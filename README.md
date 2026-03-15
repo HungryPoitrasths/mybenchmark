@@ -1,6 +1,6 @@
 # CausalSpatial-Bench
 
-**CausalSpatial-Bench** 是首个评测视觉语言模型（VLM）*因果与反事实空间推理*能力的 benchmark。现有空间 benchmark 只测静态感知（"物体 A 在哪里？"），本 benchmark 测*干预推理*：给定图像和一段空间操作描述，新的空间关系是什么？
+**CausalSpatial-Bench** 是首个评测视觉语言模型（VLM）*因果与反事实空间推理*能力的 benchmark。现有空间 benchmark 只测静态感知（"物体 A 在哪里？"），本 benchmark 测*干预推理*：给定图像和一段空间操作描述，新的空间关系是什么?
 
 ---
 
