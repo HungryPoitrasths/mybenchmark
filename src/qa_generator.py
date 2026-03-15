@@ -213,6 +213,7 @@ def generate_l2_object_move(
     camera_pose: CameraPose,
     templates: dict,
     ray_caster: RayCaster | None = None,
+    max_per_object: int = 3,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions: list[dict] = []
@@ -238,6 +239,7 @@ def generate_l2_object_move(
 
         tpl_list = templates.get("L2_object_move", _default_templates()["L2_object_move"])
 
+        obj_questions: list[dict] = []
         for ch in changed:
             # Pick a changed relation field
             for field, vals in ch["changes"].items():
@@ -263,7 +265,7 @@ def generate_l2_object_move(
                 )
                 options, answer = generate_options(vals["new"], pool)
 
-                questions.append({
+                obj_questions.append({
                     "level": "L2",
                     "type": "object_move",
                     "question": question_text,
@@ -275,6 +277,11 @@ def generate_l2_object_move(
                     "relation_unchanged": False,
                     "has_support_chain": len(get_support_chain_ids(obj["id"], support_graph)) > 0,
                 })
+
+        # Cap per moved object to avoid flooding from high-connectivity objects
+        if len(obj_questions) > max_per_object:
+            obj_questions = random.sample(obj_questions, max_per_object)
+        questions.extend(obj_questions)
 
     return questions
 
@@ -486,6 +493,7 @@ def generate_l3_coordinate_rotation(
     camera_pose: CameraPose,
     templates: dict,
     ray_caster: RayCaster | None = None,
+    max_per_angle: int = 5,
 ) -> list[dict]:
     """Generate L3.2 coordinate-rotation counterfactual questions.
 
@@ -495,6 +503,9 @@ def generate_l3_coordinate_rotation(
 
     Using the actual direction as the answer prevents the trivial shortcut of
     always answering "No" (which would be correct for most 90°/180° cases).
+
+    max_per_angle caps questions per rotation angle to avoid flooding when
+    the scene has many objects (O(n²) pairs).
     """
     questions: list[dict] = []
     tpl_list = templates.get("L3_coordinate_rotation", _default_templates()["L3_coordinate_rotation"])
@@ -507,35 +518,38 @@ def generate_l3_coordinate_rotation(
         new_relations = compute_all_relations(rotated, camera_pose, ray_caster)
         changed = find_changed_relations(original_relations, new_relations)
 
-        for ch in changed:
-            for field, vals in ch["changes"].items():
-                if field != "direction_b_rel_a":
-                    continue
-                obj_a_label = next((o["label"] for o in objects if o["id"] == ch["obj_a_id"]), "object")
-                obj_b_label = next((o["label"] for o in objects if o["id"] == ch["obj_b_id"]), "object")
+        # Collect only direction-changed pairs, then sample to cap
+        changed_dir = [ch for ch in changed if "direction_b_rel_a" in ch["changes"]]
+        if len(changed_dir) > max_per_angle:
+            changed_dir = random.sample(changed_dir, max_per_angle)
 
-                tpl = random.choice(tpl_list)
-                question_text = tpl.format(
-                    angle=angle,
-                    obj_a=obj_a_label,
-                    obj_b=obj_b_label,
-                )
-                # Correct answer is the new direction after rotation (4-option, not Yes/No)
-                new_dir = vals["new"]
-                options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
+        for ch in changed_dir:
+            vals = ch["changes"]["direction_b_rel_a"]
+            obj_a_label = next((o["label"] for o in objects if o["id"] == ch["obj_a_id"]), "object")
+            obj_b_label = next((o["label"] for o in objects if o["id"] == ch["obj_b_id"]), "object")
 
-                questions.append({
-                    "level": "L3",
-                    "type": "coordinate_rotation",
-                    "question": question_text,
-                    "options": options,
-                    "answer": answer_letter,
-                    "correct_value": new_dir,
-                    "rotation_angle": angle,
-                    "old_direction": vals["old"],
-                    "new_direction": new_dir,
-                    "relation_unchanged": False,
-                })
+            tpl = random.choice(tpl_list)
+            question_text = tpl.format(
+                angle=angle,
+                obj_a=obj_a_label,
+                obj_b=obj_b_label,
+            )
+            # Correct answer is the new direction after rotation (4-option, not Yes/No)
+            new_dir = vals["new"]
+            options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
+
+            questions.append({
+                "level": "L3",
+                "type": "coordinate_rotation",
+                "question": question_text,
+                "options": options,
+                "answer": answer_letter,
+                "correct_value": new_dir,
+                "rotation_angle": angle,
+                "old_direction": vals["old"],
+                "new_direction": new_dir,
+                "relation_unchanged": False,
+            })
 
     return questions
 
@@ -580,20 +594,33 @@ def generate_all_questions(
 
     all_questions: list[dict] = []
 
+    # Per-frame caps — keep the benchmark tractable when scenes have many objects
+    MAX_L1_DIRECTION = 20
+    MAX_L1_DISTANCE = 20
+
     # Compute baseline relations
     relations = compute_all_relations(objects, camera_pose, ray_caster)
 
-    # L1
+    # L1 — collect separately so we can sample before adding
+    l1_dir_qs:  list[dict] = []
+    l1_dist_qs: list[dict] = []
     for rel in relations:
         q = generate_l1_direction(rel, templates)
         if q:
-            all_questions.append(q)
+            l1_dir_qs.append(q)
         q = generate_l1_distance(rel, templates)
         if q:
-            all_questions.append(q)
+            l1_dist_qs.append(q)
         q = generate_l1_occlusion(rel, templates)
         if q:
             all_questions.append(q)
+
+    if len(l1_dir_qs) > MAX_L1_DIRECTION:
+        l1_dir_qs = random.sample(l1_dir_qs, MAX_L1_DIRECTION)
+    if len(l1_dist_qs) > MAX_L1_DISTANCE:
+        l1_dist_qs = random.sample(l1_dist_qs, MAX_L1_DISTANCE)
+    all_questions.extend(l1_dir_qs)
+    all_questions.extend(l1_dist_qs)
 
     # L2
     all_questions.extend(
