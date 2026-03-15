@@ -1,0 +1,8 @@
+open3d>=0.17.0
+trimesh>=4.0.0
+numpy>=1.24.0
+plyfile>=1.0
+openai>=1.0          # GPT-4o + Qwen
+google-generativeai  # Gemini
+Pillow               # Gemini 图片加载
+tqdm                 # 进度条（可选）

@@ -1,0 +1,42 @@
+{
+  "L1_direction": [
+    "From the image, {obj_a} is in which direction relative to {obj_b}?",
+    "Looking at the scene, where is {obj_a} positioned relative to {obj_b}?",
+    "In this view, what is the spatial relationship of {obj_a} to {obj_b}?"
+  ],
+  "L1_occlusion": [
+    "Is {obj_a} partially or fully occluded by {obj_b} from the current viewpoint?",
+    "Can you see {obj_a} completely, or is it blocked by {obj_b}?",
+    "From the current camera angle, is {obj_a} hidden behind {obj_b}?"
+  ],
+  "L1_distance": [
+    "Approximately how far apart are {obj_a} and {obj_b}?",
+    "What is the approximate distance between {obj_a} and {obj_b}?",
+    "Estimate the distance between {obj_a} and {obj_b} in the scene."
+  ],
+  "L2_object_move": [
+    "If {obj_a} is moved {direction} by {distance}, what would be the new spatial relationship between {obj_b} and {obj_c}?",
+    "Imagine moving {obj_a} {direction} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
+    "Suppose {obj_a} were shifted {direction} by {distance}. How would {obj_b} be positioned relative to {obj_c}?"
+  ],
+  "L2_viewpoint_move": [
+    "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",
+    "After the camera moves {direction} by {distance}, what is the visibility status of {obj_a}?",
+    "If you step {direction} by {distance}, can you still see {obj_a}?"
+  ],
+  "L2_object_remove": [
+    "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
+    "Suppose {obj_a} is taken away. What is the visibility of {obj_b} from the current camera angle?",
+    "After removing {obj_a}, how visible would {obj_b} be from this viewpoint?"
+  ],
+  "L3_support_chain": [
+    "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",
+    "If {obj_a} were relocated elsewhere in the room, which of the following objects would also change position?",
+    "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?"
+  ],
+  "L3_coordinate_rotation": [
+    "Suppose this room had originally been designed with its orientation rotated {angle} degrees, with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
+    "If the room layout had been rotated {angle} degrees from the start — all relative object positions preserved, camera position and orientation unchanged — where would {obj_a} be relative to {obj_b}?",
+    "Imagine the room was originally built rotated {angle} degrees. With all inter-object relationships intact and the camera at its original pose, what is the direction of {obj_a} from {obj_b}?"
+  ]
+}

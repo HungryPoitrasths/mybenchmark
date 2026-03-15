@@ -1,0 +1,618 @@
+"""Stage 6: QA generation.
+
+Generates multiple-choice questions from computed spatial relations and
+virtual operation results.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+import logging
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from .relation_engine import (
+    compute_all_relations,
+    find_changed_relations,
+    primary_direction,
+    compute_distance,
+)
+from .virtual_ops import (
+    apply_viewpoint_change,
+    apply_removal,
+    apply_coordinate_rotation,
+    find_meaningful_movement,
+)
+from .utils.colmap_loader import CameraPose
+from .utils.ray_casting import RayCaster
+
+logger = logging.getLogger(__name__)
+
+# Default template file; can be overridden
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+ALL_DIRECTIONS = ["left", "right", "above", "below", "in front", "behind"]
+ALL_DISTANCES = ["very close (<1m)", "close (1-3m)", "moderate (3-5m)", "far (>5m)"]
+ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
+YES_NO = ["Yes", "No"]
+
+
+def _load_templates() -> dict:
+    """Load question templates from the JSON file."""
+    tpl_path = _TEMPLATE_DIR / "question_templates.json"
+    if tpl_path.exists():
+        with open(tpl_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # Fallback inline templates
+    return _default_templates()
+
+
+def _default_templates() -> dict:
+    return {
+        "L1_direction": [
+            "From the image, {obj_a} is in which direction relative to {obj_b}?",
+            "Looking at the scene, where is {obj_a} positioned relative to {obj_b}?",
+        ],
+        "L1_occlusion": [
+            "Is {obj_a} partially or fully occluded by {obj_b} from the current viewpoint?",
+            "Can you see {obj_a} completely, or is it blocked by {obj_b}?",
+        ],
+        "L1_distance": [
+            "Approximately how far apart are {obj_a} and {obj_b}?",
+            "What is the approximate distance between {obj_a} and {obj_b}?",
+        ],
+        "L2_object_move": [
+            "If {obj_a} is moved {direction} by {distance}, what would be the new spatial relationship between {obj_b} and {obj_c}?",
+        ],
+        "L2_viewpoint_move": [
+            "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",
+        ],
+        "L2_object_remove": [
+            "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
+        ],
+        "L3_support_chain": [
+            "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",
+            "If {obj_a} were relocated elsewhere in the room, which of the following objects would also change position?",
+            "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?",
+        ],
+        "L3_coordinate_rotation": [
+            "Suppose this room had originally been designed with its orientation rotated {angle} degrees, with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
+        ],
+    }
+
+
+def generate_options(
+    correct_answer: str,
+    answer_pool: list[str],
+    n_options: int = 4,
+) -> tuple[list[str], str]:
+    """Generate MCQ options from an answer pool.
+
+    Returns (shuffled_options, correct_letter).
+    """
+    options = [correct_answer]
+    distractors = [a for a in answer_pool if a != correct_answer]
+    random.shuffle(distractors)
+    options.extend(distractors[: n_options - 1])
+
+    # Pad if pool is too small
+    while len(options) < n_options:
+        options.append(f"None of the above")
+
+    random.shuffle(options)
+    correct_idx = options.index(correct_answer)
+    correct_letter = chr(65 + correct_idx)  # A, B, C, D
+    return options, correct_letter
+
+
+# ---------------------------------------------------------------------------
+#  L1 generators
+# ---------------------------------------------------------------------------
+
+def generate_l1_direction(
+    relation: dict,
+    templates: dict,
+) -> dict | None:
+    """Generate an L1-direction question from a precomputed relation."""
+    if relation["ambiguity_score"] > 0.7:
+        return None  # too ambiguous
+
+    correct = relation["direction_b_rel_a"]
+    tpl = random.choice(templates.get("L1_direction", _default_templates()["L1_direction"]))
+    question_text = tpl.format(
+        obj_a=relation["obj_b_label"],  # "where is B relative to A?"
+        obj_b=relation["obj_a_label"],
+    )
+    options, answer = generate_options(correct, ALL_DIRECTIONS)
+
+    return {
+        "level": "L1",
+        "type": "direction",
+        "question": question_text,
+        "options": options,
+        "answer": answer,
+        "correct_value": correct,
+        "obj_a_id": relation["obj_a_id"],
+        "obj_b_id": relation["obj_b_id"],
+        "ambiguity_score": relation["ambiguity_score"],
+        "relation_unchanged": False,
+    }
+
+
+def generate_l1_distance(
+    relation: dict,
+    templates: dict,
+) -> dict | None:
+    """Generate an L1-distance question."""
+    if relation["near_boundary"]:
+        return None
+
+    correct = relation["distance_bin"]
+    tpl = random.choice(templates.get("L1_distance", _default_templates()["L1_distance"]))
+    question_text = tpl.format(
+        obj_a=relation["obj_a_label"],
+        obj_b=relation["obj_b_label"],
+    )
+    options, answer = generate_options(correct, ALL_DISTANCES)
+
+    return {
+        "level": "L1",
+        "type": "distance",
+        "question": question_text,
+        "options": options,
+        "answer": answer,
+        "correct_value": correct,
+        "obj_a_id": relation["obj_a_id"],
+        "obj_b_id": relation["obj_b_id"],
+        "ambiguity_score": 0.0,
+        "near_boundary": relation["near_boundary"],
+        "relation_unchanged": False,
+    }
+
+
+def generate_l1_occlusion(
+    relation: dict,
+    templates: dict,
+) -> dict | None:
+    """Generate an L1-occlusion question."""
+    if relation["occlusion"] == "unknown":
+        return None
+
+    correct = relation["occlusion"]
+    tpl = random.choice(templates.get("L1_occlusion", _default_templates()["L1_occlusion"]))
+    question_text = tpl.format(
+        obj_a=relation["obj_a_label"],
+        obj_b=relation["obj_b_label"],
+    )
+    options, answer = generate_options(correct, ALL_OCCLUSION)
+
+    return {
+        "level": "L1",
+        "type": "occlusion",
+        "question": question_text,
+        "options": options,
+        "answer": answer,
+        "correct_value": correct,
+        "obj_a_id": relation["obj_a_id"],
+        "obj_b_id": relation["obj_b_id"],
+        "ambiguity_score": 0.0,
+        "relation_unchanged": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  L2 generators
+# ---------------------------------------------------------------------------
+
+def generate_l2_object_move(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    templates: dict,
+    ray_caster: RayCaster | None = None,
+) -> list[dict]:
+    """Generate L2.1 object-movement questions for a scene."""
+    questions: list[dict] = []
+    obj_map = {o["id"]: o for o in objects}
+
+    for obj in objects:
+        # L2.1 only makes sense when the moved object actually carries dependent
+        # objects with it — otherwise there is no support-chain propagation and
+        # the question degenerates into a simple single-object translation.
+        children = support_graph.get(obj["id"]) or support_graph.get(str(obj["id"])) or []
+        if not children:
+            continue
+
+        delta, changed = find_meaningful_movement(
+            objects, support_graph, obj["id"], camera_pose, ray_caster
+        )
+        if delta is None:
+            continue
+
+        # Describe the movement in natural language
+        direction_desc = _delta_to_description(delta)
+        distance_desc = f"{np.linalg.norm(delta):.1f}m"
+
+        tpl_list = templates.get("L2_object_move", _default_templates()["L2_object_move"])
+
+        for ch in changed:
+            # Pick a changed relation field
+            for field, vals in ch["changes"].items():
+                if field == "direction_b_rel_a":
+                    pool = ALL_DIRECTIONS
+                elif field == "distance_bin":
+                    pool = ALL_DISTANCES
+                elif field == "occlusion":
+                    pool = ALL_OCCLUSION
+                else:
+                    continue
+
+                obj_b_label = obj_map.get(ch["obj_a_id"], {}).get("label", "object")
+                obj_c_label = obj_map.get(ch["obj_b_id"], {}).get("label", "object")
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    obj_a=obj["label"],
+                    direction=direction_desc,
+                    distance=distance_desc,
+                    obj_b=obj_b_label,
+                    obj_c=obj_c_label,
+                )
+                options, answer = generate_options(vals["new"], pool)
+
+                questions.append({
+                    "level": "L2",
+                    "type": "object_move",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": vals["new"],
+                    "moved_obj_id": obj["id"],
+                    "delta": delta.tolist(),
+                    "relation_unchanged": False,
+                    "has_support_chain": len(get_support_chain_ids(obj["id"], support_graph)) > 0,
+                })
+
+    return questions
+
+
+def generate_l2_viewpoint_move(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    templates: dict,
+    ray_caster: RayCaster | None = None,
+) -> list[dict]:
+    """Generate L2.2 viewpoint-movement questions."""
+    questions: list[dict] = []
+    tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
+
+    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+
+    for direction in ("right", "left", "forward"):
+        for dist in (2.0, 3.0):
+            new_pose = apply_viewpoint_change(camera_pose, direction, dist)
+            new_relations = compute_all_relations(objects, new_pose, ray_caster)
+            changed = find_changed_relations(original_relations, new_relations)
+
+            for ch in changed:
+                for field, vals in ch["changes"].items():
+                    if field != "occlusion":
+                        continue
+                    obj_label = next(
+                        (o["label"] for o in objects if o["id"] == ch["obj_a_id"]),
+                        "object",
+                    )
+                    tpl = random.choice(tpl_list)
+                    question_text = tpl.format(
+                        direction=direction,
+                        distance=f"{dist:.0f}m",
+                        obj_a=obj_label,
+                    )
+                    options, answer = generate_options(vals["new"], ALL_OCCLUSION)
+                    questions.append({
+                        "level": "L2",
+                        "type": "viewpoint_move",
+                        "question": question_text,
+                        "options": options,
+                        "answer": answer,
+                        "correct_value": vals["new"],
+                        "relation_unchanged": False,
+                    })
+
+    return questions
+
+
+def generate_l2_object_remove(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    templates: dict,
+    ray_caster: RayCaster | None = None,
+) -> list[dict]:
+    """Generate L2.3 object-removal questions."""
+    questions: list[dict] = []
+    tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
+
+    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+
+    for obj in objects:
+        remaining = apply_removal(objects, support_graph, obj["id"], cascade=False)
+        if len(remaining) < 2:
+            continue
+        new_relations = compute_all_relations(remaining, camera_pose, ray_caster)
+        changed = find_changed_relations(original_relations, new_relations)
+
+        for ch in changed:
+            for field, vals in ch["changes"].items():
+                if field != "occlusion":
+                    continue
+                other_label = next(
+                    (o["label"] for o in objects if o["id"] == ch["obj_a_id"]),
+                    "object",
+                )
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    obj_a=obj["label"],
+                    obj_b=other_label,
+                )
+                options, answer = generate_options(vals["new"], ALL_OCCLUSION)
+                questions.append({
+                    "level": "L2",
+                    "type": "object_remove",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": vals["new"],
+                    "removed_obj_id": obj["id"],
+                    "relation_unchanged": False,
+                })
+
+    return questions
+
+
+# ---------------------------------------------------------------------------
+#  L3 generators
+# ---------------------------------------------------------------------------
+
+def generate_l3_support_chain(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    supported_by: dict[int, int],
+    camera_pose: CameraPose,
+    templates: dict,
+    ray_caster: RayCaster | None = None,
+) -> list[dict]:
+    """Generate L3.1 support-chain membership questions (two-hop: A→B→C).
+
+    Tests whether the model can identify ALL objects displaced when A moves.
+    Requires 2-hop inference: A supports B (1-hop) AND B supports C (2-hop),
+    so both B and C are displaced — not just the direct child B.
+
+    The question does NOT state which objects are on which; the model must
+    infer the full chain from the image.
+
+    Options:
+      - "{B}"               (1-hop child only  — wrong, misses C)
+      - "{C}"               (2-hop grandchild only — wrong, misses B)
+      - "Both {B} and {C}" (correct — full chain)
+      - "{D}"               (non-chain neighbour — wrong)
+    """
+    questions: list[dict] = []
+    obj_map = {o["id"]: o for o in objects}
+    tpl_list = templates.get("L3_support_chain", _default_templates()["L3_support_chain"])
+
+    for grandparent_id, parent_ids in support_graph.items():
+        grandparent_id = int(grandparent_id)
+        grandparent = obj_map.get(grandparent_id)
+        if grandparent is None:
+            continue
+
+        for parent_id in parent_ids:
+            parent_id = int(parent_id)
+            # Second hop: does parent itself support anything?
+            grandchild_ids = (
+                support_graph.get(parent_id)
+                or support_graph.get(str(parent_id))
+                or []
+            )
+            if not grandchild_ids:
+                continue  # no depth-2 chain here
+
+            parent = obj_map.get(parent_id)
+            if parent is None:
+                continue
+
+            # All objects in this grandparent's chain (not eligible as neighbour D)
+            this_chain: set[int] = (
+                set(get_support_chain_ids(grandparent_id, support_graph))
+                | {grandparent_id}
+            )
+            non_chain = [o for o in objects if o["id"] not in this_chain]
+            if not non_chain:
+                continue
+
+            # Pick closest non-chain object as the distractor (option D)
+            gp_center = np.array(grandparent["center"])
+            neighbor = min(
+                non_chain,
+                key=lambda o: np.linalg.norm(np.array(o["center"]) - gp_center),
+            )
+
+            for grandchild_id in grandchild_ids:
+                grandchild_id = int(grandchild_id)
+                grandchild = obj_map.get(grandchild_id)
+                if grandchild is None:
+                    continue
+
+                # Skip when labels collide — options would be ambiguous
+                if len({parent["label"], grandchild["label"], neighbor["label"]}) < 3:
+                    continue
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(obj_a=grandparent["label"])
+
+                opt_parent    = parent["label"]
+                opt_grandchild = grandchild["label"]
+                opt_both      = f"Both {parent['label']} and {grandchild['label']}"
+                opt_neighbor  = neighbor["label"]
+
+                options = [opt_parent, opt_grandchild, opt_both, opt_neighbor]
+                random.shuffle(options)
+                answer_letter = chr(65 + options.index(opt_both))
+
+                questions.append({
+                    "level": "L3",
+                    "type": "support_chain",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer_letter,
+                    "correct_value": opt_both,
+                    "chain_depth": 2,
+                    "grandparent_id": grandparent_id,
+                    "parent_id": parent_id,
+                    "grandchild_id": grandchild_id,
+                    "neighbor_id": neighbor["id"],
+                    "relation_unchanged": False,
+                })
+
+    return questions
+
+
+def generate_l3_coordinate_rotation(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    templates: dict,
+    ray_caster: RayCaster | None = None,
+) -> list[dict]:
+    """Generate L3.2 coordinate-rotation counterfactual questions.
+
+    Objects are rotated around the room centre; the camera pose is held fixed.
+    The question asks for the *new direction* of A relative to B as seen from
+    the unchanged camera — a 4-option direction question, not Yes/No.
+
+    Using the actual direction as the answer prevents the trivial shortcut of
+    always answering "No" (which would be correct for most 90°/180° cases).
+    """
+    questions: list[dict] = []
+    tpl_list = templates.get("L3_coordinate_rotation", _default_templates()["L3_coordinate_rotation"])
+
+    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+
+    for angle in (90, 180, 270):
+        rotated = apply_coordinate_rotation(objects, float(angle))
+        # camera_pose intentionally unchanged — objects rotate, camera does not
+        new_relations = compute_all_relations(rotated, camera_pose, ray_caster)
+        changed = find_changed_relations(original_relations, new_relations)
+
+        for ch in changed:
+            for field, vals in ch["changes"].items():
+                if field != "direction_b_rel_a":
+                    continue
+                obj_a_label = next((o["label"] for o in objects if o["id"] == ch["obj_a_id"]), "object")
+                obj_b_label = next((o["label"] for o in objects if o["id"] == ch["obj_b_id"]), "object")
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    angle=angle,
+                    obj_a=obj_a_label,
+                    obj_b=obj_b_label,
+                )
+                # Correct answer is the new direction after rotation (4-option, not Yes/No)
+                new_dir = vals["new"]
+                options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
+
+                questions.append({
+                    "level": "L3",
+                    "type": "coordinate_rotation",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer_letter,
+                    "correct_value": new_dir,
+                    "rotation_angle": angle,
+                    "old_direction": vals["old"],
+                    "new_direction": new_dir,
+                    "relation_unchanged": False,
+                })
+
+    return questions
+
+
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+
+def get_support_chain_ids(obj_id: int, support_graph: dict) -> list[int]:
+    """Get all dependent IDs (wrapper for import convenience)."""
+    from .support_graph import get_support_chain
+    return get_support_chain(obj_id, support_graph)
+
+
+def _delta_to_description(delta: np.ndarray) -> str:
+    """Convert a 3D delta vector to a human-readable direction string."""
+    axis = np.argmax(np.abs(delta))
+    sign = delta[axis]
+    labels = {0: ("right", "left"), 1: ("forward", "backward"), 2: ("up", "down")}
+    pos_label, neg_label = labels[axis]
+    return pos_label if sign > 0 else neg_label
+
+
+# ---------------------------------------------------------------------------
+#  Main entry point
+# ---------------------------------------------------------------------------
+
+def generate_all_questions(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    supported_by: dict[int, int],
+    camera_pose: CameraPose,
+    ray_caster: RayCaster | None = None,
+    templates: dict | None = None,
+) -> list[dict]:
+    """Generate all question types for a single scene + frame.
+
+    Returns a list of question dicts.
+    """
+    if templates is None:
+        templates = _load_templates()
+
+    all_questions: list[dict] = []
+
+    # Compute baseline relations
+    relations = compute_all_relations(objects, camera_pose, ray_caster)
+
+    # L1
+    for rel in relations:
+        q = generate_l1_direction(rel, templates)
+        if q:
+            all_questions.append(q)
+        q = generate_l1_distance(rel, templates)
+        if q:
+            all_questions.append(q)
+        q = generate_l1_occlusion(rel, templates)
+        if q:
+            all_questions.append(q)
+
+    # L2
+    all_questions.extend(
+        generate_l2_object_move(objects, support_graph, camera_pose, templates, ray_caster)
+    )
+    all_questions.extend(
+        generate_l2_viewpoint_move(objects, camera_pose, templates, ray_caster)
+    )
+    all_questions.extend(
+        generate_l2_object_remove(objects, support_graph, camera_pose, templates, ray_caster)
+    )
+
+    # L3
+    all_questions.extend(
+        generate_l3_support_chain(objects, support_graph, supported_by, camera_pose, templates, ray_caster)
+    )
+    all_questions.extend(
+        generate_l3_coordinate_rotation(objects, camera_pose, templates, ray_caster)
+    )
+
+    logger.info("Generated %d questions total", len(all_questions))
+    return all_questions
