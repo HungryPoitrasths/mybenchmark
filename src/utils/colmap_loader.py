@@ -111,7 +111,10 @@ def load_scannet_intrinsics(scene_dir: Path) -> CameraIntrinsics:
     Reads the 4×4 matrix from ``intrinsic/intrinsic_color.txt`` and the image
     dimensions from ``<scene_id>.txt`` (falls back to 1296 × 968).
     """
+    # Support both intrinsic/intrinsic_color.txt and intrinsic_color.txt (at root)
     intr_file = scene_dir / "intrinsic" / "intrinsic_color.txt"
+    if not intr_file.exists():
+        intr_file = scene_dir / "intrinsic_color.txt"
     M = np.loadtxt(str(intr_file))   # 4×4
     fx, fy = float(M[0, 0]), float(M[1, 1])
     cx, cy = float(M[0, 2]), float(M[1, 2])

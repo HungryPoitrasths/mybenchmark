@@ -79,7 +79,10 @@ def select_frames(
     """
     scene_path = Path(scene_path)
 
+    # Support both intrinsic/intrinsic_color.txt and intrinsic_color.txt (at root)
     intr_path = scene_path / "intrinsic" / "intrinsic_color.txt"
+    if not intr_path.exists():
+        intr_path = scene_path / "intrinsic_color.txt"
     pose_dir  = scene_path / "pose"
 
     if not intr_path.exists() or not pose_dir.exists():

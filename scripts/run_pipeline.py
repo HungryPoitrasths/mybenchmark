@@ -98,7 +98,9 @@ def run_pipeline(
         # Load ray caster once per scene (uses aligned mesh)
         ray_caster = None
         if use_ray_casting:
-            mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
+            mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
+            if not mesh_path.exists():
+                mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
             if mesh_path.exists():
                 try:
                     ray_caster = RayCaster.from_ply(str(mesh_path))
@@ -171,7 +173,7 @@ def main():
     )
     parser.add_argument(
         "--data_root", type=str,
-        default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet"),
+        default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
         help="Root directory of ScanNet scans (contains scene subdirectories)",
     )
     parser.add_argument(

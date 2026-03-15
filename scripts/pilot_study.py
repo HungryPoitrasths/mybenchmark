@@ -34,7 +34,7 @@ def main():
     parser = argparse.ArgumentParser(description="CausalSpatial-Bench pilot study")
     parser.add_argument(
         "--data_root", type=str,
-        default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet"),
+        default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
     )
     parser.add_argument("--output_dir", type=str, default="output/pilot")
     parser.add_argument("--n_scenes", type=int, default=30)

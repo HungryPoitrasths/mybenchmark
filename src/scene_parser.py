@@ -49,8 +49,16 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
     scene_path = Path(scene_path)
     scene_id   = scene_path.name
 
-    mesh_file = scene_path / f"{scene_id}_vh_clean_2.ply"
-    seg_file  = scene_path / f"{scene_id}_vh_clean_2.0.010000.segs.json"
+    # Support both _vh_clean.ply and _vh_clean_2.ply naming conventions
+    mesh_file = scene_path / f"{scene_id}_vh_clean.ply"
+    if not mesh_file.exists():
+        mesh_file = scene_path / f"{scene_id}_vh_clean_2.ply"
+
+    # Support both segs file naming conventions
+    seg_file = scene_path / f"{scene_id}_vh_clean.segs.json"
+    if not seg_file.exists():
+        seg_file = scene_path / f"{scene_id}_vh_clean_2.0.010000.segs.json"
+
     # Try both common aggregation file names
     anno_file = scene_path / f"{scene_id}_vh_clean.aggregation.json"
     if not anno_file.exists():
