@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -169,7 +170,8 @@ def main():
         description="CausalSpatial-Bench data generation pipeline"
     )
     parser.add_argument(
-        "--data_root", type=str, default="data/scannet/scans",
+        "--data_root", type=str,
+        default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet"),
         help="Root directory of ScanNet scans (contains scene subdirectories)",
     )
     parser.add_argument(

@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,10 @@ logger = logging.getLogger("pilot_study")
 
 def main():
     parser = argparse.ArgumentParser(description="CausalSpatial-Bench pilot study")
-    parser.add_argument("--data_root", type=str, default="data/scannet/scans")
+    parser.add_argument(
+        "--data_root", type=str,
+        default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet"),
+    )
     parser.add_argument("--output_dir", type=str, default="output/pilot")
     parser.add_argument("--n_scenes", type=int, default=30)
     parser.add_argument("--max_frames", type=int, default=3)
