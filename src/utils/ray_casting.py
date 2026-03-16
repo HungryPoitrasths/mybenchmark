@@ -18,6 +18,7 @@ class RayCaster:
         # Build a ray-mesh intersector (uses embree if available, else slow fallback)
         try:
             import pyembree  # noqa: F401
+            import trimesh
             self.intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
         except (ImportError, AttributeError):
             self.intersector = mesh.ray
