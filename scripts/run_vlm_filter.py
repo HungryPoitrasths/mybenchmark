@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger("vlm_filter")
 
 VLM_BASE_URL = "http://183.129.178.195:60029/v1"
-VLM_MODEL    = "Qwen2.5-VL-72B-Instruct"
+VLM_MODEL    = "Qwen2.5-VL-72B-Instruct"  # default; override with --vlm_model
 
 # Objects mentioned in a question are extracted from these fields
 OBJECT_FIELDS = [
@@ -113,18 +113,15 @@ def _load_image_b64(image_path: Path) -> str | None:
         return base64.b64encode(f.read()).decode()
 
 
-def _is_object_visible(client, img_b64: str, obj_name: str) -> bool:
-    """Ask the VLM whether *obj_name* is clearly visible in the image.
-
-    Returns True if the model answers "yes", False otherwise.
-    """
+def _is_object_visible(client, img_b64: str, obj_name: str, model: str) -> bool:
+    """Ask the VLM whether *obj_name* is clearly visible in the image."""
     prompt = (
         f'Is there a "{obj_name}" clearly visible in this image? '
         f"Answer with only Yes or No."
     )
     try:
         resp = client.chat.completions.create(
-            model=VLM_MODEL,
+            model=model,
             messages=[{
                 "role": "user",
                 "content": [
@@ -142,16 +139,11 @@ def _is_object_visible(client, img_b64: str, obj_name: str) -> bool:
         return answer.startswith("yes")
     except Exception as e:
         logger.warning("VLM call failed for object '%s': %s", obj_name, e)
-        # On error, keep the question (conservative)
         return True
 
 
-def _filter_question(client, q: dict, image_root: Path) -> dict:
-    """Return the question dict with a 'vlm_visible' flag added.
-
-    vlm_visible=True  → all mentioned objects visible → keep
-    vlm_visible=False → at least one object not visible → discard
-    """
+def _filter_question(client, q: dict, image_root: Path, model: str) -> dict:
+    """Return the question dict with a 'vlm_visible' flag added."""
     scene_id   = q.get("scene_id", "")
     image_name = q.get("image_name", "")
     image_path = image_root / scene_id / "color" / image_name
@@ -168,7 +160,7 @@ def _filter_question(client, q: dict, image_root: Path) -> dict:
         return q
 
     for obj in objects:
-        if not _is_object_visible(client, img_b64, obj):
+        if not _is_object_visible(client, img_b64, obj, model):
             q["vlm_visible"] = False
             q["vlm_invisible_object"] = obj
             return q
@@ -190,18 +182,24 @@ def main():
                         help="ThreadPoolExecutor max_workers")
     parser.add_argument("--vlm_url",     default=VLM_BASE_URL,
                         help="VLM API base URL")
+    parser.add_argument("--vlm_model",   default=None,
+                        help="Model name to use; if not set, auto-detected from /v1/models")
     args = parser.parse_args()
 
     from openai import OpenAI
     client = OpenAI(api_key="EMPTY", base_url=args.vlm_url)
 
-    # Test connection
+    # Test connection and resolve model name
     try:
         models = client.models.list()
-        logger.info("VLM available: %s", [m.id for m in models.data])
+        available = [m.id for m in models.data]
+        logger.info("VLM available models: %s", available)
     except Exception as e:
         logger.error("Cannot reach VLM at %s: %s", args.vlm_url, e)
         sys.exit(1)
+
+    model_name = args.vlm_model if args.vlm_model else available[0]
+    logger.info("Using model: %s", model_name)
 
     # Load questions
     with open(args.questions, encoding="utf-8") as f:
@@ -248,7 +246,7 @@ def main():
     if to_process:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = {
-                pool.submit(_filter_question, client, q, image_root): i
+                pool.submit(_filter_question, client, q, image_root, model_name): i
                 for i, q in enumerate(to_process)
             }
             done_count = 0
