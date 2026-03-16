@@ -37,18 +37,26 @@ def get_visible_objects(
     intrinsics: CameraIntrinsics,
     margin: int = 80,
     min_depth: float = 0.3,
+    max_depth: float = 6.0,
 ) -> list[dict]:
     """Return objects whose centre projects into the image frame.
 
-    margin: pixels from image edge (larger = more conservative)
+    margin:    pixels from image edge (larger = more conservative)
     min_depth: minimum distance from camera in metres (filters objects
                clipped right against the camera plane)
+    max_depth: maximum distance from camera in metres. Objects beyond this
+               threshold are filtered out even if their centre projects into
+               the frame — this prevents objects in adjacent rooms (visible
+               through a doorway as a tiny projection) from appearing in
+               questions. Typical ScanNet indoor scenes are ≤8 m across;
+               6 m is conservative enough to keep far-wall objects while
+               excluding the next room.
     """
     visible = []
     for obj in objects:
         center = np.array(obj["center"])
         uv, depth = project_to_image(center, pose, intrinsics)
-        if depth > min_depth and is_in_image(uv, intrinsics, margin=margin):
+        if min_depth < depth <= max_depth and is_in_image(uv, intrinsics, margin=margin):
             visible.append(obj)
     return visible
 

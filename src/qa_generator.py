@@ -39,6 +39,13 @@ ALL_DISTANCES = ["very close (<1m)", "close (1-3m)", "moderate (3-5m)", "far (>5
 ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
 YES_NO = ["Yes", "No"]
 
+# Structural elements that cannot be meaningfully "moved" in a scene.
+# These are fixed parts of the room architecture.
+STRUCTURAL_LABELS = {
+    "floor", "wall", "ceiling", "room", "ground",
+    "door", "window", "stairs", "pillar", "column",
+}
+
 
 def _load_templates() -> dict:
     """Load question templates from the JSON file."""
@@ -66,6 +73,11 @@ def _default_templates() -> dict:
         ],
         "L2_object_move": [
             "If {obj_a} is moved {direction} by {distance}, what would be the new spatial relationship between {obj_b} and {obj_c}?",
+            "Imagine moving {obj_a} {direction} by {distance}. After this change, in which direction is {obj_b} relative to {obj_c}?",
+        ],
+        "L2_object_move_distance": [
+            "If {obj_a} is moved {direction} by {distance}, how far apart would {obj_b} and {obj_c} be?",
+            "Imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
         "L2_viewpoint_move": [
             "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",
@@ -224,6 +236,11 @@ def generate_l2_object_move(
     obj_map = {o["id"]: o for o in objects}
 
     for obj in objects:
+        # Skip structural room elements — they cannot be "moved" in any
+        # meaningful physical sense and confuse human annotators.
+        if obj.get("label", "").lower() in STRUCTURAL_LABELS:
+            continue
+
         # L2.1 only makes sense when the moved object actually carries dependent
         # objects with it — otherwise there is no support-chain propagation and
         # the question degenerates into a simple single-object translation.
@@ -249,17 +266,21 @@ def generate_l2_object_move(
             for field, vals in ch["changes"].items():
                 if field == "direction_b_rel_a":
                     pool = ALL_DIRECTIONS
+                    field_tpl_key = "L2_object_move"
                 elif field == "distance_bin":
                     pool = ALL_DISTANCES
+                    field_tpl_key = "L2_object_move_distance"
                 elif field == "occlusion":
                     pool = ALL_OCCLUSION
+                    field_tpl_key = "L2_object_move"
                 else:
                     continue
 
                 obj_b_label = obj_map.get(ch["obj_a_id"], {}).get("label", "object")
                 obj_c_label = obj_map.get(ch["obj_b_id"], {}).get("label", "object")
 
-                tpl = random.choice(tpl_list)
+                field_tpl_list = templates.get(field_tpl_key, _default_templates()[field_tpl_key])
+                tpl = random.choice(field_tpl_list)
                 question_text = tpl.format(
                     obj_a=obj["label"],
                     direction=direction_desc,
