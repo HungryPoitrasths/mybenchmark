@@ -23,7 +23,6 @@ import argparse
 import base64
 import json
 import logging
-import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -47,63 +46,31 @@ OBJECT_FIELDS = [
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _extract_object_names(question_text: str) -> list[str]:
-    """Heuristically extract object names from a question string.
+def _get_object_labels(q: dict) -> list[str]:
+    """Extract object labels directly from stored question fields.
 
-    Works for all our template patterns:
-      "... mirror ... shower ..."  → ["mirror", "shower"]
-    Strategy: grab words/phrases that look like nouns in the question.
-    We rely on the fact that our templates use object labels directly.
+    All question types now store label fields explicitly in the JSON so we
+    don't need fragile regex parsing of the question text.
+
+    Returns a deduplicated list of object label strings to check visibility.
     """
-    # Remove filler phrases, keep candidate nouns
-    text = question_text.lower()
-    # Strip common question scaffolding
-    for phrase in [
-        "from the image", "looking at the scene", "in this view",
-        "approximately", "how far apart are", "what is the approximate distance between",
-        "what is the spatial relationship of", "is in which direction relative to",
-        "where is", "positioned relative to", "can you see", "completely",
-        "or is it blocked by", "from the current viewpoint",
-        "if the observer moves", "from the current position",
-        "would", "become visible or occluded",
-        "if", "is moved", "by", "what would be the new spatial relationship between",
-        "and", "after this change", "what is the relative position of", "to",
-        "imagine moving", "in which direction is", "relative to",
-        "suppose this room had originally been designed with its orientation rotated",
-        "degrees with all objects keeping their relative positions",
-        "observed from the original camera position and viewing direction unchanged",
-        "suppose", "were moved to a different location",
-        "which of the following objects would also be displaced from their current positions",
-        "if were relocated elsewhere in the room",
-        "imagine is moved to a new spot",
-        "which of the following objects would also be displaced as a result",
-    ]:
-        text = text.replace(phrase, " ")
+    labels = set()
 
-    # Match multi-word labels like "coffee table", "kitchen counter"
-    # Remove punctuation, split by common delimiters
-    text = re.sub(r"[?.!,]", " ", text)
-    text = re.sub(r"\b\d+(\.\d+)?m?\b", " ", text)   # strip numbers/distances
-    text = re.sub(r"\s+", " ", text).strip()
+    # L1 direction / distance / occlusion
+    for key in ("obj_a_label", "obj_b_label"):
+        v = q.get(key)
+        if v:
+            labels.add(v)
 
-    # Split on "between", "of", "relative", etc. and collect 1-3 word chunks
-    chunks = re.split(r"\b(?:between|relative|of|from|and|to|is|in|the|this|a|an)\b", text)
-    objects = []
-    for chunk in chunks:
-        chunk = chunk.strip()
-        # Keep 1-3 word phrases that look like object names (not stop words)
-        words = chunk.split()
-        if 1 <= len(words) <= 3 and all(len(w) > 2 for w in words):
-            objects.append(chunk)
+    # L2 object_move
+    for key in ("moved_obj_label", "obj_c_label"):
+        v = q.get(key)
+        if v:
+            labels.add(v)
 
-    # Deduplicate while preserving order
-    seen = set()
-    unique = []
-    for obj in objects:
-        if obj not in seen:
-            seen.add(obj)
-            unique.append(obj)
-    return unique
+    # Filter out generic/uninformative labels
+    labels -= {"object", "unknown", ""}
+    return list(labels)
 
 
 def _load_image_b64(image_path: Path) -> str | None:
@@ -154,7 +121,7 @@ def _filter_question(client, q: dict, image_root: Path, model: str) -> dict:
         q["vlm_visible"] = True
         return q
 
-    objects = _extract_object_names(q["question"])
+    objects = _get_object_labels(q)
     if not objects:
         q["vlm_visible"] = True
         return q
