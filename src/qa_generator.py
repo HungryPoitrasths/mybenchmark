@@ -510,12 +510,13 @@ def generate_l3_coordinate_rotation(
     questions: list[dict] = []
     tpl_list = templates.get("L3_coordinate_rotation", _default_templates()["L3_coordinate_rotation"])
 
-    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+    # Direction changes don't need ray casting; skip it for speed.
+    original_relations = compute_all_relations(objects, camera_pose, None)
 
     for angle in (90, 180, 270):
         rotated = apply_coordinate_rotation(objects, float(angle))
         # camera_pose intentionally unchanged — objects rotate, camera does not
-        new_relations = compute_all_relations(rotated, camera_pose, ray_caster)
+        new_relations = compute_all_relations(rotated, camera_pose, None)
         changed = find_changed_relations(original_relations, new_relations)
 
         # Collect only direction-changed pairs, then sample to cap

@@ -102,14 +102,16 @@ def find_meaningful_movement(
 
     Returns (delta_vector, list_of_changed_relations) or (None, []).
     """
-    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+    # Use ray_caster=None here: we only need direction/distance changes to
+    # find a valid delta; occlusion search would be prohibitively slow.
+    original_relations = compute_all_relations(objects, camera_pose, None)
     room_min, room_max = compute_room_bounds(objects)
 
     for delta in MOVEMENT_CANDIDATES:
         new_objects = apply_movement(objects, support_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
-        new_relations = compute_all_relations(new_objects, camera_pose, ray_caster)
+        new_relations = compute_all_relations(new_objects, camera_pose, None)
         changed = find_changed_relations(original_relations, new_relations)
         if changed:
             return delta, changed
