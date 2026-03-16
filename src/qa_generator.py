@@ -119,6 +119,8 @@ def generate_l1_direction(
     """Generate an L1-direction question from a precomputed relation."""
     if relation["ambiguity_score"] > 0.7:
         return None  # too ambiguous
+    if relation["obj_a_label"] == relation["obj_b_label"]:
+        return None  # same label → "chair relative to chair" is meaningless
 
     correct = relation["direction_b_rel_a"]
     tpl = random.choice(templates.get("L1_direction", _default_templates()["L1_direction"]))
@@ -149,6 +151,8 @@ def generate_l1_distance(
     """Generate an L1-distance question."""
     if relation["near_boundary"]:
         return None
+    if relation["obj_a_label"] == relation["obj_b_label"]:
+        return None  # same label → ambiguous question
 
     correct = relation["distance_bin"]
     tpl = random.choice(templates.get("L1_distance", _default_templates()["L1_distance"]))

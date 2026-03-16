@@ -35,14 +35,20 @@ def get_visible_objects(
     objects: list[dict],
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
-    margin: int = 30,
+    margin: int = 80,
+    min_depth: float = 0.3,
 ) -> list[dict]:
-    """Return objects whose centre projects into the image frame (depth > 0)."""
+    """Return objects whose centre projects into the image frame.
+
+    margin: pixels from image edge (larger = more conservative)
+    min_depth: minimum distance from camera in metres (filters objects
+               clipped right against the camera plane)
+    """
     visible = []
     for obj in objects:
         center = np.array(obj["center"])
         uv, depth = project_to_image(center, pose, intrinsics)
-        if depth > 0 and is_in_image(uv, intrinsics, margin=margin):
+        if depth > min_depth and is_in_image(uv, intrinsics, margin=margin):
             visible.append(obj)
     return visible
 
