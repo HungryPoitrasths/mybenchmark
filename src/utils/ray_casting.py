@@ -24,11 +24,15 @@ class RayCaster:
             self.intersector = mesh.ray
 
     @classmethod
-    def from_ply(cls, ply_path: str) -> "RayCaster":
+    def from_ply(cls, ply_path: str, axis_alignment: Optional[np.ndarray] = None) -> "RayCaster":
         import trimesh
         mesh = trimesh.load(ply_path, process=False)
         if isinstance(mesh, trimesh.Scene):
             mesh = mesh.dump(concatenate=True)
+        # Apply axis alignment so the mesh lives in the same coordinate frame
+        # as the object centres and camera poses (which are already aligned).
+        if axis_alignment is not None and not np.allclose(axis_alignment, np.eye(4)):
+            mesh.apply_transform(axis_alignment)
         return cls(mesh)
 
     def cast_ray(

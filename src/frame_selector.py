@@ -27,6 +27,39 @@ from .utils.coordinate_transform import is_in_image, project_to_image
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_FRAMES = 5
+
+
+def refine_visible_ids_with_raycasting(
+    visible_object_ids: list[int],
+    objects: list[dict],
+    pose: CameraPose,
+    ray_caster,
+) -> list[int]:
+    """Remove fully-occluded objects from *visible_object_ids*.
+
+    Called AFTER projection-based frame selection so that ray casting only
+    runs on the 3-5 selected frames rather than every frame in the scene.
+
+    An object is dropped when ``multi_ray_occlusion`` (8 sample rays toward
+    the bbox) classifies it as ``"fully_occluded"``.  Partially-occluded
+    objects are kept — they are still meaningful as question subjects.
+    """
+    obj_map = {o["id"]: o for o in objects}
+    refined: list[int] = []
+    for obj_id in visible_object_ids:
+        obj = obj_map.get(obj_id)
+        if obj is None:
+            continue
+        status = ray_caster.multi_ray_occlusion(
+            camera_pos=pose.position,
+            target_bbox_min=np.array(obj["bbox_min"]),
+            target_bbox_max=np.array(obj["bbox_max"]),
+        )
+        if status != "fully_occluded":
+            refined.append(obj_id)
+    return refined
+
+
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 

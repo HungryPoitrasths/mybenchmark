@@ -22,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.scene_parser import parse_scene
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
-from src.frame_selector import select_frames
+from src.frame_selector import select_frames, refine_visible_ids_with_raycasting
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
@@ -95,7 +95,13 @@ def run_pipeline(
             logger.info("No valid frames for scene %s — skipping", scene_id)
             continue
 
-        # Load ray caster once per scene (uses aligned mesh)
+        # Load axis alignment and camera poses.  Must happen before ray-caster
+        # init so the mesh can be transformed into the same coordinate frame.
+        axis_align = load_axis_alignment(scene_dir)
+        poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+
+        # Load ray caster once per scene — apply axis alignment so the mesh
+        # lives in the same coordinate frame as object centres and poses.
         ray_caster = None
         if use_ray_casting:
             mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
@@ -103,13 +109,30 @@ def run_pipeline(
                 mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
             if mesh_path.exists():
                 try:
-                    ray_caster = RayCaster.from_ply(str(mesh_path))
+                    ray_caster = RayCaster.from_ply(str(mesh_path), axis_alignment=axis_align)
+                    logger.info("Ray caster ready for %s", scene_id)
                 except Exception as e:
                     logger.warning("Ray caster init failed for %s: %s", scene_id, e)
 
-        # Load camera poses (with axis alignment so coords match the mesh)
-        axis_align = load_axis_alignment(scene_dir)
-        poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        # Refine visible_object_ids for each selected frame using ray casting.
+        # This removes objects that project into the 2D frame but are physically
+        # occluded by walls or other furniture (e.g. objects in adjacent rooms).
+        if ray_caster is not None:
+            for frame in frames:
+                image_name = frame["image_name"]
+                if image_name not in poses:
+                    continue
+                frame["visible_object_ids"] = refine_visible_ids_with_raycasting(
+                    visible_object_ids=frame["visible_object_ids"],
+                    objects=scene["objects"],
+                    pose=poses[image_name],
+                    ray_caster=ray_caster,
+                )
+            logger.info(
+                "Scene %s: visible objects after ray-cast refinement: %s",
+                scene_id,
+                [len(f["visible_object_ids"]) for f in frames],
+            )
 
         # ---- Stages 4-6: Relations + Virtual ops + QA ----
         for frame in frames:
