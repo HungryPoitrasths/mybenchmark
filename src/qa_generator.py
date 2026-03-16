@@ -615,14 +615,21 @@ def generate_all_questions(
         }
         supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
 
+    # Only keep objects whose label is unique among visible objects.
+    # If there are 5 chairs in frame, "chair" is ambiguous — skip all of them.
+    from collections import Counter
+    label_counts = Counter(o["label"] for o in objects)
+    unique_label_ids = {o["id"] for o in objects if label_counts[o["label"]] == 1}
+    objects_uniq = [o for o in objects if o["id"] in unique_label_ids]
+
     all_questions: list[dict] = []
 
     # Per-frame caps — keep the benchmark tractable when scenes have many objects
     MAX_L1_DIRECTION = 20
     MAX_L1_DISTANCE = 20
 
-    # Compute baseline relations
-    relations = compute_all_relations(objects, camera_pose, ray_caster)
+    # Compute baseline relations using only uniquely-labelled visible objects
+    relations = compute_all_relations(objects_uniq, camera_pose, ray_caster)
 
     # L1 — collect separately so we can sample before adding
     l1_dir_qs:  list[dict] = []
@@ -645,23 +652,32 @@ def generate_all_questions(
     all_questions.extend(l1_dir_qs)
     all_questions.extend(l1_dist_qs)
 
+    # Rebuild support graph restricted to uniquely-labelled objects
+    support_graph_uniq = {
+        k: [c for c in v if c in unique_label_ids]
+        for k, v in support_graph.items()
+        if k in unique_label_ids
+    }
+    supported_by_uniq = {k: v for k, v in supported_by.items()
+                         if k in unique_label_ids and v in unique_label_ids}
+
     # L2
     all_questions.extend(
-        generate_l2_object_move(objects, support_graph, camera_pose, templates, ray_caster)
+        generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates, ray_caster)
     )
     all_questions.extend(
-        generate_l2_viewpoint_move(objects, camera_pose, templates, ray_caster)
+        generate_l2_viewpoint_move(objects_uniq, camera_pose, templates, ray_caster)
     )
     all_questions.extend(
-        generate_l2_object_remove(objects, support_graph, camera_pose, templates, ray_caster)
+        generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, templates, ray_caster)
     )
 
     # L3
     all_questions.extend(
-        generate_l3_support_chain(objects, support_graph, supported_by, camera_pose, templates, ray_caster)
+        generate_l3_support_chain(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates, ray_caster)
     )
     all_questions.extend(
-        generate_l3_coordinate_rotation(objects, camera_pose, templates, ray_caster)
+        generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates, ray_caster)
     )
 
     logger.info("Generated %d questions total", len(all_questions))
