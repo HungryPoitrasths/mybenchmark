@@ -39,6 +39,8 @@ def main():
     parser.add_argument("--output_dir", type=str, default="output/pilot")
     parser.add_argument("--n_scenes", type=int, default=30)
     parser.add_argument("--max_frames", type=int, default=3)
+    parser.add_argument("--no_ray_casting", action="store_true",
+                        help="Disable ray casting (fast but no occlusion questions)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -50,7 +52,7 @@ def main():
         output_dir=output_dir,
         max_scenes=args.n_scenes,
         max_frames=args.max_frames,
-        use_ray_casting=True,
+        use_ray_casting=not args.no_ray_casting,
     )
 
     # Print detailed statistics
