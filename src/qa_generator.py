@@ -584,13 +584,31 @@ def generate_all_questions(
     camera_pose: CameraPose,
     ray_caster: RayCaster | None = None,
     templates: dict | None = None,
+    visible_object_ids: list[int] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
+
+    visible_object_ids: if provided, restrict all questions to objects whose
+    centre projects into this frame.  Questions about off-screen objects are
+    unanswerable from the image and should never be included.
 
     Returns a list of question dicts.
     """
     if templates is None:
         templates = _load_templates()
+
+    # Restrict to objects visible in this frame so every question can be
+    # answered by looking at the image.
+    if visible_object_ids is not None:
+        vis_set = set(visible_object_ids)
+        objects = [o for o in objects if o["id"] in vis_set]
+        # Rebuild support graph restricted to visible objects
+        support_graph = {
+            k: [c for c in v if c in vis_set]
+            for k, v in support_graph.items()
+            if k in vis_set
+        }
+        supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
 
     all_questions: list[dict] = []
 

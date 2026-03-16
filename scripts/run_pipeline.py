@@ -124,6 +124,7 @@ def run_pipeline(
                 supported_by=supported_by,
                 camera_pose=camera_pose,
                 ray_caster=ray_caster,
+                visible_object_ids=frame["visible_object_ids"],
             )
 
             for q in questions:
