@@ -39,6 +39,15 @@ ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", 
 ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
 YES_NO = ["Yes", "No"]
 
+
+def _the(label: str) -> str:
+    """Prepend 'the' to an object label for natural English grammar.
+
+    'shoes' → 'the shoes', 'table' → 'the table'.
+    Avoids 'where is shoes positioned' type errors.
+    """
+    return f"the {label}"
+
 # Labels to exclude from ALL question types (not just L2).
 # Structural elements, generic labels, and uninformative categories.
 EXCLUDED_LABELS = {
@@ -95,7 +104,7 @@ def _default_templates() -> dict:
             "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?",
         ],
         "L3_coordinate_rotation": [
-            "Suppose this room had originally been designed with its orientation rotated {angle} degrees, with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
+            "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
         ],
     }
 
@@ -141,8 +150,8 @@ def generate_l1_direction(
     correct = relation["direction_b_rel_a"]
     tpl = random.choice(templates.get("L1_direction", _default_templates()["L1_direction"]))
     question_text = tpl.format(
-        obj_a=relation["obj_b_label"],  # "where is B relative to A?"
-        obj_b=relation["obj_a_label"],
+        obj_a=_the(relation["obj_b_label"]),  # "where is B relative to A?"
+        obj_b=_the(relation["obj_a_label"]),
     )
     options, answer = generate_options(correct, ALL_DIRECTIONS)
 
@@ -175,8 +184,8 @@ def generate_l1_distance(
     correct = relation["distance_bin"]
     tpl = random.choice(templates.get("L1_distance", _default_templates()["L1_distance"]))
     question_text = tpl.format(
-        obj_a=relation["obj_a_label"],
-        obj_b=relation["obj_b_label"],
+        obj_a=_the(relation["obj_a_label"]),
+        obj_b=_the(relation["obj_b_label"]),
     )
     options, answer = generate_options(correct, ALL_DISTANCES)
 
@@ -208,8 +217,8 @@ def generate_l1_occlusion(
     correct = relation["occlusion"]
     tpl = random.choice(templates.get("L1_occlusion", _default_templates()["L1_occlusion"]))
     question_text = tpl.format(
-        obj_a=relation["obj_a_label"],
-        obj_b=relation["obj_b_label"],
+        obj_a=_the(relation["obj_a_label"]),
+        obj_b=_the(relation["obj_b_label"]),
     )
     options, answer = generate_options(correct, ALL_OCCLUSION)
 
@@ -264,6 +273,18 @@ def generate_l2_object_move(
         if delta is None:
             continue
 
+        # Only keep relation changes involving the moved object or its
+        # support-chain dependents — otherwise the question is nonsensical
+        # (e.g., "move cabinet → what happens between tv and table?").
+        chain_ids = set(get_support_chain_ids(obj["id"], support_graph))
+        chain_ids.add(obj["id"])
+        changed = [
+            ch for ch in changed
+            if ch["obj_a_id"] in chain_ids or ch["obj_b_id"] in chain_ids
+        ]
+        if not changed:
+            continue
+
         # Describe the movement in natural language
         direction_desc = _delta_to_description(delta)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
@@ -292,11 +313,11 @@ def generate_l2_object_move(
                 field_tpl_list = templates.get(field_tpl_key, _default_templates()[field_tpl_key])
                 tpl = random.choice(field_tpl_list)
                 question_text = tpl.format(
-                    obj_a=obj["label"],
+                    obj_a=_the(obj["label"]),
                     direction=direction_desc,
                     distance=distance_desc,
-                    obj_b=obj_b_label,
-                    obj_c=obj_c_label,
+                    obj_b=_the(obj_b_label),
+                    obj_c=_the(obj_c_label),
                 )
                 options, answer = generate_options(vals["new"], pool)
 
@@ -354,7 +375,7 @@ def generate_l2_viewpoint_move(
                     question_text = tpl.format(
                         direction=direction,
                         distance=f"{dist:.0f}m",
-                        obj_a=obj_label,
+                        obj_a=_the(obj_label),
                     )
                     options, answer = generate_options(vals["new"], ALL_OCCLUSION)
                     questions.append({
@@ -400,8 +421,8 @@ def generate_l2_object_remove(
                 )
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
-                    obj_a=obj["label"],
-                    obj_b=other_label,
+                    obj_a=_the(obj["label"]),
+                    obj_b=_the(other_label),
                 )
                 options, answer = generate_options(vals["new"], ALL_OCCLUSION)
                 questions.append({
@@ -497,12 +518,12 @@ def generate_l3_support_chain(
                     continue
 
                 tpl = random.choice(tpl_list)
-                question_text = tpl.format(obj_a=grandparent["label"])
+                question_text = tpl.format(obj_a=_the(grandparent["label"]))
 
-                opt_parent    = parent["label"]
-                opt_grandchild = grandchild["label"]
-                opt_both      = f"Both {parent['label']} and {grandchild['label']}"
-                opt_neighbor  = neighbor["label"]
+                opt_parent    = _the(parent["label"])
+                opt_grandchild = _the(grandchild["label"])
+                opt_both      = f"Both {_the(parent['label'])} and {_the(grandchild['label'])}"
+                opt_neighbor  = _the(neighbor["label"])
 
                 options = [opt_parent, opt_grandchild, opt_both, opt_neighbor]
                 random.shuffle(options)
@@ -552,7 +573,9 @@ def generate_l3_coordinate_rotation(
     original_relations = compute_all_relations(objects, camera_pose, None)
 
     for angle in (90, 180, 270):
-        rotated = apply_coordinate_rotation(objects, float(angle))
+        # rotation_matrix_z uses math convention (positive = counterclockwise).
+        # Templates say "clockwise", so negate the angle for the actual rotation.
+        rotated = apply_coordinate_rotation(objects, float(-angle))
         # camera_pose intentionally unchanged — objects rotate, camera does not
         new_relations = compute_all_relations(rotated, camera_pose, None)
         changed = find_changed_relations(original_relations, new_relations)
@@ -570,8 +593,8 @@ def generate_l3_coordinate_rotation(
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
                 angle=angle,
-                obj_a=obj_a_label,
-                obj_b=obj_b_label,
+                obj_a=_the(obj_a_label),
+                obj_b=_the(obj_b_label),
             )
             # Correct answer is the new direction after rotation (4-option, not Yes/No)
             new_dir = vals["new"]

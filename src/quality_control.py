@@ -63,13 +63,79 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         seen_keys.add(key)
         deduped.append(q)
 
+    # Filter 5: cross-frame dedup within same scene.
+    # Same (scene_id, question_text) on different frames → keep only first.
+    seen_text: set[tuple] = set()
+    final: list[dict] = []
+    for q in deduped:
+        text_key = (q.get("scene_id"), q.get("question"))
+        if text_key in seen_text:
+            removed_counts["cross_frame_duplicate"] += 1
+            continue
+        seen_text.add(text_key)
+        final.append(q)
+
     for reason, count in removed_counts.items():
         logger.info("Removed %d questions: %s", count, reason)
     logger.info(
         "Quality filter: %d → %d questions (removed %d)",
-        len(questions), len(deduped), len(questions) - len(deduped),
+        len(questions), len(final), len(questions) - len(final),
     )
-    return deduped
+    return final
+
+
+def balance_answer_values(
+    questions: list[dict],
+    target_types: tuple[str, ...] = ("distance",),
+) -> list[dict]:
+    """Downsample questions so correct_value distribution is roughly uniform.
+
+    For question types in *target_types*, groups questions by correct_value and
+    downsamples each group to the size of the smallest group.  This prevents
+    answer-value imbalance (e.g., 66% of distance answers being "very close").
+
+    Questions of other types are passed through unchanged.
+    """
+    from collections import defaultdict
+
+    other: list[dict] = []
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for q in questions:
+        if q.get("type") in target_types:
+            by_type[q["type"]].append(q)
+        else:
+            other.append(q)
+
+    balanced: list[dict] = list(other)
+    for qtype, qs in by_type.items():
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for q in qs:
+            groups[q["correct_value"]].append(q)
+
+        if not groups:
+            continue
+
+        min_count = min(len(g) for g in groups.values())
+        if min_count == 0:
+            # Some bin has zero questions — keep all to avoid losing data
+            balanced.extend(qs)
+            continue
+
+        before = len(qs)
+        for val, group in groups.items():
+            if len(group) > min_count:
+                balanced.extend(random.sample(group, min_count))
+            else:
+                balanced.extend(group)
+
+        after = sum(min(len(g), min_count) for g in groups.values())
+        logger.info(
+            "Answer-value balance (%s): %d → %d (min_bin=%d, bins=%s)",
+            qtype, before, after, min_count,
+            {v: len(g) for v, g in groups.items()},
+        )
+
+    return balanced
 
 
 def balance_answer_distribution(
@@ -215,6 +281,7 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
         3. Log statistics
     """
     questions = quality_filter(questions)
+    questions = balance_answer_values(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)
     logger.info("Final statistics: %s", stats)
