@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 # ── Qwen2.5-VL-72B endpoint (deployed on company server) ─────────────────
 
-QWEN_BASE_URL = "http://183.129.178.195:60029/v1"
-QWEN_MODEL = "Qwen2.5-VL-72B-Instruct"
+QWEN_BASE_URL = "http://localhost:60029/v1"
+QWEN_MODEL = "/home/shenyl/hf/model/Qwen/Qwen3-VL-32B-Instruct"
 QWEN_API_KEY = "empty"  # vLLM doesn't need a real key
 
 _SYSTEM = (
