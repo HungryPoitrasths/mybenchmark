@@ -30,11 +30,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── Qwen2.5-VL-72B endpoint (already deployed on 华为 910b cluster) ───────
-#    Forwarded via jump server: 183.129.178.195:60029
+# ── Qwen3-VL-32B endpoint (deployed locally on zju-47) ───────────────────
 
-QWEN_BASE_URL = "http://183.129.178.195:60029/v1"
-QWEN_MODEL = "Qwen2.5-VL-72B-Instruct"
+QWEN_BASE_URL = "http://localhost:60029/v1"
+QWEN_MODEL = "/home/shenyl/hf/model/Qwen/Qwen3-VL-32B-Instruct"
 QWEN_API_KEY = "empty"  # vLLM doesn't need a real key
 
 _SYSTEM = (
