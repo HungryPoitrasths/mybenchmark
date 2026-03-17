@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """Run VLM on pilot study questions and evaluate results.
 
-All-in-one script: inference → evaluate → per-question detail.
+All-in-one script: load model → inference → evaluate → per-question detail.
+Loads model directly via transformers (no API server needed).
 
 Usage:
-    python scripts/run_pilot_eval.py \
+    CUDA_VISIBLE_DEVICES=4,5,6,7 python scripts/run_pilot_eval.py \
         --benchmark output/pilot/benchmark.json \
-        --image_root /home/lihongxing/datasets/ScanNet/data/scans
-
-Requires: pip install openai tqdm
+        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
+        --model /home/shenyl/hf/model/Qwen/Qwen3-VL-32B-Instruct
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import logging
 import re
-import sys
-import time
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
+
+import torch
+from PIL import Image
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,12 +29,6 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
-
-# ── Qwen3-VL-32B endpoint (deployed locally on zju-47) ───────────────────
-
-QWEN_BASE_URL = "http://localhost:60029/v1"
-QWEN_MODEL = "/home/shenyl/hf/model/Qwen/Qwen3-VL-32B-Instruct"
-QWEN_API_KEY = "empty"  # vLLM doesn't need a real key
 
 _SYSTEM = (
     "You are a visual spatial-reasoning assistant. "
@@ -53,13 +47,6 @@ def build_prompt(question: dict) -> str:
     return "\n".join(parts)
 
 
-def to_base64(path: Path) -> tuple[str, str]:
-    ext = path.suffix.lstrip(".").lower()
-    mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode(), mime
-
-
 def resolve_image(question: dict, image_root: Path) -> Path:
     return image_root / question["scene_id"] / "color" / question["image_name"]
 
@@ -74,12 +61,32 @@ def parse_answer(raw: str) -> str | None:
     return m.group(1) if m else None
 
 
-# ── Inference ─────────────────────────────────────────────────────────────
+# ── Inference (transformers, direct model loading) ────────────────────────
 
-def run_inference(questions: list[dict], image_root: Path, delay: float = 0.3) -> list[dict]:
-    from openai import OpenAI
+def load_model(model_path: str):
+    """Load Qwen2/3-VL model and processor."""
+    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-    client = OpenAI(api_key=QWEN_API_KEY, base_url=QWEN_BASE_URL)
+    logger.info("Loading model from %s ...", model_path)
+    processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    model.eval()
+    logger.info("Model loaded on %d GPUs", torch.cuda.device_count())
+    return model, processor
+
+
+def run_inference(
+    questions: list[dict],
+    image_root: Path,
+    model,
+    processor,
+) -> list[dict]:
+    from qwen_vl_utils import process_vision_info
 
     try:
         from tqdm import tqdm
@@ -101,40 +108,41 @@ def run_inference(questions: list[dict], image_root: Path, delay: float = 0.3) -
             })
             continue
 
-        prompt = build_prompt(q)
-        b64, mime = to_base64(image_path)
+        prompt_text = build_prompt(q)
 
-        pred, raw = None, None
-        for attempt in range(3):
-            try:
-                resp = client.chat.completions.create(
-                    model=QWEN_MODEL,
-                    messages=[
-                        {"role": "system", "content": _SYSTEM},
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{mime};base64,{b64}"},
-                                },
-                                {"type": "text", "text": prompt},
-                            ],
-                        },
-                    ],
-                    max_tokens=16,
-                    temperature=0,
-                )
-                raw = resp.choices[0].message.content.strip()
-                pred = parse_answer(raw)
-                break
-            except Exception as exc:
-                wait = 2.0 * (2 ** attempt)
-                if attempt < 2:
-                    logger.warning("[%d] Attempt %d failed: %s. Retry in %.0fs", idx, attempt+1, exc, wait)
-                    time.sleep(wait)
-                else:
-                    logger.error("[%d] All attempts failed: %s", idx, exc)
+        messages = [
+            {"role": "system", "content": _SYSTEM},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": str(image_path)},
+                    {"type": "text", "text": prompt_text},
+                ],
+            },
+        ]
+
+        text = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True,
+        )
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        ).to(model.device)
+
+        with torch.no_grad():
+            output_ids = model.generate(**inputs, max_new_tokens=16)
+
+        # Only decode newly generated tokens
+        generated_ids = output_ids[:, inputs.input_ids.shape[1]:]
+        raw = processor.batch_decode(
+            generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False,
+        )[0].strip()
+
+        pred = parse_answer(raw)
 
         results.append({
             "question_id": idx,
@@ -149,21 +157,16 @@ def run_inference(questions: list[dict], image_root: Path, delay: float = 0.3) -
             "correct_value": q.get("correct_value"),
         })
 
-        if delay > 0:
-            time.sleep(delay)
-
     return results
 
 
 # ── Evaluation ────────────────────────────────────────────────────────────
 
-def evaluate(questions: list[dict], predictions: list[dict]):
+def evaluate(questions: list[dict], predictions: list[dict], model_name: str):
     """Print per-type accuracy and per-question results."""
 
-    # Match predictions to questions by index
     pred_map = {p["question_id"]: p for p in predictions}
 
-    # Collect per-question results
     details = []
     for i, q in enumerate(questions):
         p = pred_map.get(i)
@@ -191,7 +194,7 @@ def evaluate(questions: list[dict], predictions: list[dict]):
     total = len(details)
     n_correct = sum(1 for d in details if d["correct"])
     print("\n" + "=" * 70)
-    print(f"PILOT EVALUATION: {QWEN_MODEL.split('/')[-1]}")
+    print(f"PILOT EVALUATION: {model_name}")
     print("=" * 70)
     print(f"Overall: {n_correct}/{total} = {n_correct/total:.1%}")
 
@@ -220,7 +223,6 @@ def evaluate(questions: list[dict], predictions: list[dict]):
         c = sum(1 for d in grp if d["correct"])
         print(f"  {t:25s}: {c}/{len(grp)} = {c/len(grp):.1%}")
 
-    # Print any remaining types not in the fixed order
     for t in sorted(type_groups.keys()):
         if t not in type_order:
             grp = type_groups[t]
@@ -247,7 +249,7 @@ def evaluate(questions: list[dict], predictions: list[dict]):
     print(f"{'#':>4s}  {'Lv':>2s}  {'Type':>20s}  {'GT':>2s}  {'Pred':>4s}  {'':>1s}  Question")
     print("-" * 100)
     for d in details:
-        mark = "✓" if d["correct"] else "✗"
+        mark = "v" if d["correct"] else "x"
         print(f"{d['idx']:4d}  {d['level']:>2s}  {d['type']:>20s}  "
               f"{d['gt']:>2s}  {d['pred']:>4s}  {mark}  {d['question']}")
 
@@ -259,7 +261,7 @@ def evaluate(questions: list[dict], predictions: list[dict]):
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Pilot eval with VLM")
+    parser = argparse.ArgumentParser(description="Pilot eval: load model directly via transformers")
     parser.add_argument(
         "--benchmark", type=str, default="output/pilot/benchmark.json",
         help="Path to pilot benchmark.json",
@@ -270,12 +272,13 @@ def main():
         help="Root of ScanNet scans directory",
     )
     parser.add_argument(
-        "--output", type=str, default="output/pilot/eval_qwen.json",
-        help="Path to save detailed results",
+        "--model", type=str,
+        default="/home/shenyl/hf/model/Qwen/Qwen3-VL-32B-Instruct",
+        help="Path to local model (HuggingFace format)",
     )
     parser.add_argument(
-        "--delay", type=float, default=0.3,
-        help="Seconds between API calls (default 0.3)",
+        "--output", type=str, default="output/pilot/eval_qwen.json",
+        help="Path to save detailed results",
     )
     parser.add_argument(
         "--max_questions", type=int, default=None,
@@ -294,9 +297,13 @@ def main():
         questions = questions[:args.max_questions]
         logger.info("Capped at %d questions", len(questions))
 
+    # Load model
+    model, processor = load_model(args.model)
+    model_name = Path(args.model).name
+
     # Run inference
-    print(f"\nCalling {QWEN_MODEL.split('/')[-1]} @ {QWEN_BASE_URL} ...")
-    predictions = run_inference(questions, Path(args.image_root), delay=args.delay)
+    print(f"\nRunning {model_name} on {len(questions)} questions ...")
+    predictions = run_inference(questions, Path(args.image_root), model, processor)
 
     # Save predictions
     output_path = Path(args.output)
@@ -306,7 +313,7 @@ def main():
     logger.info("Predictions saved to %s", output_path)
 
     # Evaluate
-    details = evaluate(questions, predictions)
+    details = evaluate(questions, predictions, model_name)
 
     # Also save full detail
     detail_path = output_path.with_name("eval_qwen_detail.json")
