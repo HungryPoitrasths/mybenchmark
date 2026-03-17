@@ -82,12 +82,8 @@ def _load_image_b64(image_path: Path) -> str | None:
         return base64.b64encode(f.read()).decode()
 
 
-def _is_object_visible(client, img_b64: str, obj_name: str, model: str) -> bool:
-    """Ask the VLM whether *obj_name* is clearly visible in the image."""
-    prompt = (
-        f'Is there a "{obj_name}" present in this image? '
-        f"Answer with only Yes or No."
-    )
+def _ask_vlm_yes_no(client, img_b64: str, prompt: str, model: str) -> bool:
+    """Send a Yes/No question to the VLM about an image. Returns True for Yes."""
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -107,8 +103,29 @@ def _is_object_visible(client, img_b64: str, obj_name: str, model: str) -> bool:
         answer = resp.choices[0].message.content.strip().lower()
         return answer.startswith("yes")
     except Exception as e:
-        logger.warning("VLM call failed for object '%s': %s", obj_name, e)
-        return True
+        logger.warning("VLM call failed for prompt '%s': %s", prompt[:60], e)
+        return True  # fail-open: keep the question
+
+
+def _is_object_visible(client, img_b64: str, obj_name: str, model: str) -> bool:
+    """Ask the VLM whether *obj_name* is present in the image."""
+    prompt = (
+        f'Is there a "{obj_name}" present in this image? '
+        f"Answer with only Yes or No."
+    )
+    return _ask_vlm_yes_no(client, img_b64, prompt, model)
+
+
+def _is_object_ambiguous(client, img_b64: str, obj_name: str, model: str) -> bool:
+    """Ask the VLM whether there are multiple instances of *obj_name*.
+
+    Returns True if ambiguous (more than one instance visible).
+    """
+    prompt = (
+        f'Is there more than one "{obj_name}" in this image? '
+        f"Answer with only Yes or No."
+    )
+    return _ask_vlm_yes_no(client, img_b64, prompt, model)
 
 
 def _filter_question(client, q: dict, image_root: Path, model: str) -> dict:
@@ -132,6 +149,15 @@ def _filter_question(client, q: dict, image_root: Path, model: str) -> dict:
         if not _is_object_visible(client, img_b64, obj, model):
             q["vlm_visible"] = False
             q["vlm_invisible_object"] = obj
+            return q
+
+    # Check for ambiguity: if multiple instances of the same object are
+    # visible, the question is unanswerable (e.g., "which direction is
+    # the chair relative to the table?" when there are 2 chairs).
+    for obj in objects:
+        if _is_object_ambiguous(client, img_b64, obj, model):
+            q["vlm_visible"] = False
+            q["vlm_ambiguous_object"] = obj
             return q
 
     q["vlm_visible"] = True
