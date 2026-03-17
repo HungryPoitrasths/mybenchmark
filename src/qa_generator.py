@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from .relation_engine import (
+    ALL_DIRECTIONS_10,
     compute_all_relations,
     find_changed_relations,
     primary_direction,
@@ -27,14 +28,13 @@ from .virtual_ops import (
     find_meaningful_movement,
 )
 from .utils.colmap_loader import CameraPose
-from .utils.ray_casting import RayCaster
 
 logger = logging.getLogger(__name__)
 
 # Default template file; can be overridden
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
-ALL_DIRECTIONS = ["left", "right", "above", "below", "in front", "behind"]
+ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
 ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
 YES_NO = ["Yes", "No"]
@@ -77,8 +77,8 @@ def _default_templates() -> dict:
             "Looking at the scene, where is {obj_a} positioned relative to {obj_b}?",
         ],
         "L1_occlusion": [
-            "Is {obj_a} partially or fully occluded by {obj_b} from the current viewpoint?",
-            "Can you see {obj_a} completely, or is it blocked by {obj_b}?",
+            "What is the visibility status of {obj_a} from the current viewpoint?",
+            "Is {obj_a} fully visible from the current camera angle?",
         ],
         "L1_distance": [
             "Approximately how far apart are {obj_a} and {obj_b}?",
@@ -207,19 +207,22 @@ def generate_l1_distance(
 
 
 def generate_l1_occlusion(
-    relation: dict,
+    obj: dict,
+    occlusion_status: str,
     templates: dict,
 ) -> dict | None:
-    """Generate an L1-occlusion question."""
-    if relation["occlusion"] == "unknown":
+    """Generate an L1-occlusion question (per-object, not pairwise).
+
+    Occlusion is now depth-map based: we know whether the object is visible
+    from the camera, but not *which* other object occludes it.  Templates
+    only reference the target object.
+    """
+    if occlusion_status == "unknown":
         return None
 
-    correct = relation["occlusion"]
+    correct = occlusion_status
     tpl = random.choice(templates.get("L1_occlusion", _default_templates()["L1_occlusion"]))
-    question_text = tpl.format(
-        obj_a=_the(relation["obj_a_label"]),
-        obj_b=_the(relation["obj_b_label"]),
-    )
+    question_text = tpl.format(obj_a=_the(obj["label"]))
     options, answer = generate_options(correct, ALL_OCCLUSION)
 
     return {
@@ -229,10 +232,8 @@ def generate_l1_occlusion(
         "options": options,
         "answer": answer,
         "correct_value": correct,
-        "obj_a_id": relation["obj_a_id"],
-        "obj_b_id": relation["obj_b_id"],
-        "obj_a_label": relation["obj_a_label"],
-        "obj_b_label": relation["obj_b_label"],
+        "obj_a_id": obj["id"],
+        "obj_a_label": obj["label"],
         "ambiguity_score": 0.0,
         "relation_unchanged": False,
     }
@@ -247,7 +248,6 @@ def generate_l2_object_move(
     support_graph: dict[int, list[int]],
     camera_pose: CameraPose,
     templates: dict,
-    ray_caster: RayCaster | None = None,
     max_per_object: int = 3,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
@@ -268,7 +268,7 @@ def generate_l2_object_move(
             continue
 
         delta, changed = find_meaningful_movement(
-            objects, support_graph, obj["id"], camera_pose, ray_caster
+            objects, support_graph, obj["id"], camera_pose,
         )
         if delta is None:
             continue
@@ -301,7 +301,7 @@ def generate_l2_object_move(
                 elif field == "distance_bin":
                     pool = ALL_DISTANCES
                     field_tpl_key = "L2_object_move_distance"
-                elif field == "occlusion":
+                elif field in ("occlusion_a", "occlusion_b"):
                     pool = ALL_OCCLUSION
                     field_tpl_key = "L2_object_move"
                 else:
@@ -349,23 +349,32 @@ def generate_l2_viewpoint_move(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    ray_caster: RayCaster | None = None,
 ) -> list[dict]:
-    """Generate L2.2 viewpoint-movement questions."""
+    """Generate L2.2 viewpoint-movement questions.
+
+    Detects direction/distance changes only (no occlusion — can't synthesise
+    a new depth map for the moved viewpoint).
+    """
     questions: list[dict] = []
     tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
 
-    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+    # No depth for either side — can't synthesise a new depth map after
+    # viewpoint change.  These L2 questions only detect direction/distance changes.
+    original_relations = compute_all_relations(objects, camera_pose, None, None)
 
     for direction in ("right", "left", "forward"):
         for dist in (2.0, 3.0):
             new_pose = apply_viewpoint_change(camera_pose, direction, dist)
-            new_relations = compute_all_relations(objects, new_pose, ray_caster)
+            new_relations = compute_all_relations(objects, new_pose, None, None)
             changed = find_changed_relations(original_relations, new_relations)
 
             for ch in changed:
                 for field, vals in ch["changes"].items():
-                    if field != "occlusion":
+                    if field == "direction_b_rel_a":
+                        pool = ALL_DIRECTIONS
+                    elif field == "distance_bin":
+                        pool = ALL_DISTANCES
+                    else:
                         continue
                     obj_label = next(
                         (o["label"] for o in objects if o["id"] == ch["obj_a_id"]),
@@ -377,7 +386,7 @@ def generate_l2_viewpoint_move(
                         distance=f"{dist:.0f}m",
                         obj_a=_the(obj_label),
                     )
-                    options, answer = generate_options(vals["new"], ALL_OCCLUSION)
+                    options, answer = generate_options(vals["new"], pool)
                     questions.append({
                         "level": "L2",
                         "type": "viewpoint_move",
@@ -396,24 +405,29 @@ def generate_l2_object_remove(
     support_graph: dict[int, list[int]],
     camera_pose: CameraPose,
     templates: dict,
-    ray_caster: RayCaster | None = None,
 ) -> list[dict]:
     """Generate L2.3 object-removal questions."""
     questions: list[dict] = []
     tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
 
-    original_relations = compute_all_relations(objects, camera_pose, ray_caster)
+    # No depth for either side — can't synthesise depth after removing an
+    # object.  These L2 questions detect direction/distance changes.
+    original_relations = compute_all_relations(objects, camera_pose, None, None)
 
     for obj in objects:
         remaining = apply_removal(objects, support_graph, obj["id"], cascade=False)
         if len(remaining) < 2:
             continue
-        new_relations = compute_all_relations(remaining, camera_pose, ray_caster)
+        new_relations = compute_all_relations(remaining, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
 
         for ch in changed:
             for field, vals in ch["changes"].items():
-                if field != "occlusion":
+                if field == "direction_b_rel_a":
+                    pool = ALL_DIRECTIONS
+                elif field == "distance_bin":
+                    pool = ALL_DISTANCES
+                else:
                     continue
                 other_label = next(
                     (o["label"] for o in objects if o["id"] == ch["obj_a_id"]),
@@ -424,7 +438,7 @@ def generate_l2_object_remove(
                     obj_a=_the(obj["label"]),
                     obj_b=_the(other_label),
                 )
-                options, answer = generate_options(vals["new"], ALL_OCCLUSION)
+                options, answer = generate_options(vals["new"], pool)
                 questions.append({
                     "level": "L2",
                     "type": "object_remove",
@@ -449,7 +463,6 @@ def generate_l3_support_chain(
     supported_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    ray_caster: RayCaster | None = None,
 ) -> list[dict]:
     """Generate L3.1 support-chain membership questions (two-hop: A→B→C).
 
@@ -551,7 +564,6 @@ def generate_l3_coordinate_rotation(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    ray_caster: RayCaster | None = None,
     max_per_angle: int = 5,
 ) -> list[dict]:
     """Generate L3.2 coordinate-rotation counterfactual questions.
@@ -569,15 +581,15 @@ def generate_l3_coordinate_rotation(
     questions: list[dict] = []
     tpl_list = templates.get("L3_coordinate_rotation", _default_templates()["L3_coordinate_rotation"])
 
-    # Direction changes don't need ray casting; skip it for speed.
-    original_relations = compute_all_relations(objects, camera_pose, None)
+    # Direction changes don't need depth/occlusion; skip it for speed.
+    original_relations = compute_all_relations(objects, camera_pose, None, None)
 
-    for angle in (90, 180, 270):
+    for angle in (45, 90, 135, 180, 225, 270, 315):
         # rotation_matrix_z uses math convention (positive = counterclockwise).
         # Templates say "clockwise", so negate the angle for the actual rotation.
         rotated = apply_coordinate_rotation(objects, float(-angle))
         # camera_pose intentionally unchanged — objects rotate, camera does not
-        new_relations = compute_all_relations(rotated, camera_pose, None)
+        new_relations = compute_all_relations(rotated, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
 
         # Collect only direction-changed pairs, then sample to cap
@@ -646,12 +658,15 @@ def generate_all_questions(
     support_graph: dict[int, list[int]],
     supported_by: dict[int, int],
     camera_pose: CameraPose,
-    ray_caster: RayCaster | None = None,
+    depth_image=None,
+    depth_intrinsics=None,
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
+    depth_image: float32 depth map in metres (from ScanNet depth PNG), or None.
+    depth_intrinsics: CameraIntrinsics for the depth camera, or None.
     visible_object_ids: if provided, restrict all questions to objects whose
     centre projects into this frame.  Questions about off-screen objects are
     unanswerable from the image and should never be included.
@@ -677,8 +692,9 @@ def generate_all_questions(
     # Remove objects with uninformative labels (wall, floor, object, etc.)
     objects = [o for o in objects if o.get("label", "").lower() not in EXCLUDED_LABELS]
 
-    # Only keep objects whose label is unique among visible objects.
-    # If there are 5 chairs in frame, "chair" is ambiguous — skip all of them.
+    # Safety net: per-frame uniqueness check.  The primary unique-label
+    # filtering now happens upstream in scene_parser.parse_scene(), but
+    # visibility filtering above may reveal edge cases — keep this guard.
     from collections import Counter
     label_counts = Counter(o["label"] for o in objects)
     unique_label_ids = {o["id"] for o in objects if label_counts[o["label"]] == 1}
@@ -691,11 +707,20 @@ def generate_all_questions(
     MAX_L1_DISTANCE = 20
 
     # Compute baseline relations using only uniquely-labelled visible objects
-    relations = compute_all_relations(objects_uniq, camera_pose, ray_caster)
+    relations = compute_all_relations(objects_uniq, camera_pose, depth_image, depth_intrinsics)
+
+    # Pre-compute per-object occlusion cache for L1 occlusion questions
+    from .relation_engine import compute_occlusion_per_object
+    occ_cache = compute_occlusion_per_object(
+        objects_uniq, camera_pose, depth_image, depth_intrinsics
+    )
 
     # L1 — collect separately so we can sample before adding
+    MAX_L1_OCCLUSION = 15
     l1_dir_qs:  list[dict] = []
     l1_dist_qs: list[dict] = []
+    l1_occ_qs:  list[dict] = []
+
     for rel in relations:
         q = generate_l1_direction(rel, templates)
         if q:
@@ -703,16 +728,27 @@ def generate_all_questions(
         q = generate_l1_distance(rel, templates)
         if q:
             l1_dist_qs.append(q)
-        q = generate_l1_occlusion(rel, templates)
+
+    # L1 occlusion: per-object (not pairwise)
+    seen_occ_objs: set[int] = set()
+    for obj in objects_uniq:
+        status, _ratio = occ_cache.get(obj["id"], ("unknown", 0.0))
+        if obj["id"] in seen_occ_objs:
+            continue
+        q = generate_l1_occlusion(obj, status, templates)
         if q:
-            all_questions.append(q)
+            l1_occ_qs.append(q)
+            seen_occ_objs.add(obj["id"])
 
     if len(l1_dir_qs) > MAX_L1_DIRECTION:
         l1_dir_qs = random.sample(l1_dir_qs, MAX_L1_DIRECTION)
     if len(l1_dist_qs) > MAX_L1_DISTANCE:
         l1_dist_qs = random.sample(l1_dist_qs, MAX_L1_DISTANCE)
+    if len(l1_occ_qs) > MAX_L1_OCCLUSION:
+        l1_occ_qs = random.sample(l1_occ_qs, MAX_L1_OCCLUSION)
     all_questions.extend(l1_dir_qs)
     all_questions.extend(l1_dist_qs)
+    all_questions.extend(l1_occ_qs)
 
     # Rebuild support graph restricted to uniquely-labelled objects
     support_graph_uniq = {
@@ -725,21 +761,21 @@ def generate_all_questions(
 
     # L2
     all_questions.extend(
-        generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates, ray_caster)
+        generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates)
     )
     all_questions.extend(
-        generate_l2_viewpoint_move(objects_uniq, camera_pose, templates, ray_caster)
+        generate_l2_viewpoint_move(objects_uniq, camera_pose, templates)
     )
     all_questions.extend(
-        generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, templates, ray_caster)
+        generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, templates)
     )
 
     # L3
     all_questions.extend(
-        generate_l3_support_chain(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates, ray_caster)
+        generate_l3_support_chain(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates)
     )
     all_questions.extend(
-        generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates, ray_caster)
+        generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates)
     )
 
     logger.info("Generated %d questions total", len(all_questions))

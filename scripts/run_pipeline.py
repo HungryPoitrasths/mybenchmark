@@ -22,14 +22,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.scene_parser import parse_scene
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
-from src.frame_selector import select_frames, refine_visible_ids_with_raycasting
+from src.frame_selector import select_frames
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
     load_axis_alignment,
+    load_scannet_depth_intrinsics,
     load_scannet_poses,
 )
-from src.utils.ray_casting import RayCaster
+from src.utils.depth_occlusion import load_depth_image
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +44,7 @@ def run_pipeline(
     output_dir: Path,
     max_scenes: int = 300,
     max_frames: int = 5,
-    use_ray_casting: bool = True,
+    use_occlusion: bool = True,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
 
@@ -99,20 +100,13 @@ def run_pipeline(
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
 
-        # Ray caster is kept for occlusion relation computation only (L1/L2
-        # occlusion questions).  Visible-object filtering is now handled by
-        # the VLM post-filter (scripts/run_vlm_filter.py) which is faster and
-        # more accurate than per-frame ray casting.
-        ray_caster = None
-        if use_ray_casting:
-            mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
-            if not mesh_path.exists():
-                mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
-            if mesh_path.exists():
-                try:
-                    ray_caster = RayCaster.from_ply(str(mesh_path), axis_alignment=axis_align)
-                except Exception as e:
-                    logger.warning("Ray caster init failed for %s: %s", scene_id, e)
+        # Load depth intrinsics once per scene (shared across all frames)
+        depth_intrinsics = None
+        if use_occlusion:
+            try:
+                depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
+            except Exception as e:
+                logger.warning("Depth intrinsics load failed for %s: %s", scene_id, e)
 
         # ---- Stages 4-6: Relations + Virtual ops + QA ----
         for frame in frames:
@@ -121,12 +115,24 @@ def run_pipeline(
                 continue
             camera_pose = poses[image_name]
 
+            # Load depth map for this frame
+            depth_image = None
+            if use_occlusion and depth_intrinsics is not None:
+                frame_id = image_name.replace(".jpg", "")
+                depth_path = scene_dir / "depth" / f"{frame_id}.png"
+                if depth_path.exists():
+                    try:
+                        depth_image = load_depth_image(depth_path)
+                    except Exception as e:
+                        logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
+
             questions = generate_all_questions(
                 objects=scene["objects"],
                 support_graph=support_graph,
                 supported_by=supported_by,
                 camera_pose=camera_pose,
-                ray_caster=ray_caster,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
                 visible_object_ids=frame["visible_object_ids"],
             )
 
@@ -193,8 +199,8 @@ def main():
         help="Maximum frames per scene",
     )
     parser.add_argument(
-        "--no_ray_casting", action="store_true",
-        help="Disable ray casting (faster but no occlusion questions)",
+        "--no_occlusion", action="store_true",
+        help="Disable depth-map occlusion (faster but no occlusion questions)",
     )
     args = parser.parse_args()
 
@@ -203,7 +209,7 @@ def main():
         output_dir=Path(args.output_dir),
         max_scenes=args.max_scenes,
         max_frames=args.max_frames,
-        use_ray_casting=not args.no_ray_casting,
+        use_occlusion=not args.no_occlusion,
     )
 
 

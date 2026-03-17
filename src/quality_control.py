@@ -86,7 +86,7 @@ def quality_filter(questions: list[dict]) -> list[dict]:
 
 def balance_answer_values(
     questions: list[dict],
-    target_types: tuple[str, ...] = ("distance",),
+    target_types: tuple[str, ...] = ("distance", "direction"),
 ) -> list[dict]:
     """Downsample questions so correct_value distribution is roughly uniform.
 

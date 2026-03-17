@@ -126,6 +126,26 @@ def load_scannet_intrinsics(scene_dir: Path) -> CameraIntrinsics:
     return CameraIntrinsics(width=width, height=height, fx=fx, fy=fy, cx=cx, cy=cy)
 
 
+def load_scannet_depth_intrinsics(scene_dir: Path) -> CameraIntrinsics:
+    """Load depth-camera intrinsics for a ScanNet scene.
+
+    Reads the 4×4 matrix from ``intrinsic/intrinsic_depth.txt`` and the depth
+    image dimensions from ``<scene_id>.txt`` (falls back to 640 × 480).
+    """
+    intr_file = scene_dir / "intrinsic" / "intrinsic_depth.txt"
+    if not intr_file.exists():
+        intr_file = scene_dir / "intrinsic_depth.txt"
+    M = np.loadtxt(str(intr_file))  # 4×4
+    fx, fy = float(M[0, 0]), float(M[1, 1])
+    cx, cy = float(M[0, 2]), float(M[1, 2])
+
+    meta = _read_scene_meta(scene_dir)
+    width  = int(meta.get("depthWidth",  640))
+    height = int(meta.get("depthHeight", 480))
+
+    return CameraIntrinsics(width=width, height=height, fx=fx, fy=fy, cx=cx, cy=cy)
+
+
 def load_scannet_poses(
     scene_dir: Path,
     axis_alignment: np.ndarray | None = None,

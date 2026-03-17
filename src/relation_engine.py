@@ -1,60 +1,33 @@
 """Stage 4: Spatial relation computation engine.
 
 Computes three types of spatial relations between object pairs:
-  - Direction (egocentric, relative to camera viewpoint)
+  - Direction (egocentric, relative to camera viewpoint — 10 directions)
   - Distance (Euclidean, with categorical binning)
-  - Occlusion (ray-casting against the scene mesh)
+  - Occlusion (depth-map based per-object visibility)
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 import numpy as np
 
 from .utils.colmap_loader import CameraPose
 from .utils.coordinate_transform import world_to_camera
-from .utils.ray_casting import RayCaster
 
 logger = logging.getLogger(__name__)
 
-# ---- Direction relation ----
+# ---- Direction relation (10-direction system) ----
 
-DIRECTION_THRESHOLD_XY = 0.3  # metres — minimum offset to declare a direction
-DIRECTION_THRESHOLD_Z = 0.5   # metres — depth axis needs larger margin
-
-
-def compute_direction(
-    obj_a_center: np.ndarray,
-    obj_b_center: np.ndarray,
-    camera_pose: CameraPose,
-) -> list[str]:
-    """Compute the directions of obj_b relative to obj_a in camera coordinates.
-
-    Camera convention (OpenCV): x→right, y→down, z→forward.
-
-    Returns a list of direction labels (may contain 0-3 elements).
-    """
-    a_cam = world_to_camera(obj_a_center, camera_pose)
-    b_cam = world_to_camera(obj_b_center, camera_pose)
-    delta = b_cam - a_cam
-
-    relations: list[str] = []
-
-    # Horizontal (camera x-axis)
-    if abs(delta[0]) > DIRECTION_THRESHOLD_XY:
-        relations.append("right" if delta[0] > 0 else "left")
-
-    # Vertical (camera y-axis, positive = down in OpenCV)
-    if abs(delta[1]) > DIRECTION_THRESHOLD_XY:
-        relations.append("below" if delta[1] > 0 else "above")
-
-    # Depth (camera z-axis)
-    if abs(delta[2]) > DIRECTION_THRESHOLD_Z:
-        relations.append("behind" if delta[2] > 0 else "in front")
-
-    return relations
+# 8 horizontal directions (egocentric, camera-frame) + 2 vertical
+HORIZONTAL_DIRECTIONS = [
+    "front", "front-right", "right", "back-right",
+    "back", "back-left", "left", "front-left",
+]
+VERTICAL_DIRECTIONS = ["above", "below"]
+ALL_DIRECTIONS_10 = HORIZONTAL_DIRECTIONS + VERTICAL_DIRECTIONS
 
 
 def primary_direction(
@@ -64,27 +37,57 @@ def primary_direction(
 ) -> tuple[str, float]:
     """Return the single most dominant direction of B relative to A.
 
+    Uses a 10-direction system: 8 horizontal bins (45° each, centred at
+    0°/45°/90°/…/315°) plus "above"/"below" for vertical dominance.
+
+    Camera convention (OpenCV): x→right, y→down, z→forward.
+
     Returns (direction_label, ambiguity_score) where ambiguity_score ∈ [0,1].
-    Higher ambiguity means the direction is close to a boundary.
+    Higher ambiguity means the direction is close to a bin boundary.
     """
     a_cam = world_to_camera(obj_a_center, camera_pose)
     b_cam = world_to_camera(obj_b_center, camera_pose)
-    delta = b_cam - a_cam
+    delta = b_cam - a_cam  # x=right, y=down, z=forward
 
-    candidates = [
-        (abs(delta[0]), "right" if delta[0] > 0 else "left"),
-        (abs(delta[1]), "below" if delta[1] > 0 else "above"),
-        (abs(delta[2]), "behind" if delta[2] > 0 else "in front"),
-    ]
-    candidates.sort(key=lambda c: c[0], reverse=True)
-    best_mag, best_dir = candidates[0]
-    second_mag = candidates[1][0]
+    dx, dy, dz = float(delta[0]), float(delta[1]), float(delta[2])
 
-    # Ambiguity: how close are the two largest components
-    if best_mag < 1e-6:
-        return best_dir, 1.0
-    ambiguity = second_mag / best_mag  # 0 = unambiguous, 1 = totally ambiguous
-    return best_dir, float(ambiguity)
+    horizontal_mag = math.sqrt(dx * dx + dz * dz)
+    vertical_mag = abs(dy)
+
+    # If vertical component dominates → above/below
+    if vertical_mag > horizontal_mag:
+        direction = "below" if dy > 0 else "above"  # OpenCV y-down
+        if horizontal_mag < 1e-6:
+            ambiguity = 0.0
+        else:
+            ambiguity = horizontal_mag / vertical_mag  # how close to switching
+        return direction, float(min(ambiguity, 1.0))
+
+    if horizontal_mag < 1e-6:
+        return "front", 1.0
+
+    # Compute angle in horizontal plane: atan2(dx, dz)
+    # dz = forward direction (0°), dx = right (90°)
+    angle = math.degrees(math.atan2(dx, dz))  # range [-180, 180]
+    if angle < 0:
+        angle += 360  # → [0, 360)
+
+    # Bin into 8 sectors (each 45°, centred at 0°, 45°, …, 315°)
+    bin_idx = int((angle + 22.5) % 360 / 45)
+    direction = HORIZONTAL_DIRECTIONS[bin_idx]
+
+    # Ambiguity: distance from bin centre, normalised to [0,1]
+    bin_centre = bin_idx * 45.0
+    offset = abs(angle - bin_centre)
+    if offset > 180:
+        offset = 360 - offset
+    horiz_ambiguity = offset / 22.5  # 0 at centre, 1 at boundary
+
+    # Also factor in vertical component ratio
+    vert_ratio = vertical_mag / horizontal_mag if horizontal_mag > 1e-6 else 0
+    ambiguity = max(horiz_ambiguity, vert_ratio)
+
+    return direction, float(min(ambiguity, 1.0))
 
 
 # ---- Distance relation ----
@@ -118,25 +121,37 @@ def compute_distance(
     return DISTANCE_BINS[-1][1], dist, near_boundary
 
 
-# ---- Occlusion relation ----
+# ---- Occlusion relation (per-object, depth-map based) ----
 
-def compute_occlusion(
-    obj_a: dict,
-    obj_b: dict,
-    camera_pos: np.ndarray,
-    ray_caster: RayCaster,
-) -> str:
-    """Determine if obj_a is occluded by obj_b from the camera position.
+def compute_occlusion_per_object(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    depth_image: np.ndarray | None = None,
+    depth_intrinsics=None,
+) -> dict[int, tuple[str, float]]:
+    """Compute per-object occlusion status using the depth map.
 
-    Uses multi-ray sampling for a more nuanced assessment.
+    Returns a dict mapping obj_id → (status, visibility_ratio).
+    Status is one of: "fully visible", "partially occluded", "fully occluded".
 
-    Returns: "fully_visible", "partially_occluded", or "fully_occluded".
+    If depth_image is None, returns "unknown" for all objects.
     """
-    return ray_caster.multi_ray_occlusion(
-        camera_pos=camera_pos,
-        target_bbox_min=np.array(obj_a["bbox_min"]),
-        target_bbox_max=np.array(obj_a["bbox_max"]),
-    )
+    if depth_image is None or depth_intrinsics is None:
+        return {o["id"]: ("unknown", 0.0) for o in objects}
+
+    from .utils.depth_occlusion import compute_depth_occlusion
+
+    cache: dict[int, tuple[str, float]] = {}
+    for obj in objects:
+        status, ratio = compute_depth_occlusion(
+            bbox_min=np.array(obj["bbox_min"]),
+            bbox_max=np.array(obj["bbox_max"]),
+            camera_pose=camera_pose,
+            intrinsics=depth_intrinsics,
+            depth_image=depth_image,
+        )
+        cache[obj["id"]] = (status, ratio)
+    return cache
 
 
 # ---- Batch computation ----
@@ -144,15 +159,23 @@ def compute_occlusion(
 def compute_all_relations(
     objects: list[dict],
     camera_pose: CameraPose,
-    ray_caster: RayCaster | None = None,
+    depth_image: np.ndarray | None = None,
+    depth_intrinsics=None,
 ) -> list[dict[str, Any]]:
     """Compute pairwise spatial relations for all object pairs.
 
+    Occlusion is computed per-object (not pairwise) using depth maps.
+
     Returns a list of relation dicts, each containing:
-        obj_a_id, obj_b_id, direction, distance_bin, distance_m, occlusion
+        obj_a_id, obj_b_id, direction, distance_bin, distance_m,
+        occlusion_a, occlusion_b
     """
+    # Pre-compute per-object occlusion (each object checked once, not per pair)
+    occ_cache = compute_occlusion_per_object(
+        objects, camera_pose, depth_image, depth_intrinsics
+    )
+
     relations: list[dict[str, Any]] = []
-    camera_pos = camera_pose.position
 
     for i, a in enumerate(objects):
         for j, b in enumerate(objects):
@@ -163,15 +186,9 @@ def compute_all_relations(
 
             # Direction: B relative to A
             dir_label, ambiguity = primary_direction(a_center, b_center, camera_pose)
-            all_dirs = compute_direction(a_center, b_center, camera_pose)
 
             # Distance
             dist_bin, dist_m, near_bound = compute_distance(a_center, b_center)
-
-            # Occlusion (only if ray caster is available)
-            occ = "unknown"
-            if ray_caster is not None:
-                occ = compute_occlusion(a, b, camera_pos, ray_caster)
 
             relations.append(
                 {
@@ -180,12 +197,12 @@ def compute_all_relations(
                     "obj_b_id": b["id"],
                     "obj_b_label": b["label"],
                     "direction_b_rel_a": dir_label,
-                    "all_directions": all_dirs,
                     "ambiguity_score": ambiguity,
                     "distance_bin": dist_bin,
                     "distance_m": round(dist_m, 2),
                     "near_boundary": near_bound,
-                    "occlusion": occ,
+                    "occlusion_a": occ_cache.get(a["id"], ("unknown", 0.0))[0],
+                    "occlusion_b": occ_cache.get(b["id"], ("unknown", 0.0))[0],
                 }
             )
 
@@ -210,7 +227,7 @@ def find_changed_relations(
         o = old_map[key]
         n = new_map[key]
         diffs = {}
-        for field in ("direction_b_rel_a", "distance_bin", "occlusion"):
+        for field in ("direction_b_rel_a", "distance_bin", "occlusion_a", "occlusion_b"):
             if o.get(field) != n.get(field):
                 diffs[field] = {"old": o[field], "new": n[field]}
         if diffs:

@@ -5,9 +5,9 @@
     "In this view, what is the spatial relationship of {obj_a} to {obj_b}?"
   ],
   "L1_occlusion": [
-    "Is {obj_a} partially or fully occluded by {obj_b} from the current viewpoint?",
-    "Can you see {obj_a} completely, or is it blocked by {obj_b}?",
-    "From the current camera angle, is {obj_a} hidden behind {obj_b}?"
+    "What is the visibility status of {obj_a} from the current viewpoint?",
+    "Is {obj_a} fully visible from the current camera angle?",
+    "From this viewpoint, how visible is {obj_a} in the scene?"
   ],
   "L1_distance": [
     "Approximately how far apart are {obj_a} and {obj_b}?",

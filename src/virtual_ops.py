@@ -22,7 +22,6 @@ from .utils.coordinate_transform import (
     get_camera_up,
     rotation_matrix_z,
 )
-from .utils.ray_casting import RayCaster
 from .relation_engine import compute_all_relations, find_changed_relations
 from .support_graph import get_support_chain
 
@@ -96,22 +95,20 @@ def find_meaningful_movement(
     support_graph: dict[int, list[int]],
     target_id: int,
     camera_pose: CameraPose,
-    ray_caster: RayCaster | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Search for a movement vector that changes at least one spatial relation.
 
     Returns (delta_vector, list_of_changed_relations) or (None, []).
     """
-    # Use ray_caster=None here: we only need direction/distance changes to
-    # find a valid delta; occlusion search would be prohibitively slow.
-    original_relations = compute_all_relations(objects, camera_pose, None)
+    # No depth/occlusion needed — we only need direction/distance changes.
+    original_relations = compute_all_relations(objects, camera_pose, None, None)
     room_min, room_max = compute_room_bounds(objects)
 
     for delta in MOVEMENT_CANDIDATES:
         new_objects = apply_movement(objects, support_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
-        new_relations = compute_all_relations(new_objects, camera_pose, None)
+        new_relations = compute_all_relations(new_objects, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
         if changed:
             return delta, changed

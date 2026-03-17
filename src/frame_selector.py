@@ -60,6 +60,41 @@ def refine_visible_ids_with_raycasting(
     return refined
 
 
+def refine_visible_ids_with_depth(
+    visible_object_ids: list[int],
+    objects: list[dict],
+    pose: CameraPose,
+    depth_image,
+    depth_intrinsics,
+) -> list[int]:
+    """Remove fully-occluded objects using depth-map occlusion.
+
+    Similar to ``refine_visible_ids_with_raycasting`` but uses the depth map
+    instead of trimesh ray casting — much faster and does not require pyembree.
+
+    Partially-occluded objects are kept; only fully-occluded ones are dropped.
+    """
+    from .utils.depth_occlusion import compute_depth_occlusion
+    import numpy as np
+
+    obj_map = {o["id"]: o for o in objects}
+    refined: list[int] = []
+    for obj_id in visible_object_ids:
+        obj = obj_map.get(obj_id)
+        if obj is None:
+            continue
+        status, _ratio = compute_depth_occlusion(
+            bbox_min=np.array(obj["bbox_min"]),
+            bbox_max=np.array(obj["bbox_max"]),
+            camera_pose=pose,
+            intrinsics=depth_intrinsics,
+            depth_image=depth_image,
+        )
+        if status != "fully occluded":
+            refined.append(obj_id)
+    return refined
+
+
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 
