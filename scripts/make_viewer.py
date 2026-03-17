@@ -122,7 +122,8 @@ def main():
     args = parser.parse_args()
 
     with open(args.questions, encoding="utf-8") as f:
-        questions = json.load(f)
+        data = json.load(f)
+    questions = data["questions"] if isinstance(data, dict) and "questions" in data else data
 
     image_root = Path(args.image_root)
     level_counter: Counter = Counter()
