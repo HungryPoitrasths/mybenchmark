@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Qwen2.5-VL-72B on pilot study questions and evaluate results.
+"""Run VLM on pilot study questions and evaluate results.
 
 All-in-one script: inference → evaluate → per-question detail.
 
@@ -83,7 +83,7 @@ def run_inference(questions: list[dict], image_root: Path, delay: float = 0.3) -
 
     try:
         from tqdm import tqdm
-        loop = tqdm(enumerate(questions), total=len(questions), desc="Qwen2.5-VL")
+        loop = tqdm(enumerate(questions), total=len(questions), desc="VLM Eval")
     except ImportError:
         loop = enumerate(questions)
 
@@ -191,7 +191,7 @@ def evaluate(questions: list[dict], predictions: list[dict]):
     total = len(details)
     n_correct = sum(1 for d in details if d["correct"])
     print("\n" + "=" * 70)
-    print("PILOT EVALUATION: Qwen2.5-VL-72B-Instruct")
+    print(f"PILOT EVALUATION: {QWEN_MODEL.split('/')[-1]}")
     print("=" * 70)
     print(f"Overall: {n_correct}/{total} = {n_correct/total:.1%}")
 
@@ -259,7 +259,7 @@ def evaluate(questions: list[dict], predictions: list[dict]):
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Pilot eval with Qwen2.5-VL-72B")
+    parser = argparse.ArgumentParser(description="Pilot eval with VLM")
     parser.add_argument(
         "--benchmark", type=str, default="output/pilot/benchmark.json",
         help="Path to pilot benchmark.json",
@@ -295,7 +295,7 @@ def main():
         logger.info("Capped at %d questions", len(questions))
 
     # Run inference
-    print(f"\nCalling Qwen2.5-VL-72B @ {QWEN_BASE_URL} ...")
+    print(f"\nCalling {QWEN_MODEL.split('/')[-1]} @ {QWEN_BASE_URL} ...")
     predictions = run_inference(questions, Path(args.image_root), delay=args.delay)
 
     # Save predictions
