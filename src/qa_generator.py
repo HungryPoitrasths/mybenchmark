@@ -584,7 +584,7 @@ def generate_l3_coordinate_rotation(
     # Direction changes don't need depth/occlusion; skip it for speed.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
 
-    for angle in (45, 90, 135, 180, 225, 270, 315):
+    for angle in (90, 180, 270):
         # rotation_matrix_z uses math convention (positive = counterclockwise).
         # Templates say "clockwise", so negate the angle for the actual rotation.
         rotated = apply_coordinate_rotation(objects, float(-angle))
