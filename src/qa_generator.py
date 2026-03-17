@@ -35,15 +35,19 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 ALL_DIRECTIONS = ["left", "right", "above", "below", "in front", "behind"]
-ALL_DISTANCES = ["very close (<1m)", "close (1-3m)", "moderate (3-5m)", "far (>5m)"]
+ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
 ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
 YES_NO = ["Yes", "No"]
 
-# Structural elements that cannot be meaningfully "moved" in a scene.
-# These are fixed parts of the room architecture.
-STRUCTURAL_LABELS = {
+# Labels to exclude from ALL question types (not just L2).
+# Structural elements, generic labels, and uninformative categories.
+EXCLUDED_LABELS = {
+    # Structural / architectural
     "floor", "wall", "ceiling", "room", "ground",
     "door", "window", "stairs", "pillar", "column",
+    # Generic / uninformative
+    "object", "otherfurniture", "otherprop", "otherstructure",
+    "unknown", "misc", "stuff",
 }
 
 
@@ -244,7 +248,7 @@ def generate_l2_object_move(
     for obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
         # meaningful physical sense and confuse human annotators.
-        if obj.get("label", "").lower() in STRUCTURAL_LABELS:
+        if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
         # L2.1 only makes sense when the moved object actually carries dependent
@@ -646,6 +650,9 @@ def generate_all_questions(
             if k in vis_set
         }
         supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
+
+    # Remove objects with uninformative labels (wall, floor, object, etc.)
+    objects = [o for o in objects if o.get("label", "").lower() not in EXCLUDED_LABELS]
 
     # Only keep objects whose label is unique among visible objects.
     # If there are 5 chairs in frame, "chair" is ambiguous — skip all of them.

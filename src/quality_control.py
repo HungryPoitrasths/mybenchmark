@@ -23,6 +23,7 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         1. Direction ambiguity > 0.7 (too close to boundary)
         2. L2/L3 questions where the relation didn't actually change
         3. Distance questions near bin boundaries
+        4. Near-duplicate questions (same frame + type + obj_a, keep one)
     """
     filtered: list[dict] = []
     removed_counts: Counter = Counter()
@@ -45,13 +46,30 @@ def quality_filter(questions: list[dict]) -> list[dict]:
 
         filtered.append(q)
 
+    # Filter 4: deduplicate near-identical questions.
+    # Same (scene, frame, type, obj_a_label) → keep only one.
+    seen_keys: set[tuple] = set()
+    deduped: list[dict] = []
+    for q in filtered:
+        key = (
+            q.get("scene_id"),
+            q.get("image_name"),
+            q.get("type"),
+            q.get("obj_a_label", q.get("moved_obj_label", "")),
+        )
+        if key in seen_keys:
+            removed_counts["near_duplicate"] += 1
+            continue
+        seen_keys.add(key)
+        deduped.append(q)
+
     for reason, count in removed_counts.items():
         logger.info("Removed %d questions: %s", count, reason)
     logger.info(
         "Quality filter: %d → %d questions (removed %d)",
-        len(questions), len(filtered), len(questions) - len(filtered),
+        len(questions), len(deduped), len(questions) - len(deduped),
     )
-    return filtered
+    return deduped
 
 
 def balance_answer_distribution(

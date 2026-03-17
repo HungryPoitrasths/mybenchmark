@@ -90,13 +90,13 @@ def primary_direction(
 # ---- Distance relation ----
 
 DISTANCE_BINS = [
-    (1.0, "very close (<1m)"),
-    (3.0, "close (1-3m)"),
-    (5.0, "moderate (3-5m)"),
-    (float("inf"), "far (>5m)"),
+    (0.5, "touching (<0.5m)"),
+    (1.5, "very close (0.5-1.5m)"),
+    (3.0, "close (1.5-3m)"),
+    (float("inf"), "far (>3m)"),
 ]
 
-DISTANCE_BIN_BOUNDARIES = [b[0] for b in DISTANCE_BINS[:-1]]  # [1.0, 3.0, 5.0]
+DISTANCE_BIN_BOUNDARIES = [b[0] for b in DISTANCE_BINS[:-1]]  # [0.5, 1.5, 3.0]
 
 
 def compute_distance(

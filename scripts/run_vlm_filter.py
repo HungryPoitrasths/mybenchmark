@@ -69,7 +69,9 @@ def _get_object_labels(q: dict) -> list[str]:
             labels.add(v)
 
     # Filter out generic/uninformative labels
-    labels -= {"object", "unknown", ""}
+    labels -= {"object", "unknown", "", "floor", "wall", "ceiling",
+               "otherfurniture", "otherprop", "otherstructure",
+               "room", "ground", "door", "window", "stairs"}
     return list(labels)
 
 
@@ -83,7 +85,7 @@ def _load_image_b64(image_path: Path) -> str | None:
 def _is_object_visible(client, img_b64: str, obj_name: str, model: str) -> bool:
     """Ask the VLM whether *obj_name* is clearly visible in the image."""
     prompt = (
-        f'Is there a "{obj_name}" clearly visible in this image? '
+        f'Is there a "{obj_name}" present in this image? '
         f"Answer with only Yes or No."
     )
     try:
