@@ -16,9 +16,14 @@ import numpy as np
 
 from .relation_engine import (
     ALL_DIRECTIONS_10,
+    ALL_ALLOCENTRIC_10,
+    CARDINAL_DIRECTIONS_8,
     compute_all_relations,
     find_changed_relations,
     primary_direction,
+    primary_direction_object_centric,
+    primary_direction_allocentric,
+    camera_cardinal_direction,
     compute_distance,
 )
 from .virtual_ops import (
@@ -35,6 +40,7 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 ALL_DIRECTIONS = ALL_DIRECTIONS_10
+ALL_DIRECTIONS_ALLOCENTRIC = ALL_ALLOCENTRIC_10
 ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
 ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
 YES_NO = ["Yes", "No"]
@@ -72,18 +78,37 @@ def _load_templates() -> dict:
 
 def _default_templates() -> dict:
     return {
+        # ==== L1 — Static perception ====
+
+        # --- Ego-centric ---
         "L1_direction": [
-            "From the image, {obj_a} is in which direction relative to {obj_b}?",
-            "Looking at the scene, where is {obj_a} positioned relative to {obj_b}?",
-        ],
-        "L1_occlusion": [
-            "What is the visibility status of {obj_a} from the current viewpoint?",
-            "Is {obj_a} fully visible from the current camera angle?",
+            "From the camera's viewpoint, {obj_a} is in which direction relative to {obj_b}?",
+            "Looking at the scene from the camera's perspective, where is {obj_a} positioned relative to {obj_b}?",
         ],
         "L1_distance": [
             "Approximately how far apart are {obj_a} and {obj_b}?",
             "What is the approximate distance between {obj_a} and {obj_b}?",
         ],
+        "L1_occlusion": [
+            "What is the visibility status of {obj_a} from the current viewpoint?",
+            "Is {obj_a} fully visible from the current camera angle?",
+        ],
+
+        # --- Object-centric ---
+        "L1_direction_object_centric": [
+            "Imagine you are standing at {obj_ref} and facing toward {obj_face}. From this perspective, in which direction is {obj_target}?",
+            "If you were at the position of {obj_ref}, looking toward {obj_face}, where would {obj_target} be?",
+        ],
+
+        # --- Allocentric ---
+        "L1_direction_allocentric": [
+            "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+            "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
+        ],
+
+        # ==== L2 — Intervention ====
+
+        # --- Ego-centric (existing) ---
         "L2_object_move": [
             "If {obj_a} is moved {direction} by {distance}, what would be the new spatial relationship between {obj_b} and {obj_c}?",
             "Imagine moving {obj_a} {direction} by {distance}. After this change, in which direction is {obj_b} relative to {obj_c}?",
@@ -98,13 +123,41 @@ def _default_templates() -> dict:
         "L2_object_remove": [
             "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
         ],
+
+        # --- Object-centric ---
+        "L2_object_move_object_centric": [
+            "If {obj_moved} is moved {direction} by {distance}, imagine standing at {obj_ref} and facing toward {obj_face}. In which direction would {obj_moved} be?",
+            "After moving {obj_moved} {direction} by {distance}, if you stand at {obj_ref} facing {obj_face}, where is {obj_moved}?",
+        ],
+
+        # --- Allocentric ---
+        "L2_object_move_allocentric": [
+            "If {obj_moved} is moved {direction} by {distance}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_moved} be from {obj_ref}?",
+            "After moving {obj_moved} {direction} by {distance}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_moved} from {obj_ref}?",
+        ],
+
+        # ==== L3 — Counterfactual / multi-hop ====
+
         "L3_support_chain": [
             "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",
             "If {obj_a} were relocated elsewhere in the room, which of the following objects would also change position?",
             "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?",
         ],
+
+        # --- Ego-centric (rewritten — 方案B) ---
         "L3_coordinate_rotation": [
-            "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
+            "Imagine all the furniture in the room is rearranged by rotating everything {angle} degrees clockwise around the center of the room (viewed from above). You remain standing in the exact same spot, looking in the same direction. After this rearrangement, in which direction is {obj_a} relative to {obj_b}?",
+            "Suppose someone rotates all objects in the room {angle} degrees clockwise around the room's center (as seen from above), while you stay in place with the same viewing angle. In which direction would {obj_a} be relative to {obj_b}?",
+        ],
+
+        # --- Object-centric ---
+        "L3_coordinate_rotation_object_centric": [
+            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). After this rearrangement, if you stand at {obj_ref}'s new position and face toward {obj_face}'s new position, in which direction is {obj_target}?",
+        ],
+
+        # --- Allocentric ---
+        "L3_coordinate_rotation_allocentric": [
+            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
         ],
     }
 
@@ -237,6 +290,147 @@ def generate_l1_occlusion(
         "ambiguity_score": 0.0,
         "relation_unchanged": False,
     }
+
+
+# ---------------------------------------------------------------------------
+#  L1 generators — new reference frames
+# ---------------------------------------------------------------------------
+
+def generate_l1_direction_object_centric(
+    objects: list[dict],
+    templates: dict,
+    max_questions: int = 20,
+) -> list[dict]:
+    """Generate L1 object-centric direction questions.
+
+    Uses triples (ref, face, target) to define a reference frame at *ref*
+    facing *face*, then asks for the direction of *target*.
+    """
+    questions: list[dict] = []
+    n = len(objects)
+    if n < 3:
+        return questions
+
+    tpl_list = templates.get(
+        "L1_direction_object_centric",
+        _default_templates()["L1_direction_object_centric"],
+    )
+
+    candidates: list[dict] = []
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            for k in range(n):
+                if k == i or k == j:
+                    continue
+                ref = objects[i]
+                face = objects[j]
+                target = objects[k]
+                # All three labels must be distinct for unambiguous reference
+                if len({ref["label"], face["label"], target["label"]}) < 3:
+                    continue
+
+                ref_c = np.array(ref["center"])
+                face_c = np.array(face["center"])
+                target_c = np.array(target["center"])
+
+                direction, ambiguity = primary_direction_object_centric(
+                    ref_c, face_c, target_c,
+                )
+                if ambiguity > 0.7:
+                    continue
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    obj_ref=_the(ref["label"]),
+                    obj_face=_the(face["label"]),
+                    obj_target=_the(target["label"]),
+                )
+                options, answer = generate_options(direction, ALL_DIRECTIONS)
+                candidates.append({
+                    "level": "L1",
+                    "type": "direction_object_centric",
+                    "reference_frame": "object_centric",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": direction,
+                    "obj_ref_id": ref["id"],
+                    "obj_ref_label": ref["label"],
+                    "obj_face_id": face["id"],
+                    "obj_face_label": face["label"],
+                    "obj_target_id": target["id"],
+                    "obj_target_label": target["label"],
+                    "ambiguity_score": ambiguity,
+                    "relation_unchanged": False,
+                })
+
+    if len(candidates) > max_questions:
+        candidates = random.sample(candidates, max_questions)
+    return candidates
+
+
+def generate_l1_direction_allocentric(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    templates: dict,
+    max_questions: int = 20,
+) -> list[dict]:
+    """Generate L1 allocentric (cardinal) direction questions.
+
+    Provides the camera's cardinal facing direction so the model can anchor
+    absolute directions from the image.
+    """
+    questions: list[dict] = []
+    cam_cardinal = camera_cardinal_direction(camera_pose)
+    n = len(objects)
+
+    tpl_list = templates.get(
+        "L1_direction_allocentric",
+        _default_templates()["L1_direction_allocentric"],
+    )
+
+    candidates: list[dict] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = objects[i], objects[j]
+            if a["label"] == b["label"]:
+                continue
+
+            a_c = np.array(a["center"])
+            b_c = np.array(b["center"])
+            direction, ambiguity = primary_direction_allocentric(a_c, b_c)
+            if ambiguity > 0.7:
+                continue
+
+            tpl = random.choice(tpl_list)
+            question_text = tpl.format(
+                camera_cardinal=cam_cardinal,
+                obj_a=_the(a["label"]),
+                obj_b=_the(b["label"]),
+            )
+            options, answer = generate_options(direction, ALL_DIRECTIONS_ALLOCENTRIC)
+            candidates.append({
+                "level": "L1",
+                "type": "direction_allocentric",
+                "reference_frame": "allocentric",
+                "question": question_text,
+                "options": options,
+                "answer": answer,
+                "correct_value": direction,
+                "camera_cardinal": cam_cardinal,
+                "obj_a_id": a["id"],
+                "obj_a_label": a["label"],
+                "obj_b_id": b["id"],
+                "obj_b_label": b["label"],
+                "ambiguity_score": ambiguity,
+                "relation_unchanged": False,
+            })
+
+    if len(candidates) > max_questions:
+        candidates = random.sample(candidates, max_questions)
+    return candidates
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +648,185 @@ def generate_l2_object_remove(
 
 
 # ---------------------------------------------------------------------------
+#  L2 generators — new reference frames
+# ---------------------------------------------------------------------------
+
+def generate_l2_object_move_object_centric(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    templates: dict,
+    max_per_object: int = 3,
+) -> list[dict]:
+    """L2 object-move questions answered in object-centric frame.
+
+    After moving *obj_moved*, asks: standing at *obj_ref* facing *obj_face*,
+    where is *obj_moved* now?
+    """
+    questions: list[dict] = []
+    obj_map = {o["id"]: o for o in objects}
+    tpl_list = templates.get(
+        "L2_object_move_object_centric",
+        _default_templates()["L2_object_move_object_centric"],
+    )
+
+    for obj in objects:
+        if obj.get("label", "").lower() in EXCLUDED_LABELS:
+            continue
+        children = support_graph.get(obj["id"]) or support_graph.get(str(obj["id"])) or []
+        if not children:
+            continue
+
+        delta, _changed = find_meaningful_movement(
+            objects, support_graph, obj["id"], camera_pose,
+        )
+        if delta is None:
+            continue
+
+        direction_desc = _delta_to_description(delta)
+        distance_desc = f"{np.linalg.norm(delta):.1f}m"
+
+        # Compute the moved object's new center
+        new_center = np.array(obj["center"]) + delta
+
+        obj_questions: list[dict] = []
+        for ref in objects:
+            if ref["id"] == obj["id"]:
+                continue
+            for face in objects:
+                if face["id"] == obj["id"] or face["id"] == ref["id"]:
+                    continue
+                if len({obj["label"], ref["label"], face["label"]}) < 3:
+                    continue
+
+                ref_c = np.array(ref["center"])
+                face_c = np.array(face["center"])
+                new_dir, amb = primary_direction_object_centric(
+                    ref_c, face_c, new_center,
+                )
+                if amb > 0.7:
+                    continue
+
+                # Check that direction actually changed from the original
+                old_dir, _ = primary_direction_object_centric(
+                    ref_c, face_c, np.array(obj["center"]),
+                )
+                if old_dir == new_dir:
+                    continue
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    obj_moved=_the(obj["label"]),
+                    direction=direction_desc,
+                    distance=distance_desc,
+                    obj_ref=_the(ref["label"]),
+                    obj_face=_the(face["label"]),
+                )
+                options, answer = generate_options(new_dir, ALL_DIRECTIONS)
+                obj_questions.append({
+                    "level": "L2",
+                    "type": "object_move_object_centric",
+                    "reference_frame": "object_centric",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": new_dir,
+                    "moved_obj_id": obj["id"],
+                    "moved_obj_label": obj["label"],
+                    "obj_ref_label": ref["label"],
+                    "obj_face_label": face["label"],
+                    "delta": delta.tolist(),
+                    "relation_unchanged": False,
+                })
+
+        if len(obj_questions) > max_per_object:
+            obj_questions = random.sample(obj_questions, max_per_object)
+        questions.extend(obj_questions)
+
+    return questions
+
+
+def generate_l2_object_move_allocentric(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    templates: dict,
+    max_per_object: int = 3,
+) -> list[dict]:
+    """L2 object-move questions answered in allocentric (cardinal) frame."""
+    questions: list[dict] = []
+    cam_cardinal = camera_cardinal_direction(camera_pose)
+    tpl_list = templates.get(
+        "L2_object_move_allocentric",
+        _default_templates()["L2_object_move_allocentric"],
+    )
+
+    for obj in objects:
+        if obj.get("label", "").lower() in EXCLUDED_LABELS:
+            continue
+        children = support_graph.get(obj["id"]) or support_graph.get(str(obj["id"])) or []
+        if not children:
+            continue
+
+        delta, _changed = find_meaningful_movement(
+            objects, support_graph, obj["id"], camera_pose,
+        )
+        if delta is None:
+            continue
+
+        direction_desc = _delta_to_description(delta)
+        distance_desc = f"{np.linalg.norm(delta):.1f}m"
+        new_center = np.array(obj["center"]) + delta
+
+        obj_questions: list[dict] = []
+        for ref in objects:
+            if ref["id"] == obj["id"]:
+                continue
+            if ref["label"] == obj["label"]:
+                continue
+
+            ref_c = np.array(ref["center"])
+            new_dir, amb = primary_direction_allocentric(new_center, ref_c)
+            if amb > 0.7:
+                continue
+
+            old_dir, _ = primary_direction_allocentric(np.array(obj["center"]), ref_c)
+            if old_dir == new_dir:
+                continue
+
+            tpl = random.choice(tpl_list)
+            question_text = tpl.format(
+                obj_moved=_the(obj["label"]),
+                direction=direction_desc,
+                distance=distance_desc,
+                camera_cardinal=cam_cardinal,
+                obj_ref=_the(ref["label"]),
+            )
+            options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
+            obj_questions.append({
+                "level": "L2",
+                "type": "object_move_allocentric",
+                "reference_frame": "allocentric",
+                "question": question_text,
+                "options": options,
+                "answer": answer,
+                "correct_value": new_dir,
+                "camera_cardinal": cam_cardinal,
+                "moved_obj_id": obj["id"],
+                "moved_obj_label": obj["label"],
+                "obj_ref_label": ref["label"],
+                "delta": delta.tolist(),
+                "relation_unchanged": False,
+            })
+
+        if len(obj_questions) > max_per_object:
+            obj_questions = random.sample(obj_questions, max_per_object)
+        questions.extend(obj_questions)
+
+    return questions
+
+
+# ---------------------------------------------------------------------------
 #  L3 generators
 # ---------------------------------------------------------------------------
 
@@ -630,6 +1003,178 @@ def generate_l3_coordinate_rotation(
     return questions
 
 
+def generate_l3_coordinate_rotation_object_centric(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    templates: dict,
+    max_per_angle: int = 5,
+) -> list[dict]:
+    """L3 coordinate-rotation questions in object-centric frame.
+
+    After rotating all objects, asks: standing at obj_ref's NEW position and
+    facing obj_face's NEW position, where is obj_target?
+    """
+    questions: list[dict] = []
+    tpl_list = templates.get(
+        "L3_coordinate_rotation_object_centric",
+        _default_templates()["L3_coordinate_rotation_object_centric"],
+    )
+
+    for angle in (90, 180, 270):
+        rotated = apply_coordinate_rotation(objects, float(-angle))
+        rot_map = {o["id"]: o for o in rotated}
+
+        candidates: list[dict] = []
+        n = len(objects)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                for k in range(n):
+                    if k == i or k == j:
+                        continue
+                    ref = objects[i]
+                    face = objects[j]
+                    target = objects[k]
+                    if len({ref["label"], face["label"], target["label"]}) < 3:
+                        continue
+
+                    # Use the rotated positions for the reference frame
+                    ref_rot = rot_map.get(ref["id"])
+                    face_rot = rot_map.get(face["id"])
+                    target_rot = rot_map.get(target["id"])
+                    if ref_rot is None or face_rot is None or target_rot is None:
+                        continue
+
+                    new_dir, amb = primary_direction_object_centric(
+                        np.array(ref_rot["center"]),
+                        np.array(face_rot["center"]),
+                        np.array(target_rot["center"]),
+                    )
+                    if amb > 0.7:
+                        continue
+
+                    # Check it differs from original
+                    old_dir, _ = primary_direction_object_centric(
+                        np.array(ref["center"]),
+                        np.array(face["center"]),
+                        np.array(target["center"]),
+                    )
+                    if old_dir == new_dir:
+                        continue
+
+                    tpl = random.choice(tpl_list)
+                    question_text = tpl.format(
+                        angle=angle,
+                        obj_ref=_the(ref["label"]),
+                        obj_face=_the(face["label"]),
+                        obj_target=_the(target["label"]),
+                    )
+                    options, answer = generate_options(new_dir, ALL_DIRECTIONS)
+                    candidates.append({
+                        "level": "L3",
+                        "type": "coordinate_rotation_object_centric",
+                        "reference_frame": "object_centric",
+                        "question": question_text,
+                        "options": options,
+                        "answer": answer,
+                        "correct_value": new_dir,
+                        "rotation_angle": angle,
+                        "obj_ref_label": ref["label"],
+                        "obj_face_label": face["label"],
+                        "obj_target_label": target["label"],
+                        "old_direction": old_dir,
+                        "new_direction": new_dir,
+                        "relation_unchanged": False,
+                    })
+
+        if len(candidates) > max_per_angle:
+            candidates = random.sample(candidates, max_per_angle)
+        questions.extend(candidates)
+
+    return questions
+
+
+def generate_l3_coordinate_rotation_allocentric(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    templates: dict,
+    max_per_angle: int = 5,
+) -> list[dict]:
+    """L3 coordinate-rotation questions in allocentric (cardinal) frame.
+
+    After rotating all objects, asks: on the floor plan, what cardinal
+    direction is obj_a from obj_b?  (Camera + room axes stay fixed, so the
+    objects' cardinal positions DO change.)
+    """
+    questions: list[dict] = []
+    cam_cardinal = camera_cardinal_direction(camera_pose)
+    tpl_list = templates.get(
+        "L3_coordinate_rotation_allocentric",
+        _default_templates()["L3_coordinate_rotation_allocentric"],
+    )
+
+    for angle in (90, 180, 270):
+        rotated = apply_coordinate_rotation(objects, float(-angle))
+        rot_map = {o["id"]: o for o in rotated}
+
+        candidates: list[dict] = []
+        n = len(objects)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = objects[i], objects[j]
+                if a["label"] == b["label"]:
+                    continue
+
+                a_rot = rot_map.get(a["id"])
+                b_rot = rot_map.get(b["id"])
+                if a_rot is None or b_rot is None:
+                    continue
+
+                new_dir, amb = primary_direction_allocentric(
+                    np.array(a_rot["center"]), np.array(b_rot["center"]),
+                )
+                if amb > 0.7:
+                    continue
+
+                old_dir, _ = primary_direction_allocentric(
+                    np.array(a["center"]), np.array(b["center"]),
+                )
+                if old_dir == new_dir:
+                    continue
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    angle=angle,
+                    camera_cardinal=cam_cardinal,
+                    obj_a=_the(a["label"]),
+                    obj_b=_the(b["label"]),
+                )
+                options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
+                candidates.append({
+                    "level": "L3",
+                    "type": "coordinate_rotation_allocentric",
+                    "reference_frame": "allocentric",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": new_dir,
+                    "camera_cardinal": cam_cardinal,
+                    "rotation_angle": angle,
+                    "obj_a_label": a["label"],
+                    "obj_b_label": b["label"],
+                    "old_direction": old_dir,
+                    "new_direction": new_dir,
+                    "relation_unchanged": False,
+                })
+
+        if len(candidates) > max_per_angle:
+            candidates = random.sample(candidates, max_per_angle)
+        questions.extend(candidates)
+
+    return questions
+
+
 # ---------------------------------------------------------------------------
 #  Helpers
 # ---------------------------------------------------------------------------
@@ -704,6 +1249,8 @@ def generate_all_questions(
 
     # Per-frame caps — keep the benchmark tractable when scenes have many objects
     MAX_L1_DIRECTION = 20
+    MAX_L1_DIRECTION_OC = 15   # object-centric
+    MAX_L1_DIRECTION_ALLO = 15 # allocentric
     MAX_L1_DISTANCE = 20
 
     # Compute baseline relations using only uniquely-labelled visible objects
@@ -740,6 +1287,14 @@ def generate_all_questions(
             l1_occ_qs.append(q)
             seen_occ_objs.add(obj["id"])
 
+    # L1 new reference frames
+    l1_dir_oc_qs = generate_l1_direction_object_centric(
+        objects_uniq, templates, max_questions=MAX_L1_DIRECTION_OC,
+    )
+    l1_dir_allo_qs = generate_l1_direction_allocentric(
+        objects_uniq, camera_pose, templates, max_questions=MAX_L1_DIRECTION_ALLO,
+    )
+
     if len(l1_dir_qs) > MAX_L1_DIRECTION:
         l1_dir_qs = random.sample(l1_dir_qs, MAX_L1_DIRECTION)
     if len(l1_dist_qs) > MAX_L1_DISTANCE:
@@ -749,6 +1304,8 @@ def generate_all_questions(
     all_questions.extend(l1_dir_qs)
     all_questions.extend(l1_dist_qs)
     all_questions.extend(l1_occ_qs)
+    all_questions.extend(l1_dir_oc_qs)
+    all_questions.extend(l1_dir_allo_qs)
 
     # Rebuild support graph restricted to uniquely-labelled objects
     support_graph_uniq = {
@@ -759,7 +1316,7 @@ def generate_all_questions(
     supported_by_uniq = {k: v for k, v in supported_by.items()
                          if k in unique_label_ids and v in unique_label_ids}
 
-    # L2
+    # L2 — ego-centric (existing)
     all_questions.extend(
         generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates)
     )
@@ -769,13 +1326,31 @@ def generate_all_questions(
     all_questions.extend(
         generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, templates)
     )
+    # L2 — new reference frames
+    all_questions.extend(
+        generate_l2_object_move_object_centric(
+            objects_uniq, support_graph_uniq, camera_pose, templates,
+        )
+    )
+    all_questions.extend(
+        generate_l2_object_move_allocentric(
+            objects_uniq, support_graph_uniq, camera_pose, templates,
+        )
+    )
 
     # L3
     all_questions.extend(
         generate_l3_support_chain(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates)
     )
+    # L3 coordinate rotation — all three reference frames
     all_questions.extend(
         generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates)
+    )
+    all_questions.extend(
+        generate_l3_coordinate_rotation_object_centric(objects_uniq, camera_pose, templates)
+    )
+    all_questions.extend(
+        generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates)
     )
 
     logger.info("Generated %d questions total", len(all_questions))

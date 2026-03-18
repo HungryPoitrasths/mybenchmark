@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 
 from .utils.colmap_loader import (
@@ -25,6 +26,57 @@ from .utils.colmap_loader import (
 from .utils.coordinate_transform import is_in_image, project_to_image
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+#  Image quality gate
+# ---------------------------------------------------------------------------
+
+# Thresholds (tuned for ScanNet 640×480 colour frames)
+SHARPNESS_MIN = 30.0       # Laplacian variance; below → motion blur / out-of-focus
+BRIGHTNESS_MIN = 30.0      # mean grayscale; below → too dark
+BRIGHTNESS_MAX = 235.0     # mean grayscale; above → overexposed
+
+
+def passes_image_quality(image_path: Path) -> bool:
+    """Return True if the image at *image_path* passes quality checks.
+
+    Checks:
+        1. Sharpness — Laplacian variance (detects motion blur / defocus).
+        2. Brightness — grayscale mean (filters underexposed / overexposed).
+    """
+    img = cv2.imread(str(image_path))
+    if img is None:
+        logger.debug("Cannot read image %s — failing quality check", image_path)
+        return False
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Sharpness: variance of Laplacian (higher = sharper)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    if laplacian_var < SHARPNESS_MIN:
+        logger.debug(
+            "Image %s too blurry (Laplacian var=%.1f < %.1f)",
+            image_path.name, laplacian_var, SHARPNESS_MIN,
+        )
+        return False
+
+    # Brightness: grayscale mean
+    mean_brightness = float(gray.mean())
+    if mean_brightness < BRIGHTNESS_MIN:
+        logger.debug(
+            "Image %s too dark (mean=%.1f < %.1f)",
+            image_path.name, mean_brightness, BRIGHTNESS_MIN,
+        )
+        return False
+    if mean_brightness > BRIGHTNESS_MAX:
+        logger.debug(
+            "Image %s overexposed (mean=%.1f > %.1f)",
+            image_path.name, mean_brightness, BRIGHTNESS_MAX,
+        )
+        return False
+
+    return True
 
 DEFAULT_MAX_FRAMES = 5
 
@@ -187,11 +239,20 @@ def select_frames(
             support_ids.update(children)
 
     # Score every frame
+    color_dir = scene_path / "color"
+    n_quality_rejected = 0
     frame_entries: list[dict[str, Any]] = []
     for image_name, pose in poses.items():
         visible = get_visible_objects(objects, pose, intrinsics)
         if len(visible) < MIN_VISIBLE_OBJECTS:
             continue
+
+        # Image quality gate — reject blurry / dark / overexposed frames
+        image_path = color_dir / image_name
+        if image_path.exists() and not passes_image_quality(image_path):
+            n_quality_rejected += 1
+            continue
+
         n_support = _count_support_objects(visible, support_ids)
         score = len(visible) * (1 + n_support)
         frame_entries.append(
@@ -202,6 +263,12 @@ def select_frames(
                 "n_visible":         len(visible),
                 "score":             score,
             }
+        )
+
+    if n_quality_rejected:
+        logger.info(
+            "Rejected %d frames for low image quality in %s",
+            n_quality_rejected, scene_path.name,
         )
 
     if not frame_entries:

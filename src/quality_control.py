@@ -47,15 +47,22 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         filtered.append(q)
 
     # Filter 4: deduplicate near-identical questions.
-    # Same (scene, frame, type, obj_a_label) → keep only one.
+    # Same (scene, frame, type, primary_object) → keep only one.
     seen_keys: set[tuple] = set()
     deduped: list[dict] = []
     for q in filtered:
+        # Pick the most specific object label for dedup
+        primary_label = (
+            q.get("obj_a_label")
+            or q.get("moved_obj_label")
+            or q.get("obj_target_label")
+            or ""
+        )
         key = (
             q.get("scene_id"),
             q.get("image_name"),
             q.get("type"),
-            q.get("obj_a_label", q.get("moved_obj_label", "")),
+            primary_label,
         )
         if key in seen_keys:
             removed_counts["near_duplicate"] += 1
@@ -86,7 +93,10 @@ def quality_filter(questions: list[dict]) -> list[dict]:
 
 def balance_answer_values(
     questions: list[dict],
-    target_types: tuple[str, ...] = ("distance", "direction"),
+    target_types: tuple[str, ...] = (
+        "distance", "direction",
+        "direction_object_centric", "direction_allocentric",
+    ),
 ) -> list[dict]:
     """Downsample questions so correct_value distribution is roughly uniform.
 

@@ -29,6 +29,13 @@ HORIZONTAL_DIRECTIONS = [
 VERTICAL_DIRECTIONS = ["above", "below"]
 ALL_DIRECTIONS_10 = HORIZONTAL_DIRECTIONS + VERTICAL_DIRECTIONS
 
+# 8 cardinal directions (allocentric, world-frame) + 2 vertical
+CARDINAL_DIRECTIONS_8 = [
+    "north", "northeast", "east", "southeast",
+    "south", "southwest", "west", "northwest",
+]
+ALL_ALLOCENTRIC_10 = CARDINAL_DIRECTIONS_8 + VERTICAL_DIRECTIONS
+
 
 def primary_direction(
     obj_a_center: np.ndarray,
@@ -88,6 +95,132 @@ def primary_direction(
     ambiguity = max(horiz_ambiguity, vert_ratio)
 
     return direction, float(min(ambiguity, 1.0))
+
+
+# ---- Object-centric direction (reference-pair frame) ----
+
+
+def primary_direction_object_centric(
+    anchor_center: np.ndarray,
+    facing_center: np.ndarray,
+    target_center: np.ndarray,
+) -> tuple[str, float]:
+    """Direction of *target* as seen from *anchor* facing toward *facing*.
+
+    Defines a local reference frame:
+        forward = anchor → facing (projected to horizontal plane)
+        right   = cross(forward, z_up)
+        up      = z_up
+
+    Returns (direction_label, ambiguity_score) using the same 10-direction
+    system as ego-centric (front/right/back-left/above/below …).
+    """
+    fwd_3d = facing_center - anchor_center
+    fwd_horiz = np.array([fwd_3d[0], fwd_3d[1], 0.0])
+    horiz_len = np.linalg.norm(fwd_horiz)
+    if horiz_len < 1e-6:
+        return "front", 1.0  # degenerate (anchor == facing or purely vertical)
+    fwd_horiz /= horiz_len
+
+    # Right = forward × z_up  (z-up world: [0,0,1])
+    right_horiz = np.array([fwd_horiz[1], -fwd_horiz[0], 0.0])
+
+    delta = target_center - anchor_center
+    fwd_comp = float(np.dot(delta, fwd_horiz))
+    right_comp = float(np.dot(delta, right_horiz))
+    vert_comp = float(delta[2])
+
+    horiz_mag = math.sqrt(fwd_comp * fwd_comp + right_comp * right_comp)
+    vert_mag = abs(vert_comp)
+
+    if vert_mag > horiz_mag:
+        direction = "above" if vert_comp > 0 else "below"
+        ambiguity = horiz_mag / vert_mag if vert_mag > 1e-6 else 0.0
+        return direction, float(min(ambiguity, 1.0))
+
+    if horiz_mag < 1e-6:
+        return "front", 1.0
+
+    angle = math.degrees(math.atan2(right_comp, fwd_comp))
+    if angle < 0:
+        angle += 360
+
+    bin_idx = int((angle + 22.5) % 360 / 45)
+    direction = HORIZONTAL_DIRECTIONS[bin_idx]
+
+    bin_centre = bin_idx * 45.0
+    offset = abs(angle - bin_centre)
+    if offset > 180:
+        offset = 360 - offset
+    horiz_ambiguity = offset / 22.5
+    vert_ratio = vert_mag / horiz_mag if horiz_mag > 1e-6 else 0
+    ambiguity = max(horiz_ambiguity, vert_ratio)
+
+    return direction, float(min(ambiguity, 1.0))
+
+
+# ---- Allocentric direction (world-frame, axis-aligned) ----
+
+
+def primary_direction_allocentric(
+    obj_a_center: np.ndarray,
+    obj_b_center: np.ndarray,
+) -> tuple[str, float]:
+    """Cardinal direction of A as seen from B in axis-aligned world coords.
+
+    Convention after ScanNet axis alignment:
+        +x = east,  +y = north,  +z = up
+
+    Returns (cardinal_label, ambiguity_score) with 8+2 directions.
+    """
+    delta = obj_a_center - obj_b_center  # B → A
+    dx, dy, dz = float(delta[0]), float(delta[1]), float(delta[2])
+
+    horiz_mag = math.sqrt(dx * dx + dy * dy)
+    vert_mag = abs(dz)
+
+    if vert_mag > horiz_mag:
+        direction = "above" if dz > 0 else "below"
+        ambiguity = horiz_mag / vert_mag if vert_mag > 1e-6 else 0.0
+        return direction, float(min(ambiguity, 1.0))
+
+    if horiz_mag < 1e-6:
+        return "north", 1.0
+
+    # atan2(east_comp, north_comp) → 0° = north, 90° = east
+    angle = math.degrees(math.atan2(dx, dy))
+    if angle < 0:
+        angle += 360
+
+    bin_idx = int((angle + 22.5) % 360 / 45)
+    direction = CARDINAL_DIRECTIONS_8[bin_idx]
+
+    bin_centre = bin_idx * 45.0
+    offset = abs(angle - bin_centre)
+    if offset > 180:
+        offset = 360 - offset
+    horiz_ambiguity = offset / 22.5
+    vert_ratio = vert_mag / horiz_mag if horiz_mag > 1e-6 else 0
+    ambiguity = max(horiz_ambiguity, vert_ratio)
+
+    return direction, float(min(ambiguity, 1.0))
+
+
+def camera_cardinal_direction(camera_pose: CameraPose) -> str:
+    """Return the cardinal direction the camera is facing.
+
+    Uses the camera forward vector projected to the horizontal plane.
+    """
+    from .utils.coordinate_transform import get_camera_forward
+    fwd = get_camera_forward(camera_pose)
+    fwd_horiz = np.array([fwd[0], fwd[1]])
+    if np.linalg.norm(fwd_horiz) < 1e-6:
+        return "north"
+    angle = math.degrees(math.atan2(float(fwd_horiz[0]), float(fwd_horiz[1])))
+    if angle < 0:
+        angle += 360
+    bin_idx = int((angle + 22.5) % 360 / 45)
+    return CARDINAL_DIRECTIONS_8[bin_idx]
 
 
 # ---- Distance relation ----
