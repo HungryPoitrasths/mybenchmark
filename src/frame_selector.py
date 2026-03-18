@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 SHARPNESS_MIN = 30.0       # Laplacian variance; below → motion blur / out-of-focus
 BRIGHTNESS_MIN = 30.0      # mean grayscale; below → too dark
 BRIGHTNESS_MAX = 235.0     # mean grayscale; above → overexposed
+CONTRAST_MIN = 25.0        # grayscale stddev; below → hazy / washed-out
 
 
 def passes_image_quality(image_path: Path) -> bool:
@@ -44,6 +45,7 @@ def passes_image_quality(image_path: Path) -> bool:
     Checks:
         1. Sharpness — Laplacian variance (detects motion blur / defocus).
         2. Brightness — grayscale mean (filters underexposed / overexposed).
+        3. Contrast — grayscale stddev (filters hazy / low-contrast frames).
     """
     img = cv2.imread(str(image_path))
     if img is None:
@@ -73,6 +75,15 @@ def passes_image_quality(image_path: Path) -> bool:
         logger.debug(
             "Image %s overexposed (mean=%.1f > %.1f)",
             image_path.name, mean_brightness, BRIGHTNESS_MAX,
+        )
+        return False
+
+    # Contrast: grayscale standard deviation
+    contrast = float(gray.std())
+    if contrast < CONTRAST_MIN:
+        logger.debug(
+            "Image %s low contrast (std=%.1f < %.1f)",
+            image_path.name, contrast, CONTRAST_MIN,
         )
         return False
 

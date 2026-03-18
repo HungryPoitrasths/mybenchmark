@@ -83,11 +83,21 @@ def is_within_room(
     return True
 
 
-def compute_room_bounds(objects: list[dict], margin: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
-    """Compute an axis-aligned bounding box for the room from all objects."""
+def compute_room_bounds(objects: list[dict], margin: float = 0.5, room_bounds: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Compute an axis-aligned bounding box for the room.
+
+    If *room_bounds* is provided (from wall/floor mesh annotations), use it
+    directly — no margin added, because these represent the actual physical
+    walls.  Otherwise, fall back to computing the bbox from all objects with
+    no extra margin (margin=0) to avoid creating room bounds that extend
+    beyond physical walls.
+    """
+    if room_bounds is not None:
+        return np.array(room_bounds["bbox_min"]), np.array(room_bounds["bbox_max"])
+
     all_mins = np.array([o["bbox_min"] for o in objects])
     all_maxs = np.array([o["bbox_max"] for o in objects])
-    return all_mins.min(axis=0) - margin, all_maxs.max(axis=0) + margin
+    return all_mins.min(axis=0), all_maxs.max(axis=0)
 
 
 def find_meaningful_movement(
@@ -95,6 +105,7 @@ def find_meaningful_movement(
     support_graph: dict[int, list[int]],
     target_id: int,
     camera_pose: CameraPose,
+    room_bounds: dict | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Search for a movement vector that changes at least one spatial relation.
 
@@ -102,7 +113,7 @@ def find_meaningful_movement(
     """
     # No depth/occlusion needed — we only need direction/distance changes.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
-    room_min, room_max = compute_room_bounds(objects)
+    room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
 
     for delta in MOVEMENT_CANDIDATES:
         new_objects = apply_movement(objects, support_graph, target_id, delta)

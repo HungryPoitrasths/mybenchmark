@@ -443,6 +443,7 @@ def generate_l2_object_move(
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
+    room_bounds: dict | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions: list[dict] = []
@@ -463,6 +464,7 @@ def generate_l2_object_move(
 
         delta, changed = find_meaningful_movement(
             objects, support_graph, obj["id"], camera_pose,
+            room_bounds=room_bounds,
         )
         if delta is None:
             continue
@@ -657,6 +659,7 @@ def generate_l2_object_move_object_centric(
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
+    room_bounds: dict | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in object-centric frame.
 
@@ -679,6 +682,7 @@ def generate_l2_object_move_object_centric(
 
         delta, _changed = find_meaningful_movement(
             objects, support_graph, obj["id"], camera_pose,
+            room_bounds=room_bounds,
         )
         if delta is None:
             continue
@@ -752,6 +756,7 @@ def generate_l2_object_move_allocentric(
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
+    room_bounds: dict | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions: list[dict] = []
@@ -770,6 +775,7 @@ def generate_l2_object_move_allocentric(
 
         delta, _changed = find_meaningful_movement(
             objects, support_graph, obj["id"], camera_pose,
+            room_bounds=room_bounds,
         )
         if delta is None:
             continue
@@ -1207,6 +1213,7 @@ def generate_all_questions(
     depth_intrinsics=None,
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
+    room_bounds: dict | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -1215,6 +1222,7 @@ def generate_all_questions(
     visible_object_ids: if provided, restrict all questions to objects whose
     centre projects into this frame.  Questions about off-screen objects are
     unanswerable from the image and should never be included.
+    room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
 
     Returns a list of question dicts.
     """
@@ -1318,7 +1326,8 @@ def generate_all_questions(
 
     # L2 — ego-centric (existing)
     all_questions.extend(
-        generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates)
+        generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates,
+                                room_bounds=room_bounds)
     )
     all_questions.extend(
         generate_l2_viewpoint_move(objects_uniq, camera_pose, templates)
@@ -1330,11 +1339,13 @@ def generate_all_questions(
     all_questions.extend(
         generate_l2_object_move_object_centric(
             objects_uniq, support_graph_uniq, camera_pose, templates,
+            room_bounds=room_bounds,
         )
     )
     all_questions.extend(
         generate_l2_object_move_allocentric(
             objects_uniq, support_graph_uniq, camera_pose, templates,
+            room_bounds=room_bounds,
         )
     )
 

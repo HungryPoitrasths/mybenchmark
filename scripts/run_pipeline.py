@@ -22,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.scene_parser import parse_scene
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
-from src.frame_selector import select_frames
+from src.frame_selector import select_frames, refine_visible_ids_with_depth
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
@@ -126,6 +126,21 @@ def run_pipeline(
                     except Exception as e:
                         logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
 
+            # Refine visible object IDs using depth-map occlusion:
+            # drop objects whose 8 bbox corners are all occluded (visibility_ratio <= 0.2)
+            visible_ids = frame["visible_object_ids"]
+            if depth_image is not None and depth_intrinsics is not None:
+                visible_ids = refine_visible_ids_with_depth(
+                    visible_ids, scene["objects"], camera_pose,
+                    depth_image, depth_intrinsics,
+                )
+                if len(visible_ids) < 2:
+                    logger.debug(
+                        "Frame %s/%s has < 2 visible objects after depth refinement — skipping",
+                        scene_id, image_name,
+                    )
+                    continue
+
             questions = generate_all_questions(
                 objects=scene["objects"],
                 support_graph=support_graph,
@@ -133,7 +148,8 @@ def run_pipeline(
                 camera_pose=camera_pose,
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
-                visible_object_ids=frame["visible_object_ids"],
+                visible_object_ids=visible_ids,
+                room_bounds=scene.get("room_bounds"),
             )
 
             for q in questions:

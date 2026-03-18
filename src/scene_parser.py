@@ -134,6 +134,21 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
             }
         )
 
+    # Extract room boundaries from wall/floor objects BEFORE filtering them out.
+    # These structural elements define the physical room extent.
+    STRUCTURAL_LABELS = {"floor", "wall", "ground", "ceiling"}
+    structural_objects = [
+        o for o in objects if o["label"].lower() in STRUCTURAL_LABELS
+    ]
+    room_bounds = None
+    if structural_objects:
+        all_mins = np.array([o["bbox_min"] for o in structural_objects])
+        all_maxs = np.array([o["bbox_max"] for o in structural_objects])
+        room_bounds = {
+            "bbox_min": all_mins.min(axis=0).tolist(),
+            "bbox_max": all_maxs.max(axis=0).tolist(),
+        }
+
     # Per-scene uniqueness: drop objects whose label appears more than once
     # (e.g. 5 "chair"s → all removed) and excluded structural labels.
     # This is more aggressive than per-frame filtering but eliminates
@@ -158,7 +173,7 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
         )
         return None
 
-    return {"scene_id": scene_id, "objects": objects}
+    return {"scene_id": scene_id, "objects": objects, "room_bounds": room_bounds}
 
 
 def parse_all_scenes(
