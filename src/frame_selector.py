@@ -336,11 +336,16 @@ def select_frames(
             support_ids.add(int(parent_id))
             support_ids.update(children)
 
-    # Score every frame
+    # Score every frame — but stride to avoid processing thousands of frames.
+    # ScanNet captures ~30 fps; stride=10 samples every ~0.3s which is dense
+    # enough to find good viewpoints while cutting runtime by ~10×.
+    FRAME_STRIDE = 10
     color_dir = scene_path / "color"
     n_quality_rejected = 0
     frame_entries: list[dict[str, Any]] = []
-    for image_name, pose in poses.items():
+    for i, (image_name, pose) in enumerate(poses.items()):
+        if i % FRAME_STRIDE != 0:
+            continue
         visible = get_visible_objects(objects, pose, intrinsics)
         if len(visible) < MIN_VISIBLE_OBJECTS:
             continue
