@@ -12,11 +12,14 @@ Algorithm:
     4. For each point: compare projected depth (z_cam) with the depth map
        value at (u, v).  If z_cam - depth_map[v, u] > tolerance -> occluded.
     5. visibility_ratio = #visible / #valid_projections.
+    6. Centre-point mandatory check: the 3D bbox centre must also pass
+       the depth test; if the centre is occluded, the object is classified
+       as "not visible" regardless of the surface-point ratio.
 
 Thresholds:
-    - ratio > 0.8 -> "fully visible"
-    - 0.2 <= ratio <= 0.8 -> "partially occluded"
-    - ratio < 0.2 -> "not visible"
+    - ratio > 0.8 AND centre visible -> "fully visible"
+    - 0.4 <= ratio <= 0.8 AND centre visible -> "partially occluded"
+    - ratio < 0.4 OR centre occluded -> "not visible"
 """
 
 from __future__ import annotations
@@ -98,51 +101,68 @@ def compute_depth_occlusion(
     valid = 0
 
     for pt in sample_points:
-        # Transform to camera coordinates
         p_cam = world_to_camera(pt, camera_pose)
-
-        # Skip points behind the camera
         if p_cam[2] <= 0:
             continue
-
-        # Project to depth image using depth intrinsics
         u = intrinsics.fx * p_cam[0] / p_cam[2] + intrinsics.cx
         v = intrinsics.fy * p_cam[1] / p_cam[2] + intrinsics.cy
-
         u_int = int(round(u))
         v_int = int(round(v))
-
-        # Check bounds
         if u_int < 0 or u_int >= w or v_int < 0 or v_int >= h:
             continue
-
         depth_val = depth_image[v_int, u_int]
-
-        # Invalid depth (sensor hole)
         if depth_val <= 0:
             continue
-
         valid += 1
-
-        # Compare projected depth with depth map
-        # If the object corner is further than the depth map reading
-        # by more than tolerance → something is in front → occluded
         if p_cam[2] - depth_val > depth_tolerance:
-            # Occluded: depth map shows something closer
-            pass
+            pass  # occluded
         else:
-            # Visible: object is at or nearer than depth surface
             visible += 1
 
     if valid == 0:
-        # No sample points projected into the depth image — not in frame
         return "not visible", 0.0
 
     ratio = visible / valid
 
+    # Centre-point mandatory check: even if surface points pass,
+    # the 3D centre must be visible — otherwise the object is likely
+    # severely cut off or behind another object.
+    centre = (bbox_min + bbox_max) / 2.0
+    centre_visible = _is_point_visible(
+        centre, camera_pose, intrinsics, depth_image, h, w, depth_tolerance,
+    )
+
+    if not centre_visible:
+        return "not visible", ratio
+
     if ratio > 0.8:
         return "fully visible", ratio
-    elif ratio >= 0.2:
+    elif ratio >= 0.4:
         return "partially occluded", ratio
     else:
         return "not visible", ratio
+
+
+def _is_point_visible(
+    point: np.ndarray,
+    camera_pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    depth_image: np.ndarray,
+    h: int,
+    w: int,
+    depth_tolerance: float,
+) -> bool:
+    """Check whether a single 3D point is visible in the depth map."""
+    p_cam = world_to_camera(point, camera_pose)
+    if p_cam[2] <= 0:
+        return False
+    u = intrinsics.fx * p_cam[0] / p_cam[2] + intrinsics.cx
+    v = intrinsics.fy * p_cam[1] / p_cam[2] + intrinsics.cy
+    u_int = int(round(u))
+    v_int = int(round(v))
+    if u_int < 0 or u_int >= w or v_int < 0 or v_int >= h:
+        return False
+    depth_val = depth_image[v_int, u_int]
+    if depth_val <= 0:
+        return False  # no depth data — treat as not visible
+    return p_cam[2] - depth_val <= depth_tolerance

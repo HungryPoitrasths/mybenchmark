@@ -63,6 +63,8 @@ EXCLUDED_LABELS = {
     # Generic / uninformative
     "object", "otherfurniture", "otherprop", "otherstructure",
     "unknown", "misc", "stuff",
+    # Reflective / transparent — depth sensor unreliable
+    "mirror", "glass", "monitor", "tv",
 }
 
 

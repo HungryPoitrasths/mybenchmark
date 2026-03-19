@@ -84,6 +84,7 @@ def _get_object_labels(q: dict) -> list[str]:
         "object", "unknown", "", "floor", "wall", "ceiling",
         "otherfurniture", "otherprop", "otherstructure",
         "room", "ground", "door", "window", "stairs",
+        "mirror", "glass", "monitor", "tv",
     }
     labels -= _EXCLUDED
     return list(labels)
