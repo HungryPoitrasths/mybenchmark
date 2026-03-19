@@ -95,85 +95,199 @@ def passes_image_quality(image_path: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
-#  Per-object local sharpness check (ROI blur filter)
+#  Strict visibility constants (used by compute_frame_object_visibility)
 # ---------------------------------------------------------------------------
 
-LOCAL_SHARPNESS_MIN = 30.0  # Laplacian variance within object ROI
+STRICT_VISIBLE_RATIO_MIN = 0.6
+STRICT_PROJECTED_AREA_MIN = 800.0
+STRICT_IN_FRAME_RATIO_MIN = 0.6
+STRICT_EDGE_MARGIN_MIN = 12.0
+STRICT_LOCAL_SHARPNESS_MIN = 45.0
 
 
-def filter_blurry_objects(
-    visible_object_ids: list[int],
-    objects: list[dict],
+def _project_object_roi(
+    obj: dict,
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
-    image_path: Path,
-) -> list[int]:
-    """Remove objects whose local image region is too blurry.
+) -> dict[str, Any]:
+    """Project an object's bbox to image space and summarise the footprint."""
+    bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
+    bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
+    mid = (bbox_min + bbox_max) / 2.0
 
-    For each visible object, projects its 3D bbox onto the colour image to
-    get a 2D ROI, then computes the Laplacian variance within that ROI.
-    Objects below LOCAL_SHARPNESS_MIN are dropped — even if the global image
-    is sharp, these objects may be out of focus or motion-blurred locally.
-    """
-    img = cv2.imread(str(image_path))
-    if img is None:
-        return visible_object_ids
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
-    h, w = gray.shape[:2]
+    sample_points = []
+    for x in [bbox_min[0], bbox_max[0]]:
+        for y in [bbox_min[1], bbox_max[1]]:
+            for z in [bbox_min[2], bbox_max[2]]:
+                sample_points.append(np.array([x, y, z], dtype=np.float64))
+    sample_points.append(mid)
 
-    obj_map = {o["id"]: o for o in objects}
-    kept: list[int] = []
-
-    for obj_id in visible_object_ids:
-        obj = obj_map.get(obj_id)
-        if obj is None:
+    projected: list[tuple[float, float]] = []
+    in_frame = 0
+    valid = 0
+    for pt in sample_points:
+        uv, depth = project_to_image(pt, pose, intrinsics)
+        if uv is None or depth <= 0:
             continue
+        valid += 1
+        u, v = float(uv[0]), float(uv[1])
+        projected.append((u, v))
+        if 0 <= u < intrinsics.width and 0 <= v < intrinsics.height:
+            in_frame += 1
 
-        # Project bbox corners + centre to 2D to find the ROI
-        bbox_min = np.array(obj["bbox_min"])
-        bbox_max = np.array(obj["bbox_max"])
-        mid = (bbox_min + bbox_max) / 2.0
-        corners_3d = []
-        for x in [bbox_min[0], bbox_max[0]]:
-            for y in [bbox_min[1], bbox_max[1]]:
-                for z in [bbox_min[2], bbox_max[2]]:
-                    corners_3d.append([x, y, z])
-        corners_3d.append(mid.tolist())
+    if len(projected) < 2:
+        return {
+            "valid_projection_count": valid,
+            "bbox_in_frame_ratio": 0.0 if valid == 0 else in_frame / valid,
+            "projected_area_px": 0.0,
+            "edge_margin_px": 0.0,
+            "roi_bounds": None,
+        }
 
-        us, vs = [], []
-        for pt in corners_3d:
-            uv, depth = project_to_image(np.array(pt), pose, intrinsics)
-            if uv is not None and depth > 0:
-                us.append(int(round(uv[0])))
-                vs.append(int(round(uv[1])))
+    us = [p[0] for p in projected]
+    vs = [p[1] for p in projected]
+    u_min = max(0, int(np.floor(min(us) - 5)))
+    u_max = min(intrinsics.width, int(np.ceil(max(us) + 5)))
+    v_min = max(0, int(np.floor(min(vs) - 5)))
+    v_max = min(intrinsics.height, int(np.ceil(max(vs) + 5)))
+    width = max(0, u_max - u_min)
+    height = max(0, v_max - v_min)
+    area = float(width * height)
+    edge_margin = float(
+        min(
+            u_min,
+            v_min,
+            intrinsics.width - u_max,
+            intrinsics.height - v_max,
+        )
+    )
+    return {
+        "valid_projection_count": valid,
+        "bbox_in_frame_ratio": 0.0 if valid == 0 else in_frame / valid,
+        "projected_area_px": area,
+        "edge_margin_px": edge_margin,
+        "roi_bounds": (u_min, u_max, v_min, v_max),
+    }
 
-        if len(us) < 2:
-            kept.append(obj_id)  # can't compute ROI — keep as-is
-            continue
 
-        # Clamp to image bounds with a small padding
-        u_min = max(0, min(us) - 5)
-        u_max = min(w, max(us) + 5)
-        v_min = max(0, min(vs) - 5)
-        v_max = min(h, max(vs) + 5)
+def _compute_roi_sharpness(
+    gray_image,
+    roi_bounds: tuple[int, int, int, int] | None,
+) -> float | None:
+    """Return Laplacian variance inside a projected ROI, or None if invalid."""
+    if gray_image is None or roi_bounds is None:
+        return None
+    u_min, u_max, v_min, v_max = roi_bounds
+    if u_max - u_min < 10 or v_max - v_min < 10:
+        return None
+    roi = gray_image[v_min:v_max, u_min:u_max]
+    if roi.size == 0:
+        return None
+    return float(cv2.Laplacian(roi, cv2.CV_64F).var())
 
-        if u_max - u_min < 10 or v_max - v_min < 10:
-            kept.append(obj_id)  # ROI too small to measure
-            continue
 
-        roi = denoised[v_min:v_max, u_min:u_max]
-        roi_var = cv2.Laplacian(roi, cv2.CV_64F).var()
+def compute_frame_object_visibility(
+    objects: list[dict],
+    pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    image_path: Path | None = None,
+    depth_image=None,
+    depth_intrinsics: CameraIntrinsics | None = None,
+    margin: int = 80,
+    min_depth: float = 0.3,
+    max_depth: float = 6.0,
+    strict_mode: bool = False,
+) -> dict[int, dict[str, Any]]:
+    """Compute per-object visibility metadata for a single frame."""
+    from .utils.depth_occlusion import compute_depth_occlusion
 
-        if roi_var >= LOCAL_SHARPNESS_MIN:
-            kept.append(obj_id)
-        else:
-            logger.debug(
-                "Object %d (%s) locally blurry (ROI Laplacian var=%.1f < %.1f)",
-                obj_id, obj.get("label", "?"), roi_var, LOCAL_SHARPNESS_MIN,
+    gray = None
+    if image_path is not None and image_path.exists():
+        img = cv2.imread(str(image_path))
+        if img is not None:
+            gray = cv2.GaussianBlur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), (3, 3), 0)
+
+    visibility: dict[int, dict[str, Any]] = {}
+    for obj in objects:
+        center = np.array(obj["center"], dtype=np.float64)
+        uv, depth = project_to_image(center, pose, color_intrinsics)
+        center_in_frame = (
+            min_depth < depth <= max_depth
+            and is_in_image(uv, color_intrinsics, margin=margin)
+        )
+
+        roi_info = _project_object_roi(obj, pose, color_intrinsics)
+        roi_sharpness = _compute_roi_sharpness(gray, roi_info["roi_bounds"])
+
+        occlusion_status = "unknown"
+        visible_ratio = 0.0
+        if depth_image is not None and depth_intrinsics is not None:
+            occlusion_status, visible_ratio = compute_depth_occlusion(
+                bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
+                bbox_max=np.array(obj["bbox_max"], dtype=np.float64),
+                camera_pose=pose,
+                intrinsics=depth_intrinsics,
+                depth_image=depth_image,
             )
 
-    return kept
+        visibility[obj["id"]] = {
+            "obj_id": obj["id"],
+            "label": obj.get("label", ""),
+            "center_in_frame": center_in_frame,
+            "center_visible": (
+                occlusion_status != "not visible"
+                if occlusion_status != "unknown" else center_in_frame
+            ),
+            "depth_m": float(depth),
+            "occlusion_status": occlusion_status,
+            "visible_ratio": float(visible_ratio),
+            "projected_area_px": float(roi_info["projected_area_px"]),
+            "bbox_in_frame_ratio": float(roi_info["bbox_in_frame_ratio"]),
+            "edge_margin_px": float(roi_info["edge_margin_px"]),
+            "roi_sharpness": roi_sharpness,
+            "label_unique_in_frame": True,
+            "eligible_as_reference": center_in_frame,
+            "eligible_as_target": center_in_frame,
+            "rejection_reasons": [],
+        }
+
+    label_counts: dict[str, int] = {}
+    for meta in visibility.values():
+        if meta["center_in_frame"]:
+            label = str(meta["label"]).lower()
+            label_counts[label] = label_counts.get(label, 0) + 1
+
+    for meta in visibility.values():
+        label = str(meta["label"]).lower()
+        meta["label_unique_in_frame"] = label_counts.get(label, 0) <= 1
+        reasons: list[str] = []
+        if not meta["center_in_frame"]:
+            reasons.append("center_out_of_frame")
+        if strict_mode:
+            if depth_image is None or depth_intrinsics is None:
+                reasons.append("missing_depth")
+            elif meta["occlusion_status"] == "not visible":
+                reasons.append("depth_occluded")
+            elif meta["visible_ratio"] < STRICT_VISIBLE_RATIO_MIN:
+                reasons.append("low_visible_ratio")
+            if meta["projected_area_px"] < STRICT_PROJECTED_AREA_MIN:
+                reasons.append("small_projection")
+            if meta["bbox_in_frame_ratio"] < STRICT_IN_FRAME_RATIO_MIN:
+                reasons.append("bbox_cut_off")
+            if meta["edge_margin_px"] < STRICT_EDGE_MARGIN_MIN:
+                reasons.append("too_close_to_edge")
+            if meta["roi_sharpness"] is None:
+                reasons.append("missing_roi_sharpness")
+            elif meta["roi_sharpness"] < STRICT_LOCAL_SHARPNESS_MIN:
+                reasons.append("blurry_roi")
+            if not meta["label_unique_in_frame"]:
+                reasons.append("duplicate_label")
+
+        meta["rejection_reasons"] = reasons
+        meta["eligible_as_reference"] = len(reasons) == 0
+        meta["eligible_as_target"] = len(reasons) == 0
+
+    return visibility
 
 
 DEFAULT_MAX_FRAMES = 5

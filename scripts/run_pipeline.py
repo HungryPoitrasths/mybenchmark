@@ -22,7 +22,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.scene_parser import parse_scene
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
-from src.frame_selector import select_frames, refine_visible_ids_with_depth, filter_blurry_objects
+from src.frame_selector import (
+    select_frames,
+    refine_visible_ids_with_depth,
+    compute_frame_object_visibility,
+)
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
@@ -46,6 +50,7 @@ def run_pipeline(
     max_scenes: int = 300,
     max_frames: int = 5,
     use_occlusion: bool = True,
+    strict_mode: bool = False,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
 
@@ -138,7 +143,41 @@ def run_pipeline(
             # drop objects whose bbox sample points are mostly occluded (visibility_ratio < 0.4).
             # If refinement leaves fewer than 3 objects, skip this frame entirely.
             visible_ids = frame["visible_object_ids"]
-            if depth_image is not None and depth_intrinsics is not None:
+            visibility_table = None
+            if strict_mode:
+                image_path = scene_dir / "color" / image_name
+                if depth_image is None or depth_intrinsics is None:
+                    logger.debug(
+                        "Frame %s/%s: strict mode requires depth; skipping",
+                        scene_id, image_name,
+                    )
+                    continue
+                if color_intrinsics is None or not image_path.exists():
+                    logger.debug(
+                        "Frame %s/%s: strict mode requires readable color image; skipping",
+                        scene_id, image_name,
+                    )
+                    continue
+                visibility_table = compute_frame_object_visibility(
+                    scene["objects"],
+                    camera_pose,
+                    color_intrinsics,
+                    image_path=image_path,
+                    depth_image=depth_image,
+                    depth_intrinsics=depth_intrinsics,
+                    strict_mode=True,
+                )
+                visible_ids = [
+                    obj_id for obj_id, meta in visibility_table.items()
+                    if meta.get("eligible_as_reference", False)
+                ]
+                if len(visible_ids) < 3:
+                    logger.debug(
+                        "Frame %s/%s: only %d strict-eligible objects; skipping",
+                        scene_id, image_name, len(visible_ids),
+                    )
+                    continue
+            elif depth_image is not None and depth_intrinsics is not None:
                 refined_ids = refine_visible_ids_with_depth(
                     visible_ids, scene["objects"], camera_pose,
                     depth_image, depth_intrinsics,
@@ -152,22 +191,6 @@ def run_pipeline(
                     )
                     continue
 
-            # Local ROI blur check: drop objects whose image region is blurry
-            # even if the global image passed quality checks.
-            if color_intrinsics is not None:
-                image_path = scene_dir / "color" / image_name
-                if image_path.exists():
-                    visible_ids = filter_blurry_objects(
-                        visible_ids, scene["objects"], camera_pose,
-                        color_intrinsics, image_path,
-                    )
-                    if len(visible_ids) < 3:
-                        logger.debug(
-                            "Frame %s/%s: only %d objects after ROI blur filter — skipping",
-                            scene_id, image_name, len(visible_ids),
-                        )
-                        continue
-
             questions = generate_all_questions(
                 objects=scene["objects"],
                 support_graph=support_graph,
@@ -176,6 +199,8 @@ def run_pipeline(
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
                 visible_object_ids=visible_ids,
+                object_visibility=visibility_table,
+                strict_mode=strict_mode,
                 room_bounds=scene.get("room_bounds"),
             )
 
@@ -245,6 +270,10 @@ def main():
         "--no_occlusion", action="store_true",
         help="Disable depth-map occlusion (faster but no occlusion questions)",
     )
+    parser.add_argument(
+        "--strict_mode", action="store_true",
+        help="Require every mentioned object to pass strict per-frame visibility checks",
+    )
     args = parser.parse_args()
 
     run_pipeline(
@@ -253,6 +282,7 @@ def main():
         max_scenes=args.max_scenes,
         max_frames=args.max_frames,
         use_occlusion=not args.no_occlusion,
+        strict_mode=args.strict_mode,
     )
 
 
