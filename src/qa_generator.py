@@ -42,7 +42,7 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DIRECTIONS_ALLOCENTRIC = ALL_ALLOCENTRIC_10
 ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
-ALL_OCCLUSION = ["fully visible", "partially occluded", "fully occluded", "not in frame"]
+ALL_OCCLUSION = ["fully visible", "partially occluded", "not visible"]
 YES_NO = ["Yes", "No"]
 
 
@@ -276,7 +276,7 @@ def generate_l1_occlusion(
     correct = occlusion_status
     tpl = random.choice(templates.get("L1_occlusion", _default_templates()["L1_occlusion"]))
     question_text = tpl.format(obj_a=_the(obj["label"]))
-    options, answer = generate_options(correct, ALL_OCCLUSION)
+    options, answer = generate_options(correct, ALL_OCCLUSION, n_options=3)
 
     return {
         "level": "L1",
@@ -1254,7 +1254,7 @@ def generate_all_questions(
         templates = _load_templates()
 
     # Keep ALL scene objects for occlusion questions (which can legitimately
-    # have "fully occluded" or "not in frame" as correct answers).
+    # have "not visible" as correct answers).
     all_scene_objects = list(objects)
 
     # Restrict to objects visible in this frame so every question can be
@@ -1293,8 +1293,8 @@ def generate_all_questions(
     relations = compute_all_relations(objects_uniq, camera_pose, depth_image, depth_intrinsics)
 
     # Pre-compute per-object occlusion cache for L1 occlusion questions.
-    # Use ALL scene objects (not just visible ones) so that "fully occluded"
-    # and "not in frame" are valid answers — these are legitimate L1 questions.
+    # Use ALL scene objects (not just visible ones) so that "not visible"
+    # is a valid answer — these are legitimate L1 questions.
     from .relation_engine import compute_occlusion_per_object
     all_scene_objs_clean = [
         o for o in all_scene_objects
@@ -1322,7 +1322,7 @@ def generate_all_questions(
             l1_dist_qs.append(q)
 
     # L1 occlusion: per-object (not pairwise).
-    # Uses ALL scene objects so "fully occluded" / "not in frame" are possible.
+    # Uses ALL scene objects so "not visible" is a possible answer.
     seen_occ_objs: set[int] = set()
     for obj in all_uniq_objs:
         status, _ratio = occ_cache.get(obj["id"], ("unknown", 0.0))

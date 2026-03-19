@@ -4,18 +4,19 @@ Uses ScanNet's pre-rendered depth maps (uint16 PNG, values in mm) to
 determine per-object visibility without ray casting.
 
 Algorithm:
-    1. Generate 8 bbox corners of the target object.
-    2. Transform each corner to camera coordinates: p_cam = R @ p_world + t.
+    1. Generate 26 sample points on the target object bbox (8 corners +
+       12 edge midpoints + 6 face centres).
+    2. Transform each point to camera coordinates: p_cam = R @ p_world + t.
     3. Project to the depth-image plane using depth intrinsics:
        u = fx * x/z + cx, v = fy * y/z + cy.
-    4. For each corner: compare projected depth (z_cam) with the depth map
-       value at (u, v).  If z_cam - depth_map[v, u] > tolerance → occluded.
+    4. For each point: compare projected depth (z_cam) with the depth map
+       value at (u, v).  If z_cam - depth_map[v, u] > tolerance -> occluded.
     5. visibility_ratio = #visible / #valid_projections.
 
 Thresholds:
-    - ratio > 0.8 → "fully visible"
-    - 0.2 ≤ ratio ≤ 0.8 → "partially occluded"
-    - ratio < 0.2 → "fully occluded"
+    - ratio > 0.8 -> "fully visible"
+    - 0.2 <= ratio <= 0.8 -> "partially occluded"
+    - ratio < 0.2 -> "not visible"
 """
 
 from __future__ import annotations
@@ -43,15 +44,29 @@ def load_depth_image(depth_path: Path | str) -> np.ndarray:
     return depth_uint16.astype(np.float32) / 1000.0  # mm → metres
 
 
-def _bbox_corners(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
-    """Return the 8 corners of an axis-aligned bounding box as (8, 3)."""
-    xs = [bbox_min[0], bbox_max[0]]
-    ys = [bbox_min[1], bbox_max[1]]
-    zs = [bbox_min[2], bbox_max[2]]
-    corners = np.array(
-        [[x, y, z] for x in xs for y in ys for z in zs], dtype=np.float64
-    )
-    return corners
+def _bbox_sample_points(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
+    """Return 26 sample points on an axis-aligned bounding box.
+
+    Includes 8 corners, 12 edge midpoints, and 6 face centres.
+    Using more points than just corners significantly reduces false
+    visibility judgements for large or elongated objects.
+    """
+    lo, hi = bbox_min, bbox_max
+    mid = (lo + hi) / 2.0
+
+    xs = [lo[0], mid[0], hi[0]]
+    ys = [lo[1], mid[1], hi[1]]
+    zs = [lo[2], mid[2], hi[2]]
+
+    points = set()
+    for x in xs:
+        for y in ys:
+            for z in zs:
+                points.add((x, y, z))
+    # Remove the interior centre point (mid, mid, mid) — it's not on the surface
+    points.discard((mid[0], mid[1], mid[2]))
+
+    return np.array(list(points), dtype=np.float64)
 
 
 def compute_depth_occlusion(
@@ -74,17 +89,17 @@ def compute_depth_occlusion(
 
     Returns:
         (status, visibility_ratio) where status is one of
-        "fully_visible", "partially_occluded", "fully_occluded".
+        "fully visible", "partially occluded", "not visible".
     """
-    corners = _bbox_corners(bbox_min, bbox_max)
+    sample_points = _bbox_sample_points(bbox_min, bbox_max)
     h, w = depth_image.shape[:2]
 
     visible = 0
     valid = 0
 
-    for corner in corners:
+    for pt in sample_points:
         # Transform to camera coordinates
-        p_cam = world_to_camera(corner, camera_pose)
+        p_cam = world_to_camera(pt, camera_pose)
 
         # Skip points behind the camera
         if p_cam[2] <= 0:
@@ -120,8 +135,8 @@ def compute_depth_occlusion(
             visible += 1
 
     if valid == 0:
-        # No corners projected into the depth image — treat as not in frame
-        return "fully occluded", 0.0
+        # No sample points projected into the depth image — not in frame
+        return "not visible", 0.0
 
     ratio = visible / valid
 
@@ -130,4 +145,4 @@ def compute_depth_occlusion(
     elif ratio >= 0.2:
         return "partially occluded", ratio
     else:
-        return "fully occluded", ratio
+        return "not visible", ratio

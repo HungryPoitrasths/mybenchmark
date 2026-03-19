@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Thresholds (tuned for ScanNet 640×480 colour frames)
-SHARPNESS_MIN = 30.0       # Laplacian variance; below → motion blur / out-of-focus
+SHARPNESS_MIN = 50.0       # Laplacian variance; below → motion blur / out-of-focus
 BRIGHTNESS_MIN = 30.0      # mean grayscale; below → too dark
 BRIGHTNESS_MAX = 235.0     # mean grayscale; above → overexposed
 CONTRAST_MIN = 25.0        # grayscale stddev; below → hazy / washed-out
@@ -104,7 +104,7 @@ def refine_visible_ids_with_raycasting(
     runs on the 3-5 selected frames rather than every frame in the scene.
 
     An object is dropped when ``multi_ray_occlusion`` (8 sample rays toward
-    the bbox) classifies it as ``"fully_occluded"``.  Partially-occluded
+    the bbox) classifies it as ``"not visible"``.  Partially-occluded
     objects are kept — they are still meaningful as question subjects.
     """
     obj_map = {o["id"]: o for o in objects}
@@ -153,7 +153,7 @@ def refine_visible_ids_with_depth(
             intrinsics=depth_intrinsics,
             depth_image=depth_image,
         )
-        if status != "fully occluded":
+        if status != "not visible":
             refined.append(obj_id)
     return refined
 

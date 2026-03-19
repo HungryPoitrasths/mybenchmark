@@ -265,7 +265,7 @@ def compute_occlusion_per_object(
     """Compute per-object occlusion status using the depth map.
 
     Returns a dict mapping obj_id → (status, visibility_ratio).
-    Status is one of: "fully visible", "partially occluded", "fully occluded".
+    Status is one of: "fully visible", "partially occluded", "not visible".
 
     If depth_image is None, returns "unknown" for all objects.
     """
