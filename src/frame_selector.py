@@ -43,21 +43,22 @@ def passes_image_quality(image_path: Path) -> bool:
     """Return True if the image at *image_path* passes quality checks.
 
     Checks:
-        1. Sharpness — Laplacian variance on Gaussian-denoised image
-           (Gaussian pre-filter kills sensor noise / compression artifacts
-           that would otherwise inflate the variance on blurry frames).
+        1. Sharpness — Laplacian variance on Gaussian-denoised image.
         2. Brightness — grayscale mean (filters underexposed / overexposed).
         3. Contrast — grayscale stddev (filters hazy / low-contrast frames).
+
+    Reads at 1/4 resolution to reduce I/O and compute cost.
     """
     img = cv2.imread(str(image_path))
     if img is None:
         logger.debug("Cannot read image %s — failing quality check", image_path)
         return False
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Downsample to 1/4 size for speed (quality metrics are scale-invariant)
+    small = cv2.resize(img, (0, 0), fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
-    # Sharpness: Gaussian blur first to suppress sensor noise / compression
-    # artifacts, then compute Laplacian variance on the cleaned image.
+    # Sharpness: Gaussian blur first to suppress sensor noise, then Laplacian
     denoised = cv2.GaussianBlur(gray, (3, 3), 0)
     laplacian_var = cv2.Laplacian(denoised, cv2.CV_64F).var()
     if laplacian_var < SHARPNESS_MIN:
@@ -451,9 +452,9 @@ def select_frames(
             support_ids.update(children)
 
     # Score every frame — but stride to avoid processing thousands of frames.
-    # ScanNet captures ~30 fps; stride=10 samples every ~0.3s which is dense
-    # enough to find good viewpoints while cutting runtime by ~10×.
-    FRAME_STRIDE = 10
+    # ScanNet captures ~30 fps; stride=30 samples every ~1s which is still
+    # dense enough to find diverse viewpoints while cutting runtime by ~30×.
+    FRAME_STRIDE = 30
     color_dir = scene_path / "color"
     n_quality_rejected = 0
     frame_entries: list[dict[str, Any]] = []
