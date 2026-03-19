@@ -1255,10 +1255,6 @@ def generate_all_questions(
     if templates is None:
         templates = _load_templates()
 
-    # Keep ALL scene objects for occlusion questions (which can legitimately
-    # have "not visible" as correct answers).
-    all_scene_objects = list(objects)
-
     # Restrict to objects visible in this frame so every question can be
     # answered by looking at the image.
     if visible_object_ids is not None:
@@ -1295,18 +1291,12 @@ def generate_all_questions(
     relations = compute_all_relations(objects_uniq, camera_pose, depth_image, depth_intrinsics)
 
     # Pre-compute per-object occlusion cache for L1 occlusion questions.
-    # Use ALL scene objects (not just visible ones) so that "not visible"
-    # is a valid answer — these are legitimate L1 questions.
+    # Only use visible objects (those whose centre projects into this frame)
+    # so that every occlusion question references an object the viewer can
+    # at least locate in the image.
     from .relation_engine import compute_occlusion_per_object
-    all_scene_objs_clean = [
-        o for o in all_scene_objects
-        if o.get("label", "").lower() not in EXCLUDED_LABELS
-    ]
-    # Uniqueness check on ALL scene objects for occlusion
-    all_label_counts = Counter(o["label"] for o in all_scene_objs_clean)
-    all_uniq_objs = [o for o in all_scene_objs_clean if all_label_counts[o["label"]] == 1]
     occ_cache = compute_occlusion_per_object(
-        all_uniq_objs, camera_pose, depth_image, depth_intrinsics
+        objects_uniq, camera_pose, depth_image, depth_intrinsics
     )
 
     # L1 — collect separately so we can sample before adding
@@ -1324,9 +1314,9 @@ def generate_all_questions(
             l1_dist_qs.append(q)
 
     # L1 occlusion: per-object (not pairwise).
-    # Uses ALL scene objects so "not visible" is a possible answer.
+    # Only uses visible objects — the viewer must be able to locate the object.
     seen_occ_objs: set[int] = set()
-    for obj in all_uniq_objs:
+    for obj in objects_uniq:
         status, _ratio = occ_cache.get(obj["id"], ("unknown", 0.0))
         if obj["id"] in seen_occ_objs:
             continue
