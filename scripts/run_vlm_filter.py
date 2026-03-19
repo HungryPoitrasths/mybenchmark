@@ -56,6 +56,11 @@ def _get_object_labels(q: dict) -> list[str]:
     """
     labels = set()
 
+    for mention in q.get("mentioned_objects", []):
+        label = mention.get("label")
+        if label:
+            labels.add(label)
+
     # L1/L3 direction, distance, occlusion, coordinate_rotation (ego-centric & allocentric)
     for key in ("obj_a_label", "obj_b_label"):
         v = q.get(key)

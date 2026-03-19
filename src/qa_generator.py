@@ -54,6 +54,11 @@ def _the(label: str) -> str:
     """
     return f"the {label}"
 
+
+def _mention(role: str, label: str, obj_id: int | None = None) -> dict[str, Any]:
+    """Create a normalised mentioned-object record for a question."""
+    return {"role": role, "obj_id": obj_id, "label": label}
+
 # Labels to exclude from ALL question types (not just L2).
 # Structural elements, generic labels, and uninformative categories.
 EXCLUDED_LABELS = {
@@ -221,6 +226,10 @@ def generate_l1_direction(
         "obj_b_id": relation["obj_b_id"],
         "obj_a_label": relation["obj_a_label"],
         "obj_b_label": relation["obj_b_label"],
+        "mentioned_objects": [
+            _mention("reference", relation["obj_a_label"], relation["obj_a_id"]),
+            _mention("target", relation["obj_b_label"], relation["obj_b_id"]),
+        ],
         "ambiguity_score": relation["ambiguity_score"],
         "relation_unchanged": False,
     }
@@ -255,6 +264,10 @@ def generate_l1_distance(
         "obj_b_id": relation["obj_b_id"],
         "obj_a_label": relation["obj_a_label"],
         "obj_b_label": relation["obj_b_label"],
+        "mentioned_objects": [
+            _mention("obj_a", relation["obj_a_label"], relation["obj_a_id"]),
+            _mention("obj_b", relation["obj_b_label"], relation["obj_b_id"]),
+        ],
         "ambiguity_score": 0.0,
         "near_boundary": relation["near_boundary"],
         "relation_unchanged": False,
@@ -289,6 +302,7 @@ def generate_l1_occlusion(
         "correct_value": correct,
         "obj_a_id": obj["id"],
         "obj_a_label": obj["label"],
+        "mentioned_objects": [_mention("target", obj["label"], obj["id"])],
         "ambiguity_score": 0.0,
         "relation_unchanged": False,
     }
@@ -364,6 +378,11 @@ def generate_l1_direction_object_centric(
                     "obj_face_label": face["label"],
                     "obj_target_id": target["id"],
                     "obj_target_label": target["label"],
+                    "mentioned_objects": [
+                        _mention("reference_origin", ref["label"], ref["id"]),
+                        _mention("reference_facing", face["label"], face["id"]),
+                        _mention("target", target["label"], target["id"]),
+                    ],
                     "ambiguity_score": ambiguity,
                     "relation_unchanged": False,
                 })
@@ -426,6 +445,10 @@ def generate_l1_direction_allocentric(
                 "obj_a_label": a["label"],
                 "obj_b_id": b["id"],
                 "obj_b_label": b["label"],
+                "mentioned_objects": [
+                    _mention("obj_a", a["label"], a["id"]),
+                    _mention("obj_b", b["label"], b["id"]),
+                ],
                 "ambiguity_score": ambiguity,
                 "relation_unchanged": False,
             })
@@ -528,8 +551,15 @@ def generate_l2_object_move(
                     "correct_value": vals["new"],
                     "moved_obj_id": obj["id"],
                     "moved_obj_label": obj["label"],
+                    "obj_b_id": ch["obj_a_id"],
                     "obj_b_label": obj_b_label,
+                    "obj_c_id": ch["obj_b_id"],
                     "obj_c_label": obj_c_label,
+                    "mentioned_objects": [
+                        _mention("moved_object", obj["label"], obj["id"]),
+                        _mention("relation_obj_b", obj_b_label, ch["obj_a_id"]),
+                        _mention("relation_obj_c", obj_c_label, ch["obj_b_id"]),
+                    ],
                     "delta": delta.tolist(),
                     "relation_unchanged": False,
                     "has_support_chain": len(get_support_chain_ids(obj["id"], support_graph)) > 0,
@@ -592,6 +622,11 @@ def generate_l2_viewpoint_move(
                         "options": options,
                         "answer": answer,
                         "correct_value": vals["new"],
+                        "obj_a_id": ch["obj_a_id"],
+                        "obj_a_label": obj_label,
+                        "mentioned_objects": [
+                            _mention("target", obj_label, ch["obj_a_id"]),
+                        ],
                         "relation_unchanged": False,
                     })
 
@@ -645,6 +680,13 @@ def generate_l2_object_remove(
                     "answer": answer,
                     "correct_value": vals["new"],
                     "removed_obj_id": obj["id"],
+                    "removed_obj_label": obj["label"],
+                    "obj_b_id": ch["obj_a_id"],
+                    "obj_b_label": other_label,
+                    "mentioned_objects": [
+                        _mention("removed_object", obj["label"], obj["id"]),
+                        _mention("remaining_object", other_label, ch["obj_a_id"]),
+                    ],
                     "relation_unchanged": False,
                 })
 
@@ -736,8 +778,15 @@ def generate_l2_object_move_object_centric(
                     "correct_value": new_dir,
                     "moved_obj_id": obj["id"],
                     "moved_obj_label": obj["label"],
+                    "obj_ref_id": ref["id"],
                     "obj_ref_label": ref["label"],
+                    "obj_face_id": face["id"],
                     "obj_face_label": face["label"],
+                    "mentioned_objects": [
+                        _mention("moved_object", obj["label"], obj["id"]),
+                        _mention("reference_origin", ref["label"], ref["id"]),
+                        _mention("reference_facing", face["label"], face["id"]),
+                    ],
                     "delta": delta.tolist(),
                     "relation_unchanged": False,
                 })
@@ -816,7 +865,12 @@ def generate_l2_object_move_allocentric(
                 "camera_cardinal": cam_cardinal,
                 "moved_obj_id": obj["id"],
                 "moved_obj_label": obj["label"],
+                "obj_ref_id": ref["id"],
                 "obj_ref_label": ref["label"],
+                "mentioned_objects": [
+                    _mention("moved_object", obj["label"], obj["id"]),
+                    _mention("reference_object", ref["label"], ref["id"]),
+                ],
                 "delta": delta.tolist(),
                 "relation_unchanged": False,
             })
@@ -933,6 +987,12 @@ def generate_l3_support_chain(
                     "grandchild_label": grandchild["label"],
                     "neighbor_id": neighbor["id"],
                     "neighbor_label": neighbor["label"],
+                    "mentioned_objects": [
+                        _mention("grandparent", grandparent["label"], grandparent_id),
+                        _mention("parent", parent["label"], parent_id),
+                        _mention("grandchild", grandchild["label"], grandchild_id),
+                        _mention("neighbor", neighbor["label"], neighbor["id"]),
+                    ],
                     "relation_unchanged": False,
                 })
 
@@ -999,8 +1059,14 @@ def generate_l3_coordinate_rotation(
                 "answer": answer_letter,
                 "correct_value": new_dir,
                 "rotation_angle": angle,
+                "obj_a_id": ch["obj_a_id"],
                 "obj_a_label": obj_a_label,
+                "obj_b_id": ch["obj_b_id"],
                 "obj_b_label": obj_b_label,
+                "mentioned_objects": [
+                    _mention("obj_a", obj_a_label, ch["obj_a_id"]),
+                    _mention("obj_b", obj_b_label, ch["obj_b_id"]),
+                ],
                 "old_direction": vals["old"],
                 "new_direction": new_dir,
                 "relation_unchanged": False,
@@ -1086,9 +1152,17 @@ def generate_l3_coordinate_rotation_object_centric(
                         "answer": answer,
                         "correct_value": new_dir,
                         "rotation_angle": angle,
+                        "obj_ref_id": ref["id"],
                         "obj_ref_label": ref["label"],
+                        "obj_face_id": face["id"],
                         "obj_face_label": face["label"],
+                        "obj_target_id": target["id"],
                         "obj_target_label": target["label"],
+                        "mentioned_objects": [
+                            _mention("reference_origin", ref["label"], ref["id"]),
+                            _mention("reference_facing", face["label"], face["id"]),
+                            _mention("target", target["label"], target["id"]),
+                        ],
                         "old_direction": old_dir,
                         "new_direction": new_dir,
                         "relation_unchanged": False,
@@ -1167,8 +1241,14 @@ def generate_l3_coordinate_rotation_allocentric(
                     "correct_value": new_dir,
                     "camera_cardinal": cam_cardinal,
                     "rotation_angle": angle,
+                    "obj_a_id": a["id"],
                     "obj_a_label": a["label"],
+                    "obj_b_id": b["id"],
                     "obj_b_label": b["label"],
+                    "mentioned_objects": [
+                        _mention("obj_a", a["label"], a["id"]),
+                        _mention("obj_b", b["label"], b["id"]),
+                    ],
                     "old_direction": old_dir,
                     "new_direction": new_dir,
                     "relation_unchanged": False,
@@ -1189,6 +1269,92 @@ def get_support_chain_ids(obj_id: int, support_graph: dict) -> list[int]:
     """Get all dependent IDs (wrapper for import convenience)."""
     from .support_graph import get_support_chain
     return get_support_chain(obj_id, support_graph)
+
+
+def _ensure_question_mentions(
+    question: dict[str, Any],
+    id_to_object: dict[int, dict],
+    label_to_object: dict[str, dict],
+) -> dict[str, Any]:
+    """Backfill `mentioned_objects` for generators that do not set it explicitly."""
+    if question.get("mentioned_objects"):
+        return question
+
+    mentions: list[dict[str, Any]] = []
+    role_specs = [
+        ("obj_a_id", "obj_a_label", "obj_a"),
+        ("obj_b_id", "obj_b_label", "obj_b"),
+        ("obj_ref_id", "obj_ref_label", "obj_ref"),
+        ("obj_face_id", "obj_face_label", "obj_face"),
+        ("obj_target_id", "obj_target_label", "obj_target"),
+        ("moved_obj_id", "moved_obj_label", "moved_obj"),
+        ("removed_obj_id", "removed_obj_label", "removed_obj"),
+        ("grandparent_id", "grandparent_label", "grandparent"),
+        ("parent_id", "parent_label", "parent"),
+        ("grandchild_id", "grandchild_label", "grandchild"),
+        ("neighbor_id", "neighbor_label", "neighbor"),
+    ]
+    seen: set[int] = set()
+    for id_key, label_key, role in role_specs:
+        obj_id = question.get(id_key)
+        label = question.get(label_key)
+        obj = None
+        if obj_id is not None:
+            obj = id_to_object.get(int(obj_id))
+        elif label:
+            obj = label_to_object.get(str(label))
+        if obj is None:
+            continue
+        real_id = int(obj["id"])
+        if real_id in seen:
+            continue
+        mentions.append(_mention(role, obj["label"], real_id))
+        seen.add(real_id)
+
+    question["mentioned_objects"] = mentions
+    return question
+
+
+def _enforce_strict_visibility(
+    questions: list[dict[str, Any]],
+    object_visibility: dict[int, dict[str, Any]] | None,
+    id_to_object: dict[int, dict],
+    label_to_object: dict[str, dict],
+) -> list[dict[str, Any]]:
+    """Drop questions whose mentioned objects are not all strict-eligible."""
+    if not object_visibility:
+        return questions
+
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for question in questions:
+        question = _ensure_question_mentions(question, id_to_object, label_to_object)
+        mentions = question.get("mentioned_objects", [])
+        if not mentions:
+            removed += 1
+            continue
+
+        ok = True
+        rejected_meta: list[dict[str, Any]] = []
+        for mention in mentions:
+            obj_id = mention.get("obj_id")
+            meta = object_visibility.get(int(obj_id)) if obj_id is not None else None
+            if meta is None or not meta.get("eligible_as_reference", False):
+                ok = False
+                rejected_meta.append({
+                    "obj_id": obj_id,
+                    "label": mention.get("label"),
+                    "rejection_reasons": [] if meta is None else meta.get("rejection_reasons", []),
+                })
+        if ok:
+            kept.append(question)
+        else:
+            removed += 1
+            question["strict_visibility_rejections"] = rejected_meta
+
+    if removed:
+        logger.info("Strict visibility filter removed %d questions", removed)
+    return kept
 
 
 def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:
@@ -1239,6 +1405,8 @@ def generate_all_questions(
     depth_intrinsics=None,
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
+    object_visibility: dict[int, dict[str, Any]] | None = None,
+    strict_mode: bool = False,
     room_bounds: dict | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
@@ -1393,6 +1561,18 @@ def generate_all_questions(
     all_questions.extend(
         generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates)
     )
+
+    id_to_object = {int(o["id"]): o for o in objects_uniq}
+    label_to_object = {str(o["label"]): o for o in objects_uniq}
+    for idx, question in enumerate(all_questions):
+        all_questions[idx] = _ensure_question_mentions(
+            question, id_to_object, label_to_object,
+        )
+
+    if strict_mode:
+        all_questions = _enforce_strict_visibility(
+            all_questions, object_visibility, id_to_object, label_to_object,
+        )
 
     logger.info("Generated %d questions total", len(all_questions))
     return all_questions
