@@ -43,7 +43,9 @@ def passes_image_quality(image_path: Path) -> bool:
     """Return True if the image at *image_path* passes quality checks.
 
     Checks:
-        1. Sharpness — Laplacian variance (detects motion blur / defocus).
+        1. Sharpness — Laplacian variance on Gaussian-denoised image
+           (Gaussian pre-filter kills sensor noise / compression artifacts
+           that would otherwise inflate the variance on blurry frames).
         2. Brightness — grayscale mean (filters underexposed / overexposed).
         3. Contrast — grayscale stddev (filters hazy / low-contrast frames).
     """
@@ -54,8 +56,10 @@ def passes_image_quality(image_path: Path) -> bool:
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Sharpness: variance of Laplacian (higher = sharper)
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    # Sharpness: Gaussian blur first to suppress sensor noise / compression
+    # artifacts, then compute Laplacian variance on the cleaned image.
+    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
+    laplacian_var = cv2.Laplacian(denoised, cv2.CV_64F).var()
     if laplacian_var < SHARPNESS_MIN:
         logger.debug(
             "Image %s too blurry (Laplacian var=%.1f < %.1f)",
@@ -88,6 +92,89 @@ def passes_image_quality(image_path: Path) -> bool:
         return False
 
     return True
+
+
+# ---------------------------------------------------------------------------
+#  Per-object local sharpness check (ROI blur filter)
+# ---------------------------------------------------------------------------
+
+LOCAL_SHARPNESS_MIN = 30.0  # Laplacian variance within object ROI
+
+
+def filter_blurry_objects(
+    visible_object_ids: list[int],
+    objects: list[dict],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    image_path: Path,
+) -> list[int]:
+    """Remove objects whose local image region is too blurry.
+
+    For each visible object, projects its 3D bbox onto the colour image to
+    get a 2D ROI, then computes the Laplacian variance within that ROI.
+    Objects below LOCAL_SHARPNESS_MIN are dropped — even if the global image
+    is sharp, these objects may be out of focus or motion-blurred locally.
+    """
+    img = cv2.imread(str(image_path))
+    if img is None:
+        return visible_object_ids
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
+    h, w = gray.shape[:2]
+
+    obj_map = {o["id"]: o for o in objects}
+    kept: list[int] = []
+
+    for obj_id in visible_object_ids:
+        obj = obj_map.get(obj_id)
+        if obj is None:
+            continue
+
+        # Project bbox corners + centre to 2D to find the ROI
+        bbox_min = np.array(obj["bbox_min"])
+        bbox_max = np.array(obj["bbox_max"])
+        mid = (bbox_min + bbox_max) / 2.0
+        corners_3d = []
+        for x in [bbox_min[0], bbox_max[0]]:
+            for y in [bbox_min[1], bbox_max[1]]:
+                for z in [bbox_min[2], bbox_max[2]]:
+                    corners_3d.append([x, y, z])
+        corners_3d.append(mid.tolist())
+
+        us, vs = [], []
+        for pt in corners_3d:
+            uv, depth = project_to_image(np.array(pt), pose, intrinsics)
+            if uv is not None and depth > 0:
+                us.append(int(round(uv[0])))
+                vs.append(int(round(uv[1])))
+
+        if len(us) < 2:
+            kept.append(obj_id)  # can't compute ROI — keep as-is
+            continue
+
+        # Clamp to image bounds with a small padding
+        u_min = max(0, min(us) - 5)
+        u_max = min(w, max(us) + 5)
+        v_min = max(0, min(vs) - 5)
+        v_max = min(h, max(vs) + 5)
+
+        if u_max - u_min < 10 or v_max - v_min < 10:
+            kept.append(obj_id)  # ROI too small to measure
+            continue
+
+        roi = denoised[v_min:v_max, u_min:u_max]
+        roi_var = cv2.Laplacian(roi, cv2.CV_64F).var()
+
+        if roi_var >= LOCAL_SHARPNESS_MIN:
+            kept.append(obj_id)
+        else:
+            logger.debug(
+                "Object %d (%s) locally blurry (ROI Laplacian var=%.1f < %.1f)",
+                obj_id, obj.get("label", "?"), roi_var, LOCAL_SHARPNESS_MIN,
+            )
+
+    return kept
+
 
 DEFAULT_MAX_FRAMES = 5
 

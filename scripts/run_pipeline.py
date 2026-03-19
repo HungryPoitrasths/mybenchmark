@@ -22,12 +22,13 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.scene_parser import parse_scene
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
-from src.frame_selector import select_frames, refine_visible_ids_with_depth
+from src.frame_selector import select_frames, refine_visible_ids_with_depth, filter_blurry_objects
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
     load_axis_alignment,
     load_scannet_depth_intrinsics,
+    load_scannet_intrinsics,
     load_scannet_poses,
 )
 from src.utils.depth_occlusion import load_depth_image
@@ -108,6 +109,13 @@ def run_pipeline(
             except Exception as e:
                 logger.warning("Depth intrinsics load failed for %s: %s", scene_id, e)
 
+        # Load colour intrinsics for local ROI blur check
+        try:
+            color_intrinsics = load_scannet_intrinsics(scene_dir)
+        except Exception as e:
+            logger.warning("Color intrinsics load failed for %s: %s", scene_id, e)
+            color_intrinsics = None
+
         # ---- Stages 4-6: Relations + Virtual ops + QA ----
         for frame in frames:
             image_name = frame["image_name"]
@@ -143,6 +151,22 @@ def run_pipeline(
                         scene_id, image_name, len(refined_ids),
                     )
                     continue
+
+            # Local ROI blur check: drop objects whose image region is blurry
+            # even if the global image passed quality checks.
+            if color_intrinsics is not None:
+                image_path = scene_dir / "color" / image_name
+                if image_path.exists():
+                    visible_ids = filter_blurry_objects(
+                        visible_ids, scene["objects"], camera_pose,
+                        color_intrinsics, image_path,
+                    )
+                    if len(visible_ids) < 3:
+                        logger.debug(
+                            "Frame %s/%s: only %d objects after ROI blur filter — skipping",
+                            scene_id, image_name, len(visible_ids),
+                        )
+                        continue
 
             questions = generate_all_questions(
                 objects=scene["objects"],
