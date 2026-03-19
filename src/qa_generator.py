@@ -61,15 +61,27 @@ def _mention(role: str, label: str, obj_id: int | None = None) -> dict[str, Any]
 
 # Labels to exclude from ALL question types (not just L2).
 # Structural elements, generic labels, and uninformative categories.
+# Must stay in sync with scene_parser.EXCLUDED_LABELS.
 EXCLUDED_LABELS = {
     # Structural / architectural
     "floor", "wall", "ceiling", "room", "ground",
     "door", "window", "stairs", "pillar", "column",
+    "doorframe", "windowsill", "hand rail", "shower",
+    "shower curtain rod", "bathroom stall", "bathroom stall door",
+    "ledge", "structure", "closet", "breakfast bar", "shower curtain",
     # Generic / uninformative
     "object", "otherfurniture", "otherprop", "otherstructure",
     "unknown", "misc", "stuff",
     # Reflective / transparent — depth sensor unreliable
     "mirror", "glass", "monitor", "tv",
+    # Ambiguous / vague
+    "case", "tube", "board", "sign", "frame", "paper", "lotion",
+    # Boundary-unclear / large amorphous
+    "counter", "couch", "clothing", "blanket", "rug",
+    # Too small to reliably identify in images
+    "power outlet", "light switch", "fire alarm", "controller",
+    "power strip", "soda can", "starbucks cup", "battery disposal jar",
+    "can", "water bottle", "paper cutter",
 }
 
 

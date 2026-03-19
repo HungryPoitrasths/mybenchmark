@@ -90,6 +90,15 @@ def _get_object_labels(q: dict) -> list[str]:
         "otherfurniture", "otherprop", "otherstructure",
         "room", "ground", "door", "window", "stairs",
         "mirror", "glass", "monitor", "tv",
+        "doorframe", "windowsill", "hand rail", "shower",
+        "shower curtain rod", "bathroom stall", "bathroom stall door",
+        "ledge", "structure", "closet", "breakfast bar", "shower curtain",
+        "case", "tube", "board", "sign", "frame", "paper", "lotion",
+        "counter", "couch", "clothing", "blanket", "rug",
+        "power outlet", "light switch", "fire alarm", "controller",
+        "power strip", "soda can", "starbucks cup", "battery disposal jar",
+        "can", "water bottle", "paper cutter",
+        "pillar", "column",
     }
     labels -= _EXCLUDED
     return list(labels)

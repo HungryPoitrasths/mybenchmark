@@ -29,15 +29,68 @@ logger = logging.getLogger(__name__)
 # Minimum requirements for a scene to be useful
 MIN_OBJECTS = 5
 
-# Labels to exclude — structural elements and uninformative categories.
+# ---------------------------------------------------------------------------
+#  Label normalisation — applied before dedup / blacklist filtering.
+#  Maps plural forms, synonyms, and sub-categories to canonical labels so
+#  that the unique-label filter catches true duplicates.
+# ---------------------------------------------------------------------------
+LABEL_NORMALIZE: dict[str, str] = {
+    # Plural → singular
+    "books": "book",
+    "doors": "door",
+    "curtains": "curtain",
+    "shoes": "shoe",
+    "cabinets": "cabinet",
+    "papers": "paper",
+    "pipes": "pipe",
+    "mailboxes": "mailbox",
+    # Sub-category → canonical
+    "kitchen cabinet": "cabinet",
+    "kitchen cabinets": "cabinet",
+    "bathroom cabinet": "cabinet",
+    "file cabinet": "cabinet",
+    "kitchen counter": "counter",
+    "storage box": "storage container",
+    "storage bin": "storage container",
+    "trash bin": "trash can",
+    "recycling bin": "trash can",
+    "sofa chair": "armchair",
+    "coffee table": "table",
+    "mini fridge": "refrigerator",
+    "shower wall": "wall",
+    "ceiling fan": "fan",
+}
+
+
+def normalize_label(label: str) -> str:
+    """Return the canonical form of *label* (lowercase, mapped)."""
+    low = label.strip().lower()
+    return LABEL_NORMALIZE.get(low, low)
+
+
+# Labels to exclude — structural elements, uninformative categories,
+# reflective/transparent surfaces, and ambiguous objects.
 # Shared with qa_generator.py (duplicated for simplicity).
 EXCLUDED_LABELS = {
     # Structural / architectural
     "floor", "wall", "ceiling", "room", "ground",
     "door", "window", "stairs", "pillar", "column",
+    "doorframe", "windowsill", "hand rail", "shower",
+    "shower curtain rod", "bathroom stall", "bathroom stall door",
+    "ledge", "structure", "closet", "breakfast bar", "shower curtain",
     # Generic / uninformative
     "object", "otherfurniture", "otherprop", "otherstructure",
     "unknown", "misc", "stuff",
+    # Reflective / transparent — depth sensor unreliable
+    "mirror", "glass", "monitor", "tv",
+    # Ambiguous / vague
+    "case", "tube", "board", "sign", "frame", "paper", "lotion",
+    # Boundary-unclear / large amorphous
+    "counter", "couch", "clothing", "blanket", "rug",
+    # Too small to reliably identify in images
+    "power outlet", "light switch", "fire alarm", "controller",
+    "power strip", "soda can", "starbucks cup", "battery disposal jar",
+    "can", "water bottle", "paper cutter",
 }
 
 
@@ -107,7 +160,7 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
     objects: list[dict[str, Any]] = []
     for anno in anno_list:
         instance_id = anno.get("id", anno.get("objectId"))
-        label       = anno.get("label", "unknown")
+        label       = normalize_label(anno.get("label", "unknown"))
         seg_ids     = set(anno.get("segments", []))
         if not seg_ids:
             continue
