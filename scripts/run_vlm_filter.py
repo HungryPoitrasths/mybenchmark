@@ -56,22 +56,36 @@ def _get_object_labels(q: dict) -> list[str]:
     """
     labels = set()
 
-    # L1 direction / distance / occlusion
+    # L1/L3 direction, distance, occlusion, coordinate_rotation (ego-centric & allocentric)
     for key in ("obj_a_label", "obj_b_label"):
         v = q.get(key)
         if v:
             labels.add(v)
 
-    # L2 object_move
+    # L2 object_move (ego-centric)
     for key in ("moved_obj_label", "obj_c_label"):
         v = q.get(key)
         if v:
             labels.add(v)
 
-    # Filter out generic/uninformative labels
-    labels -= {"object", "unknown", "", "floor", "wall", "ceiling",
-               "otherfurniture", "otherprop", "otherstructure",
-               "room", "ground", "door", "window", "stairs"}
+    # Object-centric types (L1/L2/L3)
+    for key in ("obj_ref_label", "obj_face_label", "obj_target_label"):
+        v = q.get(key)
+        if v:
+            labels.add(v)
+
+    # L3 support_chain (labels stored explicitly since #chain_ids)
+    for key in ("grandparent_label", "parent_label", "grandchild_label", "neighbor_label"):
+        v = q.get(key)
+        if v:
+            labels.add(v)
+
+    _EXCLUDED = {
+        "object", "unknown", "", "floor", "wall", "ceiling",
+        "otherfurniture", "otherprop", "otherstructure",
+        "room", "ground", "door", "window", "stairs",
+    }
+    labels -= _EXCLUDED
     return list(labels)
 
 

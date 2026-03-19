@@ -455,13 +455,6 @@ def generate_l2_object_move(
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        # L2.1 only makes sense when the moved object actually carries dependent
-        # objects with it — otherwise there is no support-chain propagation and
-        # the question degenerates into a simple single-object translation.
-        children = support_graph.get(obj["id"]) or support_graph.get(str(obj["id"])) or []
-        if not children:
-            continue
-
         delta, changed = find_meaningful_movement(
             objects, support_graph, obj["id"], camera_pose,
             room_bounds=room_bounds,
@@ -482,13 +475,20 @@ def generate_l2_object_move(
             continue
 
         # Describe the movement in natural language
-        direction_desc = _delta_to_description(delta)
+        direction_desc = _delta_to_description(delta, camera_pose)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
 
         tpl_list = templates.get("L2_object_move", _default_templates()["L2_object_move"])
 
         obj_questions: list[dict] = []
         for ch in changed:
+            # Ensure the changed relation directly involves the moved object
+            # so the question makes intuitive sense ("move A → what happens
+            # between A and B?" is clear; "move A → what happens between C
+            # and D?" is confusing even if C sits on A's support chain).
+            if obj["id"] not in (ch["obj_a_id"], ch["obj_b_id"]):
+                continue
+
             # Pick a changed relation field
             for field, vals in ch["changes"].items():
                 if field == "direction_b_rel_a":
@@ -676,9 +676,6 @@ def generate_l2_object_move_object_centric(
     for obj in objects:
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
-        children = support_graph.get(obj["id"]) or support_graph.get(str(obj["id"])) or []
-        if not children:
-            continue
 
         delta, _changed = find_meaningful_movement(
             objects, support_graph, obj["id"], camera_pose,
@@ -687,7 +684,7 @@ def generate_l2_object_move_object_centric(
         if delta is None:
             continue
 
-        direction_desc = _delta_to_description(delta)
+        direction_desc = _delta_to_description(delta, camera_pose)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
 
         # Compute the moved object's new center
@@ -769,9 +766,6 @@ def generate_l2_object_move_allocentric(
     for obj in objects:
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
-        children = support_graph.get(obj["id"]) or support_graph.get(str(obj["id"])) or []
-        if not children:
-            continue
 
         delta, _changed = find_meaningful_movement(
             objects, support_graph, obj["id"], camera_pose,
@@ -780,7 +774,7 @@ def generate_l2_object_move_allocentric(
         if delta is None:
             continue
 
-        direction_desc = _delta_to_description(delta)
+        direction_desc = _delta_to_description(delta, camera_pose)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
         new_center = np.array(obj["center"]) + delta
 
@@ -930,9 +924,13 @@ def generate_l3_support_chain(
                     "correct_value": opt_both,
                     "chain_depth": 2,
                     "grandparent_id": grandparent_id,
+                    "grandparent_label": grandparent["label"],
                     "parent_id": parent_id,
+                    "parent_label": parent["label"],
                     "grandchild_id": grandchild_id,
+                    "grandchild_label": grandchild["label"],
                     "neighbor_id": neighbor["id"],
+                    "neighbor_label": neighbor["label"],
                     "relation_unchanged": False,
                 })
 
@@ -1191,8 +1189,34 @@ def get_support_chain_ids(obj_id: int, support_graph: dict) -> list[int]:
     return get_support_chain(obj_id, support_graph)
 
 
-def _delta_to_description(delta: np.ndarray) -> str:
-    """Convert a 3D delta vector to a human-readable direction string."""
+def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:
+    """Convert a 3D world-frame delta to a camera-relative direction string.
+
+    Projects the world-frame displacement into the camera coordinate system
+    (x=right, y=down, z=forward in OpenCV convention) so that "right" in the
+    question text matches what the viewer actually sees in the image.
+
+    Falls back to world-frame labels if *camera_pose* is not provided.
+    """
+    if camera_pose is not None:
+        from .utils.coordinate_transform import world_to_camera
+        # Transform delta as a direction (translate origin to camera, then difference)
+        origin_cam = world_to_camera(np.zeros(3), camera_pose)
+        delta_cam = world_to_camera(delta, camera_pose) - origin_cam
+        dx, dy, dz = float(delta_cam[0]), float(delta_cam[1]), float(delta_cam[2])
+        # OpenCV: x=right, y=down, z=forward
+        horiz = abs(dx)
+        depth = abs(dz)
+        vert = abs(dy)
+        dominant = max(horiz, depth, vert)
+        if dominant == vert:
+            return "down" if dy > 0 else "up"
+        elif dominant == depth:
+            return "forward" if dz > 0 else "backward"
+        else:
+            return "right" if dx > 0 else "left"
+
+    # Fallback: world-frame (should not normally be used)
     axis = np.argmax(np.abs(delta))
     sign = delta[axis]
     labels = {0: ("right", "left"), 1: ("forward", "backward"), 2: ("up", "down")}
@@ -1229,6 +1253,10 @@ def generate_all_questions(
     if templates is None:
         templates = _load_templates()
 
+    # Keep ALL scene objects for occlusion questions (which can legitimately
+    # have "fully occluded" or "not in frame" as correct answers).
+    all_scene_objects = list(objects)
+
     # Restrict to objects visible in this frame so every question can be
     # answered by looking at the image.
     if visible_object_ids is not None:
@@ -1264,10 +1292,19 @@ def generate_all_questions(
     # Compute baseline relations using only uniquely-labelled visible objects
     relations = compute_all_relations(objects_uniq, camera_pose, depth_image, depth_intrinsics)
 
-    # Pre-compute per-object occlusion cache for L1 occlusion questions
+    # Pre-compute per-object occlusion cache for L1 occlusion questions.
+    # Use ALL scene objects (not just visible ones) so that "fully occluded"
+    # and "not in frame" are valid answers — these are legitimate L1 questions.
     from .relation_engine import compute_occlusion_per_object
+    all_scene_objs_clean = [
+        o for o in all_scene_objects
+        if o.get("label", "").lower() not in EXCLUDED_LABELS
+    ]
+    # Uniqueness check on ALL scene objects for occlusion
+    all_label_counts = Counter(o["label"] for o in all_scene_objs_clean)
+    all_uniq_objs = [o for o in all_scene_objs_clean if all_label_counts[o["label"]] == 1]
     occ_cache = compute_occlusion_per_object(
-        objects_uniq, camera_pose, depth_image, depth_intrinsics
+        all_uniq_objs, camera_pose, depth_image, depth_intrinsics
     )
 
     # L1 — collect separately so we can sample before adding
@@ -1284,9 +1321,10 @@ def generate_all_questions(
         if q:
             l1_dist_qs.append(q)
 
-    # L1 occlusion: per-object (not pairwise)
+    # L1 occlusion: per-object (not pairwise).
+    # Uses ALL scene objects so "fully occluded" / "not in frame" are possible.
     seen_occ_objs: set[int] = set()
-    for obj in objects_uniq:
+    for obj in all_uniq_objs:
         status, _ratio = occ_cache.get(obj["id"], ("unknown", 0.0))
         if obj["id"] in seen_occ_objs:
             continue

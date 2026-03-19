@@ -127,16 +127,26 @@ def run_pipeline(
                         logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
 
             # Refine visible object IDs using depth-map occlusion:
-            # drop objects whose 8 bbox corners are all occluded (visibility_ratio <= 0.2)
+            # drop objects whose 8 bbox corners are all occluded (visibility_ratio <= 0.2).
+            # If refinement leaves fewer than 3 objects, fall back to projection-based
+            # visibility to avoid discarding valid frames due to depth noise.
             visible_ids = frame["visible_object_ids"]
             if depth_image is not None and depth_intrinsics is not None:
-                visible_ids = refine_visible_ids_with_depth(
+                refined_ids = refine_visible_ids_with_depth(
                     visible_ids, scene["objects"], camera_pose,
                     depth_image, depth_intrinsics,
                 )
-                if len(visible_ids) < 2:
+                if len(refined_ids) >= 3:
+                    visible_ids = refined_ids
+                elif len(refined_ids) > 0:
                     logger.debug(
-                        "Frame %s/%s has < 2 visible objects after depth refinement — skipping",
+                        "Frame %s/%s: depth refinement left only %d objects — "
+                        "keeping projection-based visibility (%d objects)",
+                        scene_id, image_name, len(refined_ids), len(visible_ids),
+                    )
+                else:
+                    logger.debug(
+                        "Frame %s/%s has 0 visible objects after depth refinement — skipping",
                         scene_id, image_name,
                     )
                     continue

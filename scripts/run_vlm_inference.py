@@ -182,10 +182,56 @@ def make_qwen_caller(api_key: str) -> Callable[[Path, str], str]:
     return call
 
 
+def make_openai_local_caller(
+    base_url: str,
+    model_name: str,
+    api_key: str = "EMPTY",
+) -> Callable[[Path, str], str]:
+    """Any OpenAI-compatible local VLM endpoint (e.g. vLLM / SGLang serving).
+
+    Usage example for the lab's Qwen2.5-VL-72B server::
+
+        python scripts/run_vlm_inference.py \\
+            --model openai_local \\
+            --base_url http://183.129.178.195:60029/v1 \\
+            --model_name Qwen2.5-VL-72B-Instruct \\
+            ...
+    """
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    def call(image_path: Path, prompt: str) -> str:
+        b64, mime = _to_base64(image_path)
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                },
+            ],
+            max_tokens=16,
+            temperature=0,
+        )
+        return resp.choices[0].message.content.strip()
+
+    return call
+
+
 _CALLER_FACTORIES: dict[str, tuple[str, Callable]] = {
     "gpt-4o":         ("OPENAI_API_KEY",    make_gpt4o_caller),
     "gemini-2.5-pro": ("GOOGLE_API_KEY",    make_gemini_caller),
     "qwen2.5-vl":     ("DASHSCOPE_API_KEY", make_qwen_caller),
+    # openai_local: handled separately in main() — uses --base_url / --model_name
+    "openai_local":   ("EMPTY",             None),
 }
 
 
@@ -266,6 +312,11 @@ def main() -> None:
                         help="Path to save predictions.json")
     parser.add_argument("--api_key",     default=None,
                         help="API key (falls back to env variable)")
+    # Local OpenAI-compatible endpoint options
+    parser.add_argument("--base_url",    default=None,
+                        help="Base URL for openai_local model (e.g. http://host:port/v1)")
+    parser.add_argument("--model_name",  default=None,
+                        help="Model name to pass to openai_local endpoint")
     parser.add_argument("--max_questions", type=int, default=None,
                         help="Cap number of questions (for quick smoke-tests)")
     parser.add_argument("--delay",       type=float, default=0.5,
@@ -295,17 +346,24 @@ def main() -> None:
         questions = questions[: args.max_questions]
         logger.info("Capped at %d questions", len(questions))
 
-    # ── Resolve API key ───────────────────────────────────────────────────────
-    env_var, factory = _CALLER_FACTORIES[args.model]
-    api_key = args.api_key or os.environ.get(env_var)
-    if not api_key:
-        raise SystemExit(
-            f"API key required. Pass --api_key or set the {env_var} environment variable."
-        )
-
     # ── Build caller ──────────────────────────────────────────────────────────
     logger.info("Initialising model: %s", args.model)
-    caller = factory(api_key)
+
+    if args.model == "openai_local":
+        if not args.base_url:
+            raise SystemExit("--base_url is required for openai_local (e.g. http://host:port/v1)")
+        if not args.model_name:
+            raise SystemExit("--model_name is required for openai_local")
+        api_key = args.api_key or "EMPTY"
+        caller = make_openai_local_caller(args.base_url, args.model_name, api_key)
+    else:
+        env_var, factory = _CALLER_FACTORIES[args.model]
+        api_key = args.api_key or os.environ.get(env_var)
+        if not api_key:
+            raise SystemExit(
+                f"API key required. Pass --api_key or set the {env_var} environment variable."
+            )
+        caller = factory(api_key)
 
     # ── Inference loop ────────────────────────────────────────────────────────
     image_root   = Path(args.image_root)

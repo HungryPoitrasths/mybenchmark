@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import random
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MOVEMENT_CANDIDATES = [
+    # Varied distances across all horizontal axes for movement diversity.
+    # Order is shuffled per-call in find_meaningful_movement() to avoid
+    # systematic bias toward any one direction/distance.
+    np.array([0.5, 0.0, 0.0]),
+    np.array([-0.5, 0.0, 0.0]),
+    np.array([0.0, 0.5, 0.0]),
+    np.array([0.0, -0.5, 0.0]),
+    np.array([1.0, 0.0, 0.0]),
+    np.array([-1.0, 0.0, 0.0]),
+    np.array([0.0, 1.0, 0.0]),
+    np.array([0.0, -1.0, 0.0]),
     np.array([1.5, 0.0, 0.0]),
     np.array([-1.5, 0.0, 0.0]),
     np.array([0.0, 1.5, 0.0]),
@@ -41,6 +53,10 @@ MOVEMENT_CANDIDATES = [
     np.array([-2.0, 0.0, 0.0]),
     np.array([0.0, 2.0, 0.0]),
     np.array([0.0, -2.0, 0.0]),
+    np.array([2.5, 0.0, 0.0]),
+    np.array([-2.5, 0.0, 0.0]),
+    np.array([0.0, 2.5, 0.0]),
+    np.array([0.0, -2.5, 0.0]),
 ]
 
 
@@ -115,7 +131,11 @@ def find_meaningful_movement(
     original_relations = compute_all_relations(objects, camera_pose, None, None)
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
 
-    for delta in MOVEMENT_CANDIDATES:
+    # Shuffle candidates to avoid systematic bias toward the first entry
+    candidates = list(MOVEMENT_CANDIDATES)
+    random.shuffle(candidates)
+
+    for delta in candidates:
         new_objects = apply_movement(objects, support_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue

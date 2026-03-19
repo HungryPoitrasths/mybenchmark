@@ -36,7 +36,7 @@
   ],
   "L3_coordinate_rotation": [
     "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
-    "If the room layout had been rotated {angle} degrees clockwise (top-down view) from the start — all relative object positions preserved, camera position and orientation unchanged — where would {obj_a} be relative to {obj_b}?",
+    "If the room layout had been rotated {angle} degrees clockwise (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, where would {obj_a} be relative to {obj_b}?",
     "Imagine the room was originally built rotated {angle} degrees clockwise (as seen from above). With all inter-object relationships intact and the camera at its original pose, what is the direction of {obj_a} from {obj_b}?"
   ]
 }
