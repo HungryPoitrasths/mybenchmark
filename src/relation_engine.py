@@ -232,6 +232,11 @@ DISTANCE_BINS = [
     (float("inf"), "far (>3m)"),
 ]
 
+# Minimum centre-to-centre distance for direction questions.
+# Below this threshold, bbox annotation errors (±0.1–0.2 m) make direction
+# judgements unreliable.
+MIN_DIRECTION_DISTANCE = 0.5  # metres
+
 DISTANCE_BIN_BOUNDARIES = [b[0] for b in DISTANCE_BINS[:-1]]  # [0.5, 1.5, 3.0]
 
 

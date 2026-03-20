@@ -7,6 +7,7 @@ virtual operation results.
 from __future__ import annotations
 
 import json
+import math
 import random
 import logging
 from pathlib import Path
@@ -18,6 +19,8 @@ from .relation_engine import (
     ALL_DIRECTIONS_10,
     ALL_ALLOCENTRIC_10,
     CARDINAL_DIRECTIONS_8,
+    HORIZONTAL_DIRECTIONS,
+    MIN_DIRECTION_DISTANCE,
     compute_all_relations,
     find_changed_relations,
     primary_direction,
@@ -76,8 +79,9 @@ EXCLUDED_LABELS = {
     "mirror", "glass", "monitor", "tv",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
-    # Boundary-unclear / large amorphous
+    # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "blanket", "rug",
+    "shelf", "bookshelf", "shelves", "rack", "storage shelf",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
@@ -115,8 +119,8 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L1_direction_object_centric": [
-            "Imagine you are standing at {obj_ref} and facing toward {obj_face}. From this perspective, in which direction is {obj_target}?",
-            "If you were at the position of {obj_ref}, looking toward {obj_face}, where would {obj_target} be?",
+            "Imagine you are {obj_ref} and facing toward {obj_face}. From your perspective, in which direction is {obj_target}?",
+            "If you were {obj_ref}, looking toward {obj_face}, where would {obj_target} be?",
         ],
 
         # --- Allocentric ---
@@ -129,12 +133,12 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (existing) ---
         "L2_object_move": [
-            "If {obj_a} is moved {direction} by {distance}, what would be the new spatial relationship between {obj_b} and {obj_c}?",
-            "Imagine moving {obj_a} {direction} by {distance}. After this change, in which direction is {obj_b} relative to {obj_c}?",
+            "From the camera's perspective, if {obj_a} is moved {direction} by {distance}, in which direction is {obj_b} from {obj_c}?",
+            "From the camera's viewpoint, imagine moving {obj_a} {direction} by {distance}. After this change, in which direction is {obj_b} relative to {obj_c}?",
         ],
         "L2_object_move_distance": [
-            "If {obj_a} is moved {direction} by {distance}, how far apart would {obj_b} and {obj_c} be?",
-            "Imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
+            "From the camera's perspective, if {obj_a} is moved {direction} by {distance}, how far apart would {obj_b} and {obj_c} be?",
+            "From the camera's viewpoint, imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
         "L2_viewpoint_move": [
             "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",
@@ -145,14 +149,14 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L2_object_move_object_centric": [
-            "If {obj_moved} is moved {direction} by {distance}, imagine standing at {obj_ref} and facing toward {obj_face}. In which direction would {obj_moved} be?",
-            "After moving {obj_moved} {direction} by {distance}, if you stand at {obj_ref} facing {obj_face}, where is {obj_moved}?",
+            "If {obj_moved} is moved {distance} to the {direction}, imagine you are {obj_ref} and facing toward {obj_face}. In which direction would {obj_moved} be?",
+            "After moving {obj_moved} {distance} to the {direction}, if you are {obj_ref} facing {obj_face}, where is {obj_moved}?",
         ],
 
         # --- Allocentric ---
         "L2_object_move_allocentric": [
-            "If {obj_moved} is moved {direction} by {distance}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_moved} be from {obj_ref}?",
-            "After moving {obj_moved} {direction} by {distance}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_moved} from {obj_ref}?",
+            "If {obj_moved} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_moved} be from {obj_ref}?",
+            "After moving {obj_moved} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_moved} from {obj_ref}?",
         ],
 
         # ==== L3 — Counterfactual / multi-hop ====
@@ -171,7 +175,7 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L3_coordinate_rotation_object_centric": [
-            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). After this rearrangement, if you stand at {obj_ref}'s new position and face toward {obj_face}'s new position, in which direction is {obj_target}?",
+            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). After this rearrangement, if you are {obj_ref} at its new position and face toward {obj_face}'s new position, in which direction is {obj_target}?",
         ],
 
         # --- Allocentric ---
@@ -188,10 +192,25 @@ def generate_options(
 ) -> tuple[list[str], str]:
     """Generate MCQ options from an answer pool.
 
+    When the correct answer is a vertical direction (above/below), horizontal
+    directions are excluded from distractors and vice versa — this prevents
+    distractors that are also plausibly correct (e.g. an object that is
+    "above" is also "front" if it happens to be slightly forward).
+
     Returns (shuffled_options, correct_letter).
     """
+    VERTICAL = {"above", "below"}
+    HORIZONTAL = set(HORIZONTAL_DIRECTIONS)  # front/back/left/right/…
+
+    if correct_answer in VERTICAL:
+        exclude = HORIZONTAL
+    elif correct_answer in HORIZONTAL:
+        exclude = VERTICAL
+    else:
+        exclude = set()
+
     options = [correct_answer]
-    distractors = [a for a in answer_pool if a != correct_answer]
+    distractors = [a for a in answer_pool if a != correct_answer and a not in exclude]
     random.shuffle(distractors)
     options.extend(distractors[: n_options - 1])
 
@@ -216,6 +235,8 @@ def generate_l1_direction(
     """Generate an L1-direction question from a precomputed relation."""
     if relation["ambiguity_score"] > 0.7:
         return None  # too ambiguous
+    if relation["distance_m"] < MIN_DIRECTION_DISTANCE:
+        return None  # too close — annotation errors dominate
     if relation["obj_a_label"] == relation["obj_b_label"]:
         return None  # same label → "chair relative to chair" is meaningless
 
@@ -363,6 +384,12 @@ def generate_l1_direction_object_centric(
                 face_c = np.array(face["center"])
                 target_c = np.array(target["center"])
 
+                # Require minimum distances to avoid annotation-error-dominated results
+                if np.linalg.norm(face_c - ref_c) < MIN_DIRECTION_DISTANCE:
+                    continue
+                if np.linalg.norm(target_c - ref_c) < MIN_DIRECTION_DISTANCE:
+                    continue
+
                 direction, ambiguity = primary_direction_object_centric(
                     ref_c, face_c, target_c,
                 )
@@ -433,6 +460,8 @@ def generate_l1_direction_allocentric(
 
             a_c = np.array(a["center"])
             b_c = np.array(b["center"])
+            if np.linalg.norm(b_c - a_c) < MIN_DIRECTION_DISTANCE:
+                continue
             direction, ambiguity = primary_direction_allocentric(a_c, b_c)
             if ambiguity > 0.7:
                 continue
@@ -540,8 +569,8 @@ def generate_l2_object_move(
                 else:
                     continue
 
-                obj_b_label = obj_map.get(ch["obj_a_id"], {}).get("label", "object")
-                obj_c_label = obj_map.get(ch["obj_b_id"], {}).get("label", "object")
+                obj_b_label = obj_map.get(ch["obj_b_id"], {}).get("label", "object")
+                obj_c_label = obj_map.get(ch["obj_a_id"], {}).get("label", "object")
 
                 field_tpl_list = templates.get(field_tpl_key, _default_templates()[field_tpl_key])
                 tpl = random.choice(field_tpl_list)
@@ -563,14 +592,14 @@ def generate_l2_object_move(
                     "correct_value": vals["new"],
                     "moved_obj_id": obj["id"],
                     "moved_obj_label": obj["label"],
-                    "obj_b_id": ch["obj_a_id"],
+                    "obj_b_id": ch["obj_b_id"],
                     "obj_b_label": obj_b_label,
-                    "obj_c_id": ch["obj_b_id"],
+                    "obj_c_id": ch["obj_a_id"],
                     "obj_c_label": obj_c_label,
                     "mentioned_objects": [
                         _mention("moved_object", obj["label"], obj["id"]),
-                        _mention("relation_obj_b", obj_b_label, ch["obj_a_id"]),
-                        _mention("relation_obj_c", obj_c_label, ch["obj_b_id"]),
+                        _mention("relation_obj_b", obj_b_label, ch["obj_b_id"]),
+                        _mention("relation_obj_c", obj_c_label, ch["obj_a_id"]),
                     ],
                     "delta": delta.tolist(),
                     "relation_unchanged": False,
@@ -740,7 +769,7 @@ def generate_l2_object_move_object_centric(
         if delta is None:
             continue
 
-        direction_desc = _delta_to_description(delta, camera_pose)
+        direction_desc = _delta_to_cardinal_description(delta)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
 
         # Compute the moved object's new center
@@ -837,7 +866,7 @@ def generate_l2_object_move_allocentric(
         if delta is None:
             continue
 
-        direction_desc = _delta_to_description(delta, camera_pose)
+        direction_desc = _delta_to_cardinal_description(delta)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
         new_center = np.array(obj["center"]) + delta
 
@@ -1376,6 +1405,7 @@ def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = No
     (x=right, y=down, z=forward in OpenCV convention) so that "right" in the
     question text matches what the viewer actually sees in the image.
 
+    Used for ego-centric questions where the reference frame is the camera.
     Falls back to world-frame labels if *camera_pose* is not provided.
     """
     if camera_pose is not None:
@@ -1402,6 +1432,39 @@ def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = No
     labels = {0: ("right", "left"), 1: ("forward", "backward"), 2: ("up", "down")}
     pos_label, neg_label = labels[axis]
     return pos_label if sign > 0 else neg_label
+
+
+def _delta_to_cardinal_description(delta: np.ndarray) -> str:
+    """Convert a 3D world-frame delta to an absolute cardinal direction string.
+
+    Convention after ScanNet axis alignment:  +x = east, +y = north, +z = up.
+
+    Used for object-centric and allocentric questions where the movement
+    should be described in unambiguous absolute terms.
+    """
+    dx, dy, dz = float(delta[0]), float(delta[1]), float(delta[2])
+    horiz = math.sqrt(dx * dx + dy * dy)
+    vert = abs(dz)
+
+    if vert > horiz:
+        return "up" if dz > 0 else "down"
+
+    if horiz < 1e-6:
+        return "north"
+
+    angle = math.degrees(math.atan2(dx, dy))  # 0=north, 90=east
+    if angle < 0:
+        angle += 360
+
+    # Bin into 4 cardinal directions (N/E/S/W) using 90-degree bins
+    if angle < 45 or angle >= 315:
+        return "north"
+    elif angle < 135:
+        return "east"
+    elif angle < 225:
+        return "south"
+    else:
+        return "west"
 
 
 # ---------------------------------------------------------------------------

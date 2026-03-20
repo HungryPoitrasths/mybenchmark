@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.run_pipeline import run_pipeline
+from src.scene_parser import load_scannet_label_map
 from src.quality_control import compute_statistics, sample_for_human_validation
 
 logging.basicConfig(
@@ -41,7 +42,12 @@ def main():
     parser.add_argument("--max_frames", type=int, default=3)
     parser.add_argument("--no_occlusion", action="store_true",
                         help="Disable depth-map occlusion (fast but no occlusion questions)")
+    parser.add_argument("--label_map", type=str, default=None,
+                        help="Path to scannetv2-labels.combined.tsv")
     args = parser.parse_args()
+
+    if args.label_map:
+        load_scannet_label_map(args.label_map)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

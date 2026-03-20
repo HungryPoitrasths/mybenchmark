@@ -54,17 +54,58 @@ LABEL_NORMALIZE: dict[str, str] = {
     "storage bin": "storage container",
     "trash bin": "trash can",
     "recycling bin": "trash can",
-    "sofa chair": "armchair",
+    "sofa chair": "chair",
+    "armchair": "chair",
+    "office chair": "chair",
+    "dining chair": "chair",
+    "folding chair": "chair",
     "coffee table": "table",
+    "dining table": "table",
     "mini fridge": "refrigerator",
     "shower wall": "wall",
     "ceiling fan": "fan",
 }
 
+# Runtime label map loaded from scannetv2-labels.combined.tsv (raw_category → nyu40class).
+# Populated by load_scannet_label_map(); empty dict = fall back to LABEL_NORMALIZE only.
+_SCANNET_LABEL_MAP: dict[str, str] = {}
+
+
+def load_scannet_label_map(tsv_path: str | Path) -> None:
+    """Load raw_category → nyu40class mapping from scannetv2-labels.combined.tsv.
+
+    Populates the module-level _SCANNET_LABEL_MAP used by normalize_label().
+    Call this once at startup before parsing any scenes.
+    """
+    import csv
+    global _SCANNET_LABEL_MAP
+    tsv_path = Path(tsv_path)
+    if not tsv_path.exists():
+        logger.warning("ScanNet label map not found: %s — using built-in rules only", tsv_path)
+        return
+    mapping: dict[str, str] = {}
+    with open(tsv_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            raw = row.get("raw_category", "").strip().lower()
+            nyu = row.get("nyu40class", "").strip().lower()
+            if raw and nyu:
+                mapping[raw] = nyu
+    _SCANNET_LABEL_MAP = mapping
+    logger.info("Loaded %d label mappings from %s", len(mapping), tsv_path.name)
+
 
 def normalize_label(label: str) -> str:
-    """Return the canonical form of *label* (lowercase, mapped)."""
+    """Return the canonical form of *label* (lowercase, mapped).
+
+    Priority:
+      1. scannetv2-labels.combined.tsv (raw_category → nyu40class) if loaded
+      2. Built-in LABEL_NORMALIZE rules
+      3. Lowercase of the original label
+    """
     low = label.strip().lower()
+    if _SCANNET_LABEL_MAP:
+        return _SCANNET_LABEL_MAP.get(low, LABEL_NORMALIZE.get(low, low))
     return LABEL_NORMALIZE.get(low, low)
 
 
@@ -85,8 +126,9 @@ EXCLUDED_LABELS = {
     "mirror", "glass", "monitor", "tv",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
-    # Boundary-unclear / large amorphous
+    # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "blanket", "rug",
+    "shelf", "bookshelf", "shelves", "rack", "storage shelf",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",

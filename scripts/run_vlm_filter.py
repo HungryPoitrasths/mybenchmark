@@ -95,6 +95,7 @@ def _get_object_labels(q: dict) -> list[str]:
         "ledge", "structure", "closet", "breakfast bar", "shower curtain",
         "case", "tube", "board", "sign", "frame", "paper", "lotion",
         "counter", "couch", "clothing", "blanket", "rug",
+        "shelf", "bookshelf", "shelves", "rack", "storage shelf",
         "power outlet", "light switch", "fire alarm", "controller",
         "power strip", "soda can", "starbucks cup", "battery disposal jar",
         "can", "water bottle", "paper cutter",

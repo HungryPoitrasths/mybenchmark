@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.scene_parser import parse_scene
+from src.scene_parser import parse_scene, load_scannet_label_map
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
 from src.frame_selector import (
     select_frames,
@@ -274,7 +274,14 @@ def main():
         "--strict_mode", action="store_true",
         help="Require every mentioned object to pass strict per-frame visibility checks",
     )
+    parser.add_argument(
+        "--label_map", type=str, default=None,
+        help="Path to scannetv2-labels.combined.tsv for raw_category→nyu40class normalization",
+    )
     args = parser.parse_args()
+
+    if args.label_map:
+        load_scannet_label_map(args.label_map)
 
     run_pipeline(
         data_root=Path(args.data_root),
