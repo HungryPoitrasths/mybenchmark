@@ -27,7 +27,7 @@ from .utils.colmap_loader import load_axis_alignment
 logger = logging.getLogger(__name__)
 
 # Minimum requirements for a scene to be useful
-MIN_OBJECTS = 5
+MIN_OBJECTS = 3
 
 # ---------------------------------------------------------------------------
 #  Label normalisation — applied before dedup / blacklist filtering.
@@ -40,10 +40,12 @@ LABEL_NORMALIZE: dict[str, str] = {
     "doors": "door",
     "curtains": "curtain",
     "shoes": "shoe",
+    "clothes": "clothing",
     "cabinets": "cabinet",
     "papers": "paper",
     "pipes": "pipe",
     "mailboxes": "mailbox",
+    "cloth": "clothing",
     # Sub-category → canonical
     "kitchen cabinet": "cabinet",
     "kitchen cabinets": "cabinet",
@@ -127,7 +129,7 @@ EXCLUDED_LABELS = {
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
     # Boundary-unclear / large amorphous / unreliable 3D annotation
-    "counter", "couch", "clothing", "blanket", "rug",
+    "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",

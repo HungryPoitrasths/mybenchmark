@@ -15,9 +15,21 @@
     "Estimate the distance between {obj_a} and {obj_b} in the scene."
   ],
   "L2_object_move": [
-    "If {obj_a} is moved {direction} by {distance}, what would be the new spatial relationship between {obj_b} and {obj_c}?",
-    "Imagine moving {obj_a} {direction} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
-    "Suppose {obj_a} were shifted {direction} by {distance}. How would {obj_b} be positioned relative to {obj_c}?"
+    "From the camera's perspective, imagine moving {obj_a} {direction} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
+    "From the camera's perspective, if we move {obj_a} {direction} by {distance}, where is {obj_b} relative to {obj_c}?",
+    "From the camera's perspective, suppose {obj_a} is shifted {direction} by {distance}. After this change, what is the spatial relation of {obj_b} with respect to {obj_c}?"
+  ],
+  "L2_object_move_distance": [
+    "From the camera's perspective, imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
+    "From the camera's perspective, if {obj_a} is moved {direction} by {distance}, how far apart are {obj_b} and {obj_c}?"
+  ],
+  "L2_object_move_object_centric": [
+    "On the room's floor plan (north-up), move {obj_moved} {distance} to the {direction}. Then imagine you are {obj_ref} facing {obj_face}. In which direction is {obj_moved}?",
+    "Suppose {obj_moved} is shifted {distance} toward {direction} on the floor plan. After this change, if you stand at {obj_ref} and face {obj_face}, where is {obj_moved}?"
+  ],
+  "L2_object_move_allocentric": [
+    "If {obj_moved} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_moved} be from {obj_ref}?",
+    "After moving {obj_moved} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_moved} from {obj_ref}?"
   ],
   "L2_viewpoint_move": [
     "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",

@@ -80,7 +80,7 @@ EXCLUDED_LABELS = {
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
     # Boundary-unclear / large amorphous / unreliable 3D annotation
-    "counter", "couch", "clothing", "blanket", "rug",
+    "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
@@ -133,12 +133,12 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (existing) ---
         "L2_object_move": [
-            "From the camera's perspective, if {obj_a} is moved {direction} by {distance}, in which direction is {obj_b} from {obj_c}?",
-            "From the camera's viewpoint, imagine moving {obj_a} {direction} by {distance}. After this change, in which direction is {obj_b} relative to {obj_c}?",
+            "From the camera's perspective, imagine moving {obj_a} {direction} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
+            "From the camera's perspective, if we move {obj_a} {direction} by {distance}, where is {obj_b} relative to {obj_c}?",
         ],
         "L2_object_move_distance": [
             "From the camera's perspective, if {obj_a} is moved {direction} by {distance}, how far apart would {obj_b} and {obj_c} be?",
-            "From the camera's viewpoint, imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
+            "From the camera's perspective, imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
         "L2_viewpoint_move": [
             "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",
@@ -149,8 +149,8 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L2_object_move_object_centric": [
-            "If {obj_moved} is moved {distance} to the {direction}, imagine you are {obj_ref} and facing toward {obj_face}. In which direction would {obj_moved} be?",
-            "After moving {obj_moved} {distance} to the {direction}, if you are {obj_ref} facing {obj_face}, where is {obj_moved}?",
+            "On the room's floor plan (north-up), move {obj_moved} {distance} to the {direction}. Then imagine you are {obj_ref} facing {obj_face}. In which direction is {obj_moved}?",
+            "Suppose {obj_moved} is shifted {distance} toward {direction} on the floor plan. After this change, if you stand at {obj_ref} and face {obj_face}, where is {obj_moved}?",
         ],
 
         # --- Allocentric ---
@@ -752,6 +752,7 @@ def generate_l2_object_move_object_centric(
     where is *obj_moved* now?
     """
     questions: list[dict] = []
+    cam_cardinal = camera_cardinal_direction(camera_pose)
     obj_map = {o["id"]: o for o in objects}
     tpl_list = templates.get(
         "L2_object_move_object_centric",
@@ -807,6 +808,7 @@ def generate_l2_object_move_object_centric(
                     distance=distance_desc,
                     obj_ref=_the(ref["label"]),
                     obj_face=_the(face["label"]),
+                    camera_cardinal=cam_cardinal,
                 )
                 options, answer = generate_options(new_dir, ALL_DIRECTIONS)
                 obj_questions.append({
