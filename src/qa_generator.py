@@ -214,11 +214,26 @@ def generate_options(
     random.shuffle(distractors)
     options.extend(distractors[: n_options - 1])
 
-    # Pad if pool is too small
-    while len(options) < n_options:
-        options.append(f"None of the above")
+    # If the strict pool is too small, fall back to the excluded pool before
+    # introducing a single "None of the above" option.
+    if len(options) < n_options:
+        fallback = [
+            a for a in answer_pool
+            if a != correct_answer and a not in options
+        ]
+        random.shuffle(fallback)
+        options.extend(fallback[: n_options - len(options)])
 
-    random.shuffle(options)
+    if len(options) < n_options and "None of the above" not in options:
+        options.append("None of the above")
+
+    has_none_of_above = "None of the above" in options
+    shuffled = [opt for opt in options if opt != "None of the above"]
+    random.shuffle(shuffled)
+    if has_none_of_above:
+        shuffled.append("None of the above")
+
+    options = shuffled
     correct_idx = options.index(correct_answer)
     correct_letter = chr(65 + correct_idx)  # A, B, C, D
     return options, correct_letter

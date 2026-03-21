@@ -2013,6 +2013,39 @@ h1{text-align:center;color:#333;margin-bottom:4px}
       objectPattern,
       '<span class="obj-word">$&</span>'
     );
+
+    const seen = new Set();
+    for (const opt of Array.from(card.querySelectorAll(".opt"))) {
+      const text = opt.textContent.replace(/^[A-D]\.\s*/, "").trim().toLowerCase();
+      if (text === "none of the above") {
+        if (seen.has(text)) {
+          opt.remove();
+          continue;
+        }
+      }
+      seen.add(text);
+    }
+
+    const optContainer = q.parentElement;
+    if (!optContainer) continue;
+
+    const opts = Array.from(optContainer.querySelectorAll(".opt"));
+    const regularOpts = opts.filter(
+      (opt) => !/^[A-D]\.\s*None of the above\s*$/i.test(opt.textContent.trim())
+    );
+    const noneOpts = opts.filter(
+      (opt) => /^[A-D]\.\s*None of the above\s*$/i.test(opt.textContent.trim())
+    );
+    const orderedOpts = regularOpts.concat(noneOpts);
+
+    for (const opt of orderedOpts) {
+      optContainer.appendChild(opt);
+    }
+
+    orderedOpts.forEach((opt, idx) => {
+      const text = opt.textContent.replace(/^[A-D]\.\s*/, "").trim();
+      opt.innerHTML = `${String.fromCharCode(65 + idx)}.&nbsp;${text}`;
+    });
   }
 
   const counts = { L1: 0, L2: 0, L3: 0 };
