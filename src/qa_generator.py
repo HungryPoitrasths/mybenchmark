@@ -62,6 +62,31 @@ def _mention(role: str, label: str, obj_id: int | None = None) -> dict[str, Any]
     """Create a normalised mentioned-object record for a question."""
     return {"role": role, "obj_id": obj_id, "label": label}
 
+
+def _invert_direction(direction: str) -> str:
+    """Convert a direction of B relative to A into A relative to B."""
+    opposites = {
+        "front": "back",
+        "front-right": "back-left",
+        "right": "left",
+        "back-right": "front-left",
+        "back": "front",
+        "back-left": "front-right",
+        "left": "right",
+        "front-left": "back-right",
+        "above": "below",
+        "below": "above",
+        "north": "south",
+        "northeast": "southwest",
+        "east": "west",
+        "southeast": "northwest",
+        "south": "north",
+        "southwest": "northeast",
+        "west": "east",
+        "northwest": "southeast",
+    }
+    return opposites.get(direction, direction)
+
 # Labels to exclude from ALL question types (not just L2).
 # Structural elements, generic labels, and uninformative categories.
 # Must stay in sync with scene_parser.EXCLUDED_LABELS.
@@ -202,6 +227,7 @@ def generate_options(
     VERTICAL = {"above", "below"}
     HORIZONTAL = set(HORIZONTAL_DIRECTIONS)  # front/back/left/right/…
 
+    HORIZONTAL.update(CARDINAL_DIRECTIONS_8)
     if correct_answer in VERTICAL:
         exclude = HORIZONTAL
     elif correct_answer in HORIZONTAL:
@@ -219,7 +245,7 @@ def generate_options(
     if len(options) < n_options:
         fallback = [
             a for a in answer_pool
-            if a != correct_answer and a not in options
+            if a != correct_answer and a not in options and a not in exclude
         ]
         random.shuffle(fallback)
         options.extend(fallback[: n_options - len(options)])
@@ -1105,8 +1131,10 @@ def generate_l3_coordinate_rotation(
                 obj_a=_the(obj_a_label),
                 obj_b=_the(obj_b_label),
             )
-            # Correct answer is the new direction after rotation (4-option, not Yes/No)
-            new_dir = vals["new"]
+            # The relation engine stores "B relative to A", while this template
+            # asks for "A relative to B", so invert the direction before use.
+            old_dir = _invert_direction(vals["old"])
+            new_dir = _invert_direction(vals["new"])
             options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
 
             questions.append({
@@ -1125,7 +1153,7 @@ def generate_l3_coordinate_rotation(
                     _mention("obj_a", obj_a_label, ch["obj_a_id"]),
                     _mention("obj_b", obj_b_label, ch["obj_b_id"]),
                 ],
-                "old_direction": vals["old"],
+                "old_direction": old_dir,
                 "new_direction": new_dir,
                 "relation_unchanged": False,
             })
