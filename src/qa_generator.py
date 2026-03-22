@@ -25,6 +25,7 @@ from .relation_engine import (
     primary_direction,
     primary_direction_object_centric,
     primary_direction_allocentric,
+    camera_cardinal_direction,
     compute_distance,
 )
 from .virtual_ops import (
@@ -294,8 +295,8 @@ def _default_templates() -> dict:
 
         # --- Allocentric ---
         "L1_direction_allocentric": [
-            "{visible_wall_anchor_note} On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
-            "{visible_wall_anchor_note} Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
+            "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+            "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
         ],
 
         # ==== L2 — Intervention ====
@@ -323,8 +324,8 @@ def _default_templates() -> dict:
 
         # --- Allocentric ---
         "L2_object_move_allocentric": [
-            "{visible_wall_anchor_note} If {obj_move_source} is moved {distance} to the {direction}, on the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}?",
-            "{visible_wall_anchor_note} After moving {obj_move_source} {distance} to the {direction}, on the room's layout, in which cardinal direction is {obj_query} from {obj_ref}?",
+            "If {obj_move_source} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}?",
+            "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}?",
         ],
 
         # ==== L3 — Counterfactual / multi-hop ====
@@ -348,7 +349,7 @@ def _default_templates() -> dict:
 
         # --- Allocentric ---
         "L3_coordinate_rotation_allocentric": [
-            "{visible_wall_anchor_note} Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
         ],
     }
 
@@ -625,17 +626,17 @@ def generate_l1_direction_object_centric(
 
 def generate_l1_direction_allocentric(
     objects: list[dict],
+    camera_pose: CameraPose,
     templates: dict,
-    wall_anchor: dict[str, Any] | None,
     max_questions: int = 20,
 ) -> list[dict]:
     """Generate L1 allocentric (cardinal) direction questions.
 
-    Uses a visible wall anchor to ground world-cardinal directions in the image.
+    Provides the camera's cardinal facing direction so the model can anchor
+    absolute directions from the image.
     """
     questions: list[dict] = []
-    if wall_anchor is None:
-        return questions
+    cam_cardinal = camera_cardinal_direction(camera_pose)
     n = len(objects)
 
     tpl_list = templates.get(
@@ -662,7 +663,7 @@ def generate_l1_direction_allocentric(
 
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
-                visible_wall_anchor_note=wall_anchor["visible_wall_anchor_note"],
+                camera_cardinal=cam_cardinal,
                 obj_a=_the(a["label"]),
                 obj_b=_the(b["label"]),
             )
@@ -675,11 +676,7 @@ def generate_l1_direction_allocentric(
                 "options": options,
                 "answer": answer,
                 "correct_value": direction,
-                "allocentric_anchor": "visible_wall",
-                "visible_wall_anchor_note": wall_anchor["visible_wall_anchor_note"],
-                "anchor_wall_id": wall_anchor["anchor_wall_id"],
-                "anchor_wall_image_side": wall_anchor["anchor_wall_image_side"],
-                "anchor_wall_axis": wall_anchor["anchor_wall_axis"],
+                "camera_cardinal": cam_cardinal,
                 "obj_a_id": a["id"],
                 "obj_a_label": a["label"],
                 "obj_b_id": b["id"],
@@ -1107,14 +1104,12 @@ def generate_l2_object_move_allocentric(
     supported_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    wall_anchor: dict[str, Any] | None,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions: list[dict] = []
-    if wall_anchor is None:
-        return questions
+    cam_cardinal = camera_cardinal_direction(camera_pose)
     tpl_list = templates.get(
         "L2_object_move_allocentric",
         _default_templates()["L2_object_move_allocentric"],
@@ -1168,7 +1163,7 @@ def generate_l2_object_move_allocentric(
                 obj_query=_the(obj["label"]),
                 direction=direction_desc,
                 distance=distance_desc,
-                visible_wall_anchor_note=wall_anchor["visible_wall_anchor_note"],
+                camera_cardinal=cam_cardinal,
                 obj_ref=_the(ref["label"]),
             )
             options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
@@ -1180,11 +1175,7 @@ def generate_l2_object_move_allocentric(
                 "options": options,
                 "answer": answer,
                 "correct_value": new_dir,
-                "allocentric_anchor": "visible_wall",
-                "visible_wall_anchor_note": wall_anchor["visible_wall_anchor_note"],
-                "anchor_wall_id": wall_anchor["anchor_wall_id"],
-                "anchor_wall_image_side": wall_anchor["anchor_wall_image_side"],
-                "anchor_wall_axis": wall_anchor["anchor_wall_axis"],
+                "camera_cardinal": cam_cardinal,
                 "moved_obj_id": move_source_id,
                 "moved_obj_label": move_source["label"],
                 "query_obj_id": obj["id"],
@@ -1518,8 +1509,8 @@ def generate_l3_coordinate_rotation_object_centric(
 
 def generate_l3_coordinate_rotation_allocentric(
     objects: list[dict],
+    camera_pose: CameraPose,
     templates: dict,
-    wall_anchor: dict[str, Any] | None,
     max_per_angle: int = 5,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in allocentric (cardinal) frame.
@@ -1529,8 +1520,7 @@ def generate_l3_coordinate_rotation_allocentric(
     objects' cardinal positions DO change.)
     """
     questions: list[dict] = []
-    if wall_anchor is None:
-        return questions
+    cam_cardinal = camera_cardinal_direction(camera_pose)
     tpl_list = templates.get(
         "L3_coordinate_rotation_allocentric",
         _default_templates()["L3_coordinate_rotation_allocentric"],
@@ -1570,7 +1560,7 @@ def generate_l3_coordinate_rotation_allocentric(
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
                     angle=angle,
-                    visible_wall_anchor_note=wall_anchor["visible_wall_anchor_note"],
+                    camera_cardinal=cam_cardinal,
                     obj_a=_the(a["label"]),
                     obj_b=_the(b["label"]),
                 )
@@ -1583,11 +1573,7 @@ def generate_l3_coordinate_rotation_allocentric(
                     "options": options,
                     "answer": answer,
                     "correct_value": new_dir,
-                    "allocentric_anchor": "visible_wall",
-                    "visible_wall_anchor_note": wall_anchor["visible_wall_anchor_note"],
-                    "anchor_wall_id": wall_anchor["anchor_wall_id"],
-                    "anchor_wall_image_side": wall_anchor["anchor_wall_image_side"],
-                    "anchor_wall_axis": wall_anchor["anchor_wall_axis"],
+                    "camera_cardinal": cam_cardinal,
                     "rotation_angle": angle,
                     "obj_a_id": a["id"],
                     "obj_a_label": a["label"],
@@ -1885,12 +1871,6 @@ def generate_all_questions(
         }
         supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
 
-    wall_anchor = _build_visible_wall_anchor(
-        wall_objects=wall_objects,
-        camera_pose=camera_pose,
-        color_intrinsics=color_intrinsics,
-    )
-
     # Remove objects with uninformative labels (wall, floor, object, etc.)
     objects = [o for o in objects if o.get("label", "").lower() not in EXCLUDED_LABELS]
 
@@ -1953,7 +1933,7 @@ def generate_all_questions(
         objects_uniq, templates, max_questions=MAX_L1_DIRECTION_OC,
     )
     l1_dir_allo_qs = generate_l1_direction_allocentric(
-        objects_uniq, templates, wall_anchor, max_questions=MAX_L1_DIRECTION_ALLO,
+        objects_uniq, camera_pose, templates, max_questions=MAX_L1_DIRECTION_ALLO,
     )
 
     if len(l1_dir_qs) > MAX_L1_DIRECTION:
@@ -1997,7 +1977,7 @@ def generate_all_questions(
     )
     all_questions.extend(
         generate_l2_object_move_allocentric(
-            objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates, wall_anchor,
+            objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
         )
     )
@@ -2014,7 +1994,7 @@ def generate_all_questions(
         generate_l3_coordinate_rotation_object_centric(objects_uniq, camera_pose, templates)
     )
     all_questions.extend(
-        generate_l3_coordinate_rotation_allocentric(objects_uniq, templates, wall_anchor)
+        generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates)
     )
 
     id_to_object = {int(o["id"]): o for o in objects_uniq}

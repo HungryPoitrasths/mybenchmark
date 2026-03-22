@@ -15,8 +15,8 @@
     "Estimate the distance between {obj_a} and {obj_b} in the scene."
   ],
   "L1_direction_allocentric": [
-    "{visible_wall_anchor_note} On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
-    "{visible_wall_anchor_note} Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?"
+    "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+    "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?"
   ],
   "L2_object_move_agent": [
     "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
@@ -31,8 +31,8 @@
     "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?"
   ],
   "L2_object_move_allocentric": [
-    "{visible_wall_anchor_note} If {obj_move_source} is moved {distance} to the {direction}, on the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}?",
-    "{visible_wall_anchor_note} After moving {obj_move_source} {distance} to the {direction}, on the room's layout, in which cardinal direction is {obj_query} from {obj_ref}?"
+    "If {obj_move_source} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}?",
+    "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}?"
   ],
   "L2_viewpoint_move": [
     "If the observer moves {direction_with_camera_hint} by {distance} from the current position, would {obj_a} become visible or occluded?",
@@ -55,6 +55,6 @@
     "Imagine the room was originally built rotated {angle} degrees clockwise (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?"
   ],
   "L3_coordinate_rotation_allocentric": [
-    "{visible_wall_anchor_note} Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?"
+    "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?"
   ]
 }
