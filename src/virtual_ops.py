@@ -59,6 +59,24 @@ MOVEMENT_CANDIDATES = [
     np.array([0.0, -2.5, 0.0]),
 ]
 
+ORBIT_ROTATION_CANDIDATES = [
+    (90, "clockwise", -90.0),
+    (180, "clockwise", -180.0),
+    (270, "clockwise", -270.0),
+    (90, "counterclockwise", 90.0),
+    (180, "counterclockwise", 180.0),
+    (270, "counterclockwise", 270.0),
+]
+
+
+def get_moved_object_ids(
+    target_obj_id: int,
+    support_graph: dict[int, list[int]],
+) -> set[int]:
+    """Return all object IDs that move together with the target."""
+    dependents = get_support_chain(target_obj_id, support_graph)
+    return set(dependents) | {target_obj_id}
+
 
 def apply_movement(
     objects: list[dict],
@@ -74,8 +92,7 @@ def apply_movement(
     updated = copy.deepcopy(objects)
 
     # Collect all IDs that must move together
-    dependents = get_support_chain(target_obj_id, support_graph)
-    to_move = set(dependents) | {target_obj_id}
+    to_move = get_moved_object_ids(target_obj_id, support_graph)
 
     for obj in updated:
         if obj["id"] in to_move:
@@ -116,6 +133,34 @@ def compute_room_bounds(objects: list[dict], margin: float = 0.5, room_bounds: d
     return all_mins.min(axis=0), all_maxs.max(axis=0)
 
 
+def _bboxes_intersect_strict(obj_a: dict, obj_b: dict) -> bool:
+    """Whether two axis-aligned boxes overlap with positive volume.
+
+    Face-touching is allowed; only strict interior overlap counts as collision.
+    """
+    a_min = np.array(obj_a["bbox_min"], dtype=float)
+    a_max = np.array(obj_a["bbox_max"], dtype=float)
+    b_min = np.array(obj_b["bbox_min"], dtype=float)
+    b_max = np.array(obj_b["bbox_max"], dtype=float)
+    return bool(np.all(a_min < b_max) and np.all(b_min < a_max))
+
+
+def has_terminal_bbox_collision(
+    original_objects: list[dict],
+    moved_objects: list[dict],
+    moved_ids: set[int],
+) -> bool:
+    """Reject movements whose final boxes intersect any unmoved object."""
+    moved_map = {obj["id"]: obj for obj in moved_objects if obj["id"] in moved_ids}
+    static_objects = [obj for obj in original_objects if obj["id"] not in moved_ids]
+
+    for moved_obj in moved_map.values():
+        for static_obj in static_objects:
+            if _bboxes_intersect_strict(moved_obj, static_obj):
+                return True
+    return False
+
+
 def find_meaningful_movement(
     objects: list[dict],
     support_graph: dict[int, list[int]],
@@ -130,6 +175,7 @@ def find_meaningful_movement(
     # No depth/occlusion needed — we only need direction/distance changes.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
+    moved_ids = get_moved_object_ids(target_id, support_graph)
 
     # Shuffle candidates to avoid systematic bias toward the first entry
     candidates = list(MOVEMENT_CANDIDATES)
@@ -139,12 +185,84 @@ def find_meaningful_movement(
         new_objects = apply_movement(objects, support_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
+        if has_terminal_bbox_collision(objects, new_objects, moved_ids):
+            continue
         new_relations = compute_all_relations(new_objects, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
         if changed:
             return delta, changed
 
     return None, []
+
+
+def apply_orbit_rotation(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    target_id: int,
+    pivot_id: int,
+    angle_deg: float,
+) -> list[dict]:
+    """Orbit a moved support chain around a static pivot in the horizontal plane.
+
+    This rotates the target chain's position around *pivot_id* as seen from
+    above. It does not rotate any object's intrinsic orientation.
+    """
+    moved_ids = get_moved_object_ids(target_id, support_graph)
+    if pivot_id in moved_ids:
+        raise ValueError("Pivot object must stay outside the moved support chain")
+
+    obj_map = {obj["id"]: obj for obj in objects}
+    target = obj_map.get(target_id)
+    pivot = obj_map.get(pivot_id)
+    if target is None or pivot is None:
+        raise ValueError("Target and pivot objects must exist")
+
+    target_center = np.array(target["center"], dtype=float)
+    pivot_center = np.array(pivot["center"], dtype=float)
+    rotated_target_center = (
+        rotation_matrix_z(angle_deg) @ (target_center - pivot_center)
+    ) + pivot_center
+    delta = rotated_target_center - target_center
+    return apply_movement(objects, support_graph, target_id, delta)
+
+
+def find_meaningful_orbit_rotation(
+    objects: list[dict],
+    support_graph: dict[int, list[int]],
+    target_id: int,
+    pivot_id: int,
+    room_bounds: dict | None = None,
+) -> list[dict[str, Any]]:
+    """Enumerate physically valid orbit rotations around a static pivot."""
+    room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
+    moved_ids = get_moved_object_ids(target_id, support_graph)
+    if pivot_id in moved_ids:
+        return []
+
+    candidates = list(ORBIT_ROTATION_CANDIDATES)
+    random.shuffle(candidates)
+
+    valid_rotations: list[dict[str, Any]] = []
+    for angle, rotation_direction, signed_angle in candidates:
+        rotated_objects = apply_orbit_rotation(
+            objects,
+            support_graph,
+            target_id,
+            pivot_id,
+            signed_angle,
+        )
+        if not is_within_room(rotated_objects, room_min, room_max):
+            continue
+        if has_terminal_bbox_collision(objects, rotated_objects, moved_ids):
+            continue
+        valid_rotations.append({
+            "angle": angle,
+            "rotation_direction": rotation_direction,
+            "signed_angle": signed_angle,
+            "objects": rotated_objects,
+        })
+
+    return valid_rotations
 
 
 # ---------------------------------------------------------------------------

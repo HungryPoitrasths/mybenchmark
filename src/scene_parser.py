@@ -131,6 +131,7 @@ EXCLUDED_LABELS = {
     # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
+    "refrigerator", "refridgerator",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
@@ -237,6 +238,9 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
     structural_objects = [
         o for o in objects if o["label"].lower() in STRUCTURAL_LABELS
     ]
+    wall_objects = [
+        o for o in objects if o["label"].lower() == "wall"
+    ]
     room_bounds = None
     if structural_objects:
         all_mins = np.array([o["bbox_min"] for o in structural_objects])
@@ -270,7 +274,12 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
         )
         return None
 
-    return {"scene_id": scene_id, "objects": objects, "room_bounds": room_bounds}
+    return {
+        "scene_id": scene_id,
+        "objects": objects,
+        "room_bounds": room_bounds,
+        "wall_objects": wall_objects,
+    }
 
 
 def parse_all_scenes(

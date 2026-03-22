@@ -196,12 +196,14 @@ def run_pipeline(
                 support_graph=support_graph,
                 supported_by=supported_by,
                 camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
                 visible_object_ids=visible_ids,
                 object_visibility=visibility_table,
                 strict_mode=strict_mode,
                 room_bounds=scene.get("room_bounds"),
+                wall_objects=scene.get("wall_objects"),
             )
 
             for q in questions:

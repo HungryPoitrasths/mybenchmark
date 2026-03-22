@@ -17,7 +17,6 @@ import numpy as np
 
 from .relation_engine import (
     ALL_DIRECTIONS_10,
-    ALL_ALLOCENTRIC_10,
     CARDINAL_DIRECTIONS_8,
     HORIZONTAL_DIRECTIONS,
     MIN_DIRECTION_DISTANCE,
@@ -26,7 +25,6 @@ from .relation_engine import (
     primary_direction,
     primary_direction_object_centric,
     primary_direction_allocentric,
-    camera_cardinal_direction,
     compute_distance,
 )
 from .virtual_ops import (
@@ -34,8 +32,11 @@ from .virtual_ops import (
     apply_removal,
     apply_coordinate_rotation,
     find_meaningful_movement,
+    find_meaningful_orbit_rotation,
 )
 from .utils.colmap_loader import CameraPose
+from .utils.colmap_loader import CameraIntrinsics
+from .utils.coordinate_transform import is_in_image, project_to_image
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,18 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 ALL_DIRECTIONS = ALL_DIRECTIONS_10
-ALL_DIRECTIONS_ALLOCENTRIC = ALL_ALLOCENTRIC_10
+ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
 ALL_OCCLUSION = ["fully visible", "partially occluded", "not visible"]
 YES_NO = ["Yes", "No"]
+
+# Object-centric questions need a stable horizontal facing direction.
+MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE = 0.3
+MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_RATIO = 0.5
+MIN_WALL_HEIGHT = 1.5
+MIN_WALL_MAJOR_AXIS = 1.5
+MAX_WALL_MINOR_AXIS = 1.0
+MIN_WALL_AXIS_RATIO = 2.0
 
 
 def _the(label: str) -> str:
@@ -61,6 +70,27 @@ def _the(label: str) -> str:
 def _mention(role: str, label: str, obj_id: int | None = None) -> dict[str, Any]:
     """Create a normalised mentioned-object record for a question."""
     return {"role": role, "obj_id": obj_id, "label": label}
+
+
+def _has_stable_object_centric_facing(
+    anchor_center: np.ndarray,
+    facing_center: np.ndarray,
+) -> bool:
+    """Whether anchor->facing defines a reliable horizontal heading.
+
+    Reject pairs that are almost vertically aligned, because "face toward X"
+    then fails to define an unambiguous left/right/front/back frame.
+    """
+    delta = facing_center - anchor_center
+    horizontal_distance = float(np.linalg.norm(delta[:2]))
+    total_distance = float(np.linalg.norm(delta))
+    if horizontal_distance < MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE:
+        return False
+    if total_distance < 1e-6:
+        return False
+    if horizontal_distance / total_distance < MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_RATIO:
+        return False
+    return True
 
 
 def _invert_direction(direction: str) -> str:
@@ -87,6 +117,118 @@ def _invert_direction(direction: str) -> str:
     }
     return opposites.get(direction, direction)
 
+
+def _direction_with_camera_hint(direction: str) -> str:
+    """Clarify camera-depth motions in rendered question text."""
+    if direction == "forward":
+        return "forward (away from the camera)"
+    if direction == "backward":
+        return "backward (toward the camera)"
+    return direction
+
+
+def _wall_image_side_phrase(side: str) -> str:
+    if side == "left":
+        return "on the left side of the image"
+    if side == "right":
+        return "on the right side of the image"
+    if side == "top":
+        return "near the top of the image"
+    if side == "bottom":
+        return "near the bottom of the image"
+    return "in the image"
+
+
+def _build_visible_wall_anchor(
+    wall_objects: list[dict] | None,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+) -> dict[str, Any] | None:
+    """Select one visible, axis-aligned wall to anchor allocentric wording."""
+    if not wall_objects or color_intrinsics is None:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    width = float(color_intrinsics.width)
+    height = float(color_intrinsics.height)
+    if width <= 0 or height <= 0:
+        return None
+
+    for wall in wall_objects:
+        dims = np.array(wall.get("dimensions", [0.0, 0.0, 0.0]), dtype=float)
+        if dims.shape[0] < 3:
+            continue
+        dx, dy, dz = float(dims[0]), float(dims[1]), float(dims[2])
+        if dz < MIN_WALL_HEIGHT:
+            continue
+
+        major_axis = max(dx, dy)
+        minor_axis = min(dx, dy)
+        if major_axis < MIN_WALL_MAJOR_AXIS or minor_axis > MAX_WALL_MINOR_AXIS:
+            continue
+        if minor_axis <= 1e-6:
+            axis_ratio = float("inf")
+        else:
+            axis_ratio = major_axis / minor_axis
+        if axis_ratio < MIN_WALL_AXIS_RATIO:
+            continue
+
+        if dy >= dx:
+            wall_axis = "north_south"
+            wall_axis_text = "north-south"
+        else:
+            wall_axis = "east_west"
+            wall_axis_text = "east-west"
+
+        center = np.array(wall["center"], dtype=float)
+        uv, depth = project_to_image(center, camera_pose, color_intrinsics)
+        if not (0.3 < depth <= 6.0):
+            continue
+        if not is_in_image(uv, color_intrinsics, margin=80):
+            continue
+
+        u = float(uv[0]) / width
+        v = float(uv[1]) / height
+        dx_img = u - 0.5
+        dy_img = v - 0.5
+        if abs(dx_img) >= abs(dy_img):
+            image_side = "right" if dx_img >= 0 else "left"
+            side_separation = abs(dx_img)
+        else:
+            image_side = "bottom" if dy_img >= 0 else "top"
+            side_separation = abs(dy_img)
+
+        side_phrase = _wall_image_side_phrase(image_side)
+        note = (
+            f"The wall {side_phrase} runs {wall_axis_text} on the floor plan."
+        )
+        candidates.append({
+            "visible_wall_anchor_note": note,
+            "anchor_wall_id": wall["id"],
+            "anchor_wall_image_side": image_side,
+            "anchor_wall_axis": wall_axis,
+            "axis_ratio": float(axis_ratio),
+            "side_separation": float(side_separation),
+            "major_axis": float(major_axis),
+        })
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda c: (
+            c["side_separation"],
+            c["axis_ratio"],
+            c["major_axis"],
+        ),
+        reverse=True,
+    )
+    best = candidates[0].copy()
+    best.pop("axis_ratio", None)
+    best.pop("side_separation", None)
+    best.pop("major_axis", None)
+    return best
+
 # Labels to exclude from ALL question types (not just L2).
 # Structural elements, generic labels, and uninformative categories.
 # Must stay in sync with scene_parser.EXCLUDED_LABELS.
@@ -107,6 +249,7 @@ EXCLUDED_LABELS = {
     # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
+    "refrigerator", "refridgerator",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
@@ -129,9 +272,10 @@ def _default_templates() -> dict:
         # ==== L1 — Static perception ====
 
         # --- Ego-centric ---
-        "L1_direction": [
+        "L1_direction_agent": [
             "From the camera's viewpoint, {obj_a} is in which direction relative to {obj_b}?",
             "Looking at the scene from the camera's perspective, where is {obj_a} positioned relative to {obj_b}?",
+            "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}?",
         ],
         "L1_distance": [
             "Approximately how far apart are {obj_a} and {obj_b}?",
@@ -150,23 +294,23 @@ def _default_templates() -> dict:
 
         # --- Allocentric ---
         "L1_direction_allocentric": [
-            "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
-            "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
+            "{visible_wall_anchor_note} On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+            "{visible_wall_anchor_note} Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
         ],
 
         # ==== L2 — Intervention ====
 
         # --- Ego-centric (existing) ---
-        "L2_object_move": [
-            "From the camera's perspective, imagine moving {obj_a} {direction} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
-            "From the camera's perspective, if we move {obj_a} {direction} by {distance}, where is {obj_b} relative to {obj_c}?",
+        "L2_object_move_agent": [
+            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
+            "From the camera's perspective, if we move {obj_a} {direction_with_camera_hint} by {distance}, where is {obj_b} relative to {obj_c}?",
         ],
         "L2_object_move_distance": [
-            "From the camera's perspective, if {obj_a} is moved {direction} by {distance}, how far apart would {obj_b} and {obj_c} be?",
-            "From the camera's perspective, imagine moving {obj_a} {direction} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
+            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how far apart would {obj_b} and {obj_c} be?",
+            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
         "L2_viewpoint_move": [
-            "If the observer moves {direction} by {distance} from the current position, would {obj_a} become visible or occluded?",
+            "If the observer moves {direction_with_camera_hint} by {distance} from the current position, would {obj_a} become visible or occluded?",
         ],
         "L2_object_remove": [
             "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
@@ -174,14 +318,13 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L2_object_move_object_centric": [
-            "On the room's floor plan (north-up), move {obj_moved} {distance} to the {direction}. Then imagine you are {obj_ref} facing {obj_face}. In which direction is {obj_moved}?",
-            "Suppose {obj_moved} is shifted {distance} toward {direction} on the floor plan. After this change, if you stand at {obj_ref} and face {obj_face}, where is {obj_moved}?",
+            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?",
         ],
 
         # --- Allocentric ---
         "L2_object_move_allocentric": [
-            "If {obj_moved} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_moved} be from {obj_ref}?",
-            "After moving {obj_moved} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_moved} from {obj_ref}?",
+            "{visible_wall_anchor_note} If {obj_move_source} is moved {distance} to the {direction}, on the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}?",
+            "{visible_wall_anchor_note} After moving {obj_move_source} {distance} to the {direction}, on the room's layout, in which cardinal direction is {obj_query} from {obj_ref}?",
         ],
 
         # ==== L3 — Counterfactual / multi-hop ====
@@ -193,9 +336,9 @@ def _default_templates() -> dict:
         ],
 
         # --- Ego-centric (rewritten — 方案B) ---
-        "L3_coordinate_rotation": [
-            "Imagine all the furniture in the room is rearranged by rotating everything {angle} degrees clockwise around the center of the room (viewed from above). You remain standing in the exact same spot, looking in the same direction. After this rearrangement, in which direction is {obj_a} relative to {obj_b}?",
-            "Suppose someone rotates all objects in the room {angle} degrees clockwise around the room's center (as seen from above), while you stay in place with the same viewing angle. In which direction would {obj_a} be relative to {obj_b}?",
+        "L3_coordinate_rotation_agent": [
+            "Imagine all the furniture in the room is rearranged by rotating everything {angle} degrees clockwise around the center of the room (viewed from above). You remain standing in the exact same spot, looking in the same direction. From the camera's perspective, after this rearrangement, in which direction is {obj_a} relative to {obj_b}?",
+            "Suppose someone rotates all objects in the room {angle} degrees clockwise around the room's center (as seen from above), while you stay in place with the same viewing angle. From the camera's perspective, in which direction would {obj_a} be relative to {obj_b}?",
         ],
 
         # --- Object-centric ---
@@ -205,7 +348,7 @@ def _default_templates() -> dict:
 
         # --- Allocentric ---
         "L3_coordinate_rotation_allocentric": [
-            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+            "{visible_wall_anchor_note} Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
         ],
     }
 
@@ -282,7 +425,11 @@ def generate_l1_direction(
         return None  # same label → "chair relative to chair" is meaningless
 
     correct = relation["direction_b_rel_a"]
-    tpl = random.choice(templates.get("L1_direction", _default_templates()["L1_direction"]))
+    tpl_list = templates.get(
+        "L1_direction_agent",
+        templates.get("L1_direction", _default_templates()["L1_direction_agent"]),
+    )
+    tpl = random.choice(tpl_list)
     question_text = tpl.format(
         obj_a=_the(relation["obj_b_label"]),  # "where is B relative to A?"
         obj_b=_the(relation["obj_a_label"]),
@@ -291,7 +438,7 @@ def generate_l1_direction(
 
     return {
         "level": "L1",
-        "type": "direction",
+        "type": "direction_agent",
         "question": question_text,
         "options": options,
         "answer": answer,
@@ -430,6 +577,8 @@ def generate_l1_direction_object_centric(
                     continue
                 if np.linalg.norm(target_c - ref_c) < MIN_DIRECTION_DISTANCE:
                     continue
+                if not _has_stable_object_centric_facing(ref_c, face_c):
+                    continue
 
                 direction, ambiguity = primary_direction_object_centric(
                     ref_c, face_c, target_c,
@@ -456,6 +605,8 @@ def generate_l1_direction_object_centric(
                     "obj_ref_label": ref["label"],
                     "obj_face_id": face["id"],
                     "obj_face_label": face["label"],
+                    "facing_anchor_center": ref_c.tolist(),
+                    "facing_target_center": face_c.tolist(),
                     "obj_target_id": target["id"],
                     "obj_target_label": target["label"],
                     "mentioned_objects": [
@@ -474,17 +625,17 @@ def generate_l1_direction_object_centric(
 
 def generate_l1_direction_allocentric(
     objects: list[dict],
-    camera_pose: CameraPose,
     templates: dict,
+    wall_anchor: dict[str, Any] | None,
     max_questions: int = 20,
 ) -> list[dict]:
     """Generate L1 allocentric (cardinal) direction questions.
 
-    Provides the camera's cardinal facing direction so the model can anchor
-    absolute directions from the image.
+    Uses a visible wall anchor to ground world-cardinal directions in the image.
     """
     questions: list[dict] = []
-    cam_cardinal = camera_cardinal_direction(camera_pose)
+    if wall_anchor is None:
+        return questions
     n = len(objects)
 
     tpl_list = templates.get(
@@ -506,10 +657,12 @@ def generate_l1_direction_allocentric(
             direction, ambiguity = primary_direction_allocentric(a_c, b_c)
             if ambiguity > 0.7:
                 continue
+            if direction not in CARDINAL_DIRECTIONS_8:
+                continue
 
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
-                camera_cardinal=cam_cardinal,
+                visible_wall_anchor_note=wall_anchor["visible_wall_anchor_note"],
                 obj_a=_the(a["label"]),
                 obj_b=_the(b["label"]),
             )
@@ -522,7 +675,11 @@ def generate_l1_direction_allocentric(
                 "options": options,
                 "answer": answer,
                 "correct_value": direction,
-                "camera_cardinal": cam_cardinal,
+                "allocentric_anchor": "visible_wall",
+                "visible_wall_anchor_note": wall_anchor["visible_wall_anchor_note"],
+                "anchor_wall_id": wall_anchor["anchor_wall_id"],
+                "anchor_wall_image_side": wall_anchor["anchor_wall_image_side"],
+                "anchor_wall_axis": wall_anchor["anchor_wall_axis"],
                 "obj_a_id": a["id"],
                 "obj_a_label": a["label"],
                 "obj_b_id": b["id"],
@@ -547,6 +704,7 @@ def generate_l1_direction_allocentric(
 def generate_l2_object_move(
     objects: list[dict],
     support_graph: dict[int, list[int]],
+    supported_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
@@ -562,21 +720,23 @@ def generate_l2_object_move(
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
+        move_source_id = _resolve_support_root_id(obj["id"], supported_by)
+        move_source = obj_map.get(move_source_id)
+        if move_source is None:
+            continue
+        support_remapped = move_source_id != obj["id"]
+
         delta, changed = find_meaningful_movement(
-            objects, support_graph, obj["id"], camera_pose,
+            objects, support_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
         )
         if delta is None:
             continue
 
-        # Only keep relation changes involving the moved object or its
-        # support-chain dependents — otherwise the question is nonsensical
-        # (e.g., "move cabinet → what happens between tv and table?").
-        chain_ids = set(get_support_chain_ids(obj["id"], support_graph))
-        chain_ids.add(obj["id"])
+        # Only keep relation changes involving the queried object.
         changed = [
             ch for ch in changed
-            if ch["obj_a_id"] in chain_ids or ch["obj_b_id"] in chain_ids
+            if obj["id"] in (ch["obj_a_id"], ch["obj_b_id"])
         ]
         if not changed:
             continue
@@ -585,14 +745,14 @@ def generate_l2_object_move(
         direction_desc = _delta_to_description(delta, camera_pose)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
 
-        tpl_list = templates.get("L2_object_move", _default_templates()["L2_object_move"])
+        tpl_list = templates.get(
+            "L2_object_move_agent",
+            templates.get("L2_object_move", _default_templates()["L2_object_move_agent"]),
+        )
 
         obj_questions: list[dict] = []
         for ch in changed:
-            # Ensure the changed relation directly involves the moved object
-            # so the question makes intuitive sense ("move A → what happens
-            # between A and B?" is clear; "move A → what happens between C
-            # and D?" is confusing even if C sits on A's support chain).
+            # Ensure the changed relation directly involves the queried object.
             if obj["id"] not in (ch["obj_a_id"], ch["obj_b_id"]):
                 continue
 
@@ -600,51 +760,77 @@ def generate_l2_object_move(
             for field, vals in ch["changes"].items():
                 if field == "direction_b_rel_a":
                     pool = ALL_DIRECTIONS
-                    field_tpl_key = "L2_object_move"
+                    field_tpl_key = "L2_object_move_agent"
                 elif field == "distance_bin":
                     pool = ALL_DISTANCES
                     field_tpl_key = "L2_object_move_distance"
                 elif field in ("occlusion_a", "occlusion_b"):
                     pool = ALL_OCCLUSION
-                    field_tpl_key = "L2_object_move"
+                    field_tpl_key = "L2_object_move_agent"
                 else:
                     continue
 
-                obj_b_label = obj_map.get(ch["obj_b_id"], {}).get("label", "object")
-                obj_c_label = obj_map.get(ch["obj_a_id"], {}).get("label", "object")
+                if obj["id"] == ch["obj_b_id"]:
+                    relation_obj_b_id = ch["obj_b_id"]
+                    relation_obj_c_id = ch["obj_a_id"]
+                    answer_value = vals["new"]
+                elif obj["id"] == ch["obj_a_id"]:
+                    relation_obj_b_id = ch["obj_a_id"]
+                    relation_obj_c_id = ch["obj_b_id"]
+                    answer_value = (
+                        _invert_direction(vals["new"])
+                        if field == "direction_b_rel_a"
+                        else vals["new"]
+                    )
+                else:
+                    continue
 
-                field_tpl_list = templates.get(field_tpl_key, _default_templates()[field_tpl_key])
+                obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
+                obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+
+                field_tpl_list = templates.get(
+                    field_tpl_key,
+                    templates.get(
+                        field_tpl_key.removesuffix("_agent"),
+                        _default_templates()[field_tpl_key],
+                    ),
+                )
                 tpl = random.choice(field_tpl_list)
                 question_text = tpl.format(
-                    obj_a=_the(obj["label"]),
+                    obj_a=_the(move_source["label"]),
                     direction=direction_desc,
+                    direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
                     distance=distance_desc,
                     obj_b=_the(obj_b_label),
                     obj_c=_the(obj_c_label),
                 )
-                options, answer = generate_options(vals["new"], pool)
+                options, answer = generate_options(answer_value, pool)
 
                 obj_questions.append({
                     "level": "L2",
-                    "type": "object_move",
+                    "type": "object_move_agent",
                     "question": question_text,
                     "options": options,
                     "answer": answer,
-                    "correct_value": vals["new"],
-                    "moved_obj_id": obj["id"],
-                    "moved_obj_label": obj["label"],
-                    "obj_b_id": ch["obj_b_id"],
+                    "correct_value": answer_value,
+                    "moved_obj_id": move_source_id,
+                    "moved_obj_label": move_source["label"],
+                    "query_obj_id": obj["id"],
+                    "query_obj_label": obj["label"],
+                    "support_remapped": support_remapped,
+                    "obj_b_id": relation_obj_b_id,
                     "obj_b_label": obj_b_label,
-                    "obj_c_id": ch["obj_a_id"],
+                    "obj_c_id": relation_obj_c_id,
                     "obj_c_label": obj_c_label,
                     "mentioned_objects": [
-                        _mention("moved_object", obj["label"], obj["id"]),
-                        _mention("relation_obj_b", obj_b_label, ch["obj_b_id"]),
-                        _mention("relation_obj_c", obj_c_label, ch["obj_a_id"]),
+                        _mention("moved_object", move_source["label"], move_source_id),
+                        _mention("query_object", obj["label"], obj["id"]),
+                        _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
+                        _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
                     ],
                     "delta": delta.tolist(),
                     "relation_unchanged": False,
-                    "has_support_chain": len(get_support_chain_ids(obj["id"], support_graph)) > 0,
+                    "has_support_chain": len(get_support_chain_ids(move_source_id, support_graph)) > 0,
                 })
 
         # Cap per moved object to avoid flooding from high-connectivity objects
@@ -693,6 +879,7 @@ def generate_l2_viewpoint_move(
                     tpl = random.choice(tpl_list)
                     question_text = tpl.format(
                         direction=direction,
+                        direction_with_camera_hint=_direction_with_camera_hint(direction),
                         distance=f"{dist:.0f}m",
                         obj_a=_the(obj_label),
                     )
@@ -782,98 +969,130 @@ def generate_l2_object_remove(
 def generate_l2_object_move_object_centric(
     objects: list[dict],
     support_graph: dict[int, list[int]],
+    supported_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
 ) -> list[dict]:
-    """L2 object-move questions answered in object-centric frame.
-
-    After moving *obj_moved*, asks: standing at *obj_ref* facing *obj_face*,
-    where is *obj_moved* now?
-    """
+    """L2 object-move questions answered in a query-centric object-centric frame."""
     questions: list[dict] = []
-    cam_cardinal = camera_cardinal_direction(camera_pose)
-    obj_map = {o["id"]: o for o in objects}
     tpl_list = templates.get(
         "L2_object_move_object_centric",
         _default_templates()["L2_object_move_object_centric"],
     )
+    horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
 
     for obj in objects:
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        delta, _changed = find_meaningful_movement(
-            objects, support_graph, obj["id"], camera_pose,
-            room_bounds=room_bounds,
-        )
-        if delta is None:
+        move_source_id = _resolve_support_root_id(obj["id"], supported_by)
+        move_source = next((o for o in objects if o["id"] == move_source_id), None)
+        if move_source is None:
             continue
-
-        direction_desc = _delta_to_cardinal_description(delta)
-        distance_desc = f"{np.linalg.norm(delta):.1f}m"
-
-        # Compute the moved object's new center
-        new_center = np.array(obj["center"]) + delta
+        moved_ids = set(get_support_chain_ids(move_source_id, support_graph)) | {move_source_id}
+        if obj["id"] not in moved_ids:
+            continue
+        support_remapped = move_source_id != obj["id"]
+        query_center = np.array(obj["center"], dtype=float)
 
         obj_questions: list[dict] = []
-        for ref in objects:
-            if ref["id"] == obj["id"]:
+        for face in objects:
+            if face["id"] in moved_ids:
                 continue
-            for face in objects:
-                if face["id"] == obj["id"] or face["id"] == ref["id"]:
-                    continue
-                if len({obj["label"], ref["label"], face["label"]}) < 3:
-                    continue
+            face_c = np.array(face["center"], dtype=float)
+            if not _has_stable_object_centric_facing(query_center, face_c):
+                continue
 
-                ref_c = np.array(ref["center"])
-                face_c = np.array(face["center"])
-                new_dir, amb = primary_direction_object_centric(
-                    ref_c, face_c, new_center,
-                )
-                if amb > 0.7:
-                    continue
+            valid_rotations = find_meaningful_orbit_rotation(
+                objects,
+                support_graph,
+                move_source_id,
+                face["id"],
+                room_bounds=room_bounds,
+            )
+            if not valid_rotations:
+                continue
 
-                # Check that direction actually changed from the original
-                old_dir, _ = primary_direction_object_centric(
-                    ref_c, face_c, np.array(obj["center"]),
-                )
-                if old_dir == new_dir:
+            for rotation in valid_rotations:
+                rotated_map = {o["id"]: o for o in rotation["objects"]}
+                rotated_query = rotated_map.get(obj["id"])
+                if rotated_query is None:
                     continue
+                new_query_center = np.array(rotated_query["center"], dtype=float)
+                if not _has_stable_object_centric_facing(new_query_center, face_c):
+                    continue
+                query_delta = new_query_center - query_center
 
-                tpl = random.choice(tpl_list)
-                question_text = tpl.format(
-                    obj_moved=_the(obj["label"]),
-                    direction=direction_desc,
-                    distance=distance_desc,
-                    obj_ref=_the(ref["label"]),
-                    obj_face=_the(face["label"]),
-                    camera_cardinal=cam_cardinal,
-                )
-                options, answer = generate_options(new_dir, ALL_DIRECTIONS)
-                obj_questions.append({
-                    "level": "L2",
-                    "type": "object_move_object_centric",
-                    "reference_frame": "object_centric",
-                    "question": question_text,
-                    "options": options,
-                    "answer": answer,
-                    "correct_value": new_dir,
-                    "moved_obj_id": obj["id"],
-                    "moved_obj_label": obj["label"],
-                    "obj_ref_id": ref["id"],
-                    "obj_ref_label": ref["label"],
-                    "obj_face_id": face["id"],
-                    "obj_face_label": face["label"],
-                    "mentioned_objects": [
-                        _mention("moved_object", obj["label"], obj["id"]),
-                        _mention("reference_origin", ref["label"], ref["id"]),
-                        _mention("reference_facing", face["label"], face["id"]),
-                    ],
-                    "delta": delta.tolist(),
-                    "relation_unchanged": False,
-                })
+                for ref in objects:
+                    if ref["id"] in moved_ids or ref["id"] == face["id"]:
+                        continue
+
+                    labels = [
+                        obj["label"],
+                        ref["label"],
+                        face["label"],
+                    ]
+                    if move_source_id != obj["id"]:
+                        labels.append(move_source["label"])
+                    if len(set(labels)) < len(labels):
+                        continue
+
+                    ref_c = np.array(ref["center"], dtype=float)
+                    old_dir, old_amb = primary_direction_object_centric(
+                        query_center, face_c, ref_c,
+                    )
+                    new_dir, new_amb = primary_direction_object_centric(
+                        new_query_center, face_c, ref_c,
+                    )
+                    if old_dir not in horizontal_answer_pool or new_dir not in horizontal_answer_pool:
+                        continue
+                    if max(old_amb, new_amb) > 0.7:
+                        continue
+                    if old_dir == new_dir:
+                        continue
+
+                    tpl = random.choice(tpl_list)
+                    question_text = tpl.format(
+                        obj_move_source=_the(move_source["label"]),
+                        obj_query=_the(obj["label"]),
+                        obj_ref=_the(ref["label"]),
+                        obj_face=_the(face["label"]),
+                        angle=rotation["angle"],
+                        rotation_direction=rotation["rotation_direction"],
+                    )
+                    options, answer = generate_options(new_dir, horizontal_answer_pool)
+                    obj_questions.append({
+                        "level": "L2",
+                        "type": "object_move_object_centric",
+                        "reference_frame": "object_centric",
+                        "question": question_text,
+                        "options": options,
+                        "answer": answer,
+                        "correct_value": new_dir,
+                        "moved_obj_id": move_source_id,
+                        "moved_obj_label": move_source["label"],
+                        "query_obj_id": obj["id"],
+                        "query_obj_label": obj["label"],
+                        "support_remapped": support_remapped,
+                        "obj_ref_id": ref["id"],
+                        "obj_ref_label": ref["label"],
+                        "obj_face_id": face["id"],
+                        "obj_face_label": face["label"],
+                        "facing_anchor_center": new_query_center.tolist(),
+                        "facing_target_center": face_c.tolist(),
+                        "rotation_angle": rotation["angle"],
+                        "rotation_direction": rotation["rotation_direction"],
+                        "mentioned_objects": [
+                            _mention("moved_object", move_source["label"], move_source_id),
+                            _mention("query_object", obj["label"], obj["id"]),
+                            _mention("reference_object", ref["label"], ref["id"]),
+                            _mention("reference_facing", face["label"], face["id"]),
+                        ],
+                        "delta": query_delta.tolist(),
+                        "relation_unchanged": False,
+                    })
 
         if len(obj_questions) > max_per_object:
             obj_questions = random.sample(obj_questions, max_per_object)
@@ -885,14 +1104,17 @@ def generate_l2_object_move_object_centric(
 def generate_l2_object_move_allocentric(
     objects: list[dict],
     support_graph: dict[int, list[int]],
+    supported_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
+    wall_anchor: dict[str, Any] | None,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions: list[dict] = []
-    cam_cardinal = camera_cardinal_direction(camera_pose)
+    if wall_anchor is None:
+        return questions
     tpl_list = templates.get(
         "L2_object_move_allocentric",
         _default_templates()["L2_object_move_allocentric"],
@@ -902,8 +1124,17 @@ def generate_l2_object_move_allocentric(
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
+        move_source_id = _resolve_support_root_id(obj["id"], supported_by)
+        move_source = next((o for o in objects if o["id"] == move_source_id), None)
+        if move_source is None:
+            continue
+        moved_ids = set(get_support_chain_ids(move_source_id, support_graph)) | {move_source_id}
+        if obj["id"] not in moved_ids:
+            continue
+        support_remapped = move_source_id != obj["id"]
+
         delta, _changed = find_meaningful_movement(
-            objects, support_graph, obj["id"], camera_pose,
+            objects, support_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
         )
         if delta is None:
@@ -915,7 +1146,7 @@ def generate_l2_object_move_allocentric(
 
         obj_questions: list[dict] = []
         for ref in objects:
-            if ref["id"] == obj["id"]:
+            if ref["id"] in (obj["id"], move_source_id):
                 continue
             if ref["label"] == obj["label"]:
                 continue
@@ -924,6 +1155,8 @@ def generate_l2_object_move_allocentric(
             new_dir, amb = primary_direction_allocentric(new_center, ref_c)
             if amb > 0.7:
                 continue
+            if new_dir not in CARDINAL_DIRECTIONS_8:
+                continue
 
             old_dir, _ = primary_direction_allocentric(np.array(obj["center"]), ref_c)
             if old_dir == new_dir:
@@ -931,10 +1164,11 @@ def generate_l2_object_move_allocentric(
 
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
-                obj_moved=_the(obj["label"]),
+                obj_move_source=_the(move_source["label"]),
+                obj_query=_the(obj["label"]),
                 direction=direction_desc,
                 distance=distance_desc,
-                camera_cardinal=cam_cardinal,
+                visible_wall_anchor_note=wall_anchor["visible_wall_anchor_note"],
                 obj_ref=_the(ref["label"]),
             )
             options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
@@ -946,13 +1180,21 @@ def generate_l2_object_move_allocentric(
                 "options": options,
                 "answer": answer,
                 "correct_value": new_dir,
-                "camera_cardinal": cam_cardinal,
-                "moved_obj_id": obj["id"],
-                "moved_obj_label": obj["label"],
+                "allocentric_anchor": "visible_wall",
+                "visible_wall_anchor_note": wall_anchor["visible_wall_anchor_note"],
+                "anchor_wall_id": wall_anchor["anchor_wall_id"],
+                "anchor_wall_image_side": wall_anchor["anchor_wall_image_side"],
+                "anchor_wall_axis": wall_anchor["anchor_wall_axis"],
+                "moved_obj_id": move_source_id,
+                "moved_obj_label": move_source["label"],
+                "query_obj_id": obj["id"],
+                "query_obj_label": obj["label"],
+                "support_remapped": support_remapped,
                 "obj_ref_id": ref["id"],
                 "obj_ref_label": ref["label"],
                 "mentioned_objects": [
-                    _mention("moved_object", obj["label"], obj["id"]),
+                    _mention("moved_object", move_source["label"], move_source_id),
+                    _mention("query_object", obj["label"], obj["id"]),
                     _mention("reference_object", ref["label"], ref["id"]),
                 ],
                 "delta": delta.tolist(),
@@ -1102,7 +1344,13 @@ def generate_l3_coordinate_rotation(
     the scene has many objects (O(n²) pairs).
     """
     questions: list[dict] = []
-    tpl_list = templates.get("L3_coordinate_rotation", _default_templates()["L3_coordinate_rotation"])
+    tpl_list = templates.get(
+        "L3_coordinate_rotation_agent",
+        templates.get(
+            "L3_coordinate_rotation",
+            _default_templates()["L3_coordinate_rotation_agent"],
+        ),
+    )
 
     # Direction changes don't need depth/occlusion; skip it for speed.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
@@ -1139,7 +1387,7 @@ def generate_l3_coordinate_rotation(
 
             questions.append({
                 "level": "L3",
-                "type": "coordinate_rotation",
+                "type": "coordinate_rotation_agent",
                 "question": question_text,
                 "options": options,
                 "answer": answer_letter,
@@ -1203,11 +1451,16 @@ def generate_l3_coordinate_rotation_object_centric(
                     target_rot = rot_map.get(target["id"])
                     if ref_rot is None or face_rot is None or target_rot is None:
                         continue
+                    ref_rot_c = np.array(ref_rot["center"])
+                    face_rot_c = np.array(face_rot["center"])
+                    target_rot_c = np.array(target_rot["center"])
+                    if not _has_stable_object_centric_facing(ref_rot_c, face_rot_c):
+                        continue
 
                     new_dir, amb = primary_direction_object_centric(
-                        np.array(ref_rot["center"]),
-                        np.array(face_rot["center"]),
-                        np.array(target_rot["center"]),
+                        ref_rot_c,
+                        face_rot_c,
+                        target_rot_c,
                     )
                     if amb > 0.7:
                         continue
@@ -1242,6 +1495,8 @@ def generate_l3_coordinate_rotation_object_centric(
                         "obj_ref_label": ref["label"],
                         "obj_face_id": face["id"],
                         "obj_face_label": face["label"],
+                        "facing_anchor_center": ref_rot_c.tolist(),
+                        "facing_target_center": face_rot_c.tolist(),
                         "obj_target_id": target["id"],
                         "obj_target_label": target["label"],
                         "mentioned_objects": [
@@ -1263,8 +1518,8 @@ def generate_l3_coordinate_rotation_object_centric(
 
 def generate_l3_coordinate_rotation_allocentric(
     objects: list[dict],
-    camera_pose: CameraPose,
     templates: dict,
+    wall_anchor: dict[str, Any] | None,
     max_per_angle: int = 5,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in allocentric (cardinal) frame.
@@ -1274,7 +1529,8 @@ def generate_l3_coordinate_rotation_allocentric(
     objects' cardinal positions DO change.)
     """
     questions: list[dict] = []
-    cam_cardinal = camera_cardinal_direction(camera_pose)
+    if wall_anchor is None:
+        return questions
     tpl_list = templates.get(
         "L3_coordinate_rotation_allocentric",
         _default_templates()["L3_coordinate_rotation_allocentric"],
@@ -1302,6 +1558,8 @@ def generate_l3_coordinate_rotation_allocentric(
                 )
                 if amb > 0.7:
                     continue
+                if new_dir not in CARDINAL_DIRECTIONS_8:
+                    continue
 
                 old_dir, _ = primary_direction_allocentric(
                     np.array(a["center"]), np.array(b["center"]),
@@ -1312,7 +1570,7 @@ def generate_l3_coordinate_rotation_allocentric(
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
                     angle=angle,
-                    camera_cardinal=cam_cardinal,
+                    visible_wall_anchor_note=wall_anchor["visible_wall_anchor_note"],
                     obj_a=_the(a["label"]),
                     obj_b=_the(b["label"]),
                 )
@@ -1325,7 +1583,11 @@ def generate_l3_coordinate_rotation_allocentric(
                     "options": options,
                     "answer": answer,
                     "correct_value": new_dir,
-                    "camera_cardinal": cam_cardinal,
+                    "allocentric_anchor": "visible_wall",
+                    "visible_wall_anchor_note": wall_anchor["visible_wall_anchor_note"],
+                    "anchor_wall_id": wall_anchor["anchor_wall_id"],
+                    "anchor_wall_image_side": wall_anchor["anchor_wall_image_side"],
+                    "anchor_wall_axis": wall_anchor["anchor_wall_axis"],
                     "rotation_angle": angle,
                     "obj_a_id": a["id"],
                     "obj_a_label": a["label"],
@@ -1357,6 +1619,24 @@ def get_support_chain_ids(obj_id: int, support_graph: dict) -> list[int]:
     return get_support_chain(obj_id, support_graph)
 
 
+def _resolve_support_root_id(obj_id: int, supported_by: dict[int, int]) -> int:
+    """Return the lowest supporting ancestor of *obj_id*, or itself if unsupported."""
+    current = int(obj_id)
+    seen: set[int] = set()
+
+    while current not in seen:
+        seen.add(current)
+        parent = supported_by.get(current, supported_by.get(str(current)))
+        if parent is None:
+            break
+        try:
+            current = int(parent)
+        except (TypeError, ValueError):
+            break
+
+    return current
+
+
 def _ensure_question_mentions(
     question: dict[str, Any],
     id_to_object: dict[int, dict],
@@ -1374,6 +1654,7 @@ def _ensure_question_mentions(
         ("obj_face_id", "obj_face_label", "obj_face"),
         ("obj_target_id", "obj_target_label", "obj_target"),
         ("moved_obj_id", "moved_obj_label", "moved_obj"),
+        ("query_obj_id", "query_obj_label", "query_obj"),
         ("removed_obj_id", "removed_obj_label", "removed_obj"),
         ("grandparent_id", "grandparent_label", "grandparent"),
         ("parent_id", "parent_label", "parent"),
@@ -1440,6 +1721,50 @@ def _enforce_strict_visibility(
 
     if removed:
         logger.info("Strict visibility filter removed %d questions", removed)
+    return kept
+
+
+def _enforce_stable_facing_references(
+    questions: list[dict[str, Any]],
+    id_to_object: dict[int, dict],
+) -> list[dict[str, Any]]:
+    """Drop any question whose "stand at A, face B" reference frame is unstable.
+
+    This is a semantic safety net: any question carrying both `obj_ref_id` and
+    `obj_face_id` is treated as using an object-defined facing frame, regardless
+    of its formal question type.
+    """
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for question in questions:
+        ref_id = question.get("obj_ref_id")
+        face_id = question.get("obj_face_id")
+        if ref_id is None or face_id is None:
+            kept.append(question)
+            continue
+
+        anchor_center = question.get("facing_anchor_center")
+        facing_center = question.get("facing_target_center")
+        if anchor_center is None or facing_center is None:
+            ref_obj = id_to_object.get(int(ref_id))
+            face_obj = id_to_object.get(int(face_id))
+            if ref_obj is None or face_obj is None:
+                kept.append(question)
+                continue
+            anchor_center = ref_obj["center"]
+            facing_center = face_obj["center"]
+
+        if _has_stable_object_centric_facing(
+            np.array(anchor_center, dtype=float),
+            np.array(facing_center, dtype=float),
+        ):
+            kept.append(question)
+            continue
+
+        removed += 1
+
+    if removed:
+        logger.info("Stable-facing filter removed %d questions", removed)
     return kept
 
 
@@ -1521,6 +1846,7 @@ def generate_all_questions(
     support_graph: dict[int, list[int]],
     supported_by: dict[int, int],
     camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None = None,
     depth_image=None,
     depth_intrinsics=None,
     templates: dict | None = None,
@@ -1528,6 +1854,7 @@ def generate_all_questions(
     object_visibility: dict[int, dict[str, Any]] | None = None,
     strict_mode: bool = False,
     room_bounds: dict | None = None,
+    wall_objects: list[dict] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -1537,6 +1864,8 @@ def generate_all_questions(
     centre projects into this frame.  Questions about off-screen objects are
     unanswerable from the image and should never be included.
     room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
+    wall_objects: visible filtering for ordinary objects does not touch these;
+    they are only used to construct allocentric wall-anchor wording.
 
     Returns a list of question dicts.
     """
@@ -1555,6 +1884,12 @@ def generate_all_questions(
             if k in vis_set
         }
         supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
+
+    wall_anchor = _build_visible_wall_anchor(
+        wall_objects=wall_objects,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+    )
 
     # Remove objects with uninformative labels (wall, floor, object, etc.)
     objects = [o for o in objects if o.get("label", "").lower() not in EXCLUDED_LABELS]
@@ -1618,7 +1953,7 @@ def generate_all_questions(
         objects_uniq, templates, max_questions=MAX_L1_DIRECTION_OC,
     )
     l1_dir_allo_qs = generate_l1_direction_allocentric(
-        objects_uniq, camera_pose, templates, max_questions=MAX_L1_DIRECTION_ALLO,
+        objects_uniq, templates, wall_anchor, max_questions=MAX_L1_DIRECTION_ALLO,
     )
 
     if len(l1_dir_qs) > MAX_L1_DIRECTION:
@@ -1644,7 +1979,7 @@ def generate_all_questions(
 
     # L2 — ego-centric (existing)
     all_questions.extend(
-        generate_l2_object_move(objects_uniq, support_graph_uniq, camera_pose, templates,
+        generate_l2_object_move(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
                                 room_bounds=room_bounds)
     )
     all_questions.extend(
@@ -1656,13 +1991,13 @@ def generate_all_questions(
     # L2 — new reference frames
     all_questions.extend(
         generate_l2_object_move_object_centric(
-            objects_uniq, support_graph_uniq, camera_pose, templates,
+            objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
         )
     )
     all_questions.extend(
         generate_l2_object_move_allocentric(
-            objects_uniq, support_graph_uniq, camera_pose, templates,
+            objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates, wall_anchor,
             room_bounds=room_bounds,
         )
     )
@@ -1679,7 +2014,7 @@ def generate_all_questions(
         generate_l3_coordinate_rotation_object_centric(objects_uniq, camera_pose, templates)
     )
     all_questions.extend(
-        generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates)
+        generate_l3_coordinate_rotation_allocentric(objects_uniq, templates, wall_anchor)
     )
 
     id_to_object = {int(o["id"]): o for o in objects_uniq}
@@ -1688,6 +2023,10 @@ def generate_all_questions(
         all_questions[idx] = _ensure_question_mentions(
             question, id_to_object, label_to_object,
         )
+
+    all_questions = _enforce_stable_facing_references(
+        all_questions, id_to_object,
+    )
 
     if strict_mode:
         all_questions = _enforce_strict_visibility(
