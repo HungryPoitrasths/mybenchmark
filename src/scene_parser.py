@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +127,7 @@ EXCLUDED_LABELS = {
     "mirror", "glass", "monitor", "tv",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
+    "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
     # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
@@ -330,20 +330,14 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
             "bbox_max": all_maxs.max(axis=0).tolist(),
         }
 
-    # Per-scene uniqueness: drop objects whose label appears more than once
-    # (e.g. 5 "chair"s → all removed) and excluded structural labels.
-    # This is more aggressive than per-frame filtering but eliminates
-    # ambiguity at the source ("the chair" is always unambiguous).
+    # Keep all surviving instances. Frame-level referability / ambiguity is
+    # handled downstream by the VLM cache or per-frame fallback logic, so we
+    # only remove excluded labels here.
     n_before = len(objects)
-    label_counts = Counter(o["label"] for o in objects)
-    objects = [
-        o for o in objects
-        if label_counts[o["label"]] == 1
-        and o["label"].lower() not in EXCLUDED_LABELS
-    ]
+    objects = [o for o in objects if o["label"].lower() not in EXCLUDED_LABELS]
     if n_before != len(objects):
         logger.debug(
-            "Scene %s: %d → %d objects after unique-label + excluded filter",
+            "Scene %s: %d -> %d objects after excluded-label filter",
             scene_id, n_before, len(objects),
         )
 

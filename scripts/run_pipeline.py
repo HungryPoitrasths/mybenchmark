@@ -43,6 +43,26 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 
 
+def _load_referability_cache(path: Path) -> dict | None:
+    if not path.exists():
+        logger.warning("Referability cache not found: %s", path)
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    logger.info("Loaded referability cache from %s", path)
+    return data
+
+
+def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) -> dict | None:
+    if not cache:
+        return None
+    frames = cache.get("frames", cache)
+    scene_frames = frames.get(scene_id)
+    if isinstance(scene_frames, dict):
+        return scene_frames.get(image_name)
+    return frames.get(f"{scene_id}/{image_name}")
+
+
 def run_pipeline(
     data_root: Path,
     output_dir: Path,
@@ -50,6 +70,7 @@ def run_pipeline(
     max_frames: int = 5,
     use_occlusion: bool = True,
     strict_mode: bool = False,
+    referability_cache: dict | None = None,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
 
@@ -176,6 +197,29 @@ def run_pipeline(
                     )
                     continue
 
+            referable_ids = None
+            referability_entry = _get_referability_entry(
+                referability_cache, scene_id, image_name,
+            )
+            if referability_entry is not None:
+                if not referability_entry.get("frame_usable", True):
+                    logger.debug(
+                        "Frame %s/%s rejected by referability cache: %s",
+                        scene_id, image_name,
+                        referability_entry.get("frame_reject_reason", "frame_not_usable"),
+                    )
+                    continue
+                referable_ids = [
+                    int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
+                    if int(obj_id) in visible_ids
+                ]
+                if not referable_ids:
+                    logger.debug(
+                        "Frame %s/%s has no referable objects after visibility intersection",
+                        scene_id, image_name,
+                    )
+                    continue
+
             questions = generate_all_questions(
                 objects=scene["objects"],
                 support_graph=support_graph,
@@ -185,6 +229,7 @@ def run_pipeline(
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
                 visible_object_ids=visible_ids,
+                referable_object_ids=referable_ids,
                 object_visibility=visibility_table,
                 strict_mode=strict_mode,
                 room_bounds=scene.get("room_bounds"),
@@ -262,6 +307,10 @@ def main():
         help="Require every mentioned object to pass strict per-frame visibility checks",
     )
     parser.add_argument(
+        "--referability_cache", type=str, default=None,
+        help="Optional JSON cache of VLM frame/object referability decisions",
+    )
+    parser.add_argument(
         "--label_map", type=str, default=None,
         help="Path to scannetv2-labels.combined.tsv for raw_category→nyu40class normalization",
     )
@@ -270,6 +319,10 @@ def main():
     if args.label_map:
         load_scannet_label_map(args.label_map)
 
+    referability_cache = None
+    if args.referability_cache:
+        referability_cache = _load_referability_cache(Path(args.referability_cache))
+
     run_pipeline(
         data_root=Path(args.data_root),
         output_dir=Path(args.output_dir),
@@ -277,6 +330,7 @@ def main():
         max_frames=args.max_frames,
         use_occlusion=not args.no_occlusion,
         strict_mode=args.strict_mode,
+        referability_cache=referability_cache,
     )
 
 

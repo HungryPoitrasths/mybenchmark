@@ -94,6 +94,7 @@ def _get_object_labels(q: dict) -> list[str]:
         "shower curtain rod", "bathroom stall", "bathroom stall door",
         "ledge", "structure", "closet", "breakfast bar", "shower curtain",
         "case", "tube", "board", "sign", "frame", "paper", "lotion",
+        "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
         "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
         "shelf", "bookshelf", "shelves", "rack", "storage shelf",
         "power outlet", "light switch", "fire alarm", "controller",

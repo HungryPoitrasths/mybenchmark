@@ -247,6 +247,7 @@ EXCLUDED_LABELS = {
     "mirror", "glass", "monitor", "tv",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
+    "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
     # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
@@ -1837,6 +1838,7 @@ def generate_all_questions(
     depth_intrinsics=None,
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
+    referable_object_ids: list[int] | None = None,
     object_visibility: dict[int, dict[str, Any]] | None = None,
     strict_mode: bool = False,
     room_bounds: dict | None = None,
@@ -1849,6 +1851,8 @@ def generate_all_questions(
     visible_object_ids: if provided, restrict all questions to objects whose
     centre projects into this frame.  Questions about off-screen objects are
     unanswerable from the image and should never be included.
+    referable_object_ids: if provided, restrict question generation to the
+    object_id subset judged referable by the VLM for this frame.
     room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
     wall_objects: visible filtering for ordinary objects does not touch these;
     they are only used to construct allocentric wall-anchor wording.
@@ -1874,13 +1878,27 @@ def generate_all_questions(
     # Remove objects with uninformative labels (wall, floor, object, etc.)
     objects = [o for o in objects if o.get("label", "").lower() not in EXCLUDED_LABELS]
 
-    # Safety net: per-frame uniqueness check.  The primary unique-label
-    # filtering now happens upstream in scene_parser.parse_scene(), but
-    # visibility filtering above may reveal edge cases — keep this guard.
-    from collections import Counter
-    label_counts = Counter(o["label"] for o in objects)
-    unique_label_ids = {o["id"] for o in objects if label_counts[o["label"]] == 1}
-    objects_uniq = [o for o in objects if o["id"] in unique_label_ids]
+    if referable_object_ids is not None:
+        referable_set = set(referable_object_ids)
+        objects = [o for o in objects if o["id"] in referable_set]
+        support_graph = {
+            k: [c for c in v if c in referable_set]
+            for k, v in support_graph.items()
+            if k in referable_set
+        }
+        supported_by = {
+            k: v for k, v in supported_by.items()
+            if k in referable_set and v in referable_set
+        }
+        unique_label_ids = {o["id"] for o in objects}
+        objects_uniq = list(objects)
+    else:
+        # Fallback path without a referability cache: require per-frame unique
+        # labels so that bare label mentions remain unambiguous.
+        from collections import Counter
+        label_counts = Counter(o["label"] for o in objects)
+        unique_label_ids = {o["id"] for o in objects if label_counts[o["label"]] == 1}
+        objects_uniq = [o for o in objects if o["id"] in unique_label_ids]
 
     all_questions: list[dict] = []
 
