@@ -24,7 +24,6 @@ from src.scene_parser import parse_scene, load_scannet_label_map
 from src.support_graph import enrich_scene_with_support, has_nontrivial_support
 from src.frame_selector import (
     select_frames,
-    refine_visible_ids_with_depth,
     compute_frame_object_visibility,
 )
 from src.qa_generator import generate_all_questions
@@ -139,9 +138,8 @@ def run_pipeline(
                     except Exception as e:
                         logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
 
-            # Refine visible object IDs using depth-map occlusion:
-            # drop objects whose bbox sample points are mostly occluded (visibility_ratio < 0.4).
-            # If refinement leaves fewer than 3 objects, skip this frame entirely.
+            # In normal mode, keep projection-based visible IDs unchanged.
+            # Depth is only used downstream for occlusion-question generation.
             visible_ids = frame["visible_object_ids"]
             visibility_table = None
             if strict_mode:
@@ -175,19 +173,6 @@ def run_pipeline(
                     logger.debug(
                         "Frame %s/%s: only %d strict-eligible objects; skipping",
                         scene_id, image_name, len(visible_ids),
-                    )
-                    continue
-            elif depth_image is not None and depth_intrinsics is not None:
-                refined_ids = refine_visible_ids_with_depth(
-                    visible_ids, scene["objects"], camera_pose,
-                    depth_image, depth_intrinsics,
-                )
-                if len(refined_ids) >= 3:
-                    visible_ids = refined_ids
-                else:
-                    logger.debug(
-                        "Frame %s/%s: only %d objects after depth refinement — skipping frame",
-                        scene_id, image_name, len(refined_ids),
                     )
                     continue
 

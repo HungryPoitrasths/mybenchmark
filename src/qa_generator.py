@@ -1890,8 +1890,8 @@ def generate_all_questions(
     MAX_L1_DIRECTION_ALLO = 15 # allocentric
     MAX_L1_DISTANCE = 20
 
-    # Compute baseline relations using only uniquely-labelled visible objects
-    relations = compute_all_relations(objects_uniq, camera_pose, depth_image, depth_intrinsics)
+    # Ordinary L1 relations ignore depth in normal generation.
+    relations = compute_all_relations(objects_uniq, camera_pose, None, None)
 
     # Pre-compute per-object occlusion cache for L1 occlusion questions.
     # Only use visible objects (those whose centre projects into this frame)
