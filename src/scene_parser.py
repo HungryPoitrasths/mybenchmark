@@ -146,6 +146,84 @@ def _apply_axis_alignment(vertices: np.ndarray, M: np.ndarray) -> np.ndarray:
     return (R @ vertices.T).T + t
 
 
+def _cross_2d(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    return float((a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]))
+
+
+def _convex_hull_2d(points_xy: np.ndarray) -> np.ndarray:
+    """Return the 2D convex hull of *points_xy* using the monotonic chain."""
+    if len(points_xy) == 0:
+        return np.empty((0, 2), dtype=float)
+
+    pts = np.unique(np.asarray(points_xy, dtype=float), axis=0)
+    if len(pts) <= 2:
+        return pts
+
+    pts = pts[np.lexsort((pts[:, 1], pts[:, 0]))]
+    lower: list[np.ndarray] = []
+    for p in pts:
+        while len(lower) >= 2 and _cross_2d(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+
+    upper: list[np.ndarray] = []
+    for p in pts[::-1]:
+        while len(upper) >= 2 and _cross_2d(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+
+    return np.vstack((lower[:-1], upper[:-1]))
+
+
+def _rectangle_from_bbox_xy(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
+    return np.array([
+        [bbox_min[0], bbox_min[1]],
+        [bbox_max[0], bbox_min[1]],
+        [bbox_max[0], bbox_max[1]],
+        [bbox_min[0], bbox_max[1]],
+    ], dtype=float)
+
+
+def _slice_tolerance(obj_height: float) -> float:
+    return float(np.clip(0.02 * max(obj_height, 0.0), 0.01, 0.03))
+
+
+def _build_support_geom(
+    obj_vertices: np.ndarray,
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+) -> dict[str, list[list[float]]]:
+    """Build lightweight top/bottom support hulls for one instance."""
+    obj_height = float(max(bbox_max[2] - bbox_min[2], 0.0))
+    slice_tol = _slice_tolerance(obj_height)
+
+    bottom_mask = np.abs(obj_vertices[:, 2] - bbox_min[2]) <= slice_tol
+    top_mask = np.abs(obj_vertices[:, 2] - bbox_max[2]) <= slice_tol
+
+    bottom_xy = obj_vertices[bottom_mask][:, :2]
+    top_xy = obj_vertices[top_mask][:, :2]
+
+    bottom_hull = (
+        _convex_hull_2d(bottom_xy)
+        if len(bottom_xy) >= 3 else np.empty((0, 2), dtype=float)
+    )
+    top_hull = (
+        _convex_hull_2d(top_xy)
+        if len(top_xy) >= 3 else np.empty((0, 2), dtype=float)
+    )
+
+    rect_xy = _rectangle_from_bbox_xy(bbox_min, bbox_max)
+    if len(bottom_hull) < 3:
+        bottom_hull = rect_xy.copy()
+    if len(top_hull) < 3:
+        top_hull = rect_xy.copy()
+
+    return {
+        "bottom_hull_xy": bottom_hull.tolist(),
+        "top_hull_xy": top_hull.tolist(),
+    }
+
+
 def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
     """Parse a single ScanNet scene.
 
@@ -219,6 +297,7 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
         bbox_max   = obj_vertices.max(axis=0)
         center     = (bbox_min + bbox_max) / 2.0
         dimensions = bbox_max - bbox_min
+        support_geom = _build_support_geom(obj_vertices, bbox_min, bbox_max)
 
         objects.append(
             {
@@ -229,6 +308,7 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
                 "bbox_max":     bbox_max.tolist(),
                 "dimensions":   dimensions.tolist(),
                 "vertex_count": int(obj_vertices.shape[0]),
+                "support_geom": support_geom,
             }
         )
 
