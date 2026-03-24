@@ -113,7 +113,7 @@ PAGE = """\
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>CausalSpatial-Bench Viewer</title>
+<title>predictive spatial reasoning benchmark</title>
 <style>
 *{{box-sizing:border-box}}
 body{{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}}
@@ -150,7 +150,7 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 </style>
 </head>
 <body>
-<h1>CausalSpatial-Bench - QA Viewer</h1>
+<h1>predictive spatial reasoning benchmark</h1>
 <div class="stats">{n} questions &nbsp;&middot;&nbsp; {levels}</div>
 <div class="summary">
   <h2>Task Summary</h2>
