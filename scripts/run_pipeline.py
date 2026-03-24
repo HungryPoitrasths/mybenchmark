@@ -35,6 +35,7 @@ from src.utils.colmap_loader import (
     load_scannet_poses,
 )
 from src.utils.depth_occlusion import load_depth_image
+from src.utils import RayCaster
 
 logging.basicConfig(
     level=logging.INFO,
@@ -128,6 +129,7 @@ def run_pipeline(
     use_occlusion: bool = True,
     strict_mode: bool = False,
     referability_cache: dict | None = None,
+    occlusion_backend: str = "depth",
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
 
@@ -196,6 +198,18 @@ def run_pipeline(
         # Load camera poses (with axis alignment so coords match the mesh)
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        ray_caster = None
+        if occlusion_backend == "ray":
+            mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
+            if not mesh_path.exists():
+                mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
+            if mesh_path.exists() and RayCaster is not None:
+                try:
+                    ray_caster = RayCaster.from_ply(str(mesh_path), axis_alignment=axis_align)
+                except Exception as e:
+                    logger.warning("Ray caster load failed for %s: %s", scene_id, e)
+            else:
+                logger.warning("Ray backend requested but mesh/RayCaster unavailable for %s", scene_id)
 
         # Load depth intrinsics once per scene (shared across all frames)
         depth_intrinsics = None
@@ -299,6 +313,8 @@ def run_pipeline(
                 color_intrinsics=color_intrinsics,
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
+                occlusion_backend=occlusion_backend,
+                ray_caster=ray_caster,
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
                 object_visibility=visibility_table,
@@ -374,6 +390,13 @@ def main():
         help="Disable depth-map occlusion (faster but no occlusion questions)",
     )
     parser.add_argument(
+        "--occlusion_backend",
+        type=str,
+        choices=("depth", "ray", "approx"),
+        default="depth",
+        help="Backend for visibility/occlusion estimation",
+    )
+    parser.add_argument(
         "--strict_mode", action="store_true",
         help="Require every mentioned object to pass strict per-frame visibility checks",
     )
@@ -402,6 +425,7 @@ def main():
         use_occlusion=not args.no_occlusion,
         strict_mode=args.strict_mode,
         referability_cache=referability_cache,
+        occlusion_backend=args.occlusion_backend,
     )
 
 

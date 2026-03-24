@@ -759,9 +759,9 @@ def _ray_hits_aabb_before_point(
 
 
 def _visibility_status_from_ratio(visible_ratio: float) -> str:
-    if visible_ratio > 0.65:
+    if visible_ratio > 0.90:
         return "fully visible"
-    if visible_ratio >= 0.2:
+    if visible_ratio >= 0.10:
         return "partially occluded"
     return "not visible"
 
@@ -799,6 +799,10 @@ def _compute_visibility_status_per_object(
     objects: list[dict],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
+    depth_image=None,
+    depth_intrinsics=None,
+    occlusion_backend: str = "approx",
+    ray_caster=None,
 ) -> dict[int, tuple[str, float]]:
     if color_intrinsics is None:
         return {int(obj["id"]): ("not visible", 0.0) for obj in objects}
@@ -822,6 +826,38 @@ def _compute_visibility_status_per_object(
         if projected_area < 400.0 or in_frame_ratio < 0.25:
             visibility[obj_id] = ("not visible", 0.0)
             continue
+
+        if (
+            occlusion_backend == "depth"
+            and depth_image is not None
+            and depth_intrinsics is not None
+        ):
+            from .utils.depth_occlusion import compute_depth_occlusion
+
+            status, visible_ratio = compute_depth_occlusion(
+                bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
+                bbox_max=np.array(obj["bbox_max"], dtype=np.float64),
+                camera_pose=camera_pose,
+                intrinsics=depth_intrinsics,
+                depth_image=depth_image,
+            )
+            visibility[obj_id] = (status, float(visible_ratio))
+            continue
+
+        if occlusion_backend == "ray" and ray_caster is not None:
+            ray_status = ray_caster.multi_ray_occlusion(
+                camera_pos=camera_pos,
+                target_bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
+                target_bbox_max=np.array(obj["bbox_max"], dtype=np.float64),
+            )
+            if ray_status == "fully_visible":
+                visibility[obj_id] = ("fully visible", 1.0)
+            elif ray_status == "partially_occluded":
+                visibility[obj_id] = ("partially occluded", 0.5)
+            else:
+                visibility[obj_id] = ("not visible", 0.0)
+            continue
+
         valid = 0
         visible = 0
 
@@ -862,6 +898,21 @@ def _compute_visibility_status_per_object(
         )
 
     return visibility
+
+
+def _ray_caster_without_object(ray_caster, removed_obj: dict):
+    if ray_caster is None or not hasattr(ray_caster, "mesh"):
+        return ray_caster
+
+    bbox_min = np.array(removed_obj["bbox_min"], dtype=np.float64) - 0.02
+    bbox_max = np.array(removed_obj["bbox_max"], dtype=np.float64) + 0.02
+    face_vertices = ray_caster.mesh.vertices[ray_caster.mesh.faces]
+    centroids = face_vertices.mean(axis=1)
+    remove_mask = np.all((centroids >= bbox_min) & (centroids <= bbox_max), axis=1)
+    tri_ids = set(np.nonzero(remove_mask)[0].tolist())
+    if not tri_ids:
+        return ray_caster
+    return ray_caster.remove_triangles(tri_ids)
 
 def generate_l2_object_move(
     objects: list[dict],
@@ -1011,6 +1062,10 @@ def generate_l2_viewpoint_move(
     objects: list[dict],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
+    depth_image,
+    depth_intrinsics,
+    occlusion_backend: str,
+    ray_caster,
     templates: dict,
 ) -> list[dict]:
     """Generate L2.2 viewpoint-movement questions.
@@ -1024,6 +1079,10 @@ def generate_l2_viewpoint_move(
 
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
+        depth_image=depth_image,
+        depth_intrinsics=depth_intrinsics,
+        occlusion_backend=occlusion_backend,
+        ray_caster=ray_caster,
     )
 
     for direction, prompt_direction in (
@@ -1036,6 +1095,12 @@ def generate_l2_viewpoint_move(
             new_pose = apply_viewpoint_change(camera_pose, direction, dist)
             new_visibility = _compute_visibility_status_per_object(
                 objects, new_pose, color_intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend=(
+                    "ray" if occlusion_backend == "ray" else "approx"
+                ),
+                ray_caster=ray_caster,
             )
 
             for obj in objects:
@@ -1077,6 +1142,10 @@ def generate_l2_object_remove(
     support_graph: dict[int, list[int]],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
+    depth_image,
+    depth_intrinsics,
+    occlusion_backend: str,
+    ray_caster,
     templates: dict,
 ) -> list[dict]:
     """Generate L2.3 object-removal questions from visibility changes."""
@@ -1086,14 +1155,29 @@ def generate_l2_object_remove(
     tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
+        depth_image=depth_image,
+        depth_intrinsics=depth_intrinsics,
+        occlusion_backend=occlusion_backend,
+        ray_caster=ray_caster,
     )
 
     for obj in objects:
         remaining = apply_removal(objects, support_graph, obj["id"], cascade=True)
         if len(remaining) < 2:
             continue
+        removal_ray_caster = (
+            _ray_caster_without_object(ray_caster, obj)
+            if occlusion_backend == "ray"
+            else None
+        )
         new_visibility = _compute_visibility_status_per_object(
             remaining, camera_pose, color_intrinsics,
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend=(
+                "ray" if occlusion_backend == "ray" else "approx"
+            ),
+            ray_caster=removal_ray_caster,
         )
 
         for other in remaining:
@@ -2007,6 +2091,8 @@ def generate_all_questions(
     color_intrinsics: CameraIntrinsics | None = None,
     depth_image=None,
     depth_intrinsics=None,
+    occlusion_backend: str = "depth",
+    ray_caster=None,
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
     referable_object_ids: list[int] | None = None,
@@ -2087,13 +2173,30 @@ def generate_all_questions(
     # so that every occlusion question references an object the viewer can
     # at least locate in the image.
     if depth_image is not None and depth_intrinsics is not None:
-        from .relation_engine import compute_occlusion_per_object
-        occ_cache = compute_occlusion_per_object(
-            objects_uniq, camera_pose, depth_image, depth_intrinsics
-        )
+        if occlusion_backend == "depth":
+            from .relation_engine import compute_occlusion_per_object
+            occ_cache = compute_occlusion_per_object(
+                objects_uniq, camera_pose, depth_image, depth_intrinsics
+            )
+        else:
+            occ_cache = _compute_visibility_status_per_object(
+                objects_uniq,
+                camera_pose,
+                color_intrinsics,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                occlusion_backend=occlusion_backend,
+                ray_caster=ray_caster,
+            )
     else:
         occ_cache = _compute_visibility_status_per_object(
-            objects_uniq, camera_pose, color_intrinsics,
+            objects_uniq,
+            camera_pose,
+            color_intrinsics,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            occlusion_backend=occlusion_backend,
+            ray_caster=ray_caster,
         )
 
     # L1 — collect separately so we can sample before adding
@@ -2157,10 +2260,29 @@ def generate_all_questions(
                                 room_bounds=room_bounds)
     )
     all_questions.extend(
-        generate_l2_viewpoint_move(objects_uniq, camera_pose, color_intrinsics, templates)
+        generate_l2_viewpoint_move(
+            objects_uniq,
+            camera_pose,
+            color_intrinsics,
+            depth_image,
+            depth_intrinsics,
+            occlusion_backend,
+            ray_caster,
+            templates,
+        )
     )
     all_questions.extend(
-        generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, color_intrinsics, templates)
+        generate_l2_object_remove(
+            objects_uniq,
+            support_graph_uniq,
+            camera_pose,
+            color_intrinsics,
+            depth_image,
+            depth_intrinsics,
+            occlusion_backend,
+            ray_caster,
+            templates,
+        )
     )
     # L2 — new reference frames
     all_questions.extend(
