@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""VLM-based frame and label referability prefilter.
+"""VLM-based frame and label-count referability prefilter.
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
   1. whether the frame is usable for spatial reasoning;
-  2. which candidate labels are clearly visible and uniquely referable in text.
+  2. for batches of candidate labels, how many clearly visible instances of
+     each label appear in the image.
 
 The output is a cache that can be consumed by scripts/run_pipeline.py via
 --referability_cache.
@@ -18,7 +19,7 @@ import logging
 import os
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ logger = logging.getLogger("vlm_referability")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
+LABEL_BATCH_SIZE = 5
 
 
 def _image_to_base64(image: np.ndarray) -> str:
@@ -71,69 +73,70 @@ def _call_vlm_json(
     model: str,
     content: list[dict],
     default: dict[str, Any],
-) -> tuple[dict[str, Any], str]:
+    max_tokens: int = 512,
+) -> dict[str, Any]:
     try:
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": content}],
-            max_tokens=512,
+            max_tokens=max_tokens,
             temperature=0,
         )
         text = (resp.choices[0].message.content or "").strip()
         parsed = _extract_json_object(text)
         if parsed is None:
-            return default, text
-        return parsed, text
+            return default
+        return parsed
     except Exception as e:
         logger.warning("VLM call failed: %s", e)
-        return default, ""
+        return default
 
 
-def _frame_prompt(candidate_labels: list[str]) -> str:
+def _frame_prompt() -> str:
+    return (
+        "You are given one original scene image. "
+        "Decide whether this frame is usable for visual spatial-reasoning questions. "
+        "Reject frames that are too blurry, too dark, too unclear, or where most objects are hard to recognize. "
+        'Answer with strict JSON only: {"frame_usable": true, "reason": "clear_scene"}'
+    )
+
+
+def _count_prompt(candidate_labels: list[str]) -> str:
     labels_json = json.dumps(candidate_labels, ensure_ascii=False)
     return (
         "You are given one original scene image and a candidate label list extracted from scene metadata. "
         "Only use the image and this candidate label list. Do not invent new labels. "
-        "Decide whether this frame is usable for spatial-reasoning questions. Reject frames that are too blurry, "
-        "too dark, too unclear, or where most objects are hard to recognize. "
-        "Then, from the candidate labels only, return the labels that are both clearly visible in the image and "
-        'can be referred to unambiguously by bare text like "the chair". '
-        "If a label has multiple visible separated instances, do not include it. "
-        "If a label is in metadata but not clearly visible in the image, do not include it. "
+        "For each candidate label, return the exact number of clearly visible instances in the image. "
+        "Count only instances that are clear enough to support a spatial-reasoning question. "
+        "If a label is not clearly visible, return 0. "
+        "Every candidate label must appear exactly once in the output. "
         f"Candidate labels: {labels_json}. "
-        "Answer with strict JSON only using this schema: "
-        '{"frame_usable": true, "reason": "clear_scene", "visible_unique_labels": ["chair"], '
-        '"rejected_labels": {"table": "multiple_instances"}, "visual_evidence": "chair near center"}'
+        'Answer with strict JSON only using this schema: {"counts": {"chair": 3, "lamp": 1, "book": 0}}'
     )
 
 
-def _normalize_label_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        label = item.strip().lower()
-        if not label or label in seen:
-            continue
-        seen.add(label)
-        out.append(label)
-    return out
+def _chunk_labels(labels: list[str], size: int = LABEL_BATCH_SIZE) -> list[list[str]]:
+    return [labels[i:i + size] for i in range(0, len(labels), size)]
 
 
-def _normalize_rejected_labels(value: Any) -> dict[str, str]:
+def _normalize_count_map(value: Any, expected_labels: list[str]) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
-    out: dict[str, str] = {}
-    for key, reason in value.items():
+    expected = {label.lower() for label in expected_labels}
+    out: dict[str, int] = {}
+    for key, count in value.items():
         if not isinstance(key, str):
             continue
         label = key.strip().lower()
-        if not label:
+        if label not in expected:
             continue
-        out[label] = str(reason)
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            continue
+        if count_int < 0:
+            continue
+        out[label] = count_int
     return out
 
 
@@ -141,45 +144,49 @@ def _frame_decision(
     client,
     model: str,
     image: np.ndarray,
-    candidate_labels: list[str],
 ) -> dict[str, Any]:
     full_b64 = _image_to_base64(image)
     default = {
         "frame_usable": True,
         "reason": "vlm_parse_fallback",
-        "visible_unique_labels": [],
-        "rejected_labels": {},
-        "visual_evidence": "",
     }
-    parsed, raw_text = _call_vlm_json(
+    parsed = _call_vlm_json(
         client,
         model,
         [
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_b64}"}},
-            {"type": "text", "text": _frame_prompt(candidate_labels)},
+            {"type": "text", "text": _frame_prompt()},
         ],
         default=default,
+        max_tokens=128,
     )
-
-    candidate_set = set(candidate_labels)
-    visible_unique_labels = [
-        label for label in _normalize_label_list(parsed.get("visible_unique_labels"))
-        if label in candidate_set
-    ]
-    rejected_labels = {
-        label: reason
-        for label, reason in _normalize_rejected_labels(parsed.get("rejected_labels")).items()
-        if label in candidate_set
-    }
     return {
         "frame_usable": bool(parsed.get("frame_usable", default["frame_usable"])),
         "reason": str(parsed.get("reason", default["reason"])),
-        "visible_unique_labels": visible_unique_labels,
-        "rejected_labels": rejected_labels,
-        "visual_evidence": str(parsed.get("visual_evidence", default["visual_evidence"])),
-        "raw_vlm_output": raw_text,
-        "parsed_vlm_output": parsed,
     }
+
+
+def _label_count_decision(
+    client,
+    model: str,
+    image: np.ndarray,
+    candidate_labels: list[str],
+) -> dict[str, int]:
+    if not candidate_labels:
+        return {}
+    full_b64 = _image_to_base64(image)
+    default = {"counts": {}}
+    parsed = _call_vlm_json(
+        client,
+        model,
+        [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_b64}"}},
+            {"type": "text", "text": _count_prompt(candidate_labels)},
+        ],
+        default=default,
+        max_tokens=256,
+    )
+    return _normalize_count_map(parsed.get("counts"), candidate_labels)
 
 
 def _build_frame_label_candidates(
@@ -201,15 +208,17 @@ def _build_frame_label_candidates(
 
 
 def _resolve_referable_object_ids(
-    visible_unique_labels: list[str],
+    label_counts: dict[str, int],
     label_to_ids: dict[str, list[int]],
 ) -> list[int]:
-    label_counts = Counter({label: len(ids) for label, ids in label_to_ids.items()})
     referable_ids: list[int] = []
-    for label in visible_unique_labels:
-        if label_counts.get(label, 0) != 1:
+    for label, count in label_counts.items():
+        if count != 1:
             continue
-        referable_ids.append(label_to_ids[label][0])
+        obj_ids = label_to_ids.get(label, [])
+        if len(obj_ids) != 1:
+            continue
+        referable_ids.append(obj_ids[0])
     return sorted(referable_ids)
 
 
@@ -280,7 +289,7 @@ def main():
 
     output_path = Path(args.output)
     cache: dict[str, Any] = {
-        "version": "2.0",
+        "version": "3.0",
         "model": model_name,
         "frames": {},
     }
@@ -343,11 +352,17 @@ def main():
                 objects_by_id,
             )
 
-            frame_info = _frame_decision(client, model_name, image, candidate_labels)
-            referable_object_ids = []
+            frame_info = _frame_decision(client, model_name, image)
+            label_counts: dict[str, int] = {}
+            referable_object_ids: list[int] = []
+
             if frame_info["frame_usable"]:
+                for label_batch in _chunk_labels(candidate_labels):
+                    batch_counts = _label_count_decision(client, model_name, image, label_batch)
+                    label_counts.update(batch_counts)
+
                 referable_object_ids = _resolve_referable_object_ids(
-                    frame_info["visible_unique_labels"],
+                    label_counts,
                     label_to_ids,
                 )
 
@@ -359,13 +374,8 @@ def main():
                     for obj_id in frame["visible_object_ids"]
                     if int(obj_id) in objects_by_id
                 ],
-                "candidate_labels": candidate_labels,
-                "visible_unique_labels": frame_info["visible_unique_labels"],
-                "rejected_labels": frame_info["rejected_labels"],
-                "visual_evidence": frame_info["visual_evidence"],
+                "label_counts": label_counts,
                 "referable_object_ids": referable_object_ids,
-                "raw_vlm_output": frame_info["raw_vlm_output"],
-                "parsed_vlm_output": frame_info["parsed_vlm_output"],
             }
             scene_cache[image_name] = frame_entry
 
