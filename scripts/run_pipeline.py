@@ -63,6 +63,55 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
     return frames.get(f"{scene_id}/{image_name}")
 
 
+def _get_referability_scene_frames(cache: dict | None, scene_id: str) -> dict[str, dict]:
+    if not cache:
+        return {}
+    frames = cache.get("frames", cache)
+    scene_frames = frames.get(scene_id)
+    if isinstance(scene_frames, dict):
+        return scene_frames
+
+    prefix = f"{scene_id}/"
+    matched: dict[str, dict] = {}
+    for key, value in frames.items():
+        if isinstance(key, str) and key.startswith(prefix) and isinstance(value, dict):
+            matched[key[len(prefix):]] = value
+    return matched
+
+
+def _get_referability_scene_ids(cache: dict | None) -> set[str]:
+    if not cache:
+        return set()
+    frames = cache.get("frames", cache)
+    scene_ids: set[str] = set()
+    for key, value in frames.items():
+        if isinstance(value, dict) and "frame_usable" not in value:
+            scene_ids.add(str(key))
+        elif isinstance(key, str) and "/" in key:
+            scene_ids.add(key.split("/", 1)[0])
+    return scene_ids
+
+
+def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[str, object]]:
+    frames: list[dict[str, object]] = []
+    for image_name, entry in sorted(scene_frames.items()):
+        object_decisions = entry.get("object_decisions", {})
+        visible_object_ids: list[int] = []
+        if isinstance(object_decisions, dict):
+            for obj_id in object_decisions.keys():
+                try:
+                    visible_object_ids.append(int(obj_id))
+                except (TypeError, ValueError):
+                    continue
+        frames.append(
+            {
+                "image_name": image_name,
+                "visible_object_ids": sorted(visible_object_ids),
+            }
+        )
+    return frames
+
+
 def run_pipeline(
     data_root: Path,
     output_dir: Path,
@@ -80,23 +129,33 @@ def run_pipeline(
     questions_dir.mkdir(parents=True, exist_ok=True)
 
     # Discover scene directories (ScanNet scenes have a pose/ subdir)
-    scene_dirs = sorted(
+    discovered_scene_dirs = sorted(
         p for p in data_root.iterdir()
         if p.is_dir() and (p / "pose").exists()
     )
-    logger.info("Found %d candidate scenes", len(scene_dirs))
+    if referability_cache:
+        cached_scene_ids = _get_referability_scene_ids(referability_cache)
+        scene_dirs = [p for p in discovered_scene_dirs if p.name in cached_scene_ids]
+        logger.info(
+            "Loaded %d cached scenes from referability cache; ignoring --max_scenes/--max_frames",
+            len(scene_dirs),
+        )
+    else:
+        scene_dirs = discovered_scene_dirs
+        logger.info("Found %d candidate scenes", len(scene_dirs))
 
     all_questions: list[dict] = []
     processed = 0
+    total_scenes = len(scene_dirs) if referability_cache else min(len(scene_dirs), max_scenes)
 
     for scene_dir in scene_dirs:
-        if processed >= max_scenes:
+        if not referability_cache and processed >= max_scenes:
             break
 
         scene_id = scene_dir.name
         logger.info(
             "=== Processing scene %s (%d/%d) ===",
-            scene_id, processed + 1, max_scenes,
+            scene_id, processed + 1, total_scenes,
         )
 
         # ---- Stage 1: Parse ----
@@ -117,7 +176,11 @@ def run_pipeline(
             json.dump(scene, f, indent=2, ensure_ascii=False)
 
         # ---- Stage 3: Frame selection ----
-        frames = select_frames(scene_dir, scene["objects"], support_graph, max_frames)
+        if referability_cache:
+            scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
+            frames = _frames_from_referability_cache(scene_frames)
+        else:
+            frames = select_frames(scene_dir, scene["objects"], support_graph, max_frames)
         if not frames:
             logger.info("No valid frames for scene %s — skipping", scene_id)
             continue
