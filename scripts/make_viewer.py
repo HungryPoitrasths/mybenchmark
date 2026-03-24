@@ -28,6 +28,43 @@ except ImportError:
     sys.exit("Pillow is required: pip install Pillow")
 
 
+SUMMARY_GROUPS = [
+    (
+        "L1 静态感知",
+        [
+            ("direction_agent", "L1_direction_agent"),
+            ("occlusion", "L1_occlusion"),
+            ("distance", "L1_distance"),
+            ("direction_object_centric", "L1_direction_object_centric"),
+            ("direction_allocentric", "L1_direction_allocentric"),
+        ],
+    ),
+    (
+        "L2 干预题",
+        [
+            ("object_move_agent", "L2_object_move_agent"),
+            ("object_move_distance", "L2_object_move_distance"),
+            ("object_move_object_centric", "L2_object_move_object_centric"),
+            ("object_move_allocentric", "L2_object_move_allocentric"),
+            ("viewpoint_move", "L2_viewpoint_move"),
+            ("object_remove", "L2_object_remove"),
+        ],
+    ),
+    (
+        "L3 多跳 / 反事实",
+        [
+            ("support_chain", "L3_support_chain"),
+            ("coordinate_rotation_agent", "L3_coordinate_rotation_agent"),
+            (
+                "coordinate_rotation_object_centric",
+                "L3_coordinate_rotation_object_centric",
+            ),
+            ("coordinate_rotation_allocentric", "L3_coordinate_rotation_allocentric"),
+        ],
+    ),
+]
+
+
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
     try:
         img = Image.open(path).convert("RGB")
@@ -39,6 +76,36 @@ def img_to_b64(path: Path, max_width: int = 480) -> str | None:
         return base64.b64encode(buf.getvalue()).decode()
     except Exception:
         return None
+
+
+def build_task_summary(type_counter: Counter) -> str:
+    known_keys = {
+        key
+        for _, items in SUMMARY_GROUPS
+        for key, _ in items
+    }
+    parts: list[str] = []
+
+    for section_title, items in SUMMARY_GROUPS:
+        lines = [f'<div class="summary-line"><strong>{section_title}：</strong></div>']
+        for key, label in items:
+            lines.append(
+                f'<div class="summary-line">{label}：{type_counter.get(key, 0)}</div>'
+            )
+        parts.append(f'<div class="summary-section">{"".join(lines)}</div>')
+
+    other_items = [
+        (qtype, count)
+        for qtype, count in sorted(type_counter.items())
+        if qtype not in known_keys
+    ]
+    if other_items:
+        other_text = "；".join(f"{qtype}={count}" for qtype, count in other_items)
+        parts.append(
+            f'<div class="summary-other"><strong>其他类型：</strong>{other_text}</div>'
+        )
+
+    return "".join(parts)
 
 
 PAGE = """\
@@ -55,8 +122,11 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .summary{{max-width:1100px;margin:0 auto 24px;background:#fff;border-radius:10px;
           box-shadow:0 2px 6px rgba(0,0,0,.12);padding:18px 20px}}
 .summary h2{{margin:0 0 12px;color:#111;font-size:18px}}
-.summary ul{{margin:0;padding-left:20px;color:#374151}}
-.summary li{{margin:6px 0;font-size:14px}}
+.summary-block{{color:#374151;font-size:14px;line-height:1.7}}
+.summary-line{{margin:2px 0}}
+.summary-section{{margin-top:10px}}
+.summary-section:first-child{{margin-top:0}}
+.summary-other{{margin-top:12px;color:#6b7280}}
 .card{{display:flex;background:#fff;border-radius:10px;
        box-shadow:0 2px 6px rgba(0,0,0,.12);margin-bottom:18px;overflow:hidden}}
 .img-wrap{{flex:0 0 auto;width:480px;background:#222;display:flex;
@@ -84,9 +154,7 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 <div class="stats">{n} questions &nbsp;&middot;&nbsp; {levels}</div>
 <div class="summary">
   <h2>Task Summary</h2>
-  <ul>
-    {task_summary}
-  </ul>
+  <div class="summary-block">{task_summary}</div>
 </div>
 {cards}
 </body>
@@ -183,10 +251,7 @@ def main():
     levels_str = " &nbsp;&middot;&nbsp; ".join(
         f"{k}: {v}" for k, v in sorted(level_counter.items())
     )
-    task_summary = "\n    ".join(
-        f"<li><strong>{qtype}</strong>: {count}</li>"
-        for qtype, count in sorted(type_counter.items())
-    )
+    task_summary = build_task_summary(type_counter)
     html = PAGE.format(
         n=len(questions),
         levels=levels_str,
