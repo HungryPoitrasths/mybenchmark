@@ -357,7 +357,12 @@ def main():
 
     from openai import OpenAI
 
-    client = OpenAI(api_key="EMPTY", base_url=args.vlm_url)
+    api_key = (
+        os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or "EMPTY"
+    )
+    client = OpenAI(api_key=api_key, base_url=args.vlm_url)
     try:
         models = client.models.list()
         available = [m.id for m in models.data]
