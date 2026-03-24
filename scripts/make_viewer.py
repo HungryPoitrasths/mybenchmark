@@ -2,8 +2,8 @@
 """Generate a self-contained HTML viewer for QA validation.
 
 Each question is shown next to its source image.
-The output is a single HTML file with base64-embedded images —
-no server required, just open in any browser.
+The output is a single HTML file with base64-embedded images - no server
+required, just open it in any browser.
 
 Usage:
     python scripts/make_viewer.py \
@@ -28,10 +28,6 @@ except ImportError:
     sys.exit("Pillow is required: pip install Pillow")
 
 
-# ---------------------------------------------------------------------------
-# Image helper
-# ---------------------------------------------------------------------------
-
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
     try:
         img = Image.open(path).convert("RGB")
@@ -45,10 +41,6 @@ def img_to_b64(path: Path, max_width: int = 480) -> str | None:
         return None
 
 
-# ---------------------------------------------------------------------------
-# HTML templates
-# ---------------------------------------------------------------------------
-
 PAGE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -60,6 +52,11 @@ PAGE = """\
 body{{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}}
 h1{{text-align:center;color:#333;margin-bottom:4px}}
 .stats{{text-align:center;color:#666;font-size:14px;margin-bottom:24px}}
+.summary{{max-width:1100px;margin:0 auto 24px;background:#fff;border-radius:10px;
+          box-shadow:0 2px 6px rgba(0,0,0,.12);padding:18px 20px}}
+.summary h2{{margin:0 0 12px;color:#111;font-size:18px}}
+.summary ul{{margin:0;padding-left:20px;color:#374151}}
+.summary li{{margin:6px 0;font-size:14px}}
 .card{{display:flex;background:#fff;border-radius:10px;
        box-shadow:0 2px 6px rgba(0,0,0,.12);margin-bottom:18px;overflow:hidden}}
 .img-wrap{{flex:0 0 auto;width:480px;background:#222;display:flex;
@@ -83,8 +80,14 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 </style>
 </head>
 <body>
-<h1>CausalSpatial-Bench — QA Viewer</h1>
-<div class="stats">{n} questions &nbsp;·&nbsp; {levels}</div>
+<h1>CausalSpatial-Bench - QA Viewer</h1>
+<div class="stats">{n} questions &nbsp;&middot;&nbsp; {levels}</div>
+<div class="summary">
+  <h2>Task Summary</h2>
+  <ul>
+    {task_summary}
+  </ul>
+</div>
 {cards}
 </body>
 </html>
@@ -106,19 +109,25 @@ CARD = """\
 </div>"""
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(description="Build HTML QA viewer")
-    parser.add_argument("--questions", required=True,
-                        help="Path to questions JSON (e.g. human_validation_sample.json)")
-    parser.add_argument("--image_root", required=True,
-                        help="Root of ScanNet scans (parent of scene dirs)")
+    parser.add_argument(
+        "--questions",
+        required=True,
+        help="Path to questions JSON (e.g. human_validation_sample.json)",
+    )
+    parser.add_argument(
+        "--image_root",
+        required=True,
+        help="Root of ScanNet scans (parent of scene dirs)",
+    )
     parser.add_argument("--output", default="viewer.html")
-    parser.add_argument("--max_width", type=int, default=480,
-                        help="Max image width in pixels (default 480)")
+    parser.add_argument(
+        "--max_width",
+        type=int,
+        default=480,
+        help="Max image width in pixels (default 480)",
+    )
     args = parser.parse_args()
 
     with open(args.questions, encoding="utf-8") as f:
@@ -127,51 +136,63 @@ def main():
 
     image_root = Path(args.image_root)
     level_counter: Counter = Counter()
+    type_counter: Counter = Counter()
     cards: list[str] = []
 
     for idx, q in enumerate(questions, 1):
-        level   = q.get("level", "?")
-        qtype   = q.get("type", "")
-        scene   = q.get("scene_id", "")
-        frame   = q.get("image_name", "")
-        answer  = q.get("answer", "")
-        opts    = q.get("options", [])
+        level = q.get("level", "?")
+        qtype = q.get("type", "")
+        scene = q.get("scene_id", "")
+        frame = q.get("image_name", "")
+        answer = q.get("answer", "")
+        opts = q.get("options", [])
 
         level_counter[level] += 1
+        type_counter[qtype or "unknown"] += 1
 
-        # Image
         img_path = image_root / scene / "color" / frame
         b64 = img_to_b64(img_path, args.max_width)
         img_html = (
             f'<img src="data:image/jpeg;base64,{b64}">'
-            if b64 else '<div class="no-img">image not found</div>'
+            if b64
+            else '<div class="no-img">image not found</div>'
         )
 
-        # Options
         opt_html = ""
         for i, opt in enumerate(opts):
             letter = chr(65 + i)
             cls = "opt correct" if letter == answer else "opt"
             opt_html += f'<div class="{cls}">{letter}.&nbsp; {opt}</div>\n    '
 
-        cards.append(CARD.format(
-            img=img_html,
-            level=level,
-            qtype=qtype,
-            idx=idx,
-            question=q.get("question", ""),
-            options=opt_html,
-            scene_id=scene,
-            image_name=frame,
-        ))
+        cards.append(
+            CARD.format(
+                img=img_html,
+                level=level,
+                qtype=qtype,
+                idx=idx,
+                question=q.get("question", ""),
+                options=opt_html,
+                scene_id=scene,
+                image_name=frame,
+            )
+        )
 
         if idx % 20 == 0:
-            print(f"  {idx}/{len(questions)} processed…", flush=True)
+            print(f"  {idx}/{len(questions)} processed...", flush=True)
 
-    levels_str = " &nbsp;·&nbsp; ".join(
-        f'{k}: {v}' for k, v in sorted(level_counter.items())
+    levels_str = " &nbsp;&middot;&nbsp; ".join(
+        f"{k}: {v}" for k, v in sorted(level_counter.items())
     )
-    html = PAGE.format(n=len(questions), levels=levels_str, cards="\n".join(cards))
+    task_summary = "\n    ".join(
+        f"<li><strong>{qtype}</strong>: {count}</li>"
+        for qtype, count in sorted(type_counter.items())
+    )
+    html = PAGE.format(
+        n=len(questions),
+        levels=levels_str,
+        task_summary=task_summary,
+        cards="\n".join(cards),
+    )
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
