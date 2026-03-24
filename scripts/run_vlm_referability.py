@@ -262,6 +262,7 @@ def main():
     global EXCLUDED_LABELS
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
     from src.scene_parser import load_scannet_label_map, parse_scene
+    from src.support_graph import enrich_scene_with_support, has_nontrivial_support
 
     EXCLUDED_LABELS = set(SCENE_EXCLUDED_LABELS)
 
@@ -322,6 +323,15 @@ def main():
 
         scene = parse_scene(scene_dir)
         if scene is None:
+            continue
+
+        enrich_scene_with_support(scene)
+        support_graph = {
+            int(parent_id): child_ids
+            for parent_id, child_ids in scene.get("support_graph", {}).items()
+        }
+        if not has_nontrivial_support(support_graph):
+            logger.info("Scene %s has no support relations -> skipping", scene_id)
             continue
 
         frames = select_frames(scene_dir, scene["objects"], None, args.max_frames)
