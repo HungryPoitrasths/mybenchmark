@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""VLM-based frame and object referability prefilter.
+"""VLM-based frame and label referability prefilter.
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
   1. whether the frame is usable for spatial reasoning;
-  2. which visible object_ids are clearly visible and referable in text.
+  2. which candidate labels are clearly visible and uniquely referable in text.
 
 The output is a cache that can be consumed by scripts/run_pipeline.py via
 --referability_cache.
@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sys
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -29,13 +30,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.frame_selector import select_frames
 from src.utils.colmap_loader import (
-    CameraIntrinsics,
-    CameraPose,
     load_axis_alignment,
-    load_scannet_intrinsics,
     load_scannet_poses,
 )
-from src.utils.coordinate_transform import project_to_image
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,244 +66,151 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return None
 
 
-def _project_object_bbox(
-    obj: dict,
-    pose: CameraPose,
-    intrinsics: CameraIntrinsics,
-) -> dict[str, Any]:
-    bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
-    bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
-    mid = (bbox_min + bbox_max) / 2.0
-
-    sample_points = []
-    for x in [bbox_min[0], bbox_max[0]]:
-        for y in [bbox_min[1], bbox_max[1]]:
-            for z in [bbox_min[2], bbox_max[2]]:
-                sample_points.append(np.array([x, y, z], dtype=np.float64))
-    sample_points.append(mid)
-
-    projected: list[tuple[float, float]] = []
-    in_frame = 0
-    valid = 0
-    for pt in sample_points:
-        uv, depth = project_to_image(pt, pose, intrinsics)
-        if uv is None or depth <= 0:
-            continue
-        valid += 1
-        u, v = float(uv[0]), float(uv[1])
-        projected.append((u, v))
-        if 0 <= u < intrinsics.width and 0 <= v < intrinsics.height:
-            in_frame += 1
-
-    if len(projected) < 2:
-        return {
-            "projected_bbox": None,
-            "roi_bounds": None,
-            "bbox_in_frame_ratio": 0.0 if valid == 0 else in_frame / valid,
-            "projected_area_px": 0.0,
-        }
-
-    us = [p[0] for p in projected]
-    vs = [p[1] for p in projected]
-    u_min = max(0, int(np.floor(min(us))))
-    u_max = min(intrinsics.width - 1, int(np.ceil(max(us))))
-    v_min = max(0, int(np.floor(min(vs))))
-    v_max = min(intrinsics.height - 1, int(np.ceil(max(vs))))
-    area = float(max(0, u_max - u_min) * max(0, v_max - v_min))
-    return {
-        "projected_bbox": [u_min, v_min, u_max, v_max],
-        "roi_bounds": (u_min, u_max, v_min, v_max),
-        "bbox_in_frame_ratio": 0.0 if valid == 0 else in_frame / valid,
-        "projected_area_px": area,
-    }
-
-
-def _draw_box(image: np.ndarray, bbox: list[int], label: str) -> np.ndarray:
-    annotated = image.copy()
-    x1, y1, x2, y2 = bbox
-    cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 3)
-    cv2.putText(
-        annotated,
-        label,
-        (x1, max(20, y1 - 8)),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        (0, 0, 255),
-        2,
-        cv2.LINE_AA,
-    )
-    return annotated
-
-
-def _crop_with_padding(image: np.ndarray, bbox: list[int], pad_ratio: float = 0.15) -> np.ndarray:
-    x1, y1, x2, y2 = bbox
-    h, w = image.shape[:2]
-    bw = max(1, x2 - x1)
-    bh = max(1, y2 - y1)
-    pad_x = int(bw * pad_ratio)
-    pad_y = int(bh * pad_ratio)
-    cx1 = max(0, x1 - pad_x)
-    cy1 = max(0, y1 - pad_y)
-    cx2 = min(w, x2 + pad_x)
-    cy2 = min(h, y2 + pad_y)
-    crop = image[cy1:cy2, cx1:cx2]
-    if crop.size == 0:
-        return image.copy()
-    return crop
-
-
-def _bbox_iou(box_a: list[int] | None, box_b: list[int] | None) -> float | None:
-    if not box_a or not box_b:
-        return None
-    ax1, ay1, ax2, ay2 = box_a
-    bx1, by1, bx2, by2 = box_b
-    ix1 = max(ax1, bx1)
-    iy1 = max(ay1, by1)
-    ix2 = min(ax2, bx2)
-    iy2 = min(ay2, by2)
-    iw = max(0, ix2 - ix1)
-    ih = max(0, iy2 - iy1)
-    inter = iw * ih
-    if inter <= 0:
-        return 0.0
-    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
-    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
-    union = area_a + area_b - inter
-    if union <= 0:
-        return None
-    return float(inter / union)
-
-
-def _normalize_bbox(value: Any) -> list[int] | None:
-    if not isinstance(value, list) or len(value) != 4:
-        return None
-    try:
-        return [int(round(float(v))) for v in value]
-    except (TypeError, ValueError):
-        return None
-
-
-def _call_vlm_json(client, model: str, content: list[dict], default: dict[str, Any]) -> dict[str, Any]:
+def _call_vlm_json(
+    client,
+    model: str,
+    content: list[dict],
+    default: dict[str, Any],
+) -> tuple[dict[str, Any], str]:
     try:
         resp = client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": content}],
-            max_tokens=256,
+            max_tokens=512,
             temperature=0,
         )
         text = (resp.choices[0].message.content or "").strip()
         parsed = _extract_json_object(text)
         if parsed is None:
-            return default
-        return parsed
+            return default, text
+        return parsed, text
     except Exception as e:
         logger.warning("VLM call failed: %s", e)
-        return default
+        return default, ""
 
 
-def _frame_prompt() -> str:
+def _frame_prompt(candidate_labels: list[str]) -> str:
+    labels_json = json.dumps(candidate_labels, ensure_ascii=False)
     return (
-        "Decide whether this image is usable for visual spatial-reasoning questions. "
-        "Reject frames that are too blurry, too dark, too unclear, or where most objects are hard to recognize. "
-        "Answer with strict JSON only: "
-        '{"frame_usable": true, "reason": "clear_scene"}'
+        "You are given one original scene image and a candidate label list extracted from scene metadata. "
+        "Only use the image and this candidate label list. Do not invent new labels. "
+        "Decide whether this frame is usable for spatial-reasoning questions. Reject frames that are too blurry, "
+        "too dark, too unclear, or where most objects are hard to recognize. "
+        "Then, from the candidate labels only, return the labels that are both clearly visible in the image and "
+        'can be referred to unambiguously by bare text like "the chair". '
+        "If a label has multiple visible separated instances, do not include it. "
+        "If a label is in metadata but not clearly visible in the image, do not include it. "
+        f"Candidate labels: {labels_json}. "
+        "Answer with strict JSON only using this schema: "
+        '{"frame_usable": true, "reason": "clear_scene", "visible_unique_labels": ["chair"], '
+        '"rejected_labels": {"table": "multiple_instances"}, "visual_evidence": "chair near center"}'
     )
 
 
-def _object_prompt(label: str) -> str:
-    return (
-        f'Image 1 is the full scene with one candidate "{label}" highlighted by a red box. '
-        f'Image 2 is a crop around the same boxed region. '
-        f'Decide whether the boxed "{label}" is clearly visible and whether a question can refer to it simply as '
-        f'"the {label}" without confusing the reader. '
-        "If multiple same-label instances form one tight cluster in one place, referable may still be true. "
-        "If multiple separated same-label instances would make the phrase ambiguous, referable should be false. "
-        "Also provide an optional grounding bbox in the full image if you can localize the intended object. "
-        "Answer with strict JSON only: "
-        '{"visible": true, "clear": true, "referable": true, '
-        '"reason": "single_clear_instance", "grounding_bbox": [x1, y1, x2, y2]}'
-    )
+def _normalize_label_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        label = item.strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append(label)
+    return out
 
 
-def _frame_decision(client, model: str, image: np.ndarray) -> dict[str, Any]:
-    full_b64 = _image_to_base64(image)
-    default = {"frame_usable": True, "reason": "vlm_parse_fallback"}
-    result = _call_vlm_json(
-        client,
-        model,
-        [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_b64}"}},
-            {"type": "text", "text": _frame_prompt()},
-        ],
-        default=default,
-    )
-    return {
-        "frame_usable": bool(result.get("frame_usable", True)),
-        "reason": str(result.get("reason", default["reason"])),
-    }
+def _normalize_rejected_labels(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, reason in value.items():
+        if not isinstance(key, str):
+            continue
+        label = key.strip().lower()
+        if not label:
+            continue
+        out[label] = str(reason)
+    return out
 
 
-def _object_decision(
+def _frame_decision(
     client,
     model: str,
     image: np.ndarray,
-    obj: dict,
-    projected_bbox: list[int],
+    candidate_labels: list[str],
 ) -> dict[str, Any]:
-    label = obj["label"]
-    annotated = _draw_box(image, projected_bbox, label)
-    crop = _crop_with_padding(image, projected_bbox)
-    full_b64 = _image_to_base64(annotated)
-    crop_b64 = _image_to_base64(crop)
+    full_b64 = _image_to_base64(image)
     default = {
-        "visible": True,
-        "clear": True,
-        "referable": True,
+        "frame_usable": True,
         "reason": "vlm_parse_fallback",
-        "grounding_bbox": None,
+        "visible_unique_labels": [],
+        "rejected_labels": {},
+        "visual_evidence": "",
     }
-    result = _call_vlm_json(
+    parsed, raw_text = _call_vlm_json(
         client,
         model,
         [
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_b64}"}},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{crop_b64}"}},
-            {"type": "text", "text": _object_prompt(label)},
+            {"type": "text", "text": _frame_prompt(candidate_labels)},
         ],
         default=default,
     )
-    grounding_bbox = _normalize_bbox(result.get("grounding_bbox"))
+
+    candidate_set = set(candidate_labels)
+    visible_unique_labels = [
+        label for label in _normalize_label_list(parsed.get("visible_unique_labels"))
+        if label in candidate_set
+    ]
+    rejected_labels = {
+        label: reason
+        for label, reason in _normalize_rejected_labels(parsed.get("rejected_labels")).items()
+        if label in candidate_set
+    }
     return {
-        "visible": bool(result.get("visible", default["visible"])),
-        "clear": bool(result.get("clear", default["clear"])),
-        "referable": bool(result.get("referable", default["referable"])),
-        "reason": str(result.get("reason", default["reason"])),
-        "grounding_bbox": grounding_bbox,
+        "frame_usable": bool(parsed.get("frame_usable", default["frame_usable"])),
+        "reason": str(parsed.get("reason", default["reason"])),
+        "visible_unique_labels": visible_unique_labels,
+        "rejected_labels": rejected_labels,
+        "visual_evidence": str(parsed.get("visual_evidence", default["visual_evidence"])),
+        "raw_vlm_output": raw_text,
+        "parsed_vlm_output": parsed,
     }
 
 
-def _enforce_single_referable_per_label(
-    decisions: dict[str, dict[str, Any]],
+def _build_frame_label_candidates(
+    visible_object_ids: list[int],
     objects_by_id: dict[int, dict[str, Any]],
-) -> None:
-    winners: dict[str, tuple[str, float]] = {}
-    for obj_id, decision in decisions.items():
-        if not decision.get("referable", False):
+) -> tuple[list[str], dict[str, list[int]]]:
+    label_to_ids: dict[str, list[int]] = defaultdict(list)
+    for obj_id in visible_object_ids:
+        obj = objects_by_id.get(int(obj_id))
+        if obj is None:
             continue
-        label = objects_by_id[int(obj_id)]["label"]
-        area = float(decision.get("audit", {}).get("projected_area_px", 0.0))
-        if label not in winners or area > winners[label][1]:
-            winners[label] = (obj_id, area)
+        label = str(obj.get("label", "")).strip().lower()
+        if not label or label in EXCLUDED_LABELS:
+            continue
+        label_to_ids[label].append(int(obj_id))
 
-    for obj_id, decision in decisions.items():
-        if not decision.get("referable", False):
+    candidate_labels = sorted(label_to_ids.keys())
+    return candidate_labels, dict(label_to_ids)
+
+
+def _resolve_referable_object_ids(
+    visible_unique_labels: list[str],
+    label_to_ids: dict[str, list[int]],
+) -> list[int]:
+    label_counts = Counter({label: len(ids) for label, ids in label_to_ids.items()})
+    referable_ids: list[int] = []
+    for label in visible_unique_labels:
+        if label_counts.get(label, 0) != 1:
             continue
-        label = objects_by_id[int(obj_id)]["label"]
-        winner_id, _ = winners[label]
-        if obj_id != winner_id:
-            decision["referable"] = False
-            if decision.get("reason") in {"single_clear_instance", "vlm_parse_fallback"}:
-                decision["reason"] = "same_label_competition"
+        referable_ids.append(label_to_ids[label][0])
+    return sorted(referable_ids)
 
 
 def main():
@@ -349,6 +253,7 @@ def main():
     global EXCLUDED_LABELS
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
     from src.scene_parser import load_scannet_label_map, parse_scene
+
     EXCLUDED_LABELS = set(SCENE_EXCLUDED_LABELS)
 
     if args.label_map:
@@ -375,7 +280,7 @@ def main():
 
     output_path = Path(args.output)
     cache: dict[str, Any] = {
-        "version": "1.0",
+        "version": "2.0",
         "model": model_name,
         "frames": {},
     }
@@ -399,7 +304,12 @@ def main():
             break
 
         scene_id = scene_dir.name
-        logger.info("=== Referability scene %s (%d/%d) ===", scene_id, processed + 1, args.max_scenes)
+        logger.info(
+            "=== Referability scene %s (%d/%d) ===",
+            scene_id,
+            processed + 1,
+            args.max_scenes,
+        )
 
         scene = parse_scene(scene_dir)
         if scene is None:
@@ -411,11 +321,6 @@ def main():
 
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
-        try:
-            color_intrinsics = load_scannet_intrinsics(scene_dir)
-        except Exception as e:
-            logger.warning("Color intrinsics load failed for %s: %s", scene_id, e)
-            continue
 
         scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         objects_by_id = {int(o["id"]): o for o in scene["objects"]}
@@ -433,67 +338,35 @@ def main():
                 logger.warning("Cannot read image %s", image_path)
                 continue
 
-            frame_info = _frame_decision(client, model_name, image)
+            candidate_labels, label_to_ids = _build_frame_label_candidates(
+                frame["visible_object_ids"],
+                objects_by_id,
+            )
+
+            frame_info = _frame_decision(client, model_name, image, candidate_labels)
+            referable_object_ids = []
+            if frame_info["frame_usable"]:
+                referable_object_ids = _resolve_referable_object_ids(
+                    frame_info["visible_unique_labels"],
+                    label_to_ids,
+                )
+
             frame_entry: dict[str, Any] = {
                 "frame_usable": frame_info["frame_usable"],
                 "frame_reject_reason": None if frame_info["frame_usable"] else frame_info["reason"],
-                "referable_object_ids": [],
-                "object_decisions": {},
+                "candidate_visible_object_ids": [
+                    int(obj_id)
+                    for obj_id in frame["visible_object_ids"]
+                    if int(obj_id) in objects_by_id
+                ],
+                "candidate_labels": candidate_labels,
+                "visible_unique_labels": frame_info["visible_unique_labels"],
+                "rejected_labels": frame_info["rejected_labels"],
+                "visual_evidence": frame_info["visual_evidence"],
+                "referable_object_ids": referable_object_ids,
+                "raw_vlm_output": frame_info["raw_vlm_output"],
+                "parsed_vlm_output": frame_info["parsed_vlm_output"],
             }
-            if not frame_info["frame_usable"]:
-                scene_cache[image_name] = frame_entry
-                continue
-
-            pose = poses[image_name]
-            for obj_id in frame["visible_object_ids"]:
-                obj = objects_by_id.get(int(obj_id))
-                if obj is None:
-                    continue
-                if obj["label"].lower() in EXCLUDED_LABELS:
-                    continue
-
-                roi_info = _project_object_bbox(obj, pose, color_intrinsics)
-                projected_bbox = roi_info["projected_bbox"]
-                if projected_bbox is None:
-                    frame_entry["object_decisions"][str(obj_id)] = {
-                        "label": obj["label"],
-                        "visible": False,
-                        "clear": False,
-                        "referable": False,
-                        "reason": "projection_failed",
-                        "audit": {
-                            "projected_bbox": None,
-                            "grounding_bbox": None,
-                            "iou": None,
-                            "projected_area_px": 0.0,
-                            "bbox_in_frame_ratio": roi_info["bbox_in_frame_ratio"],
-                        },
-                    }
-                    continue
-
-                decision = _object_decision(client, model_name, image, obj, projected_bbox)
-                audit = {
-                    "projected_bbox": projected_bbox,
-                    "grounding_bbox": decision["grounding_bbox"],
-                    "iou": _bbox_iou(projected_bbox, decision["grounding_bbox"]),
-                    "projected_area_px": roi_info["projected_area_px"],
-                    "bbox_in_frame_ratio": roi_info["bbox_in_frame_ratio"],
-                }
-                frame_entry["object_decisions"][str(obj_id)] = {
-                    "label": obj["label"],
-                    "visible": decision["visible"],
-                    "clear": decision["clear"],
-                    "referable": decision["referable"],
-                    "reason": decision["reason"],
-                    "audit": audit,
-                }
-
-            _enforce_single_referable_per_label(frame_entry["object_decisions"], objects_by_id)
-            frame_entry["referable_object_ids"] = [
-                int(obj_id)
-                for obj_id, d in frame_entry["object_decisions"].items()
-                if d.get("visible", False) and d.get("clear", False) and d.get("referable", False)
-            ]
             scene_cache[image_name] = frame_entry
 
             output_path.parent.mkdir(parents=True, exist_ok=True)

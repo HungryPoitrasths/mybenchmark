@@ -95,14 +95,22 @@ def _get_referability_scene_ids(cache: dict | None) -> set[str]:
 def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[str, object]]:
     frames: list[dict[str, object]] = []
     for image_name, entry in sorted(scene_frames.items()):
-        object_decisions = entry.get("object_decisions", {})
         visible_object_ids: list[int] = []
-        if isinstance(object_decisions, dict):
-            for obj_id in object_decisions.keys():
+        candidate_visible_object_ids = entry.get("candidate_visible_object_ids")
+        if isinstance(candidate_visible_object_ids, list):
+            for obj_id in candidate_visible_object_ids:
                 try:
                     visible_object_ids.append(int(obj_id))
                 except (TypeError, ValueError):
                     continue
+        else:
+            object_decisions = entry.get("object_decisions", {})
+            if isinstance(object_decisions, dict):
+                for obj_id in object_decisions.keys():
+                    try:
+                        visible_object_ids.append(int(obj_id))
+                    except (TypeError, ValueError):
+                        continue
         frames.append(
             {
                 "image_name": image_name,
