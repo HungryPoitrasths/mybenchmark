@@ -7,19 +7,19 @@ Algorithm:
     1. Generate 26 sample points on the target object bbox (8 corners +
        12 edge midpoints + 6 face centres).
     2. Transform each point to camera coordinates: p_cam = R @ p_world + t.
-    3. Project to the depth-image plane using depth intrinsics:
-       u = fx * x/z + cx, v = fy * y/z + cy.
-    4. For each point: compare projected depth (z_cam) with the depth map
-       value at (u, v).  If z_cam - depth_map[v, u] > tolerance -> occluded.
-    5. visibility_ratio = #visible / #valid_projections.
-    6. Centre-point mandatory check: the 3D bbox centre must also pass
-       the depth test; if the centre is occluded, the object is classified
-       as "not visible" regardless of the surface-point ratio.
+    3. Project each point into the image plane.
+    4. Measure projected footprint and in-frame coverage to reject objects
+       whose visible portion is only a tiny corner near the image boundary.
+    5. If a depth map is available, compare each projected depth with the depth
+       image and compute visibility_ratio = #visible / #valid_projections.
+    6. Classify primarily from visibility_ratio, without the old hard rule
+       that required the bbox centre itself to be visible.
 
 Thresholds:
-    - ratio > 0.8 AND centre visible -> "fully visible"
-    - 0.4 <= ratio <= 0.8 AND centre visible -> "partially occluded"
-    - ratio < 0.4 OR centre occluded -> "not visible"
+    - projected_area < 400 px or in_frame_ratio < 0.25 -> "not visible"
+    - ratio > 0.65 -> "fully visible"
+    - 0.2 <= ratio <= 0.65 -> "partially occluded"
+    - ratio < 0.2 -> "not visible"
 """
 
 from __future__ import annotations
@@ -30,6 +30,12 @@ import numpy as np
 
 from .colmap_loader import CameraIntrinsics, CameraPose
 from .coordinate_transform import world_to_camera
+
+
+MIN_PROJECTED_AREA_PX = 400.0
+MIN_IN_FRAME_RATIO = 0.25
+FULLY_VISIBLE_RATIO_MIN = 0.65
+PARTIALLY_VISIBLE_RATIO_MIN = 0.20
 
 
 def load_depth_image(depth_path: Path | str) -> np.ndarray:
@@ -96,6 +102,7 @@ def compute_depth_occlusion(
     """
     sample_points = _bbox_sample_points(bbox_min, bbox_max)
     h, w = depth_image.shape[:2]
+    projected = []
 
     visible = 0
     valid = 0
@@ -108,6 +115,7 @@ def compute_depth_occlusion(
         v = intrinsics.fy * p_cam[1] / p_cam[2] + intrinsics.cy
         u_int = int(round(u))
         v_int = int(round(v))
+        projected.append((u, v))
         if u_int < 0 or u_int >= w or v_int < 0 or v_int >= h:
             continue
         depth_val = depth_image[v_int, u_int]
@@ -122,47 +130,39 @@ def compute_depth_occlusion(
     if valid == 0:
         return "not visible", 0.0
 
+    projected_area, in_frame_ratio = _projected_bbox_stats(projected, h, w)
+    if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
+        return "not visible", 0.0
+
     ratio = visible / valid
 
-    # Centre-point mandatory check: even if surface points pass,
-    # the 3D centre must be visible — otherwise the object is likely
-    # severely cut off or behind another object.
-    centre = (bbox_min + bbox_max) / 2.0
-    centre_visible = _is_point_visible(
-        centre, camera_pose, intrinsics, depth_image, h, w, depth_tolerance,
-    )
-
-    if not centre_visible:
-        return "not visible", ratio
-
-    if ratio > 0.8:
+    if ratio > FULLY_VISIBLE_RATIO_MIN:
         return "fully visible", ratio
-    elif ratio >= 0.4:
+    elif ratio >= PARTIALLY_VISIBLE_RATIO_MIN:
         return "partially occluded", ratio
     else:
         return "not visible", ratio
 
 
-def _is_point_visible(
-    point: np.ndarray,
-    camera_pose: CameraPose,
-    intrinsics: CameraIntrinsics,
-    depth_image: np.ndarray,
+def _projected_bbox_stats(
+    projected_points: list[tuple[float, float]],
     h: int,
     w: int,
-    depth_tolerance: float,
-) -> bool:
-    """Check whether a single 3D point is visible in the depth map."""
-    p_cam = world_to_camera(point, camera_pose)
-    if p_cam[2] <= 0:
-        return False
-    u = intrinsics.fx * p_cam[0] / p_cam[2] + intrinsics.cx
-    v = intrinsics.fy * p_cam[1] / p_cam[2] + intrinsics.cy
-    u_int = int(round(u))
-    v_int = int(round(v))
-    if u_int < 0 or u_int >= w or v_int < 0 or v_int >= h:
-        return False
-    depth_val = depth_image[v_int, u_int]
-    if depth_val <= 0:
-        return False  # no depth data — treat as not visible
-    return p_cam[2] - depth_val <= depth_tolerance
+) -> tuple[float, float]:
+    """Return projected bbox area and fraction of sample points inside frame."""
+    if not projected_points:
+        return 0.0, 0.0
+
+    us = [float(u) for u, _ in projected_points]
+    vs = [float(v) for _, v in projected_points]
+    u_min = max(0.0, min(us))
+    v_min = max(0.0, min(vs))
+    u_max = min(float(w), max(us))
+    v_max = min(float(h), max(vs))
+    area = max(0.0, u_max - u_min) * max(0.0, v_max - v_min)
+
+    in_frame = sum(
+        1 for u, v in projected_points
+        if 0 <= u < w and 0 <= v < h
+    )
+    return float(area), float(in_frame / len(projected_points))

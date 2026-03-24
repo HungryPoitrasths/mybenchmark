@@ -699,6 +699,170 @@ def generate_l1_direction_allocentric(
 #  L2 generators
 # ---------------------------------------------------------------------------
 
+def _bbox_surface_sample_points(obj: dict[str, Any]) -> np.ndarray:
+    bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
+    bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
+    mid = (bbox_min + bbox_max) / 2.0
+
+    points = []
+    for x in (bbox_min[0], mid[0], bbox_max[0]):
+        for y in (bbox_min[1], mid[1], bbox_max[1]):
+            for z in (bbox_min[2], mid[2], bbox_max[2]):
+                points.append(np.array([x, y, z], dtype=np.float64))
+
+    centre = mid.tolist()
+    return np.array(
+        [pt for pt in points if pt.tolist() != centre],
+        dtype=np.float64,
+    )
+
+
+def _ray_hits_aabb_before_point(
+    camera_pos: np.ndarray,
+    target_point: np.ndarray,
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    epsilon: float = 0.05,
+) -> bool:
+    direction = target_point - camera_pos
+    dist_to_point = float(np.linalg.norm(direction))
+    if dist_to_point <= 1e-6:
+        return False
+
+    direction /= dist_to_point
+    t_min = 0.0
+    t_max = dist_to_point - epsilon
+    if t_max <= 0:
+        return False
+
+    for axis in range(3):
+        origin = float(camera_pos[axis])
+        inv_denom = float(direction[axis])
+        lo = float(bbox_min[axis])
+        hi = float(bbox_max[axis])
+
+        if abs(inv_denom) < 1e-8:
+            if origin < lo or origin > hi:
+                return False
+            continue
+
+        t0 = (lo - origin) / inv_denom
+        t1 = (hi - origin) / inv_denom
+        if t0 > t1:
+            t0, t1 = t1, t0
+        t_min = max(t_min, t0)
+        t_max = min(t_max, t1)
+        if t_max < t_min:
+            return False
+
+    return t_max >= max(t_min, 0.0)
+
+
+def _visibility_status_from_ratio(visible_ratio: float) -> str:
+    if visible_ratio > 0.65:
+        return "fully visible"
+    if visible_ratio >= 0.2:
+        return "partially occluded"
+    return "not visible"
+
+
+def _projected_area_summary(
+    sample_points: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> tuple[float, float]:
+    projected: list[tuple[float, float]] = []
+    for pt in sample_points:
+        uv, depth = project_to_image(pt, camera_pose, color_intrinsics)
+        if uv is None or depth <= 0:
+            continue
+        projected.append((float(uv[0]), float(uv[1])))
+
+    if not projected:
+        return 0.0, 0.0
+
+    us = [u for u, _ in projected]
+    vs = [v for _, v in projected]
+    u_min = max(0.0, min(us))
+    v_min = max(0.0, min(vs))
+    u_max = min(float(color_intrinsics.width), max(us))
+    v_max = min(float(color_intrinsics.height), max(vs))
+    area = max(0.0, u_max - u_min) * max(0.0, v_max - v_min)
+    in_frame = sum(
+        1 for u, v in projected
+        if 0 <= u < color_intrinsics.width and 0 <= v < color_intrinsics.height
+    )
+    return float(area), float(in_frame / len(projected))
+
+
+def _compute_visibility_status_per_object(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+) -> dict[int, tuple[str, float]]:
+    if color_intrinsics is None:
+        return {int(obj["id"]): ("not visible", 0.0) for obj in objects}
+
+    camera_pos = np.array(camera_pose.position, dtype=np.float64)
+    bbox_cache = {
+        int(obj["id"]): (
+            np.array(obj["bbox_min"], dtype=np.float64),
+            np.array(obj["bbox_max"], dtype=np.float64),
+        )
+        for obj in objects
+    }
+
+    visibility: dict[int, tuple[str, float]] = {}
+    for obj in objects:
+        obj_id = int(obj["id"])
+        sample_points = _bbox_surface_sample_points(obj)
+        projected_area, in_frame_ratio = _projected_area_summary(
+            sample_points, camera_pose, color_intrinsics,
+        )
+        if projected_area < 400.0 or in_frame_ratio < 0.25:
+            visibility[obj_id] = ("not visible", 0.0)
+            continue
+        valid = 0
+        visible = 0
+
+        for pt in sample_points:
+            uv, depth = project_to_image(pt, camera_pose, color_intrinsics)
+            if uv is None or depth <= 0:
+                continue
+            if not is_in_image(uv, color_intrinsics, margin=0):
+                continue
+
+            valid += 1
+            occluded = False
+            for other in objects:
+                other_id = int(other["id"])
+                if other_id == obj_id:
+                    continue
+                other_bbox_min, other_bbox_max = bbox_cache[other_id]
+                if _ray_hits_aabb_before_point(
+                    camera_pos,
+                    pt,
+                    other_bbox_min,
+                    other_bbox_max,
+                ):
+                    occluded = True
+                    break
+
+            if not occluded:
+                visible += 1
+
+        if valid == 0:
+            visibility[obj_id] = ("not visible", 0.0)
+            continue
+
+        visible_ratio = visible / valid
+        visibility[obj_id] = (
+            _visibility_status_from_ratio(visible_ratio),
+            float(visible_ratio),
+        )
+
+    return visibility
+
 def generate_l2_object_move(
     objects: list[dict],
     support_graph: dict[int, list[int]],
@@ -806,7 +970,11 @@ def generate_l2_object_move(
 
                 obj_questions.append({
                     "level": "L2",
-                    "type": "object_move_agent",
+                    "type": (
+                        "object_move_distance"
+                        if field_tpl_key == "L2_object_move_distance"
+                        else "object_move_agent"
+                    ),
                     "question": question_text,
                     "options": options,
                     "answer": answer,
@@ -842,60 +1010,64 @@ def generate_l2_object_move(
 def generate_l2_viewpoint_move(
     objects: list[dict],
     camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
     templates: dict,
 ) -> list[dict]:
     """Generate L2.2 viewpoint-movement questions.
 
-    Detects direction/distance changes only (no occlusion — can't synthesise
-    a new depth map for the moved viewpoint).
+    Compares target-object visibility before/after moving the observer.
     """
     questions: list[dict] = []
+    if color_intrinsics is None:
+        return questions
     tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
 
-    # No depth for either side — can't synthesise a new depth map after
-    # viewpoint change.  These L2 questions only detect direction/distance changes.
-    original_relations = compute_all_relations(objects, camera_pose, None, None)
+    original_visibility = _compute_visibility_status_per_object(
+        objects, camera_pose, color_intrinsics,
+    )
 
-    for direction in ("right", "left", "forward"):
-        for dist in (2.0, 3.0):
+    for direction, prompt_direction in (
+        ("right", "right"),
+        ("left", "left"),
+        ("forward", "forward"),
+        ("back", "backward"),
+    ):
+        for dist in (1.0, 2.0, 3.0):
             new_pose = apply_viewpoint_change(camera_pose, direction, dist)
-            new_relations = compute_all_relations(objects, new_pose, None, None)
-            changed = find_changed_relations(original_relations, new_relations)
+            new_visibility = _compute_visibility_status_per_object(
+                objects, new_pose, color_intrinsics,
+            )
 
-            for ch in changed:
-                for field, vals in ch["changes"].items():
-                    if field == "direction_b_rel_a":
-                        pool = ALL_DIRECTIONS
-                    elif field == "distance_bin":
-                        pool = ALL_DISTANCES
-                    else:
-                        continue
-                    obj_label = next(
-                        (o["label"] for o in objects if o["id"] == ch["obj_a_id"]),
-                        "object",
-                    )
-                    tpl = random.choice(tpl_list)
-                    question_text = tpl.format(
-                        direction=direction,
-                        direction_with_camera_hint=_direction_with_camera_hint(direction),
-                        distance=f"{dist:.0f}m",
-                        obj_a=_the(obj_label),
-                    )
-                    options, answer = generate_options(vals["new"], pool)
-                    questions.append({
-                        "level": "L2",
-                        "type": "viewpoint_move",
-                        "question": question_text,
-                        "options": options,
-                        "answer": answer,
-                        "correct_value": vals["new"],
-                        "obj_a_id": ch["obj_a_id"],
-                        "obj_a_label": obj_label,
-                        "mentioned_objects": [
-                            _mention("target", obj_label, ch["obj_a_id"]),
-                        ],
-                        "relation_unchanged": False,
-                    })
+            for obj in objects:
+                old_status, _old_ratio = original_visibility.get(obj["id"], ("not visible", 0.0))
+                new_status, _new_ratio = new_visibility.get(obj["id"], ("not visible", 0.0))
+                if old_status == new_status:
+                    continue
+
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    direction=prompt_direction,
+                    direction_with_camera_hint=_direction_with_camera_hint(prompt_direction),
+                    distance=f"{dist:.0f}m",
+                    obj_a=_the(obj["label"]),
+                )
+                options, answer = generate_options(new_status, ALL_OCCLUSION)
+                questions.append({
+                    "level": "L2",
+                    "type": "viewpoint_move",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": new_status,
+                    "obj_a_id": obj["id"],
+                    "obj_a_label": obj["label"],
+                    "old_visibility": old_status,
+                    "new_visibility": new_status,
+                    "mentioned_objects": [
+                        _mention("target", obj["label"], obj["id"]),
+                    ],
+                    "relation_unchanged": False,
+                })
 
     return questions
 
@@ -904,58 +1076,57 @@ def generate_l2_object_remove(
     objects: list[dict],
     support_graph: dict[int, list[int]],
     camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
     templates: dict,
 ) -> list[dict]:
-    """Generate L2.3 object-removal questions."""
+    """Generate L2.3 object-removal questions from visibility changes."""
     questions: list[dict] = []
+    if color_intrinsics is None:
+        return questions
     tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
-
-    # No depth for either side — can't synthesise depth after removing an
-    # object.  These L2 questions detect direction/distance changes.
-    original_relations = compute_all_relations(objects, camera_pose, None, None)
+    original_visibility = _compute_visibility_status_per_object(
+        objects, camera_pose, color_intrinsics,
+    )
 
     for obj in objects:
-        remaining = apply_removal(objects, support_graph, obj["id"], cascade=False)
+        remaining = apply_removal(objects, support_graph, obj["id"], cascade=True)
         if len(remaining) < 2:
             continue
-        new_relations = compute_all_relations(remaining, camera_pose, None, None)
-        changed = find_changed_relations(original_relations, new_relations)
+        new_visibility = _compute_visibility_status_per_object(
+            remaining, camera_pose, color_intrinsics,
+        )
 
-        for ch in changed:
-            for field, vals in ch["changes"].items():
-                if field == "direction_b_rel_a":
-                    pool = ALL_DIRECTIONS
-                elif field == "distance_bin":
-                    pool = ALL_DISTANCES
-                else:
-                    continue
-                other_label = next(
-                    (o["label"] for o in objects if o["id"] == ch["obj_a_id"]),
-                    "object",
-                )
-                tpl = random.choice(tpl_list)
-                question_text = tpl.format(
-                    obj_a=_the(obj["label"]),
-                    obj_b=_the(other_label),
-                )
-                options, answer = generate_options(vals["new"], pool)
-                questions.append({
-                    "level": "L2",
-                    "type": "object_remove",
-                    "question": question_text,
-                    "options": options,
-                    "answer": answer,
-                    "correct_value": vals["new"],
-                    "removed_obj_id": obj["id"],
-                    "removed_obj_label": obj["label"],
-                    "obj_b_id": ch["obj_a_id"],
-                    "obj_b_label": other_label,
-                    "mentioned_objects": [
-                        _mention("removed_object", obj["label"], obj["id"]),
-                        _mention("remaining_object", other_label, ch["obj_a_id"]),
-                    ],
-                    "relation_unchanged": False,
-                })
+        for other in remaining:
+            old_status, _old_ratio = original_visibility.get(other["id"], ("not visible", 0.0))
+            new_status, _new_ratio = new_visibility.get(other["id"], ("not visible", 0.0))
+            if old_status == new_status:
+                continue
+
+            tpl = random.choice(tpl_list)
+            question_text = tpl.format(
+                obj_a=_the(obj["label"]),
+                obj_b=_the(other["label"]),
+            )
+            options, answer = generate_options(new_status, ALL_OCCLUSION)
+            questions.append({
+                "level": "L2",
+                "type": "object_remove",
+                "question": question_text,
+                "options": options,
+                "answer": answer,
+                "correct_value": new_status,
+                "removed_obj_id": obj["id"],
+                "removed_obj_label": obj["label"],
+                "obj_b_id": other["id"],
+                "obj_b_label": other["label"],
+                "old_visibility": old_status,
+                "new_visibility": new_status,
+                "mentioned_objects": [
+                    _mention("removed_object", obj["label"], obj["id"]),
+                    _mention("remaining_object", other["label"], other["id"]),
+                ],
+                "relation_unchanged": False,
+            })
 
     return questions
 
@@ -1915,10 +2086,15 @@ def generate_all_questions(
     # Only use visible objects (those whose centre projects into this frame)
     # so that every occlusion question references an object the viewer can
     # at least locate in the image.
-    from .relation_engine import compute_occlusion_per_object
-    occ_cache = compute_occlusion_per_object(
-        objects_uniq, camera_pose, depth_image, depth_intrinsics
-    )
+    if depth_image is not None and depth_intrinsics is not None:
+        from .relation_engine import compute_occlusion_per_object
+        occ_cache = compute_occlusion_per_object(
+            objects_uniq, camera_pose, depth_image, depth_intrinsics
+        )
+    else:
+        occ_cache = _compute_visibility_status_per_object(
+            objects_uniq, camera_pose, color_intrinsics,
+        )
 
     # L1 — collect separately so we can sample before adding
     MAX_L1_OCCLUSION = 15
@@ -1981,10 +2157,10 @@ def generate_all_questions(
                                 room_bounds=room_bounds)
     )
     all_questions.extend(
-        generate_l2_viewpoint_move(objects_uniq, camera_pose, templates)
+        generate_l2_viewpoint_move(objects_uniq, camera_pose, color_intrinsics, templates)
     )
     all_questions.extend(
-        generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, templates)
+        generate_l2_object_remove(objects_uniq, support_graph_uniq, camera_pose, color_intrinsics, templates)
     )
     # L2 — new reference frames
     all_questions.extend(
