@@ -28,7 +28,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.frame_selector import select_frames
-from src.support_graph import enrich_scene_with_support, has_nontrivial_support
 from src.utils.colmap_loader import (
     CameraIntrinsics,
     CameraPose,
@@ -406,13 +405,7 @@ def main():
         if scene is None:
             continue
 
-        enrich_scene_with_support(scene)
-        support_graph = {int(k): v for k, v in scene["support_graph"].items()}
-        if not has_nontrivial_support(support_graph):
-            logger.info("Scene %s has no support relations -> skipping", scene_id)
-            continue
-
-        frames = select_frames(scene_dir, scene["objects"], support_graph, args.max_frames)
+        frames = select_frames(scene_dir, scene["objects"], None, args.max_frames)
         if not frames:
             continue
 
