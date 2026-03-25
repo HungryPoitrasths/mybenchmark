@@ -175,6 +175,14 @@ def _convex_hull_2d(points_xy: np.ndarray) -> np.ndarray:
     return np.vstack((lower[:-1], upper[:-1]))
 
 
+def _polygon_area(poly: np.ndarray) -> float:
+    if len(poly) < 3:
+        return 0.0
+    x = poly[:, 0]
+    y = poly[:, 1]
+    return float(0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
 def _rectangle_from_bbox_xy(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
     return np.array([
         [bbox_min[0], bbox_min[1]],
@@ -188,39 +196,118 @@ def _slice_tolerance(obj_height: float) -> float:
     return float(np.clip(0.02 * max(obj_height, 0.0), 0.01, 0.03))
 
 
+def _top_surface_candidates(
+    obj_vertices: np.ndarray,
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    rect_xy: np.ndarray,
+    slice_tol: float,
+) -> list[dict[str, float | list[list[float]]]]:
+    """Approximate multiple plausible upper contact plateaus from vertices."""
+    rect_area = max(_polygon_area(rect_xy), 1e-8)
+    obj_height = float(max(bbox_max[2] - bbox_min[2], 0.0))
+    if obj_height <= 1e-8:
+        return [{
+            "z": float(bbox_max[2]),
+            "hull_xy": rect_xy.tolist(),
+            "area": float(rect_area),
+            "score": 1.0,
+        }]
+
+    z_values = np.asarray(obj_vertices[:, 2], dtype=float)
+    lower_bound = float(bbox_min[2] + 0.35 * obj_height)
+    upper_z = z_values[z_values >= lower_bound]
+    if len(upper_z) < 6:
+        upper_z = z_values
+
+    quantiles = np.array([0.55, 0.65, 0.75, 0.85, 0.93, 0.98, 1.0], dtype=float)
+    band_tol = float(max(slice_tol, min(0.06, 0.08 * obj_height)))
+    candidate_zs = np.quantile(upper_z, quantiles)
+
+    dedup: list[float] = []
+    for z in sorted(float(v) for v in candidate_zs):
+        if not dedup or abs(z - dedup[-1]) > (0.5 * band_tol):
+            dedup.append(z)
+
+    top_candidates: list[dict[str, float | list[list[float]]]] = []
+    for z_center in dedup:
+        mask = np.abs(z_values - z_center) <= band_tol
+        band_xy = obj_vertices[mask][:, :2]
+        if len(band_xy) < 3:
+            continue
+        hull_xy = _convex_hull_2d(band_xy)
+        area = _polygon_area(hull_xy)
+        if area <= 1e-8:
+            continue
+        height_score = float(np.clip((z_center - bbox_min[2]) / max(obj_height, 1e-8), 0.0, 1.0))
+        area_score = float(np.clip(area / rect_area, 0.0, 1.0))
+        density_score = float(np.clip(len(np.unique(band_xy, axis=0)) / max(len(obj_vertices), 1), 0.0, 1.0))
+        top_candidates.append({
+            "z": float(z_center),
+            "hull_xy": hull_xy.tolist(),
+            "area": float(area),
+            "score": float(0.55 * area_score + 0.25 * density_score + 0.20 * height_score),
+        })
+
+    if not top_candidates:
+        return [{
+            "z": float(bbox_max[2]),
+            "hull_xy": rect_xy.tolist(),
+            "area": float(rect_area),
+            "score": 0.25,
+        }]
+
+    top_candidates.sort(
+        key=lambda item: (
+            float(item["score"]),
+            float(item["area"]),
+            float(item["z"]),
+        ),
+        reverse=True,
+    )
+    kept = top_candidates[:6]
+
+    highest = max(top_candidates, key=lambda item: float(item["z"]))
+    if all(abs(float(c["z"]) - float(highest["z"])) > 1e-6 for c in kept):
+        kept.append(highest)
+
+    kept.sort(key=lambda item: float(item["z"]))
+    return kept
+
+
 def _build_support_geom(
     obj_vertices: np.ndarray,
     bbox_min: np.ndarray,
     bbox_max: np.ndarray,
-) -> dict[str, list[list[float]]]:
-    """Build lightweight top/bottom support hulls for one instance."""
+) -> dict[str, Any]:
+    """Build lightweight support geometry for one instance."""
     obj_height = float(max(bbox_max[2] - bbox_min[2], 0.0))
     slice_tol = _slice_tolerance(obj_height)
 
     bottom_mask = np.abs(obj_vertices[:, 2] - bbox_min[2]) <= slice_tol
-    top_mask = np.abs(obj_vertices[:, 2] - bbox_max[2]) <= slice_tol
 
     bottom_xy = obj_vertices[bottom_mask][:, :2]
-    top_xy = obj_vertices[top_mask][:, :2]
 
     bottom_hull = (
         _convex_hull_2d(bottom_xy)
         if len(bottom_xy) >= 3 else np.empty((0, 2), dtype=float)
     )
-    top_hull = (
-        _convex_hull_2d(top_xy)
-        if len(top_xy) >= 3 else np.empty((0, 2), dtype=float)
-    )
 
     rect_xy = _rectangle_from_bbox_xy(bbox_min, bbox_max)
     if len(bottom_hull) < 3:
         bottom_hull = rect_xy.copy()
-    if len(top_hull) < 3:
-        top_hull = rect_xy.copy()
+    top_candidates = _top_surface_candidates(
+        obj_vertices, bbox_min, bbox_max, rect_xy, slice_tol,
+    )
+    top_hull = np.asarray(
+        max(top_candidates, key=lambda item: (float(item["area"]), float(item["score"])))["hull_xy"],
+        dtype=float,
+    )
 
     return {
         "bottom_hull_xy": bottom_hull.tolist(),
         "top_hull_xy": top_hull.tolist(),
+        "top_surface_candidates": top_candidates,
     }
 
 

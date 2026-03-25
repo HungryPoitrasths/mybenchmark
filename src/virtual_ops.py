@@ -318,13 +318,12 @@ def apply_removal(
     objects: list[dict],
     support_graph: dict[int, list[int]],
     target_id: int,
-    cascade: bool = True,
+    cascade: bool = False,
 ) -> list[dict]:
     """Remove an object from the scene.
 
-    If *cascade* is True, objects transitively supported by the removed object
-    are also removed (they would fall / disappear).  Otherwise only the target
-    is removed.
+    If *cascade* is True, objects transitively attached to the removed object
+    are also removed. Otherwise only the target is removed.
 
     Returns a new (deep-copied) object list.
     """

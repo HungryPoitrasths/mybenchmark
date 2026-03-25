@@ -21,7 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.scene_parser import parse_scene, load_scannet_label_map
-from src.support_graph import enrich_scene_with_support, has_nontrivial_support
+from src.support_graph import enrich_scene_with_support, has_nontrivial_attachment
 from src.frame_selector import (
     select_frames,
     compute_frame_object_visibility,
@@ -175,10 +175,16 @@ def run_pipeline(
 
         # ---- Stage 2: Support graph ----
         enrich_scene_with_support(scene)
-        support_graph = {int(k): v for k, v in scene["support_graph"].items()}
-        supported_by  = {int(k): v for k, v in scene["supported_by"].items()}
+        attachment_graph = {
+            int(k): [int(child_id) for child_id in v]
+            for k, v in scene.get("attachment_graph", scene["support_graph"]).items()
+        }
+        attached_by = {
+            int(k): int(v)
+            for k, v in scene.get("attached_by", scene["supported_by"]).items()
+        }
 
-        if not has_nontrivial_support(support_graph):
+        if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no support relations — skipping", scene_id)
             continue
 
@@ -190,7 +196,7 @@ def run_pipeline(
             scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
             frames = _frames_from_referability_cache(scene_frames)
         else:
-            frames = select_frames(scene_dir, scene["objects"], support_graph, max_frames)
+            frames = select_frames(scene_dir, scene["objects"], attachment_graph, max_frames)
         if not frames:
             logger.info("No valid frames for scene %s — skipping", scene_id)
             continue
@@ -307,8 +313,8 @@ def run_pipeline(
 
             questions = generate_all_questions(
                 objects=scene["objects"],
-                support_graph=support_graph,
-                supported_by=supported_by,
+                support_graph=attachment_graph,
+                supported_by=attached_by,
                 camera_pose=camera_pose,
                 color_intrinsics=color_intrinsics,
                 depth_image=depth_image,

@@ -1172,7 +1172,7 @@ def generate_l2_object_remove(
     )
 
     for obj in objects:
-        remaining = apply_removal(objects, support_graph, obj["id"], cascade=True)
+        remaining = apply_removal(objects, support_graph, obj["id"], cascade=False)
         if len(remaining) < 2:
             continue
         removal_ray_caster = (
