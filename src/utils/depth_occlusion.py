@@ -16,7 +16,7 @@ Algorithm:
        that required the bbox centre itself to be visible.
 
 Thresholds:
-    - projected_area < 400 px or in_frame_ratio < 0.25 -> "not visible"
+    - projected_area < 400 px or in_frame_ratio < 0.10 -> "not visible"
     - ratio > 0.65 -> "fully visible"
     - 0.2 <= ratio <= 0.65 -> "partially occluded"
     - ratio < 0.2 -> "not visible"
@@ -33,9 +33,10 @@ from .coordinate_transform import world_to_camera
 
 
 MIN_PROJECTED_AREA_PX = 400.0
-MIN_IN_FRAME_RATIO = 0.25
+MIN_IN_FRAME_RATIO = 0.10
 FULLY_VISIBLE_RATIO_MIN = 0.65
 PARTIALLY_VISIBLE_RATIO_MIN = 0.20
+FACE_SAMPLE_STEPS = 5
 
 
 def load_depth_image(depth_path: Path | str) -> np.ndarray:
@@ -71,9 +72,9 @@ def bbox_camera_facing_sample_points(
     mid = (lo + hi) / 2.0
 
     grid = [
-        [lo[0], mid[0], hi[0]],
-        [lo[1], mid[1], hi[1]],
-        [lo[2], mid[2], hi[2]],
+        np.linspace(lo[0], hi[0], FACE_SAMPLE_STEPS, dtype=np.float64),
+        np.linspace(lo[1], hi[1], FACE_SAMPLE_STEPS, dtype=np.float64),
+        np.linspace(lo[2], hi[2], FACE_SAMPLE_STEPS, dtype=np.float64),
     ]
     face_coords = [
         lo[axis] if camera_pos[axis] <= mid[axis] else hi[axis]

@@ -39,6 +39,8 @@ from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
 from .utils.coordinate_transform import is_in_image, project_to_image
 from .utils.depth_occlusion import (
+    MIN_IN_FRAME_RATIO,
+    MIN_PROJECTED_AREA_PX,
     FULLY_VISIBLE_RATIO_MIN,
     PARTIALLY_VISIBLE_RATIO_MIN,
     bbox_camera_facing_sample_points,
@@ -823,7 +825,7 @@ def _compute_visibility_status_per_object(
         projected_area, in_frame_ratio = _projected_area_summary(
             sample_points, camera_pose, color_intrinsics,
         )
-        if projected_area < 400.0 or in_frame_ratio < 0.25:
+        if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
             visibility[obj_id] = ("not visible", 0.0)
             continue
 
