@@ -53,29 +53,97 @@ def load_depth_image(depth_path: Path | str) -> np.ndarray:
     return depth_uint16.astype(np.float32) / 1000.0  # mm → metres
 
 
-def _bbox_sample_points(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
-    """Return 26 sample points on an axis-aligned bounding box.
+def bbox_camera_facing_sample_points(
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    camera_pos: np.ndarray,
+) -> np.ndarray:
+    """Sample the camera-facing shell of an axis-aligned bounding box.
 
-    Includes 8 corners, 12 edge midpoints, and 6 face centres.
-    Using more points than just corners significantly reduces false
-    visibility judgements for large or elongated objects.
+    A depth map only captures the nearest visible surface of an object. If we
+    also sample back faces of the bbox, those points are "occluded" by the
+    object's own front surface and large thick objects get penalised
+    incorrectly. To avoid that self-occlusion failure mode, we only sample the
+    three faces that can be visible from the current viewpoint.
     """
-    lo, hi = bbox_min, bbox_max
+    lo = np.asarray(bbox_min, dtype=np.float64)
+    hi = np.asarray(bbox_max, dtype=np.float64)
     mid = (lo + hi) / 2.0
 
-    xs = [lo[0], mid[0], hi[0]]
-    ys = [lo[1], mid[1], hi[1]]
-    zs = [lo[2], mid[2], hi[2]]
+    grid = [
+        [lo[0], mid[0], hi[0]],
+        [lo[1], mid[1], hi[1]],
+        [lo[2], mid[2], hi[2]],
+    ]
+    face_coords = [
+        lo[axis] if camera_pos[axis] <= mid[axis] else hi[axis]
+        for axis in range(3)
+    ]
 
-    points = set()
-    for x in xs:
-        for y in ys:
-            for z in zs:
-                points.add((x, y, z))
-    # Remove the interior centre point (mid, mid, mid) — it's not on the surface
-    points.discard((mid[0], mid[1], mid[2]))
+    points: set[tuple[float, float, float]] = set()
+    for fixed_axis, fixed_value in enumerate(face_coords):
+        other_axes = [axis for axis in range(3) if axis != fixed_axis]
+        for a in grid[other_axes[0]]:
+            for b in grid[other_axes[1]]:
+                coords = [0.0, 0.0, 0.0]
+                coords[fixed_axis] = float(fixed_value)
+                coords[other_axes[0]] = float(a)
+                coords[other_axes[1]] = float(b)
+                points.add(tuple(coords))
 
-    return np.array(list(points), dtype=np.float64)
+    return np.array(sorted(points), dtype=np.float64)
+
+
+def _ray_box_entry_depth(
+    u: float,
+    v: float,
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    camera_pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+) -> float | None:
+    """Return the camera-space z depth where pixel ray first enters the bbox."""
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    ray_dir_cam = np.array(
+        [
+            (u - intrinsics.cx) / intrinsics.fx,
+            (v - intrinsics.cy) / intrinsics.fy,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+    ray_dir_world = camera_pose.rotation.T @ ray_dir_cam
+
+    t_min = 0.0
+    t_max = float("inf")
+    for axis in range(3):
+        origin = float(camera_pos[axis])
+        direction = float(ray_dir_world[axis])
+        lo = float(bbox_min[axis])
+        hi = float(bbox_max[axis])
+
+        if abs(direction) < 1e-8:
+            if origin < lo or origin > hi:
+                return None
+            continue
+
+        t0 = (lo - origin) / direction
+        t1 = (hi - origin) / direction
+        if t0 > t1:
+            t0, t1 = t1, t0
+        t_min = max(t_min, t0)
+        t_max = min(t_max, t1)
+        if t_max < t_min:
+            return None
+
+    if t_max <= 0:
+        return None
+
+    hit_world = camera_pos + max(t_min, 0.0) * ray_dir_world
+    hit_cam = world_to_camera(hit_world, camera_pose)
+    if hit_cam[2] <= 0:
+        return None
+    return float(hit_cam[2])
 
 
 def compute_depth_occlusion(
@@ -100,7 +168,11 @@ def compute_depth_occlusion(
         (status, visibility_ratio) where status is one of
         "fully visible", "partially occluded", "not visible".
     """
-    sample_points = _bbox_sample_points(bbox_min, bbox_max)
+    sample_points = bbox_camera_facing_sample_points(
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        camera_pos=camera_pose.position,
+    )
     h, w = depth_image.shape[:2]
     projected = []
 
@@ -121,8 +193,18 @@ def compute_depth_occlusion(
         depth_val = depth_image[v_int, u_int]
         if depth_val <= 0:
             continue
+        entry_depth = _ray_box_entry_depth(
+            u=u,
+            v=v,
+            bbox_min=bbox_min,
+            bbox_max=bbox_max,
+            camera_pose=camera_pose,
+            intrinsics=intrinsics,
+        )
+        if entry_depth is None:
+            continue
         valid += 1
-        if p_cam[2] - depth_val > depth_tolerance:
+        if entry_depth - depth_val > depth_tolerance:
             pass  # occluded
         else:
             visible += 1

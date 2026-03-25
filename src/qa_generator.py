@@ -38,6 +38,11 @@ from .virtual_ops import (
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
 from .utils.coordinate_transform import is_in_image, project_to_image
+from .utils.depth_occlusion import (
+    FULLY_VISIBLE_RATIO_MIN,
+    PARTIALLY_VISIBLE_RATIO_MIN,
+    bbox_camera_facing_sample_points,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -699,21 +704,16 @@ def generate_l1_direction_allocentric(
 #  L2 generators
 # ---------------------------------------------------------------------------
 
-def _bbox_surface_sample_points(obj: dict[str, Any]) -> np.ndarray:
+def _bbox_surface_sample_points(
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+) -> np.ndarray:
     bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
     bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
-    mid = (bbox_min + bbox_max) / 2.0
-
-    points = []
-    for x in (bbox_min[0], mid[0], bbox_max[0]):
-        for y in (bbox_min[1], mid[1], bbox_max[1]):
-            for z in (bbox_min[2], mid[2], bbox_max[2]):
-                points.append(np.array([x, y, z], dtype=np.float64))
-
-    centre = mid.tolist()
-    return np.array(
-        [pt for pt in points if pt.tolist() != centre],
-        dtype=np.float64,
+    return bbox_camera_facing_sample_points(
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        camera_pos=np.array(camera_pose.position, dtype=np.float64),
     )
 
 
@@ -759,9 +759,9 @@ def _ray_hits_aabb_before_point(
 
 
 def _visibility_status_from_ratio(visible_ratio: float) -> str:
-    if visible_ratio > 0.90:
+    if visible_ratio >= FULLY_VISIBLE_RATIO_MIN:
         return "fully visible"
-    if visible_ratio >= 0.10:
+    if visible_ratio >= PARTIALLY_VISIBLE_RATIO_MIN:
         return "partially occluded"
     return "not visible"
 
@@ -819,7 +819,7 @@ def _compute_visibility_status_per_object(
     visibility: dict[int, tuple[str, float]] = {}
     for obj in objects:
         obj_id = int(obj["id"])
-        sample_points = _bbox_surface_sample_points(obj)
+        sample_points = _bbox_surface_sample_points(obj, camera_pose)
         projected_area, in_frame_ratio = _projected_area_summary(
             sample_points, camera_pose, color_intrinsics,
         )
@@ -913,6 +913,16 @@ def _ray_caster_without_object(ray_caster, removed_obj: dict):
     if not tri_ids:
         return ray_caster
     return ray_caster.remove_triangles(tri_ids)
+
+
+def _counterfactual_occlusion_backend(
+    occlusion_backend: str,
+    ray_caster,
+) -> str:
+    """Return a single backend usable on both sides of an L2 comparison."""
+    if occlusion_backend == "ray" and ray_caster is not None:
+        return "ray"
+    return "approx"
 
 def generate_l2_object_move(
     objects: list[dict],
@@ -1076,12 +1086,13 @@ def generate_l2_viewpoint_move(
     if color_intrinsics is None:
         return questions
     tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
+    compare_backend = _counterfactual_occlusion_backend(occlusion_backend, ray_caster)
 
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
-        depth_image=depth_image,
-        depth_intrinsics=depth_intrinsics,
-        occlusion_backend=occlusion_backend,
+        depth_image=None,
+        depth_intrinsics=None,
+        occlusion_backend=compare_backend,
         ray_caster=ray_caster,
     )
 
@@ -1097,9 +1108,7 @@ def generate_l2_viewpoint_move(
                 objects, new_pose, color_intrinsics,
                 depth_image=None,
                 depth_intrinsics=None,
-                occlusion_backend=(
-                    "ray" if occlusion_backend == "ray" else "approx"
-                ),
+                occlusion_backend=compare_backend,
                 ray_caster=ray_caster,
             )
 
@@ -1153,11 +1162,12 @@ def generate_l2_object_remove(
     if color_intrinsics is None:
         return questions
     tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
+    compare_backend = _counterfactual_occlusion_backend(occlusion_backend, ray_caster)
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
-        depth_image=depth_image,
-        depth_intrinsics=depth_intrinsics,
-        occlusion_backend=occlusion_backend,
+        depth_image=None,
+        depth_intrinsics=None,
+        occlusion_backend=compare_backend,
         ray_caster=ray_caster,
     )
 
@@ -1174,9 +1184,7 @@ def generate_l2_object_remove(
             remaining, camera_pose, color_intrinsics,
             depth_image=None,
             depth_intrinsics=None,
-            occlusion_backend=(
-                "ray" if occlusion_backend == "ray" else "approx"
-            ),
+            occlusion_backend=compare_backend,
             ray_caster=removal_ray_caster,
         )
 
