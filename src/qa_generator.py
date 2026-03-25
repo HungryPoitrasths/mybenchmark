@@ -257,6 +257,7 @@ EXCLUDED_LABELS = {
     "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
     # Boundary-unclear / large amorphous / unreliable 3D annotation
     "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
+    "cabinet",
     "shelf", "bookshelf", "shelves", "rack", "storage shelf",
     "refrigerator", "refridgerator",
     # Too small to reliably identify in images
