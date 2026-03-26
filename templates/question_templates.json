@@ -31,6 +31,10 @@
     "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
     "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how far apart are {obj_b} and {obj_c}?"
   ],
+  "L2_object_move_occlusion": [
+    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the visibility status of {obj_b} relative to {obj_c}?",
+    "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how visible would {obj_b} be with respect to {obj_c}?"
+  ],
   "L2_object_move_object_centric": [
     "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?"
   ],
@@ -61,6 +65,9 @@
     "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
     "If the room layout had been rotated {angle} degrees clockwise (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}?",
     "Imagine the room was originally built rotated {angle} degrees clockwise (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?"
+  ],
+  "L3_coordinate_rotation_object_centric": [
+    "Suppose this room had originally been oriented {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be?"
   ],
   "L3_coordinate_rotation_allocentric": [
     "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?"

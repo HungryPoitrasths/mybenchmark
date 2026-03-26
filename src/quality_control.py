@@ -6,6 +6,7 @@ for human validation.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import random
 from collections import Counter
@@ -21,9 +22,8 @@ def quality_filter(questions: list[dict]) -> list[dict]:
 
     Filters:
         1. Direction ambiguity > 0.7 (too close to boundary)
-        2. L2/L3 questions where the relation didn't actually change
-        3. Distance questions near bin boundaries
-        4. Near-duplicate questions (same frame + type + obj_a, keep one)
+        2. Distance questions near bin boundaries
+        3. Near-duplicate questions (same frame + type + obj_a, keep one)
     """
     filtered: list[dict] = []
     removed_counts: Counter = Counter()
@@ -34,19 +34,14 @@ def quality_filter(questions: list[dict]) -> list[dict]:
             removed_counts["ambiguous_direction"] += 1
             continue
 
-        # Filter 2: intervention questions must actually change something
-        if q.get("level") in ("L2", "L3") and q.get("relation_unchanged", False):
-            removed_counts["unchanged_relation"] += 1
-            continue
-
-        # Filter 3: distance near boundary
+        # Filter 2: distance near boundary
         if q.get("type") == "distance" and q.get("near_boundary", False):
             removed_counts["near_boundary"] += 1
             continue
 
         filtered.append(q)
 
-    # Filter 4: deduplicate near-identical questions.
+    # Filter 3: deduplicate near-identical questions.
     # Same (scene, frame, type, primary_object) → keep only one.
     seen_keys: set[tuple] = set()
     deduped: list[dict] = []
@@ -167,22 +162,60 @@ def balance_answer_distribution(
 
     balanced: list[dict] = []
     for key, group in groups.items():
-        answer_counts = Counter(q["answer"] for q in group)
-        total = len(group)
+        group_copy: list[dict] = []
+        for q in group:
+            q_copy = dict(q)
+            q_copy["options"] = list(q["options"])
+            group_copy.append(q_copy)
+
+        answer_counts = Counter(q["answer"] for q in group_copy)
+        total = len(group_copy)
         needs_rebalance = any(c / total > max_ratio for c in answer_counts.values())
 
         if needs_rebalance:
             logger.info(
                 "Rebalancing %s: %s (total=%d)", key, dict(answer_counts), total
             )
-            for q in group:
-                correct_val = q["correct_value"]
-                options = q["options"]
-                random.shuffle(options)
-                new_idx = options.index(correct_val)
-                q["answer"] = chr(65 + new_idx)
+            for q in group_copy:
+                original_answer = q["answer"]
+                if answer_counts[original_answer] / total <= max_ratio:
+                    continue
 
-        balanced.extend(group)
+                correct_val = q["correct_value"]
+                options = list(q["options"])
+                best_options = options
+                best_answer = original_answer
+                best_counts = answer_counts
+                best_overflow = max(
+                    max(0.0, count / total - max_ratio)
+                    for count in answer_counts.values()
+                )
+
+                for perm in {tuple(p) for p in itertools.permutations(options)}:
+                    new_options = list(perm)
+                    new_answer = chr(65 + new_options.index(correct_val))
+                    trial_counts = answer_counts.copy()
+                    trial_counts[original_answer] -= 1
+                    if trial_counts[original_answer] <= 0:
+                        del trial_counts[original_answer]
+                    trial_counts[new_answer] += 1
+                    trial_overflow = max(
+                        (max(0.0, count / total - max_ratio) for count in trial_counts.values()),
+                        default=0.0,
+                    )
+                    if trial_overflow < best_overflow:
+                        best_options = new_options
+                        best_answer = new_answer
+                        best_counts = trial_counts
+                        best_overflow = trial_overflow
+                        if best_overflow == 0.0:
+                            break
+
+                q["options"] = best_options
+                q["answer"] = best_answer
+                answer_counts = best_counts
+
+        balanced.extend(group_copy)
 
     return balanced
 

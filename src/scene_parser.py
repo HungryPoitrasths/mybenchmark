@@ -106,6 +106,8 @@ def normalize_label(label: str) -> str:
       3. Lowercase of the original label
     """
     low = label.strip().lower()
+    # When the ScanNet TSV is loaded it remains the source of truth; built-in
+    # normalization only fills gaps for categories absent from the TSV.
     if _SCANNET_LABEL_MAP:
         return _SCANNET_LABEL_MAP.get(low, LABEL_NORMALIZE.get(low, low))
     return LABEL_NORMALIZE.get(low, low)
@@ -209,7 +211,17 @@ def _load_scene_geometry(
         annotations = json.load(f)
 
     if isinstance(annotations, dict):
-        anno_list = annotations.get("segGroups", annotations.get("annotations", []))
+        if "segGroups" in annotations:
+            anno_list = annotations["segGroups"]
+        elif "annotations" in annotations:
+            anno_list = annotations["annotations"]
+        else:
+            logger.warning(
+                "Scene %s annotation JSON has no 'segGroups' or 'annotations' field; available keys: %s",
+                scene_id,
+                sorted(annotations.keys()),
+            )
+            anno_list = []
     else:
         anno_list = annotations
 
@@ -572,6 +584,8 @@ def parse_scene(
     structural_objects = [
         o for o in objects if o["label"].lower() in STRUCTURAL_LABELS
     ]
+    # Preserve walls before excluded-label filtering; they are later used as
+    # allocentric/reference anchors even though they are never question subjects.
     wall_objects = [
         o for o in objects if o["label"].lower() == "wall"
     ]

@@ -169,18 +169,17 @@ def _frame_decision(
 def _label_count_decision(
     client,
     model: str,
-    image: np.ndarray,
+    image_b64: str,
     candidate_labels: list[str],
 ) -> dict[str, int]:
     if not candidate_labels:
         return {}
-    full_b64 = _image_to_base64(image)
     default = {"counts": {}}
     parsed = _call_vlm_json(
         client,
         model,
         [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_b64}"}},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
             {"type": "text", "text": _count_prompt(candidate_labels)},
         ],
         default=default,
@@ -262,7 +261,11 @@ def main():
     global EXCLUDED_LABELS
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
     from src.scene_parser import load_scannet_label_map, parse_scene
-    from src.support_graph import enrich_scene_with_support, has_nontrivial_attachment
+    from src.support_graph import (
+        enrich_scene_with_support,
+        get_scene_attachment_graph,
+        has_nontrivial_attachment,
+    )
 
     EXCLUDED_LABELS = set(SCENE_EXCLUDED_LABELS)
 
@@ -326,15 +329,12 @@ def main():
             continue
 
         enrich_scene_with_support(scene)
-        attachment_graph = {
-            int(parent_id): [int(child_id) for child_id in child_ids]
-            for parent_id, child_ids in scene.get("attachment_graph", scene.get("support_graph", {})).items()
-        }
+        attachment_graph = get_scene_attachment_graph(scene, scene_id=scene_id)
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)
             continue
 
-        frames = select_frames(scene_dir, scene["objects"], None, args.max_frames)
+        frames = select_frames(scene_dir, scene["objects"], attachment_graph, args.max_frames)
         if not frames:
             continue
 
@@ -343,11 +343,20 @@ def main():
 
         scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         objects_by_id = {int(o["id"]): o for o in scene["objects"]}
+        pending_frames = [frame for frame in frames if frame["image_name"] not in scene_cache]
+        if not pending_frames:
+            logger.info("Scene %s already cached -> skipping", scene_id)
+            continue
+        logger.info(
+            "Processing referability scene %s (%d/%d) with %d pending frames",
+            scene_id,
+            processed + 1,
+            args.max_scenes,
+            len(pending_frames),
+        )
 
-        for frame in frames:
+        for frame in pending_frames:
             image_name = frame["image_name"]
-            if image_name in scene_cache:
-                continue
             if image_name not in poses:
                 continue
 
@@ -367,8 +376,9 @@ def main():
             referable_object_ids: list[int] = []
 
             if frame_info["frame_usable"]:
+                image_b64 = _image_to_base64(image)
                 for label_batch in _chunk_labels(candidate_labels):
-                    batch_counts = _label_count_decision(client, model_name, image, label_batch)
+                    batch_counts = _label_count_decision(client, model_name, image_b64, label_batch)
                     label_counts.update(batch_counts)
 
                 referable_object_ids = _resolve_referable_object_ids(

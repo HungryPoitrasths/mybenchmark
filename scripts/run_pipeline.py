@@ -20,8 +20,18 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.scene_parser import parse_scene, load_instance_mesh_data, load_scannet_label_map
-from src.support_graph import enrich_scene_with_support, has_nontrivial_attachment
+from src.scene_parser import (
+    _load_scene_geometry,
+    load_instance_mesh_data,
+    load_scannet_label_map,
+    parse_scene,
+)
+from src.support_graph import (
+    enrich_scene_with_support,
+    get_scene_attached_by,
+    get_scene_attachment_graph,
+    has_nontrivial_attachment,
+)
 from src.frame_selector import (
     select_frames,
     compute_frame_object_visibility,
@@ -96,6 +106,10 @@ def _get_referability_scene_ids(cache: dict | None) -> set[str]:
 def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[str, object]]:
     frames: list[dict[str, object]] = []
     for image_name, entry in sorted(scene_frames.items()):
+        if not isinstance(entry, dict):
+            continue
+        if not entry.get("frame_usable", True):
+            continue
         visible_object_ids: list[int] = []
         candidate_visible_object_ids = entry.get("candidate_visible_object_ids")
         if isinstance(candidate_visible_object_ids, list):
@@ -169,20 +183,20 @@ def run_pipeline(
         )
 
         # ---- Stage 1: Parse ----
-        scene = parse_scene(scene_dir)
+        preloaded_geometry = None
+        if occlusion_backend == "mesh_ray":
+            try:
+                preloaded_geometry = _load_scene_geometry(scene_dir)
+            except Exception as e:
+                logger.warning("Scene geometry preload failed for %s: %s", scene_id, e)
+        scene = parse_scene(scene_dir, preloaded_geometry=preloaded_geometry)
         if scene is None:
             continue
 
         # ---- Stage 2: Support graph ----
         enrich_scene_with_support(scene)
-        attachment_graph = {
-            int(k): [int(child_id) for child_id in v]
-            for k, v in scene.get("attachment_graph", scene["support_graph"]).items()
-        }
-        attached_by = {
-            int(k): int(v)
-            for k, v in scene.get("attached_by", scene["supported_by"]).items()
-        }
+        attachment_graph = get_scene_attachment_graph(scene, scene_id=scene_id)
+        attached_by = get_scene_attached_by(scene, scene_id=scene_id)
 
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no support relations — skipping", scene_id)
@@ -224,6 +238,7 @@ def run_pipeline(
                     scene_dir,
                     instance_ids=[int(o["id"]) for o in scene["objects"]],
                     n_surface_samples=128,
+                    preloaded_geometry=preloaded_geometry,
                 )
             except Exception as e:
                 logger.warning("Instance mesh data unavailable for %s: %s", scene_id, e)
@@ -299,21 +314,15 @@ def run_pipeline(
                     )
                     continue
 
+            visible_id_set = set(int(obj_id) for obj_id in visible_ids)
             referable_ids = None
             referability_entry = _get_referability_entry(
                 referability_cache, scene_id, image_name,
             )
             if referability_entry is not None:
-                if not referability_entry.get("frame_usable", True):
-                    logger.debug(
-                        "Frame %s/%s rejected by referability cache: %s",
-                        scene_id, image_name,
-                        referability_entry.get("frame_reject_reason", "frame_not_usable"),
-                    )
-                    continue
                 referable_ids = [
                     int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
-                    if int(obj_id) in visible_ids
+                    if int(obj_id) in visible_id_set
                 ]
                 if not referable_ids:
                     logger.debug(

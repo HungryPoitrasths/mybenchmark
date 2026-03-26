@@ -10,8 +10,8 @@ Implements four types of spatial interventions:
 from __future__ import annotations
 
 import copy
+import itertools
 import logging
-import random
 from typing import Any
 
 import numpy as np
@@ -35,8 +35,7 @@ logger = logging.getLogger(__name__)
 
 MOVEMENT_CANDIDATES = [
     # Varied distances across all horizontal axes for movement diversity.
-    # Order is shuffled per-call in find_meaningful_movement() to avoid
-    # systematic bias toward any one direction/distance.
+    # Order is fixed so virtual operations remain reproducible.
     np.array([0.5, 0.0, 0.0]),
     np.array([-0.5, 0.0, 0.0]),
     np.array([0.0, 0.5, 0.0]),
@@ -60,12 +59,10 @@ MOVEMENT_CANDIDATES = [
 ]
 
 ORBIT_ROTATION_CANDIDATES = [
+    # Canonical representatives of the 3 unique horizontal orbit geometries.
     (90, "clockwise", -90.0),
-    (180, "clockwise", -180.0),
-    (270, "clockwise", -270.0),
     (90, "counterclockwise", 90.0),
-    (180, "counterclockwise", 180.0),
-    (270, "counterclockwise", 270.0),
+    (180, "clockwise", -180.0),
 ]
 
 
@@ -76,6 +73,32 @@ def get_moved_object_ids(
     """Return all object IDs that move together with the target."""
     dependents = get_support_chain(target_obj_id, support_graph)
     return set(dependents) | {target_obj_id}
+
+
+def _translate_object_in_place(obj: dict, delta_position: np.ndarray) -> None:
+    delta = np.asarray(delta_position, dtype=float)
+    obj["center"] = (np.asarray(obj["center"], dtype=float) + delta).tolist()
+    obj["bbox_min"] = (np.asarray(obj["bbox_min"], dtype=float) + delta).tolist()
+    obj["bbox_max"] = (np.asarray(obj["bbox_max"], dtype=float) + delta).tolist()
+
+
+def _rotate_points(points: np.ndarray, rotation: np.ndarray, pivot: np.ndarray) -> np.ndarray:
+    centered = np.asarray(points, dtype=float) - np.asarray(pivot, dtype=float)
+    return (rotation @ centered.T).T + np.asarray(pivot, dtype=float)
+
+
+def _rotate_aabb(
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    rotation: np.ndarray,
+    pivot: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    corners = np.array(
+        list(itertools.product(*zip(np.asarray(bbox_min, dtype=float), np.asarray(bbox_max, dtype=float)))),
+        dtype=float,
+    )
+    rotated_corners = _rotate_points(corners, rotation, pivot)
+    return rotated_corners.min(axis=0), rotated_corners.max(axis=0)
 
 
 def apply_movement(
@@ -96,9 +119,7 @@ def apply_movement(
 
     for obj in updated:
         if obj["id"] in to_move:
-            obj["center"] = (np.array(obj["center"]) + delta_position).tolist()
-            obj["bbox_min"] = (np.array(obj["bbox_min"]) + delta_position).tolist()
-            obj["bbox_max"] = (np.array(obj["bbox_max"]) + delta_position).tolist()
+            _translate_object_in_place(obj, delta_position)
 
     return updated
 
@@ -116,7 +137,7 @@ def is_within_room(
     return True
 
 
-def compute_room_bounds(objects: list[dict], margin: float = 0.5, room_bounds: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
+def compute_room_bounds(objects: list[dict], margin: float = 0.0, room_bounds: dict | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Compute an axis-aligned bounding box for the room.
 
     If *room_bounds* is provided (from wall/floor mesh annotations), use it
@@ -125,12 +146,14 @@ def compute_room_bounds(objects: list[dict], margin: float = 0.5, room_bounds: d
     no extra margin (margin=0) to avoid creating room bounds that extend
     beyond physical walls.
     """
+    # room_bounds are authoritative; margin only applies to object-derived bounds.
     if room_bounds is not None:
         return np.array(room_bounds["bbox_min"]), np.array(room_bounds["bbox_max"])
 
     all_mins = np.array([o["bbox_min"] for o in objects])
     all_maxs = np.array([o["bbox_max"] for o in objects])
-    return all_mins.min(axis=0), all_maxs.max(axis=0)
+    padding = np.full(3, float(margin), dtype=float)
+    return all_mins.min(axis=0) - padding, all_maxs.max(axis=0) + padding
 
 
 def _bboxes_intersect_strict(obj_a: dict, obj_b: dict) -> bool:
@@ -177,11 +200,7 @@ def find_meaningful_movement(
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
     moved_ids = get_moved_object_ids(target_id, support_graph)
 
-    # Shuffle candidates to avoid systematic bias toward the first entry
-    candidates = list(MOVEMENT_CANDIDATES)
-    random.shuffle(candidates)
-
-    for delta in candidates:
+    for delta in MOVEMENT_CANDIDATES:
         new_objects = apply_movement(objects, support_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
@@ -217,13 +236,17 @@ def apply_orbit_rotation(
     if target is None or pivot is None:
         raise ValueError("Target and pivot objects must exist")
 
-    target_center = np.array(target["center"], dtype=float)
     pivot_center = np.array(pivot["center"], dtype=float)
-    rotated_target_center = (
-        rotation_matrix_z(angle_deg) @ (target_center - pivot_center)
-    ) + pivot_center
-    delta = rotated_target_center - target_center
-    return apply_movement(objects, support_graph, target_id, delta)
+    rotation = rotation_matrix_z(angle_deg)
+
+    updated = copy.deepcopy(objects)
+    for obj in updated:
+        if obj["id"] not in moved_ids:
+            continue
+        obj_center = np.array(obj["center"], dtype=float)
+        rotated_center = _rotate_points(np.array([obj_center]), rotation, pivot_center)[0]
+        _translate_object_in_place(obj, rotated_center - obj_center)
+    return updated
 
 
 def find_meaningful_orbit_rotation(
@@ -239,11 +262,8 @@ def find_meaningful_orbit_rotation(
     if pivot_id in moved_ids:
         return []
 
-    candidates = list(ORBIT_ROTATION_CANDIDATES)
-    random.shuffle(candidates)
-
     valid_rotations: list[dict[str, Any]] = []
-    for angle, rotation_direction, signed_angle in candidates:
+    for angle, rotation_direction, signed_angle in ORBIT_ROTATION_CANDIDATES:
         rotated_objects = apply_orbit_rotation(
             objects,
             support_graph,
@@ -374,9 +394,19 @@ def apply_coordinate_rotation(
 
     rotated = copy.deepcopy(objects)
     for obj in rotated:
-        for key in ("center", "bbox_min", "bbox_max"):
-            vec = np.array(obj[key]) - room_center
-            obj[key] = (R @ vec + room_center).tolist()
+        obj["center"] = _rotate_points(
+            np.array([obj["center"]], dtype=float),
+            R,
+            room_center,
+        )[0].tolist()
+        bbox_min, bbox_max = _rotate_aabb(
+            np.array(obj["bbox_min"], dtype=float),
+            np.array(obj["bbox_max"], dtype=float),
+            R,
+            room_center,
+        )
+        obj["bbox_min"] = bbox_min.tolist()
+        obj["bbox_max"] = bbox_max.tolist()
 
     return rotated
 

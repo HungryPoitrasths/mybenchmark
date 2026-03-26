@@ -54,7 +54,8 @@ def passes_image_quality(image_path: Path) -> bool:
         logger.debug("Cannot read image %s — failing quality check", image_path)
         return False
 
-    # Downsample to 1/4 size for speed (quality metrics are scale-invariant)
+    # Downsample to 1/4 size for speed. These thresholds are calibrated for the
+    # reduced-resolution image and are not resolution-invariant.
     small = cv2.resize(img, (0, 0), fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
@@ -395,7 +396,10 @@ def get_visible_objects(
 
 
 def _angular_distance(pose_a: CameraPose, pose_b: CameraPose) -> float:
-    """Approximate angular difference between two viewing directions (degrees)."""
+    """Approximate angular difference between two viewing directions (degrees).
+
+    This ignores camera translation and only measures heading diversity.
+    """
     fwd_a = pose_a.rotation.T[:, 2]
     fwd_b = pose_b.rotation.T[:, 2]
     cos_angle = np.clip(np.dot(fwd_a, fwd_b), -1.0, 1.0)
@@ -457,6 +461,7 @@ def select_frames(
     FRAME_STRIDE = 30
     color_dir = scene_path / "color"
     n_quality_rejected = 0
+    n_missing_images = 0
     frame_entries: list[dict[str, Any]] = []
     for i, (image_name, pose) in enumerate(poses.items()):
         if i % FRAME_STRIDE != 0:
@@ -467,7 +472,11 @@ def select_frames(
 
         # Image quality gate — reject blurry / dark / overexposed frames
         image_path = color_dir / image_name
-        if image_path.exists() and not passes_image_quality(image_path):
+        if not image_path.exists():
+            n_missing_images += 1
+            logger.debug("Missing color frame %s in %s", image_name, scene_path.name)
+            continue
+        if not passes_image_quality(image_path):
             n_quality_rejected += 1
             continue
 
@@ -487,6 +496,11 @@ def select_frames(
         logger.info(
             "Rejected %d frames for low image quality in %s",
             n_quality_rejected, scene_path.name,
+        )
+    if n_missing_images:
+        logger.warning(
+            "Skipped %d frames with missing color images in %s",
+            n_missing_images, scene_path.name,
         )
 
     if not frame_entries:
@@ -509,6 +523,14 @@ def select_frames(
         )
         if not too_close:
             selected.append(entry)
+
+    if len(selected) < min(max_frames, len(frame_entries)):
+        logger.info(
+            "Selected %d/%d frames for %s after viewpoint-diversity filtering",
+            len(selected),
+            min(max_frames, len(frame_entries)),
+            scene_path.name,
+        )
 
     results = []
     for s in selected:

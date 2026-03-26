@@ -340,6 +340,10 @@ def _default_templates() -> dict:
             "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how far apart would {obj_b} and {obj_c} be?",
             "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
+        "L2_object_move_occlusion": [
+            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the visibility status of {obj_b} relative to {obj_c}?",
+            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how visible would {obj_b} be with respect to {obj_c}?",
+        ],
         "L2_viewpoint_move": [
             "If the observer moves {direction_with_camera_hint} by {distance} from the current position, would {obj_a} become visible or occluded?",
         ],
@@ -372,13 +376,14 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (rewritten — 方案B) ---
         "L3_coordinate_rotation_agent": [
-            "Imagine all the furniture in the room is rearranged by rotating everything {angle} degrees clockwise around the center of the room (viewed from above). You remain standing in the exact same spot, looking in the same direction. From the camera's perspective, after this rearrangement, in which direction is {obj_a} relative to {obj_b}?",
-            "Suppose someone rotates all objects in the room {angle} degrees clockwise around the room's center (as seen from above), while you stay in place with the same viewing angle. From the camera's perspective, in which direction would {obj_a} be relative to {obj_b}?",
+            "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
+            "If the room layout had been rotated {angle} degrees clockwise (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}?",
+            "Imagine the room was originally built rotated {angle} degrees clockwise (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?",
         ],
 
         # --- Object-centric ---
         "L3_coordinate_rotation_object_centric": [
-            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). After this rearrangement, if you are {obj_ref} at its new position and face toward {obj_face}'s new position, in which direction is {obj_target}?",
+            "Suppose this room had originally been oriented {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be?",
         ],
 
         # --- Allocentric ---
@@ -423,7 +428,9 @@ def generate_options(
     if len(options) < n_options:
         fallback = [
             a for a in answer_pool
-            if a != correct_answer and a not in options and a not in exclude
+            if a != correct_answer
+            and a not in options
+            and (not exclude or a in exclude)
         ]
         random.shuffle(fallback)
         options.extend(fallback[: n_options - len(options)])
@@ -1037,9 +1044,9 @@ def _counterfactual_occlusion_backend(
     instance_mesh_data: InstanceMeshData | None,
 ) -> str:
     """Return a single backend usable on both sides of an L2 comparison."""
-    if ray_caster is not None and instance_mesh_data is not None:
+    if occlusion_backend == "mesh_ray" and ray_caster is not None and instance_mesh_data is not None:
         return "mesh_ray"
-    if ray_caster is not None:
+    if occlusion_backend in ("ray", "mesh_ray") and ray_caster is not None:
         return "ray"
     return "approx"
 
@@ -1108,7 +1115,7 @@ def generate_l2_object_move(
                     field_tpl_key = "L2_object_move_distance"
                 elif field in ("occlusion_a", "occlusion_b"):
                     pool = ALL_OCCLUSION
-                    field_tpl_key = "L2_object_move_agent"
+                    field_tpl_key = "L2_object_move_occlusion"
                 else:
                     continue
 
@@ -1153,7 +1160,11 @@ def generate_l2_object_move(
                     "type": (
                         "object_move_distance"
                         if field_tpl_key == "L2_object_move_distance"
-                        else "object_move_agent"
+                        else (
+                            "object_move_occlusion"
+                            if field_tpl_key == "L2_object_move_occlusion"
+                            else "object_move_agent"
+                        )
                     ),
                     "question": question_text,
                     "options": options,
@@ -1754,10 +1765,11 @@ def generate_l2_support_move_consequence(
         if parent is None:
             continue
         parent_center = np.array(parent["center"], dtype=float)
+        moved_with_parent = set(get_support_chain_ids(parent_id, support_graph)) | {parent_id}
 
         candidates = [
             obj for obj in objects_uniq
-            if int(obj["id"]) != parent_id and (int(obj["id"]), parent_id) not in supported_pairs
+            if int(obj["id"]) not in moved_with_parent
         ]
         candidates.sort(
             key=lambda obj: float(np.linalg.norm(np.array(obj["center"], dtype=float) - parent_center))
@@ -1841,11 +1853,7 @@ def generate_l3_support_chain(
         for parent_id in parent_ids:
             parent_id = int(parent_id)
             # Second hop: does parent itself support anything?
-            grandchild_ids = (
-                support_graph.get(parent_id)
-                or support_graph.get(str(parent_id))
-                or []
-            )
+            grandchild_ids = support_graph.get(parent_id) or []
             if not grandchild_ids:
                 continue  # no depth-2 chain here
 
@@ -2215,7 +2223,7 @@ def _resolve_support_root_id(obj_id: int, supported_by: dict[int, int]) -> int:
 
     while current not in seen:
         seen.add(current)
-        parent = supported_by.get(current, supported_by.get(str(current)))
+        parent = supported_by.get(current)
         if parent is None:
             break
         try:
@@ -2224,6 +2232,23 @@ def _resolve_support_root_id(obj_id: int, supported_by: dict[int, int]) -> int:
             break
 
     return current
+
+
+def _normalize_object_id_set(
+    object_ids: list[int] | list[str] | None,
+    field_name: str,
+) -> set[int]:
+    """Best-effort int normalization for object-ID filters."""
+    normalized: set[int] = set()
+    if object_ids is None:
+        return normalized
+
+    for obj_id in object_ids:
+        try:
+            normalized.add(int(obj_id))
+        except (TypeError, ValueError):
+            logger.warning("Skipping non-integer %s entry: %r", field_name, obj_id)
+    return normalized
 
 
 def _ensure_question_mentions(
@@ -2474,7 +2499,7 @@ def generate_all_questions(
     # Restrict to objects visible in this frame so every question can be
     # answered by looking at the image.
     if visible_object_ids is not None:
-        vis_set = set(visible_object_ids)
+        vis_set = _normalize_object_id_set(visible_object_ids, "visible_object_ids")
         objects = [o for o in objects if o["id"] in vis_set]
         # Rebuild support graph restricted to visible objects
         support_graph = {
@@ -2508,7 +2533,10 @@ def generate_all_questions(
     attachment_edge_count_nonexcluded = len(attachment_edges)
 
     if referable_object_ids is not None:
-        referable_set = set(referable_object_ids)
+        referable_set = _normalize_object_id_set(
+            referable_object_ids,
+            "referable_object_ids",
+        )
         question_only_ids = {
             int(o["id"]) for o in all_objects_for_graph
             if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED

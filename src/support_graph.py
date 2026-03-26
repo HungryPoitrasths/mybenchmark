@@ -167,6 +167,8 @@ def _line_intersection(
 
 
 def _clip_polygon(subject: np.ndarray, clipper: np.ndarray) -> np.ndarray:
+    # Sutherland-Hodgman clipping expects convex polygons. Current callers feed
+    # convex hulls for both polygons; keep this assumption explicit here.
     output = subject.copy()
     clipper = _ensure_ccw(clipper)
     if len(output) < 3 or len(clipper) < 3:
@@ -270,6 +272,8 @@ def _surface_attachment_metrics(
     if overlap_area <= GEOM_EPS:
         return None
 
+    # Cheap coarse gate to reject obvious non-contacts before more expensive
+    # hull processing. This is not the final confirmation threshold.
     aabb_child_coverage = overlap_area / child_xy_area
     if aabb_child_coverage < AABB_CHILD_COVERAGE_MIN:
         return None
@@ -299,6 +303,8 @@ def _surface_attachment_metrics(
             )
             confirmed = hull_child_coverage >= hull_coverage_min
         else:
+            # Without usable hull geometry we require a stricter AABB overlap,
+            # because the approximation is less precise than polygon contact.
             confirmed = aabb_child_coverage >= fallback_coverage_min
 
         if not confirmed:
@@ -580,6 +586,8 @@ def _attachment_candidate(
     obj_b: dict,
     z_threshold: float | None = None,
 ) -> dict[str, Any] | None:
+    # Type order is semantic, not purely confidence-based: e.g. "contained_in"
+    # should win over a weaker "supported_by" interpretation for the same pair.
     for builder in (
         lambda: _contained_in_metrics(obj_a, obj_b),
         lambda: _affixed_to_metrics(obj_a, obj_b),
@@ -753,6 +761,59 @@ def has_nontrivial_attachment(
     attachment_graph: dict[int, list[int]] | dict[str, list[int]],
 ) -> bool:
     return len(attachment_graph) > 0
+
+
+def get_scene_attachment_graph(
+    scene: dict[str, Any],
+    scene_id: str | None = None,
+) -> dict[int, list[int]]:
+    """Return the scene attachment graph with int-normalized IDs.
+
+    Falls back to legacy ``support_graph`` with a warning if needed.
+    Raises ``KeyError`` if neither field is present.
+    """
+    scene_label = scene_id or str(scene.get("scene_id", "<unknown>"))
+    raw_graph = scene.get("attachment_graph")
+    if raw_graph is None:
+        raw_graph = scene.get("support_graph")
+        if raw_graph is None:
+            raise KeyError(
+                f"Scene {scene_label} is missing both 'attachment_graph' and legacy 'support_graph'"
+            )
+        logger.warning(
+            "Scene %s is missing 'attachment_graph'; falling back to legacy 'support_graph'",
+            scene_label,
+        )
+
+    normalized: dict[int, list[int]] = {}
+    for parent_id, child_ids in raw_graph.items():
+        normalized[int(parent_id)] = [int(child_id) for child_id in child_ids]
+    return normalized
+
+
+def get_scene_attached_by(
+    scene: dict[str, Any],
+    scene_id: str | None = None,
+) -> dict[int, int]:
+    """Return the scene reverse attachment map with int-normalized IDs.
+
+    Falls back to legacy ``supported_by`` with a warning if needed.
+    Raises ``KeyError`` if neither field is present.
+    """
+    scene_label = scene_id or str(scene.get("scene_id", "<unknown>"))
+    raw_map = scene.get("attached_by")
+    if raw_map is None:
+        raw_map = scene.get("supported_by")
+        if raw_map is None:
+            raise KeyError(
+                f"Scene {scene_label} is missing both 'attached_by' and legacy 'supported_by'"
+            )
+        logger.warning(
+            "Scene %s is missing 'attached_by'; falling back to legacy 'supported_by'",
+            scene_label,
+        )
+
+    return {int(child_id): int(parent_id) for child_id, parent_id in raw_map.items()}
 
 
 def enrich_scene_with_attachment(

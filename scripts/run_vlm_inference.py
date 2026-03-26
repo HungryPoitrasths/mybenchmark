@@ -243,11 +243,22 @@ def parse_answer(raw: str) -> str | None:
     """Extract A/B/C/D from raw model output."""
     if not raw:
         return None
-    first = raw.strip()[0].upper()
-    if first in "ABCD":
-        return first
-    # Fallback: find any standalone letter
-    m = re.search(r"\b([ABCD])\b", raw.upper())
+    stripped = raw.strip()
+    if not stripped:
+        return None
+
+    upper = stripped.upper()
+    if re.fullmatch(r"[ABCD]", upper):
+        return upper
+
+    # Accept leading forms like "B)", "(C)", or "D:" but avoid matching the
+    # first letter of ordinary words such as "Answer: B".
+    m = re.match(r"^[\(\[]?([ABCD])(?:[\)\].:\s-]|$)", upper)
+    if m:
+        return m.group(1)
+
+    # Fallback: find any standalone answer letter in the response.
+    m = re.search(r"\b([ABCD])\b", upper)
     return m.group(1) if m else None
 
 
@@ -332,19 +343,28 @@ def main() -> None:
     args = parser.parse_args()
 
     # ── Load benchmark ────────────────────────────────────────────────────────
-    questions = _load_benchmark(Path(args.benchmark))
-    logger.info("Loaded %d questions from %s", len(questions), args.benchmark)
+    all_questions = _load_benchmark(Path(args.benchmark))
+    indexed_questions = list(enumerate(all_questions))
+    logger.info("Loaded %d questions from %s", len(indexed_questions), args.benchmark)
 
     # Optional filters
     if args.level:
-        questions = [q for q in questions if q.get("level") == args.level]
-        logger.info("Filtered to level=%s: %d questions", args.level, len(questions))
+        indexed_questions = [
+            (orig_idx, q)
+            for orig_idx, q in indexed_questions
+            if q.get("level") == args.level
+        ]
+        logger.info("Filtered to level=%s: %d questions", args.level, len(indexed_questions))
     if args.qtype:
-        questions = [q for q in questions if q.get("type") == args.qtype]
-        logger.info("Filtered to type=%s: %d questions", args.qtype, len(questions))
+        indexed_questions = [
+            (orig_idx, q)
+            for orig_idx, q in indexed_questions
+            if q.get("type") == args.qtype
+        ]
+        logger.info("Filtered to type=%s: %d questions", args.qtype, len(indexed_questions))
     if args.max_questions:
-        questions = questions[: args.max_questions]
-        logger.info("Capped at %d questions", len(questions))
+        indexed_questions = indexed_questions[: args.max_questions]
+        logger.info("Capped at %d questions", len(indexed_questions))
 
     # ── Build caller ──────────────────────────────────────────────────────────
     logger.info("Initialising model: %s", args.model)
@@ -376,19 +396,22 @@ def main() -> None:
 
     try:
         from tqdm import tqdm
-        loop = tqdm(enumerate(questions), total=len(questions), desc=args.model)
+        loop = tqdm(indexed_questions, total=len(indexed_questions), desc=args.model)
     except ImportError:
-        loop = enumerate(questions)
+        loop = indexed_questions
 
-    for idx, q in loop:
+    for processed_idx, (orig_idx, q) in enumerate(loop):
         image_path = resolve_image(q, image_root)
 
         if not image_path.exists():
-            logger.warning("[%d] Image not found: %s", idx, image_path)
+            logger.warning("[%d] Image not found: %s", orig_idx, image_path)
             predictions.append({
-                "question_id": idx,
+                "question_id": orig_idx,
                 "prediction":  None,
                 "error":       "image_not_found",
+                "scene_id":     q.get("scene_id"),
+                "image_name":   q.get("image_name"),
+                "question":     q.get("question"),
             })
             n_missing += 1
             continue
@@ -400,15 +423,16 @@ def main() -> None:
             n_errors += 1
         elif pred is None:
             n_unparsed += 1
-            logger.warning("[%d] Unparseable reply: %r", idx, raw[:80])
+            logger.warning("[%d] Unparseable reply: %r", orig_idx, raw[:80])
 
         predictions.append({
-            "question_id":  idx,
+            "question_id":  orig_idx,
             "prediction":   pred,
             "raw_response": raw,
             # Extra fields for offline debugging / text-based matching
             "scene_id":     q.get("scene_id"),
             "image_name":   q.get("image_name"),
+            "question":     q.get("question"),
             "level":        q.get("level"),
             "type":         q.get("type"),
             "gt_answer":    q.get("answer"),
@@ -417,9 +441,13 @@ def main() -> None:
         if args.delay > 0:
             time.sleep(args.delay)
 
-        if (idx + 1) % args.checkpoint_every == 0:
+        if (processed_idx + 1) % args.checkpoint_every == 0:
             _save(predictions, output_path)
-            logger.info("Checkpoint saved: %d / %d", idx + 1, len(questions))
+            logger.info(
+                "Checkpoint saved: %d / %d",
+                processed_idx + 1,
+                len(indexed_questions),
+            )
 
     _save(predictions, output_path)
 
