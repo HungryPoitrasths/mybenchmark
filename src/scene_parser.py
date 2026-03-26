@@ -13,6 +13,7 @@ ScanNet file layout (inside each scene directory)::
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import logging
 from pathlib import Path
@@ -113,7 +114,7 @@ def normalize_label(label: str) -> str:
 # Labels to exclude — structural elements, uninformative categories,
 # reflective/transparent surfaces, and ambiguous objects.
 # Shared with qa_generator.py (duplicated for simplicity).
-EXCLUDED_LABELS = {
+ALWAYS_EXCLUDED = {
     # Structural / architectural
     "floor", "wall", "ceiling", "room", "ground",
     "door", "window", "stairs", "pillar", "column",
@@ -128,16 +129,29 @@ EXCLUDED_LABELS = {
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
     "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
-    # Boundary-unclear / large amorphous / unreliable 3D annotation
-    "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
-    "cabinet",
-    "shelf", "bookshelf", "shelves", "rack", "storage shelf",
-    "refrigerator", "refridgerator",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
     "can", "water bottle", "paper cutter",
 }
+
+QUESTION_ONLY_EXCLUDED = {
+    "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
+    "cabinet",
+    "shelf", "bookshelf", "shelves", "rack", "storage shelf",
+    "refrigerator", "refridgerator",
+}
+
+EXCLUDED_LABELS = ALWAYS_EXCLUDED | QUESTION_ONLY_EXCLUDED
+
+
+@dataclass
+class InstanceMeshData:
+    """Per-instance triangle ownership and cached surface samples."""
+
+    triangle_ids_by_instance: dict[int, np.ndarray]
+    boundary_triangle_ids_by_instance: dict[int, np.ndarray]
+    surface_points_by_instance: dict[int, np.ndarray]
 
 
 def _apply_axis_alignment(vertices: np.ndarray, M: np.ndarray) -> np.ndarray:
@@ -145,6 +159,182 @@ def _apply_axis_alignment(vertices: np.ndarray, M: np.ndarray) -> np.ndarray:
     R = M[:3, :3]
     t = M[:3, 3]
     return (R @ vertices.T).T + t
+
+
+def _resolve_scene_files(scene_path: Path) -> tuple[str, Path, Path, Path]:
+    """Return scene id plus mesh / seg / aggregation paths."""
+    scene_id = scene_path.name
+
+    mesh_file = scene_path / f"{scene_id}_vh_clean.ply"
+    if not mesh_file.exists():
+        mesh_file = scene_path / f"{scene_id}_vh_clean_2.ply"
+
+    seg_file = scene_path / f"{scene_id}_vh_clean.segs.json"
+    if not seg_file.exists():
+        seg_file = scene_path / f"{scene_id}_vh_clean_2.0.010000.segs.json"
+
+    anno_file = scene_path / f"{scene_id}_vh_clean.aggregation.json"
+    if not anno_file.exists():
+        anno_file = scene_path / f"{scene_id}.aggregation.json"
+
+    return scene_id, mesh_file, seg_file, anno_file
+
+
+def _load_scene_geometry(
+    scene_path: str | Path,
+) -> tuple[str, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    """Load one scene's aligned vertices, faces, segment ids, and annotations."""
+    scene_path = Path(scene_path)
+    scene_id, mesh_file, seg_file, anno_file = _resolve_scene_files(scene_path)
+
+    for required in (mesh_file, seg_file, anno_file):
+        if not required.exists():
+            raise FileNotFoundError(f"Missing {required.name} for scene {scene_id}")
+
+    mesh = o3d.io.read_triangle_mesh(str(mesh_file))
+    vertices = np.asarray(mesh.vertices)
+    faces = np.asarray(mesh.triangles, dtype=np.int64)
+
+    M = load_axis_alignment(scene_path)
+    if not np.allclose(M, np.eye(4)):
+        vertices = _apply_axis_alignment(vertices, M)
+
+    with open(seg_file, "r", encoding="utf-8") as f:
+        seg_data = json.load(f)
+    seg_indices = np.array(seg_data["segIndices"], dtype=np.int64)
+
+    with open(anno_file, "r", encoding="utf-8") as f:
+        annotations = json.load(f)
+
+    if isinstance(annotations, dict):
+        anno_list = annotations.get("segGroups", annotations.get("annotations", []))
+    else:
+        anno_list = annotations
+
+    return scene_id, vertices, faces, seg_indices, anno_list
+
+
+def _sample_surface_points_from_triangles(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    triangle_ids: np.ndarray,
+    n_samples: int,
+    rng: np.random.RandomState,
+) -> np.ndarray:
+    """Area-weighted barycentric surface sampling from selected triangles."""
+    if len(triangle_ids) == 0 or n_samples <= 0:
+        return np.empty((0, 3), dtype=np.float64)
+
+    tri_vertices = vertices[faces[triangle_ids]]
+    cross = np.cross(
+        tri_vertices[:, 1] - tri_vertices[:, 0],
+        tri_vertices[:, 2] - tri_vertices[:, 0],
+    )
+    areas = 0.5 * np.linalg.norm(cross, axis=1)
+    positive_mask = areas > 1e-10
+    if not np.any(positive_mask):
+        return tri_vertices.mean(axis=1)
+
+    tri_vertices = tri_vertices[positive_mask]
+    areas = areas[positive_mask]
+    probs = areas / areas.sum()
+    chosen = rng.choice(len(tri_vertices), size=n_samples, replace=True, p=probs)
+    chosen_triangles = tri_vertices[chosen]
+
+    u = rng.rand(n_samples, 1)
+    v = rng.rand(n_samples, 1)
+    sqrt_u = np.sqrt(u)
+    bary_a = 1.0 - sqrt_u
+    bary_b = sqrt_u * (1.0 - v)
+    bary_c = sqrt_u * v
+    return (
+        bary_a * chosen_triangles[:, 0]
+        + bary_b * chosen_triangles[:, 1]
+        + bary_c * chosen_triangles[:, 2]
+    ).astype(np.float64)
+
+
+def load_instance_mesh_data(
+    scene_path: str | Path,
+    instance_ids: list[int] | None = None,
+    n_surface_samples: int = 128,
+) -> InstanceMeshData:
+    """Return instance triangle ownership and cached sampled surface points."""
+    _scene_id, vertices, faces, seg_indices, anno_list = _load_scene_geometry(scene_path)
+    requested_ids = None if instance_ids is None else {int(x) for x in instance_ids}
+
+    segment_to_instance: dict[int, int] = {}
+    kept_instances: set[int] = set()
+    for anno in anno_list:
+        instance_id = anno.get("id", anno.get("objectId"))
+        if instance_id is None:
+            continue
+        instance_id = int(instance_id)
+        if requested_ids is not None and instance_id not in requested_ids:
+            continue
+
+        label = normalize_label(anno.get("label", "unknown"))
+        if label.lower() in ALWAYS_EXCLUDED:
+            continue
+
+        seg_ids = set(anno.get("segments", []))
+        if not seg_ids:
+            continue
+
+        kept_instances.add(instance_id)
+        for seg_id in seg_ids:
+            segment_to_instance[int(seg_id)] = instance_id
+
+    triangle_ids_by_instance: dict[int, list[int]] = {}
+    boundary_triangle_ids_by_instance: dict[int, list[int]] = {}
+
+    for tri_id, face in enumerate(faces):
+        tri_seg_ids = seg_indices[face]
+        tri_instance_ids = [
+            segment_to_instance.get(int(seg_id), -1)
+            for seg_id in tri_seg_ids
+        ]
+        valid_ids = [inst_id for inst_id in tri_instance_ids if inst_id >= 0]
+        if not valid_ids:
+            continue
+
+        if tri_instance_ids[0] == tri_instance_ids[1] == tri_instance_ids[2] and tri_instance_ids[0] >= 0:
+            triangle_ids_by_instance.setdefault(tri_instance_ids[0], []).append(int(tri_id))
+            continue
+
+        for inst_id in set(valid_ids):
+            boundary_triangle_ids_by_instance.setdefault(inst_id, []).append(int(tri_id))
+
+    triangle_arrays = {
+        inst_id: np.array(tri_ids, dtype=np.int64)
+        for inst_id, tri_ids in triangle_ids_by_instance.items()
+        if inst_id in kept_instances and tri_ids
+    }
+    boundary_arrays = {
+        inst_id: np.array(sorted(set(tri_ids)), dtype=np.int64)
+        for inst_id, tri_ids in boundary_triangle_ids_by_instance.items()
+        if inst_id in kept_instances and tri_ids
+    }
+
+    surface_points_by_instance: dict[int, np.ndarray] = {}
+    for inst_id in kept_instances:
+        tri_ids = triangle_arrays.get(inst_id)
+        if tri_ids is None or len(tri_ids) == 0:
+            continue
+        rng = np.random.RandomState(inst_id % (2 ** 32))
+        surface_points_by_instance[inst_id] = _sample_surface_points_from_triangles(
+            vertices=vertices,
+            faces=faces,
+            triangle_ids=tri_ids,
+            n_samples=n_surface_samples,
+            rng=rng,
+        )
+
+    return InstanceMeshData(
+        triangle_ids_by_instance=triangle_arrays,
+        boundary_triangle_ids_by_instance=boundary_arrays,
+        surface_points_by_instance=surface_points_by_instance,
+    )
 
 
 def _cross_2d(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
@@ -418,11 +608,10 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
             "bbox_max": all_maxs.max(axis=0).tolist(),
         }
 
-    # Keep all surviving instances. Frame-level referability / ambiguity is
-    # handled downstream by the VLM cache or per-frame fallback logic, so we
-    # only remove excluded labels here.
+    # Keep question-only excluded labels so they can remain as attachment
+    # parents. Ordinary question-subject filtering happens downstream.
     n_before = len(objects)
-    objects = [o for o in objects if o["label"].lower() not in EXCLUDED_LABELS]
+    objects = [o for o in objects if o["label"].lower() not in ALWAYS_EXCLUDED]
     if n_before != len(objects):
         logger.debug(
             "Scene %s: %d -> %d objects after excluded-label filter",

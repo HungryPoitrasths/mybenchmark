@@ -18,6 +18,10 @@
     "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
     "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?"
   ],
+  "L1_attachment_type": [
+    "What is the physical relationship between {obj_child} and {obj_parent}?",
+    "How is {obj_child} physically connected to or resting on {obj_parent}?"
+  ],
   "L2_object_move_agent": [
     "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
     "From the camera's perspective, if we move {obj_a} {direction_with_camera_hint} by {distance}, where is {obj_b} relative to {obj_c}?",
@@ -43,6 +47,10 @@
     "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
     "Suppose {obj_a} is taken away. What is the visibility of {obj_b} from the current camera angle?",
     "After removing {obj_a}, how visible would {obj_b} be from this viewpoint?"
+  ],
+  "L2_support_move_consequence": [
+    "If {obj_parent} is moved {direction} by {distance}, would {obj_child} also change its position?",
+    "Imagine moving {obj_parent} {direction_with_camera_hint} by {distance}. Would {obj_child} move along with it?"
   ],
   "L3_support_chain": [
     "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",

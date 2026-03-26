@@ -6,6 +6,7 @@ virtual operation results.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import math
 import random
@@ -45,6 +46,7 @@ from .utils.depth_occlusion import (
     PARTIALLY_VISIBLE_RATIO_MIN,
     bbox_camera_facing_sample_points,
 )
+from .scene_parser import ALWAYS_EXCLUDED, QUESTION_ONLY_EXCLUDED, InstanceMeshData
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,12 @@ ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
 ALL_OCCLUSION = ["fully visible", "partially occluded", "not visible"]
 YES_NO = ["Yes", "No"]
+ALL_ATTACHMENT_TYPES = [
+    "resting on",
+    "inside",
+    "attached/affixed to",
+    "no physical contact",
+]
 
 # Object-centric questions need a stable horizontal facing direction.
 MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE = 0.3
@@ -64,6 +72,12 @@ MIN_WALL_HEIGHT = 1.5
 MIN_WALL_MAJOR_AXIS = 1.5
 MAX_WALL_MINOR_AXIS = 1.0
 MIN_WALL_AXIS_RATIO = 2.0
+
+
+@dataclass(frozen=True)
+class _ModifiedSceneContext:
+    ray_caster: Any
+    ignored_tri_ids: frozenset[int]
 
 
 def _the(label: str) -> str:
@@ -266,6 +280,9 @@ EXCLUDED_LABELS = {
     "can", "water bottle", "paper cutter",
 }
 
+# Keep a single authoritative blacklist definition in scene_parser.
+EXCLUDED_LABELS = ALWAYS_EXCLUDED | QUESTION_ONLY_EXCLUDED
+
 
 def _load_templates() -> dict:
     """Load question templates from the JSON file."""
@@ -307,6 +324,10 @@ def _default_templates() -> dict:
             "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
             "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
         ],
+        "L1_attachment_type": [
+            "What is the physical relationship between {obj_child} and {obj_parent}?",
+            "How is {obj_child} physically connected to or resting on {obj_parent}?",
+        ],
 
         # ==== L2 — Intervention ====
 
@@ -324,6 +345,10 @@ def _default_templates() -> dict:
         ],
         "L2_object_remove": [
             "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
+        ],
+        "L2_support_move_consequence": [
+            "If {obj_parent} is moved {direction} by {distance}, would {obj_child} also change its position?",
+            "Imagine moving {obj_parent} {direction_with_camera_hint} by {distance}. Would {obj_child} move along with it?",
         ],
 
         # --- Object-centric ---
@@ -798,6 +823,52 @@ def _projected_area_summary(
     return float(area), float(in_frame / len(projected))
 
 
+def _build_modified_scene(
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+    removed_ids: set[int],
+) -> _ModifiedSceneContext | None:
+    """Prepare a lightweight counterfactual scene query context."""
+    if ray_caster is None:
+        return None
+
+    ignored_tri_ids: set[int] = set()
+    if instance_mesh_data is not None:
+        for obj_id in removed_ids:
+            tri_ids = instance_mesh_data.triangle_ids_by_instance.get(int(obj_id))
+            if tri_ids is not None:
+                ignored_tri_ids.update(int(tid) for tid in tri_ids.tolist())
+
+    return _ModifiedSceneContext(
+        ray_caster=ray_caster,
+        ignored_tri_ids=frozenset(ignored_tri_ids),
+    )
+
+
+def _compute_target_visibility(
+    modified_scene: _ModifiedSceneContext | None,
+    target_surface_points: np.ndarray,
+    target_triangle_ids: set[int],
+    camera_pos: np.ndarray,
+) -> tuple[str, float]:
+    """Evaluate target visibility against a possibly modified scene."""
+    if (
+        modified_scene is None
+        or modified_scene.ray_caster is None
+        or len(target_surface_points) == 0
+        or not target_triangle_ids
+    ):
+        return "not visible", 0.0
+
+    visible_ratio = modified_scene.ray_caster.mesh_visibility_ratio(
+        camera_pos=camera_pos,
+        target_points=target_surface_points,
+        target_tri_ids=target_triangle_ids,
+        ignored_tri_ids=set(modified_scene.ignored_tri_ids),
+    )
+    return _visibility_status_from_ratio(visible_ratio), float(visible_ratio)
+
+
 def _compute_visibility_status_per_object(
     objects: list[dict],
     camera_pose: CameraPose,
@@ -806,11 +877,19 @@ def _compute_visibility_status_per_object(
     depth_intrinsics=None,
     occlusion_backend: str = "approx",
     ray_caster=None,
+    instance_mesh_data: InstanceMeshData | None = None,
+    modified_scene: _ModifiedSceneContext | None = None,
 ) -> dict[int, tuple[str, float]]:
     if color_intrinsics is None:
         return {int(obj["id"]): ("not visible", 0.0) for obj in objects}
 
     camera_pos = np.array(camera_pose.position, dtype=np.float64)
+    if occlusion_backend == "mesh_ray" and modified_scene is None:
+        modified_scene = _build_modified_scene(
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+            removed_ids=set(),
+        )
     bbox_cache = {
         int(obj["id"]): (
             np.array(obj["bbox_min"], dtype=np.float64),
@@ -818,16 +897,50 @@ def _compute_visibility_status_per_object(
         )
         for obj in objects
     }
+    mesh_triangle_sets = (
+        {
+            int(obj_id): {int(tid) for tid in tri_ids.tolist()}
+            for obj_id, tri_ids in instance_mesh_data.triangle_ids_by_instance.items()
+        }
+        if instance_mesh_data is not None
+        else {}
+    )
 
     visibility: dict[int, tuple[str, float]] = {}
     for obj in objects:
         obj_id = int(obj["id"])
-        sample_points = _bbox_surface_sample_points(obj, camera_pose)
+        bbox_sample_points = _bbox_surface_sample_points(obj, camera_pose)
+        mesh_sample_points = None
+        mesh_triangle_ids: set[int] | None = None
+        if instance_mesh_data is not None:
+            mesh_sample_points = instance_mesh_data.surface_points_by_instance.get(obj_id)
+            mesh_triangle_ids = mesh_triangle_sets.get(obj_id)
+
+        sample_points = (
+            mesh_sample_points
+            if mesh_sample_points is not None and len(mesh_sample_points) >= 16
+            else bbox_sample_points
+        )
         projected_area, in_frame_ratio = _projected_area_summary(
             sample_points, camera_pose, color_intrinsics,
         )
         if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
             visibility[obj_id] = ("not visible", 0.0)
+            continue
+
+        if (
+            occlusion_backend == "mesh_ray"
+            and mesh_sample_points is not None
+            and len(mesh_sample_points) >= 16
+            and mesh_triangle_ids
+        ):
+            status, visible_ratio = _compute_target_visibility(
+                modified_scene=modified_scene,
+                target_surface_points=mesh_sample_points,
+                target_triangle_ids=mesh_triangle_ids,
+                camera_pos=camera_pos,
+            )
+            visibility[obj_id] = (status, float(visible_ratio))
             continue
 
         if (
@@ -847,7 +960,7 @@ def _compute_visibility_status_per_object(
             visibility[obj_id] = (status, float(visible_ratio))
             continue
 
-        if occlusion_backend == "ray" and ray_caster is not None:
+        if occlusion_backend in ("ray", "mesh_ray") and ray_caster is not None:
             ray_status = ray_caster.multi_ray_occlusion(
                 camera_pos=camera_pos,
                 target_bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
@@ -921,9 +1034,12 @@ def _ray_caster_without_object(ray_caster, removed_obj: dict):
 def _counterfactual_occlusion_backend(
     occlusion_backend: str,
     ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
 ) -> str:
     """Return a single backend usable on both sides of an L2 comparison."""
-    if occlusion_backend == "ray" and ray_caster is not None:
+    if ray_caster is not None and instance_mesh_data is not None:
+        return "mesh_ray"
+    if ray_caster is not None:
         return "ray"
     return "approx"
 
@@ -1079,6 +1195,7 @@ def generate_l2_viewpoint_move(
     depth_intrinsics,
     occlusion_backend: str,
     ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
     templates: dict,
 ) -> list[dict]:
     """Generate L2.2 viewpoint-movement questions.
@@ -1089,7 +1206,13 @@ def generate_l2_viewpoint_move(
     if color_intrinsics is None:
         return questions
     tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
-    compare_backend = _counterfactual_occlusion_backend(occlusion_backend, ray_caster)
+    compare_backend = _counterfactual_occlusion_backend(
+        occlusion_backend, ray_caster, instance_mesh_data,
+    )
+    scene_context = (
+        _build_modified_scene(ray_caster, instance_mesh_data, set())
+        if compare_backend == "mesh_ray" else None
+    )
 
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
@@ -1097,6 +1220,8 @@ def generate_l2_viewpoint_move(
         depth_intrinsics=None,
         occlusion_backend=compare_backend,
         ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+        modified_scene=scene_context,
     )
 
     for direction, prompt_direction in (
@@ -1113,6 +1238,8 @@ def generate_l2_viewpoint_move(
                 depth_intrinsics=None,
                 occlusion_backend=compare_backend,
                 ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+                modified_scene=scene_context,
             )
 
             for obj in objects:
@@ -1158,6 +1285,7 @@ def generate_l2_object_remove(
     depth_intrinsics,
     occlusion_backend: str,
     ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
     templates: dict,
 ) -> list[dict]:
     """Generate L2.3 object-removal questions from visibility changes."""
@@ -1165,30 +1293,47 @@ def generate_l2_object_remove(
     if color_intrinsics is None:
         return questions
     tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
-    compare_backend = _counterfactual_occlusion_backend(occlusion_backend, ray_caster)
+    compare_backend = _counterfactual_occlusion_backend(
+        occlusion_backend, ray_caster, instance_mesh_data,
+    )
+    original_scene_context = (
+        _build_modified_scene(ray_caster, instance_mesh_data, set())
+        if compare_backend == "mesh_ray" else None
+    )
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
         depth_image=None,
         depth_intrinsics=None,
         occlusion_backend=compare_backend,
         ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+        modified_scene=original_scene_context,
     )
 
+    original_ids = {int(obj["id"]) for obj in objects}
     for obj in objects:
         remaining = apply_removal(objects, support_graph, obj["id"], cascade=False)
         if len(remaining) < 2:
             continue
+        remaining_ids = {int(other["id"]) for other in remaining}
+        removed_ids = original_ids - remaining_ids
         removal_ray_caster = (
             _ray_caster_without_object(ray_caster, obj)
-            if occlusion_backend == "ray"
+            if compare_backend == "ray"
             else None
+        )
+        removal_scene_context = (
+            _build_modified_scene(ray_caster, instance_mesh_data, removed_ids)
+            if compare_backend == "mesh_ray" else None
         )
         new_visibility = _compute_visibility_status_per_object(
             remaining, camera_pose, color_intrinsics,
             depth_image=None,
             depth_intrinsics=None,
             occlusion_backend=compare_backend,
-            ray_caster=removal_ray_caster,
+            ray_caster=(ray_caster if compare_backend == "mesh_ray" else removal_ray_caster),
+            instance_mesh_data=instance_mesh_data,
+            modified_scene=removal_scene_context,
         )
 
         for other in remaining:
@@ -1463,6 +1608,197 @@ def generate_l2_object_move_allocentric(
             obj_questions = random.sample(obj_questions, max_per_object)
         questions.extend(obj_questions)
 
+    return questions
+
+
+# ---------------------------------------------------------------------------
+#  Attachment / support relation generators
+# ---------------------------------------------------------------------------
+
+ATTACHMENT_MOVE_PROMPTS = [
+    ("to the left", "0.5m"),
+    ("to the right", "1.0m"),
+    ("forward", "0.5m"),
+    ("backward", "1.0m"),
+]
+
+
+def generate_l1_attachment_type(
+    objects_uniq: list[dict],
+    all_objects_map: dict[int, dict],
+    attachment_edges: list[dict],
+    templates: dict,
+    max_questions: int = 15,
+) -> list[dict]:
+    """L1: identify the physical attachment/support relation type."""
+    questions: list[dict] = []
+    tpl_list = templates.get(
+        "L1_attachment_type",
+        _default_templates()["L1_attachment_type"],
+    )
+    question_eligible_ids = {int(o["id"]) for o in objects_uniq}
+    type_to_answer = {
+        "supported_by": "resting on",
+        "resting_on_soft_surface": "resting on",
+        "contained_in": "inside",
+        "affixed_to": "attached/affixed to",
+    }
+
+    for edge in attachment_edges:
+        child_id = int(edge["child_id"])
+        parent_id = int(edge["parent_id"])
+        if child_id not in question_eligible_ids:
+            continue
+        child = all_objects_map.get(child_id)
+        parent = all_objects_map.get(parent_id)
+        if child is None or parent is None:
+            continue
+
+        correct = type_to_answer.get(str(edge.get("type", "")))
+        if correct is None:
+            continue
+
+        tpl = random.choice(tpl_list)
+        question_text = tpl.format(
+            obj_child=_the(child["label"]),
+            obj_parent=_the(parent["label"]),
+        )
+        options, answer = generate_options(correct, ALL_ATTACHMENT_TYPES)
+        questions.append({
+            "level": "L1",
+            "type": "attachment_type",
+            "question": question_text,
+            "options": options,
+            "answer": answer,
+            "correct_value": correct,
+            "child_id": child_id,
+            "child_label": child["label"],
+            "parent_id": parent_id,
+            "parent_label": parent["label"],
+            "attachment_type": str(edge.get("type", "")),
+            "mentioned_objects": [
+                _mention("child", child["label"], child_id),
+                _mention("parent", parent["label"], parent_id),
+            ],
+            "ambiguity_score": 0.0,
+            "relation_unchanged": False,
+        })
+
+    if len(questions) > max_questions:
+        questions = random.sample(questions, max_questions)
+    return questions
+
+
+def generate_l2_support_move_consequence(
+    objects_uniq: list[dict],
+    all_objects_map: dict[int, dict],
+    support_graph: dict[int, list[int]],
+    supported_by: dict[int, int],
+    templates: dict,
+    max_questions: int = 15,
+) -> list[dict]:
+    """L2: ask whether a dependent object moves when its parent moves."""
+    questions: list[dict] = []
+    tpl_list = templates.get(
+        "L2_support_move_consequence",
+        _default_templates()["L2_support_move_consequence"],
+    )
+    question_eligible_ids = {int(o["id"]) for o in objects_uniq}
+    supported_pairs = {
+        (int(child_id), int(parent_id))
+        for child_id, parent_id in supported_by.items()
+    }
+
+    for child_id, parent_id in sorted(supported_pairs):
+        if child_id not in question_eligible_ids:
+            continue
+        child = all_objects_map.get(child_id)
+        parent = all_objects_map.get(parent_id)
+        if child is None or parent is None:
+            continue
+
+        direction, distance = random.choice(ATTACHMENT_MOVE_PROMPTS)
+        tpl = random.choice(tpl_list)
+        question_text = tpl.format(
+            obj_parent=_the(parent["label"]),
+            obj_child=_the(child["label"]),
+            direction=direction,
+            direction_with_camera_hint=_direction_with_camera_hint(direction),
+            distance=distance,
+        )
+        options, answer = generate_options("Yes", YES_NO, n_options=2)
+        questions.append({
+            "level": "L2",
+            "type": "support_move_consequence",
+            "question": question_text,
+            "options": options,
+            "answer": answer,
+            "correct_value": "Yes",
+            "parent_id": parent_id,
+            "parent_label": parent["label"],
+            "child_id": child_id,
+            "child_label": child["label"],
+            "mentioned_objects": [
+                _mention("parent", parent["label"], parent_id),
+                _mention("child", child["label"], child_id),
+            ],
+            "relation_unchanged": False,
+        })
+
+    negative_added = 0
+    for parent_id_raw, child_ids in support_graph.items():
+        parent_id = int(parent_id_raw)
+        if not child_ids:
+            continue
+        parent = all_objects_map.get(parent_id)
+        if parent is None:
+            continue
+        parent_center = np.array(parent["center"], dtype=float)
+
+        candidates = [
+            obj for obj in objects_uniq
+            if int(obj["id"]) != parent_id and (int(obj["id"]), parent_id) not in supported_pairs
+        ]
+        candidates.sort(
+            key=lambda obj: float(np.linalg.norm(np.array(obj["center"], dtype=float) - parent_center))
+        )
+        if not candidates:
+            continue
+
+        child = candidates[0]
+        direction, distance = random.choice(ATTACHMENT_MOVE_PROMPTS)
+        tpl = random.choice(tpl_list)
+        question_text = tpl.format(
+            obj_parent=_the(parent["label"]),
+            obj_child=_the(child["label"]),
+            direction=direction,
+            direction_with_camera_hint=_direction_with_camera_hint(direction),
+            distance=distance,
+        )
+        options, answer = generate_options("No", YES_NO, n_options=2)
+        questions.append({
+            "level": "L2",
+            "type": "support_move_consequence",
+            "question": question_text,
+            "options": options,
+            "answer": answer,
+            "correct_value": "No",
+            "parent_id": parent_id,
+            "parent_label": parent["label"],
+            "child_id": int(child["id"]),
+            "child_label": child["label"],
+            "mentioned_objects": [
+                _mention("parent", parent["label"], parent_id),
+                _mention("child", child["label"], int(child["id"])),
+            ],
+            "relation_unchanged": False,
+        })
+        negative_added += 1
+        if negative_added >= max_questions // 2:
+            break
+
+    if len(questions) > max_questions:
+        questions = random.sample(questions, max_questions)
     return questions
 
 
@@ -2104,6 +2440,7 @@ def generate_all_questions(
     depth_intrinsics=None,
     occlusion_backend: str = "depth",
     ray_caster=None,
+    instance_mesh_data: InstanceMeshData | None = None,
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
     referable_object_ids: list[int] | None = None,
@@ -2111,6 +2448,7 @@ def generate_all_questions(
     strict_mode: bool = False,
     room_bounds: dict | None = None,
     wall_objects: list[dict] | None = None,
+    attachment_edges: list[dict] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -2129,6 +2467,9 @@ def generate_all_questions(
     """
     if templates is None:
         templates = _load_templates()
+    if attachment_edges is None:
+        attachment_edges = []
+    attachment_edge_input = len(attachment_edges)
 
     # Restrict to objects visible in this frame so every question can be
     # answered by looking at the image.
@@ -2142,31 +2483,101 @@ def generate_all_questions(
             if k in vis_set
         }
         supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
+        attachment_edges = [
+            e for e in attachment_edges
+            if int(e["parent_id"]) in vis_set and int(e["child_id"]) in vis_set
+        ]
 
-    # Remove objects with uninformative labels (wall, floor, object, etc.)
-    objects = [o for o in objects if o.get("label", "").lower() not in EXCLUDED_LABELS]
+    attachment_edge_count_visible = len(attachment_edges)
+
+    # Keep question-only excluded labels in the graph so they can still serve
+    # as attachment parents. Ordinary question subjects exclude them.
+    all_objects_for_graph = [
+        o for o in objects
+        if o.get("label", "").lower() not in ALWAYS_EXCLUDED
+    ]
+    objects_for_questions = [
+        o for o in all_objects_for_graph
+        if o.get("label", "").lower() not in QUESTION_ONLY_EXCLUDED
+    ]
+    graph_ids = {int(o["id"]) for o in all_objects_for_graph}
+    attachment_edges = [
+        e for e in attachment_edges
+        if int(e["parent_id"]) in graph_ids and int(e["child_id"]) in graph_ids
+    ]
+    attachment_edge_count_nonexcluded = len(attachment_edges)
 
     if referable_object_ids is not None:
         referable_set = set(referable_object_ids)
-        objects = [o for o in objects if o["id"] in referable_set]
+        question_only_ids = {
+            int(o["id"]) for o in all_objects_for_graph
+            if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED
+        }
+        graph_allowed_ids = referable_set | question_only_ids
+        all_objects_for_graph = [
+            o for o in all_objects_for_graph
+            if int(o["id"]) in graph_allowed_ids
+        ]
+        objects_for_questions = [
+            o for o in objects_for_questions
+            if int(o["id"]) in referable_set
+        ]
         support_graph = {
-            k: [c for c in v if c in referable_set]
+            k: [c for c in v if c in graph_allowed_ids]
             for k, v in support_graph.items()
-            if k in referable_set
+            if k in graph_allowed_ids
         }
         supported_by = {
             k: v for k, v in supported_by.items()
-            if k in referable_set and v in referable_set
+            if k in graph_allowed_ids and v in graph_allowed_ids
         }
-        unique_label_ids = {o["id"] for o in objects}
-        objects_uniq = list(objects)
+        attachment_edges = [
+            e for e in attachment_edges
+            if int(e["parent_id"]) in graph_allowed_ids and int(e["child_id"]) in graph_allowed_ids
+        ]
+        unique_label_ids = {int(o["id"]) for o in objects_for_questions}
+        objects_uniq = list(objects_for_questions)
     else:
         # Fallback path without a referability cache: require per-frame unique
         # labels so that bare label mentions remain unambiguous.
         from collections import Counter
-        label_counts = Counter(o["label"] for o in objects)
-        unique_label_ids = {o["id"] for o in objects if label_counts[o["label"]] == 1}
-        objects_uniq = [o for o in objects if o["id"] in unique_label_ids]
+        label_counts = Counter(o["label"] for o in objects_for_questions)
+        unique_label_ids = {
+            int(o["id"]) for o in objects_for_questions
+            if label_counts[o["label"]] == 1
+        }
+        objects_uniq = [o for o in objects_for_questions if int(o["id"]) in unique_label_ids]
+
+    question_only_ids = {
+        int(o["id"]) for o in all_objects_for_graph
+        if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED
+    }
+    graph_eligible_ids = unique_label_ids | question_only_ids
+    support_graph = {
+        k: [c for c in v if c in graph_eligible_ids]
+        for k, v in support_graph.items()
+        if k in graph_eligible_ids
+    }
+    supported_by = {
+        k: v for k, v in supported_by.items()
+        if k in graph_eligible_ids and v in graph_eligible_ids
+    }
+    attachment_edges = [
+        e for e in attachment_edges
+        if int(e["parent_id"]) in graph_eligible_ids and int(e["child_id"]) in graph_eligible_ids
+    ]
+    all_objects_map = {int(o["id"]): o for o in all_objects_for_graph}
+
+    logger.info(
+        "Attachment filter stats: edges input=%d visible=%d nonexcluded=%d final=%d, graph_objects=%d, question_objects=%d, unique_question_objects=%d",
+        attachment_edge_input,
+        attachment_edge_count_visible,
+        attachment_edge_count_nonexcluded,
+        len(attachment_edges),
+        len(all_objects_for_graph),
+        len(objects_for_questions),
+        len(objects_uniq),
+    )
 
     all_questions: list[dict] = []
 
@@ -2198,6 +2609,7 @@ def generate_all_questions(
                 depth_intrinsics=depth_intrinsics,
                 occlusion_backend=occlusion_backend,
                 ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
             )
     else:
         occ_cache = _compute_visibility_status_per_object(
@@ -2208,6 +2620,7 @@ def generate_all_questions(
             depth_intrinsics=depth_intrinsics,
             occlusion_backend=occlusion_backend,
             ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
         )
 
     # L1 — collect separately so we can sample before adding
@@ -2255,15 +2668,24 @@ def generate_all_questions(
     all_questions.extend(l1_occ_qs)
     all_questions.extend(l1_dir_oc_qs)
     all_questions.extend(l1_dir_allo_qs)
+    all_questions.extend(
+        generate_l1_attachment_type(
+            all_objects_for_graph,
+            all_objects_map,
+            attachment_edges,
+            templates,
+        )
+    )
 
-    # Rebuild support graph restricted to uniquely-labelled objects
+    # Rebuild movement graph restricted to question-eligible children plus
+    # question-only parents that may still anchor attachment questions.
     support_graph_uniq = {
-        k: [c for c in v if c in unique_label_ids]
+        k: [c for c in v if c in graph_eligible_ids]
         for k, v in support_graph.items()
-        if k in unique_label_ids
+        if k in graph_eligible_ids
     }
     supported_by_uniq = {k: v for k, v in supported_by.items()
-                         if k in unique_label_ids and v in unique_label_ids}
+                         if k in graph_eligible_ids and v in graph_eligible_ids}
 
     # L2 — ego-centric (existing)
     all_questions.extend(
@@ -2279,6 +2701,7 @@ def generate_all_questions(
             depth_intrinsics,
             occlusion_backend,
             ray_caster,
+            instance_mesh_data,
             templates,
         )
     )
@@ -2292,6 +2715,7 @@ def generate_all_questions(
             depth_intrinsics,
             occlusion_backend,
             ray_caster,
+            instance_mesh_data,
             templates,
         )
     )
@@ -2306,6 +2730,15 @@ def generate_all_questions(
         generate_l2_object_move_allocentric(
             objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
+        )
+    )
+    all_questions.extend(
+        generate_l2_support_move_consequence(
+            all_objects_for_graph,
+            all_objects_map,
+            support_graph_uniq,
+            supported_by_uniq,
+            templates,
         )
     )
 

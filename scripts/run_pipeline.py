@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.scene_parser import parse_scene, load_scannet_label_map
+from src.scene_parser import parse_scene, load_instance_mesh_data, load_scannet_label_map
 from src.support_graph import enrich_scene_with_support, has_nontrivial_attachment
 from src.frame_selector import (
     select_frames,
@@ -205,7 +205,7 @@ def run_pipeline(
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
         ray_caster = None
-        if occlusion_backend == "ray":
+        if occlusion_backend in ("ray", "mesh_ray"):
             mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
             if not mesh_path.exists():
                 mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
@@ -216,6 +216,17 @@ def run_pipeline(
                     logger.warning("Ray caster load failed for %s: %s", scene_id, e)
             else:
                 logger.warning("Ray backend requested but mesh/RayCaster unavailable for %s", scene_id)
+
+        instance_mesh_data = None
+        if occlusion_backend == "mesh_ray":
+            try:
+                instance_mesh_data = load_instance_mesh_data(
+                    scene_dir,
+                    instance_ids=[int(o["id"]) for o in scene["objects"]],
+                    n_surface_samples=128,
+                )
+            except Exception as e:
+                logger.warning("Instance mesh data unavailable for %s: %s", scene_id, e)
 
         # Load depth intrinsics once per scene (shared across all frames)
         depth_intrinsics = None
@@ -321,12 +332,14 @@ def run_pipeline(
                 depth_intrinsics=depth_intrinsics,
                 occlusion_backend=occlusion_backend,
                 ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
                 object_visibility=visibility_table,
                 strict_mode=strict_mode,
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
+                attachment_edges=scene.get("attachment_edges", []),
             )
 
             for q in questions:
@@ -398,7 +411,7 @@ def main():
     parser.add_argument(
         "--occlusion_backend",
         type=str,
-        choices=("depth", "ray", "approx"),
+        choices=("depth", "ray", "approx", "mesh_ray"),
         default="depth",
         help="Backend for visibility/occlusion estimation",
     )
