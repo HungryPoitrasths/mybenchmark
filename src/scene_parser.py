@@ -144,6 +144,8 @@ QUESTION_ONLY_EXCLUDED = {
 
 EXCLUDED_LABELS = ALWAYS_EXCLUDED | QUESTION_ONLY_EXCLUDED
 
+SceneGeometry = tuple[str, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]
+
 
 @dataclass
 class InstanceMeshData:
@@ -182,7 +184,7 @@ def _resolve_scene_files(scene_path: Path) -> tuple[str, Path, Path, Path]:
 
 def _load_scene_geometry(
     scene_path: str | Path,
-) -> tuple[str, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
+) -> SceneGeometry:
     """Load one scene's aligned vertices, faces, segment ids, and annotations."""
     scene_path = Path(scene_path)
     scene_id, mesh_file, seg_file, anno_file = _resolve_scene_files(scene_path)
@@ -258,9 +260,13 @@ def load_instance_mesh_data(
     scene_path: str | Path,
     instance_ids: list[int] | None = None,
     n_surface_samples: int = 128,
+    preloaded_geometry: SceneGeometry | None = None,
 ) -> InstanceMeshData:
     """Return instance triangle ownership and cached sampled surface points."""
-    _scene_id, vertices, faces, seg_indices, anno_list = _load_scene_geometry(scene_path)
+    if preloaded_geometry is None:
+        _scene_id, vertices, faces, seg_indices, anno_list = _load_scene_geometry(scene_path)
+    else:
+        _scene_id, vertices, faces, seg_indices, anno_list = preloaded_geometry
     requested_ids = None if instance_ids is None else {int(x) for x in instance_ids}
 
     segment_to_instance: dict[int, int] = {}
@@ -502,7 +508,10 @@ def _build_support_geom(
     }
 
 
-def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
+def parse_scene(
+    scene_path: str | Path,
+    preloaded_geometry: SceneGeometry | None = None,
+) -> dict[str, Any] | None:
     """Parse a single ScanNet scene.
 
     Args:
@@ -513,49 +522,16 @@ def parse_scene(scene_path: str | Path) -> dict[str, Any] | None:
         Returns ``None`` if the scene does not meet filtering criteria.
     """
     scene_path = Path(scene_path)
-    scene_id   = scene_path.name
+    scene_id = scene_path.name
 
-    # Support both _vh_clean.ply and _vh_clean_2.ply naming conventions
-    mesh_file = scene_path / f"{scene_id}_vh_clean.ply"
-    if not mesh_file.exists():
-        mesh_file = scene_path / f"{scene_id}_vh_clean_2.ply"
-
-    # Support both segs file naming conventions
-    seg_file = scene_path / f"{scene_id}_vh_clean.segs.json"
-    if not seg_file.exists():
-        seg_file = scene_path / f"{scene_id}_vh_clean_2.0.010000.segs.json"
-
-    # Try both common aggregation file names
-    anno_file = scene_path / f"{scene_id}_vh_clean.aggregation.json"
-    if not anno_file.exists():
-        anno_file = scene_path / f"{scene_id}.aggregation.json"
-
-    for required in (mesh_file, seg_file, anno_file):
-        if not required.exists():
-            logger.warning("Missing %s — skipping scene %s", required.name, scene_id)
-            return None
-
-    # 1. Load mesh vertices and apply axis alignment
-    mesh     = o3d.io.read_triangle_mesh(str(mesh_file))
-    vertices = np.asarray(mesh.vertices)  # (N, 3)
-
-    M = load_axis_alignment(scene_path)
-    if not np.allclose(M, np.eye(4)):
-        vertices = _apply_axis_alignment(vertices, M)
-
-    # 2. Load segmentation index (vertex → segment_id)
-    with open(seg_file, "r", encoding="utf-8") as f:
-        seg_data = json.load(f)
-    seg_indices = np.array(seg_data["segIndices"], dtype=np.int64)
-
-    # 3. Load instance annotations (segment → instance + label)
-    with open(anno_file, "r", encoding="utf-8") as f:
-        annotations = json.load(f)
-
-    if isinstance(annotations, dict):
-        anno_list = annotations.get("segGroups", annotations.get("annotations", []))
-    else:
-        anno_list = annotations
+    try:
+        if preloaded_geometry is None:
+            scene_id, vertices, _faces, seg_indices, anno_list = _load_scene_geometry(scene_path)
+        else:
+            scene_id, vertices, _faces, seg_indices, anno_list = preloaded_geometry
+    except FileNotFoundError as exc:
+        logger.warning("Missing scene geometry for %s: %s", scene_id, exc)
+        return None
 
     # 4. Build per-instance vertex sets and compute AABBs
     objects: list[dict[str, Any]] = []

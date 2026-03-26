@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Optional, TYPE_CHECKING
 
 import numpy as np
@@ -9,19 +10,32 @@ import numpy as np
 if TYPE_CHECKING:
     import trimesh as _trimesh
 
+logger = logging.getLogger(__name__)
+MAX_RELIABLE_RETRY_RAYS = 10
+
 
 class RayCaster:
     """Wraps a trimesh scene for batched ray-intersection queries."""
 
     def __init__(self, mesh):
         self.mesh = mesh
+        self.has_embree = False
+        self._reliable_intersector = None
+        self._warned_slow_mesh_visibility = False
+        self._warned_retry_cap = False
         # Build a ray-mesh intersector (uses embree if available, else slow fallback)
         try:
             import pyembree  # noqa: F401
             import trimesh
             self.intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
+            self.has_embree = True
+            try:
+                self._reliable_intersector = trimesh.ray.ray_triangle.RayMeshIntersector(mesh)
+            except Exception:
+                self._reliable_intersector = self.intersector
         except (ImportError, AttributeError):
             self.intersector = mesh.ray
+            self._reliable_intersector = self.intersector
 
     @classmethod
     def from_ply(cls, ply_path: str, axis_alignment: Optional[np.ndarray] = None) -> "RayCaster":
@@ -58,6 +72,153 @@ class RayCaster:
         return [
             (locations[i], int(index_tri[i]), float(distances[i])) for i in order
         ]
+
+    def first_visible_hit(
+        self,
+        origin: np.ndarray,
+        direction: np.ndarray,
+        ignored_tri_ids: Optional[set[int]] = None,
+    ) -> tuple[np.ndarray, int, float] | None:
+        """Return the first hit not masked by *ignored_tri_ids*."""
+        hits = self.cast_ray(origin, direction)
+        if not hits:
+            return None
+
+        if not ignored_tri_ids:
+            return hits[0]
+
+        for hit_point, tri_id, dist in hits:
+            if tri_id not in ignored_tri_ids:
+                return hit_point, tri_id, dist
+        return None
+
+    def _first_non_ignored_hits(
+        self,
+        origins: np.ndarray,
+        directions: np.ndarray,
+        ignored_tri_ids: Optional[set[int]] = None,
+    ) -> tuple[dict[int, tuple[int, float]], np.ndarray, np.ndarray]:
+        """Return nearest non-ignored hit per ray plus hit and forced-block masks."""
+        n_rays = len(origins)
+        first_hits: dict[int, tuple[int, float]] = {}
+        has_any_hit = np.zeros(n_rays, dtype=bool)
+        has_non_ignored_hit = np.zeros(n_rays, dtype=bool)
+        forced_blocked = np.zeros(n_rays, dtype=bool)
+
+        locations, index_ray, index_tri = self.intersector.intersects_location(
+            ray_origins=origins,
+            ray_directions=directions,
+            multiple_hits=True,
+        )
+        if len(locations) > 0:
+            distances = np.linalg.norm(locations - origins[index_ray], axis=1)
+            order = np.lexsort((distances, index_ray))
+            for idx in order:
+                ray_idx = int(index_ray[idx])
+                tri_id = int(index_tri[idx])
+                has_any_hit[ray_idx] = True
+                if ignored_tri_ids and tri_id in ignored_tri_ids:
+                    continue
+                if ray_idx not in first_hits:
+                    first_hits[ray_idx] = (tri_id, float(distances[idx]))
+                    has_non_ignored_hit[ray_idx] = True
+
+        if (
+            ignored_tri_ids
+            and self.has_embree
+            and self._reliable_intersector is not None
+            and self._reliable_intersector is not self.intersector
+        ):
+            ignored_only = np.flatnonzero(has_any_hit & ~has_non_ignored_hit)
+            if len(ignored_only) > 0:
+                if len(ignored_only) > MAX_RELIABLE_RETRY_RAYS:
+                    forced_blocked[ignored_only] = True
+                    if not self._warned_retry_cap:
+                        logger.warning(
+                            "Skipping reliable ray retry for %d rays; capping at %d to avoid slow fallback",
+                            len(ignored_only),
+                            MAX_RELIABLE_RETRY_RAYS,
+                        )
+                        self._warned_retry_cap = True
+                else:
+                    retry_origins = origins[ignored_only]
+                    retry_directions = directions[ignored_only]
+                    retry_locations, retry_index_ray, retry_index_tri = self._reliable_intersector.intersects_location(
+                        ray_origins=retry_origins,
+                        ray_directions=retry_directions,
+                        multiple_hits=True,
+                    )
+                    if len(retry_locations) > 0:
+                        retry_distances = np.linalg.norm(
+                            retry_locations - retry_origins[retry_index_ray],
+                            axis=1,
+                        )
+                        retry_order = np.lexsort((retry_distances, retry_index_ray))
+                        for idx in retry_order:
+                            retry_ray_idx = int(retry_index_ray[idx])
+                            ray_idx = int(ignored_only[retry_ray_idx])
+                            tri_id = int(retry_index_tri[idx])
+                            if tri_id in ignored_tri_ids:
+                                continue
+                            if ray_idx not in first_hits:
+                                first_hits[ray_idx] = (tri_id, float(retry_distances[idx]))
+                                has_non_ignored_hit[ray_idx] = True
+
+        return first_hits, has_any_hit, forced_blocked
+
+    def mesh_visibility_ratio(
+        self,
+        camera_pos: np.ndarray,
+        target_points: np.ndarray,
+        target_tri_ids: set[int],
+        ignored_tri_ids: Optional[set[int]] = None,
+        hit_epsilon: float = 0.05,
+    ) -> float:
+        """Return the visible fraction of sampled target surface points."""
+        if len(target_points) == 0 or not target_tri_ids:
+            return 0.0
+
+        sampled_points = np.asarray(target_points, dtype=np.float64)
+        if not self.has_embree and len(sampled_points) > 32:
+            if not self._warned_slow_mesh_visibility:
+                logger.warning(
+                    "Embree unavailable; downsampling mesh visibility rays from %d to 32",
+                    len(sampled_points),
+                )
+                self._warned_slow_mesh_visibility = True
+            sample_idx = np.linspace(0, len(sampled_points) - 1, num=32, dtype=int)
+            sampled_points = sampled_points[sample_idx]
+
+        directions = sampled_points - np.asarray(camera_pos, dtype=np.float64)
+        expected_dists = np.linalg.norm(directions, axis=1)
+        valid_mask = expected_dists > 1e-6
+        if not np.any(valid_mask):
+            return 0.0
+
+        directions = directions[valid_mask]
+        expected_dists = expected_dists[valid_mask]
+        directions = directions / expected_dists[:, None]
+        origins = np.broadcast_to(np.asarray(camera_pos, dtype=np.float64), directions.shape).copy()
+
+        first_hits, _has_any_hit, forced_blocked = self._first_non_ignored_hits(
+            origins=origins,
+            directions=directions,
+            ignored_tri_ids=ignored_tri_ids,
+        )
+
+        visible = 0
+        for ray_idx, expected_dist in enumerate(expected_dists):
+            if forced_blocked[ray_idx]:
+                continue
+            hit = first_hits.get(ray_idx)
+            if hit is None:
+                visible += 1
+                continue
+            tri_id, hit_dist = hit
+            if tri_id in target_tri_ids and abs(hit_dist - float(expected_dist)) <= hit_epsilon:
+                visible += 1
+
+        return float(visible / len(expected_dists))
 
     def check_occlusion(
         self,
