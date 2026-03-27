@@ -35,6 +35,7 @@ from src.support_graph import (
 from src.frame_selector import (
     select_frames,
     compute_frame_object_visibility,
+    get_visible_objects,
 )
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
@@ -276,9 +277,16 @@ def run_pipeline(
                     except Exception as e:
                         logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
 
-            # In normal mode, keep projection-based visible IDs unchanged.
-            # Depth is only used downstream for occlusion-question generation.
             visible_ids = frame["visible_object_ids"]
+            if referability_cache and color_intrinsics is not None:
+                visible_ids = [
+                    int(o["id"])
+                    for o in get_visible_objects(
+                        scene["objects"],
+                        camera_pose,
+                        color_intrinsics,
+                    )
+                ]
             visibility_table = None
             if strict_mode:
                 image_path = scene_dir / "color" / image_name

@@ -2531,6 +2531,7 @@ def generate_all_questions(
         if int(e["parent_id"]) in graph_ids and int(e["child_id"]) in graph_ids
     ]
     attachment_edge_count_nonexcluded = len(attachment_edges)
+    attachment_context_ids: set[int] = set()
 
     if referable_object_ids is not None:
         referable_set = _normalize_object_id_set(
@@ -2541,7 +2542,13 @@ def generate_all_questions(
             int(o["id"]) for o in all_objects_for_graph
             if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED
         }
-        graph_allowed_ids = referable_set | question_only_ids
+        attachment_parent_ids = {
+            int(e["parent_id"])
+            for e in attachment_edges
+            if int(e["child_id"]) in referable_set
+        }
+        attachment_context_ids = attachment_parent_ids
+        graph_allowed_ids = referable_set | question_only_ids | attachment_context_ids
         all_objects_for_graph = [
             o for o in all_objects_for_graph
             if int(o["id"]) in graph_allowed_ids
@@ -2580,7 +2587,7 @@ def generate_all_questions(
         int(o["id"]) for o in all_objects_for_graph
         if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED
     }
-    graph_eligible_ids = unique_label_ids | question_only_ids
+    graph_eligible_ids = unique_label_ids | question_only_ids | attachment_context_ids
     support_graph = {
         k: [c for c in v if c in graph_eligible_ids]
         for k, v in support_graph.items()

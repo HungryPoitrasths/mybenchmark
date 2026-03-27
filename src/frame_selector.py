@@ -363,6 +363,8 @@ def refine_visible_ids_with_depth(
 
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
+VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
+VISIBLE_PROJECTED_AREA_MIN = 400.0
 
 
 def get_visible_objects(
@@ -373,7 +375,12 @@ def get_visible_objects(
     min_depth: float = 0.3,
     max_depth: float = 6.0,
 ) -> list[dict]:
-    """Return objects whose centre projects into the image frame.
+    """Return objects whose projected footprint is meaningfully visible.
+
+    The old centre-only rule was too strict for attachment/support relations:
+    a large parent object can be clearly visible while its 3D centre lies just
+    outside the image crop. Keep those cases when enough of the projected bbox
+    remains inside the frame.
 
     margin:    pixels from image edge (larger = more conservative)
     min_depth: minimum distance from camera in metres (filters objects
@@ -390,7 +397,18 @@ def get_visible_objects(
     for obj in objects:
         center = np.array(obj["center"])
         uv, depth = project_to_image(center, pose, intrinsics)
-        if min_depth < depth <= max_depth and is_in_image(uv, intrinsics, margin=margin):
+        if not (min_depth < depth <= max_depth):
+            continue
+
+        if is_in_image(uv, intrinsics, margin=margin):
+            visible.append(obj)
+            continue
+
+        roi_info = _project_object_roi(obj, pose, intrinsics)
+        if (
+            roi_info["bbox_in_frame_ratio"] >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
+            and roi_info["projected_area_px"] >= VISIBLE_PROJECTED_AREA_MIN
+        ):
             visible.append(obj)
     return visible
 
