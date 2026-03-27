@@ -169,16 +169,51 @@ def compute_depth_occlusion(
         (status, visibility_ratio) where status is one of
         "fully visible", "partially occluded", "not visible".
     """
+    metrics = compute_depth_occlusion_metrics(
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        camera_pose=camera_pose,
+        intrinsics=intrinsics,
+        depth_image=depth_image,
+        depth_tolerance=depth_tolerance,
+    )
+    if metrics["valid_in_frame_count"] == 0:
+        return "not visible", 0.0
+
+    projected_area = float(metrics["projected_area"])
+    in_frame_ratio = float(metrics["in_frame_ratio"])
+    if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
+        return "not visible", 0.0
+
+    ratio = float(metrics["visible_ratio_in_frame"])
+
+    if ratio > FULLY_VISIBLE_RATIO_MIN:
+        return "fully visible", ratio
+    elif ratio >= PARTIALLY_VISIBLE_RATIO_MIN:
+        return "partially occluded", ratio
+    else:
+        return "not visible", ratio
+
+
+def compute_depth_occlusion_metrics(
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    camera_pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    depth_image: np.ndarray,
+    depth_tolerance: float = 0.10,
+) -> dict[str, float | int]:
+    """Return depth-based in-frame and occlusion metrics for a target bbox."""
     sample_points = bbox_camera_facing_sample_points(
         bbox_min=bbox_min,
         bbox_max=bbox_max,
         camera_pos=camera_pose.position,
     )
     h, w = depth_image.shape[:2]
-    projected = []
+    projected: list[tuple[float, float]] = []
 
-    visible = 0
-    valid = 0
+    valid_in_frame = 0
+    visible_in_frame = 0
 
     for pt in sample_points:
         p_cam = world_to_camera(pt, camera_pose)
@@ -204,27 +239,25 @@ def compute_depth_occlusion(
         )
         if entry_depth is None:
             continue
-        valid += 1
-        if entry_depth - depth_val > depth_tolerance:
-            pass  # occluded
-        else:
-            visible += 1
-
-    if valid == 0:
-        return "not visible", 0.0
+        valid_in_frame += 1
+        if entry_depth - depth_val <= depth_tolerance:
+            visible_in_frame += 1
 
     projected_area, in_frame_ratio = _projected_bbox_stats(projected, h, w)
-    if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
-        return "not visible", 0.0
-
-    ratio = visible / valid
-
-    if ratio > FULLY_VISIBLE_RATIO_MIN:
-        return "fully visible", ratio
-    elif ratio >= PARTIALLY_VISIBLE_RATIO_MIN:
-        return "partially occluded", ratio
-    else:
-        return "not visible", ratio
+    visible_ratio_in_frame = (
+        float(visible_in_frame / valid_in_frame) if valid_in_frame > 0 else 0.0
+    )
+    occlusion_ratio_in_frame = (
+        float(1.0 - visible_ratio_in_frame) if valid_in_frame > 0 else 1.0
+    )
+    return {
+        "projected_area": float(projected_area),
+        "in_frame_ratio": float(in_frame_ratio),
+        "valid_in_frame_count": int(valid_in_frame),
+        "visible_in_frame_count": int(visible_in_frame),
+        "visible_ratio_in_frame": visible_ratio_in_frame,
+        "occlusion_ratio_in_frame": occlusion_ratio_in_frame,
+    }
 
 
 def _projected_bbox_stats(

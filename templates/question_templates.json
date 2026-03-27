@@ -5,9 +5,9 @@
     "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}?"
   ],
   "L1_occlusion": [
-    "What is the visibility status of {obj_a} from the current viewpoint?",
-    "Is {obj_a} fully visible from the current camera angle?",
-    "From this viewpoint, how visible is {obj_a} in the scene?"
+    "What is the occlusion status of {obj_a} in the current view?",
+    "From the current viewpoint, which best describes {obj_a}: not occluded, occluded, or not visible?",
+    "In the current image, is {obj_a} unoccluded, occluded by another object, or not visible?"
   ],
   "L1_distance": [
     "Approximately how far apart are {obj_a} and {obj_b}?",
@@ -43,9 +43,9 @@
     "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}?"
   ],
   "L2_viewpoint_move": [
-    "If the observer moves {direction_with_camera_hint} by {distance} from the current position, would {obj_a} become visible or occluded?",
-    "After the camera moves {direction_with_camera_hint} by {distance}, what is the visibility status of {obj_a}?",
-    "If you step {direction_with_camera_hint} by {distance}, can you still see {obj_a}?"
+    "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, would {obj_a} become visible or occluded?",
+    "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, what is the visibility status of {obj_a}?",
+    "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, can you still see {obj_a}?"
   ],
   "L2_object_remove": [
     "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",

@@ -11,9 +11,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +55,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("pipeline")
+DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
+DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -73,6 +77,100 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
     if isinstance(scene_frames, dict):
         return scene_frames.get(image_name)
     return frames.get(f"{scene_id}/{image_name}")
+
+
+def _image_to_base64(image) -> str:
+    import cv2
+
+    ok, buf = cv2.imencode(".jpg", image)
+    if not ok:
+        raise ValueError("Failed to encode image")
+    return base64.b64encode(buf.tobytes()).decode()
+
+
+def _extract_json_object(text: str) -> dict | None:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def _occlusion_prompt(label: str) -> str:
+    return (
+        "You are given a local scene crop. "
+        f"The target object is the highlighted {label}. "
+        "The highlighted target is shown with a colored mask overlay and outline. "
+        "Decide whether the target is occluded by another object. "
+        "Being partially outside the image does not count as occluded. "
+        "Only count blockage by another object as occluded. "
+        'Answer with strict JSON only using this schema: {"occlusion": "not occluded"} '
+        'or {"occlusion": "occluded"}.'
+    )
+
+
+def _build_occlusion_vlm_adjudicator(
+    vlm_url: str | None,
+    vlm_model: str | None,
+):
+    if not vlm_url:
+        return None
+
+    from openai import OpenAI
+
+    api_key = (
+        os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or "EMPTY"
+    )
+    client = OpenAI(api_key=api_key, base_url=vlm_url)
+    model_name = vlm_model
+    if not model_name:
+        try:
+            models = client.models.list()
+            available = [m.id for m in models.data]
+            if not available:
+                raise RuntimeError("No VLM models available")
+            model_name = available[0]
+        except Exception as e:
+            raise RuntimeError(f"Cannot reach occlusion VLM at {vlm_url}: {e}") from e
+
+    logger.info("Using occlusion VLM model: %s", model_name)
+
+    def _adjudicate(local_overlay_image, label: str) -> str | None:
+        try:
+            image_b64 = _image_to_base64(local_overlay_image)
+            resp = client.chat.completions.create(
+                model=model_name,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                        {"type": "text", "text": _occlusion_prompt(label)},
+                    ],
+                }],
+                max_tokens=128,
+                temperature=0,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            parsed = _extract_json_object(text)
+            if not isinstance(parsed, dict):
+                return None
+            decision = str(parsed.get("occlusion", "")).strip().lower()
+            if decision in {"not occluded", "occluded"}:
+                return decision
+            return None
+        except Exception as e:
+            logger.warning("Occlusion VLM adjudication failed for %s: %s", label, e)
+            return None
+
+    return _adjudicate
 
 
 def _get_referability_scene_frames(cache: dict | None, scene_id: str) -> dict[str, dict]:
@@ -102,6 +200,19 @@ def _get_referability_scene_ids(cache: dict | None) -> set[str]:
         elif isinstance(key, str) and "/" in key:
             scene_ids.add(key.split("/", 1)[0])
     return scene_ids
+
+
+def _has_l1_visibility_candidates(label_counts: object) -> bool:
+    if not isinstance(label_counts, dict):
+        return False
+    for count in label_counts.values():
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            continue
+        if count_int in (0, 1):
+            return True
+    return False
 
 
 def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[str, object]]:
@@ -145,6 +256,9 @@ def run_pipeline(
     strict_mode: bool = False,
     referability_cache: dict | None = None,
     occlusion_backend: str = "depth",
+    use_occlusion_vlm: bool = False,
+    occlusion_vlm_url: str | None = None,
+    occlusion_vlm_model: str | None = None,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
 
@@ -172,6 +286,11 @@ def run_pipeline(
     all_questions: list[dict] = []
     processed = 0
     total_scenes = len(scene_dirs) if referability_cache else min(len(scene_dirs), max_scenes)
+    occlusion_vlm_adjudicator = (
+        _build_occlusion_vlm_adjudicator(occlusion_vlm_url, occlusion_vlm_model)
+        if use_occlusion_vlm
+        else None
+    )
 
     for scene_dir in scene_dirs:
         if not referability_cache and processed >= max_scenes:
@@ -185,7 +304,7 @@ def run_pipeline(
 
         # ---- Stage 1: Parse ----
         preloaded_geometry = None
-        if occlusion_backend == "mesh_ray":
+        if occlusion_backend == "mesh_ray" or occlusion_vlm_adjudicator is not None:
             try:
                 preloaded_geometry = _load_scene_geometry(scene_dir)
             except Exception as e:
@@ -228,12 +347,18 @@ def run_pipeline(
                 try:
                     ray_caster = RayCaster.from_ply(str(mesh_path), axis_alignment=axis_align)
                 except Exception as e:
-                    logger.warning("Ray caster load failed for %s: %s", scene_id, e)
+                    raise RuntimeError(
+                        f"{occlusion_backend} backend requested for {scene_id}, "
+                        f"but ray caster initialization failed: {e}"
+                    ) from e
             else:
-                logger.warning("Ray backend requested but mesh/RayCaster unavailable for %s", scene_id)
+                raise RuntimeError(
+                    f"{occlusion_backend} backend requested for {scene_id}, "
+                    "but mesh geometry or RayCaster is unavailable"
+                )
 
         instance_mesh_data = None
-        if occlusion_backend == "mesh_ray":
+        if occlusion_backend == "mesh_ray" or occlusion_vlm_adjudicator is not None:
             try:
                 instance_mesh_data = load_instance_mesh_data(
                     scene_dir,
@@ -242,7 +367,10 @@ def run_pipeline(
                     preloaded_geometry=preloaded_geometry,
                 )
             except Exception as e:
-                logger.warning("Instance mesh data unavailable for %s: %s", scene_id, e)
+                raise RuntimeError(
+                    f"mesh_ray backend requested for {scene_id}, "
+                    f"but instance mesh data could not be loaded: {e}"
+                ) from e
 
         # Load depth intrinsics once per scene (shared across all frames)
         depth_intrinsics = None
@@ -265,6 +393,7 @@ def run_pipeline(
             if image_name not in poses:
                 continue
             camera_pose = poses[image_name]
+            frame_image = None
 
             # Load depth map for this frame
             depth_image = None
@@ -324,20 +453,33 @@ def run_pipeline(
 
             visible_id_set = set(int(obj_id) for obj_id in visible_ids)
             referable_ids = None
+            label_counts = None
             referability_entry = _get_referability_entry(
                 referability_cache, scene_id, image_name,
             )
             if referability_entry is not None:
+                raw_label_counts = referability_entry.get("label_counts")
+                if isinstance(raw_label_counts, dict):
+                    label_counts = raw_label_counts
                 referable_ids = [
                     int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
                     if int(obj_id) in visible_id_set
                 ]
-                if not referable_ids:
+                if not referable_ids and not _has_l1_visibility_candidates(label_counts):
                     logger.debug(
-                        "Frame %s/%s has no referable objects after visibility intersection",
+                        "Frame %s/%s has no referable objects or L1 visibility candidates",
                         scene_id, image_name,
                     )
                     continue
+
+            if occlusion_vlm_adjudicator is not None:
+                image_path = scene_dir / "color" / image_name
+                if image_path.exists():
+                    import cv2
+
+                    frame_image = cv2.imread(str(image_path))
+                    if frame_image is None:
+                        logger.warning("Cannot read frame image for occlusion VLM: %s", image_path)
 
             questions = generate_all_questions(
                 objects=scene["objects"],
@@ -352,6 +494,9 @@ def run_pipeline(
                 instance_mesh_data=instance_mesh_data,
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
+                label_counts=label_counts,
+                frame_image=frame_image,
+                occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
                 object_visibility=visibility_table,
                 strict_mode=strict_mode,
                 room_bounds=scene.get("room_bounds"),
@@ -444,6 +589,18 @@ def main():
         "--label_map", type=str, default=None,
         help="Path to scannetv2-labels.combined.tsv for raw_category→nyu40class normalization",
     )
+    parser.add_argument(
+        "--use_occlusion_vlm", action="store_true",
+        help="Use a VLM to adjudicate gray-zone L1 occlusion cases from local mask overlays",
+    )
+    parser.add_argument(
+        "--vlm_url", type=str, default=DEFAULT_VLM_URL,
+        help="OpenAI-compatible VLM API base URL for gray-zone occlusion adjudication",
+    )
+    parser.add_argument(
+        "--vlm_model", type=str, default=None,
+        help="Model name for gray-zone occlusion adjudication; auto-detect if omitted",
+    )
     args = parser.parse_args()
 
     if args.label_map:
@@ -462,6 +619,9 @@ def main():
         strict_mode=args.strict_mode,
         referability_cache=referability_cache,
         occlusion_backend=args.occlusion_backend,
+        use_occlusion_vlm=args.use_occlusion_vlm,
+        occlusion_vlm_url=args.vlm_url,
+        occlusion_vlm_model=args.vlm_model,
     )
 
 

@@ -153,6 +153,8 @@ SceneGeometry = tuple[str, np.ndarray, np.ndarray, np.ndarray, list[dict[str, An
 class InstanceMeshData:
     """Per-instance triangle ownership and cached surface samples."""
 
+    vertices: np.ndarray
+    faces: np.ndarray
     triangle_ids_by_instance: dict[int, np.ndarray]
     boundary_triangle_ids_by_instance: dict[int, np.ndarray]
     surface_points_by_instance: dict[int, np.ndarray]
@@ -349,6 +351,8 @@ def load_instance_mesh_data(
         )
 
     return InstanceMeshData(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
         triangle_ids_by_instance=triangle_arrays,
         boundary_triangle_ids_by_instance=boundary_arrays,
         surface_points_by_instance=surface_points_by_instance,
