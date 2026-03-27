@@ -44,6 +44,7 @@ SUMMARY_GROUPS = [
         [
             ("object_move_agent", "L2_object_move_agent"),
             ("object_move_distance", "L2_object_move_distance"),
+            ("object_move_occlusion", "L2_object_move_occlusion"),
             ("object_move_object_centric", "L2_object_move_object_centric"),
             ("object_move_allocentric", "L2_object_move_allocentric"),
             ("viewpoint_move", "L2_viewpoint_move"),
@@ -63,6 +64,16 @@ SUMMARY_GROUPS = [
         ],
     ),
 ]
+
+
+OBJECT_MOVE_TYPES = {
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_occlusion",
+    "object_move_object_centric",
+    "object_move_allocentric",
+}
+REMOVED_TYPES = {"attachment_type", "support_move_consequence"}
 
 
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
@@ -103,6 +114,63 @@ def build_task_summary(type_counter: Counter) -> str:
         other_text = "；".join(f"{qtype}={count}" for qtype, count in other_items)
         parts.append(
             f'<div class="summary-other"><strong>其他类型：</strong>{other_text}</div>'
+        )
+
+    return "".join(parts)
+
+
+def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
+    known_keys = {
+        key
+        for _, items in SUMMARY_GROUPS
+        for key, _ in items
+    }
+    total_counter: Counter = Counter()
+    attached_counter: Counter = Counter()
+    for q in questions:
+        qtype = str(q.get("type", "")).strip()
+        if qtype not in OBJECT_MOVE_TYPES:
+            continue
+        total_counter[qtype] += 1
+        if bool(q.get("support_remapped", False)):
+            attached_counter[qtype] += 1
+
+    parts: list[str] = []
+    for section_title, items in SUMMARY_GROUPS:
+        lines = [f'<div class="summary-line"><strong>{section_title}</strong></div>']
+        object_move_keys = [key for key, _ in items if key in OBJECT_MOVE_TYPES]
+        if object_move_keys:
+            total = sum(total_counter.get(key, 0) for key in object_move_keys)
+            attached = sum(attached_counter.get(key, 0) for key in object_move_keys)
+            unattached = total - attached
+            lines.append(
+                f'<div class="summary-line">L2_object_move_all: total={total}, '
+                f'with_attachment={attached}, without_attachment={unattached}</div>'
+            )
+        for key, label in items:
+            if key in OBJECT_MOVE_TYPES:
+                total = total_counter.get(key, 0)
+                attached = attached_counter.get(key, 0)
+                unattached = total - attached
+                lines.append(
+                    f'<div class="summary-line">{label}: total={total}, '
+                    f'with_attachment={attached}, without_attachment={unattached}</div>'
+                )
+            else:
+                lines.append(
+                f'<div class="summary-line">{label}: {type_counter.get(key, 0)}</div>'
+                )
+        parts.append(f'<div class="summary-section">{"".join(lines)}</div>')
+
+    other_items = [
+        (qtype, count)
+        for qtype, count in sorted(type_counter.items())
+        if qtype not in known_keys
+    ]
+    if other_items:
+        other_text = "; ".join(f"{qtype}={count}" for qtype, count in other_items)
+        parts.append(
+            f'<div class="summary-other"><strong>Other Types:</strong> {other_text}</div>'
         )
 
     return "".join(parts)
@@ -193,12 +261,7 @@ def main():
     parser.add_argument(
         "--qtypes",
         default="",
-        help="Comma-separated question types to keep, e.g. attachment_type,support_move_consequence",
-    )
-    parser.add_argument(
-        "--attachment_only",
-        action="store_true",
-        help="Shortcut for --qtypes attachment_type,support_move_consequence",
+        help="Comma-separated question types to keep",
     )
     parser.add_argument(
         "--max_width",
@@ -211,14 +274,16 @@ def main():
     with open(args.questions, encoding="utf-8") as f:
         data = json.load(f)
     questions = data["questions"] if isinstance(data, dict) and "questions" in data else data
+    questions = [
+        q for q in questions
+        if str(q.get("type", "")).strip() not in REMOVED_TYPES
+    ]
 
     requested_qtypes: set[str] = set()
     if args.qtypes:
         requested_qtypes.update(
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )
-    if args.attachment_only:
-        requested_qtypes.update({"attachment_type", "support_move_consequence"})
     if requested_qtypes:
         questions = [
             q for q in questions
@@ -274,7 +339,7 @@ def main():
     levels_str = " &nbsp;&middot;&nbsp; ".join(
         f"{k}: {v}" for k, v in sorted(level_counter.items())
     )
-    task_summary = build_task_summary(type_counter)
+    task_summary = build_task_summary_v2(questions, type_counter)
     html = PAGE.format(
         n=len(questions),
         levels=levels_str,

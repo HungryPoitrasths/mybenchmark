@@ -65,6 +65,8 @@ ORBIT_ROTATION_CANDIDATES = [
     (180, "clockwise", -180.0),
 ]
 
+ROOM_BBOX_TOL = 1e-6
+
 
 def get_moved_object_ids(
     target_obj_id: int,
@@ -129,10 +131,13 @@ def is_within_room(
     room_bbox_min: np.ndarray,
     room_bbox_max: np.ndarray,
 ) -> bool:
-    """Check that every object centre lies inside the room bounding box."""
+    """Check that every object's full bbox stays inside the room bounds."""
     for obj in objects:
-        c = np.array(obj["center"])
-        if np.any(c < room_bbox_min) or np.any(c > room_bbox_max):
+        obj_bbox_min = np.array(obj["bbox_min"], dtype=float)
+        obj_bbox_max = np.array(obj["bbox_max"], dtype=float)
+        if np.any(obj_bbox_min < (room_bbox_min - ROOM_BBOX_TOL)):
+            return False
+        if np.any(obj_bbox_max > (room_bbox_max + ROOM_BBOX_TOL)):
             return False
     return True
 
@@ -172,10 +177,12 @@ def has_terminal_bbox_collision(
     original_objects: list[dict],
     moved_objects: list[dict],
     moved_ids: set[int],
+    collision_objects: list[dict] | None = None,
 ) -> bool:
-    """Reject movements whose final boxes intersect any unmoved object."""
+    """Reject movements whose final boxes intersect any static collision object."""
     moved_map = {obj["id"]: obj for obj in moved_objects if obj["id"] in moved_ids}
-    static_objects = [obj for obj in original_objects if obj["id"] not in moved_ids]
+    collision_source = original_objects if collision_objects is None else collision_objects
+    static_objects = [obj for obj in collision_source if obj["id"] not in moved_ids]
 
     for moved_obj in moved_map.values():
         for static_obj in static_objects:
@@ -190,6 +197,7 @@ def find_meaningful_movement(
     target_id: int,
     camera_pose: CameraPose,
     room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Search for a movement vector that changes at least one spatial relation.
 
@@ -204,7 +212,12 @@ def find_meaningful_movement(
         new_objects = apply_movement(objects, support_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
-        if has_terminal_bbox_collision(objects, new_objects, moved_ids):
+        if has_terminal_bbox_collision(
+            objects,
+            new_objects,
+            moved_ids,
+            collision_objects=collision_objects,
+        ):
             continue
         new_relations = compute_all_relations(new_objects, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
@@ -255,6 +268,7 @@ def find_meaningful_orbit_rotation(
     target_id: int,
     pivot_id: int,
     room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
     """Enumerate physically valid orbit rotations around a static pivot."""
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
@@ -273,7 +287,12 @@ def find_meaningful_orbit_rotation(
         )
         if not is_within_room(rotated_objects, room_min, room_max):
             continue
-        if has_terminal_bbox_collision(objects, rotated_objects, moved_ids):
+        if has_terminal_bbox_collision(
+            objects,
+            rotated_objects,
+            moved_ids,
+            collision_objects=collision_objects,
+        ):
             continue
         valid_rotations.append({
             "angle": angle,

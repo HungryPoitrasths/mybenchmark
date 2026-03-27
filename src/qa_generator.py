@@ -60,12 +60,6 @@ ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", 
 ALL_OCCLUSION = ["fully visible", "partially occluded", "not visible"]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
 YES_NO = ["Yes", "No"]
-ALL_ATTACHMENT_TYPES = [
-    "resting on",
-    "inside",
-    "attached/affixed to",
-    "no physical contact",
-]
 
 # Object-centric questions need a stable horizontal facing direction.
 MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE = 0.3
@@ -346,10 +340,6 @@ def _default_templates() -> dict:
             "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
             "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
         ],
-        "L1_attachment_type": [
-            "What is the physical relationship between {obj_child} and {obj_parent}?",
-            "How is {obj_child} physically connected to or resting on {obj_parent}?",
-        ],
 
         # ==== L2 — Intervention ====
 
@@ -373,10 +363,6 @@ def _default_templates() -> dict:
         ],
         "L2_object_remove": [
             "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
-        ],
-        "L2_support_move_consequence": [
-            "If {obj_parent} is moved {direction} by {distance}, would {obj_child} also change its position?",
-            "Imagine moving {obj_parent} {direction_with_camera_hint} by {distance}. Would {obj_child} move along with it?",
         ],
 
         # --- Object-centric ---
@@ -1552,6 +1538,7 @@ def generate_l2_object_move(
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions: list[dict] = []
@@ -1572,6 +1559,7 @@ def generate_l2_object_move(
         delta, changed = find_meaningful_movement(
             objects, support_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
+            collision_objects=collision_objects,
         )
         if delta is None:
             continue
@@ -1891,6 +1879,7 @@ def generate_l2_object_move_object_centric(
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in a query-centric object-centric frame."""
     questions: list[dict] = []
@@ -1928,6 +1917,7 @@ def generate_l2_object_move_object_centric(
                 move_source_id,
                 face["id"],
                 room_bounds=room_bounds,
+                collision_objects=collision_objects,
             )
             if not valid_rotations:
                 continue
@@ -2026,6 +2016,7 @@ def generate_l2_object_move_allocentric(
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions: list[dict] = []
@@ -2051,6 +2042,7 @@ def generate_l2_object_move_allocentric(
         delta, _changed = find_meaningful_movement(
             objects, support_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
+            collision_objects=collision_objects,
         )
         if delta is None:
             continue
@@ -2122,194 +2114,6 @@ def generate_l2_object_move_allocentric(
 # ---------------------------------------------------------------------------
 #  Attachment / support relation generators
 # ---------------------------------------------------------------------------
-
-ATTACHMENT_MOVE_PROMPTS = [
-    ("to the left", "0.5m"),
-    ("to the right", "1.0m"),
-    ("forward", "0.5m"),
-    ("backward", "1.0m"),
-]
-
-
-def generate_l1_attachment_type(
-    objects_uniq: list[dict],
-    all_objects_map: dict[int, dict],
-    attachment_edges: list[dict],
-    templates: dict,
-    max_questions: int = 15,
-) -> list[dict]:
-    """L1: identify the physical attachment/support relation type."""
-    questions: list[dict] = []
-    tpl_list = templates.get(
-        "L1_attachment_type",
-        _default_templates()["L1_attachment_type"],
-    )
-    question_eligible_ids = {int(o["id"]) for o in objects_uniq}
-    type_to_answer = {
-        "supported_by": "resting on",
-        "resting_on_soft_surface": "resting on",
-        "contained_in": "inside",
-        "affixed_to": "attached/affixed to",
-    }
-
-    for edge in attachment_edges:
-        child_id = int(edge["child_id"])
-        parent_id = int(edge["parent_id"])
-        if child_id not in question_eligible_ids:
-            continue
-        child = all_objects_map.get(child_id)
-        parent = all_objects_map.get(parent_id)
-        if child is None or parent is None:
-            continue
-
-        correct = type_to_answer.get(str(edge.get("type", "")))
-        if correct is None:
-            continue
-
-        tpl = random.choice(tpl_list)
-        question_text = tpl.format(
-            obj_child=_the(child["label"]),
-            obj_parent=_the(parent["label"]),
-        )
-        options, answer = generate_options(correct, ALL_ATTACHMENT_TYPES)
-        questions.append({
-            "level": "L1",
-            "type": "attachment_type",
-            "question": question_text,
-            "options": options,
-            "answer": answer,
-            "correct_value": correct,
-            "child_id": child_id,
-            "child_label": child["label"],
-            "parent_id": parent_id,
-            "parent_label": parent["label"],
-            "attachment_type": str(edge.get("type", "")),
-            "mentioned_objects": [
-                _mention("child", child["label"], child_id),
-                _mention("parent", parent["label"], parent_id),
-            ],
-            "ambiguity_score": 0.0,
-            "relation_unchanged": False,
-        })
-
-    if len(questions) > max_questions:
-        questions = random.sample(questions, max_questions)
-    return questions
-
-
-def generate_l2_support_move_consequence(
-    objects_uniq: list[dict],
-    all_objects_map: dict[int, dict],
-    support_graph: dict[int, list[int]],
-    supported_by: dict[int, int],
-    templates: dict,
-    max_questions: int = 15,
-) -> list[dict]:
-    """L2: ask whether a dependent object moves when its parent moves."""
-    questions: list[dict] = []
-    tpl_list = templates.get(
-        "L2_support_move_consequence",
-        _default_templates()["L2_support_move_consequence"],
-    )
-    question_eligible_ids = {int(o["id"]) for o in objects_uniq}
-    supported_pairs = {
-        (int(child_id), int(parent_id))
-        for child_id, parent_id in supported_by.items()
-    }
-
-    for child_id, parent_id in sorted(supported_pairs):
-        if child_id not in question_eligible_ids:
-            continue
-        child = all_objects_map.get(child_id)
-        parent = all_objects_map.get(parent_id)
-        if child is None or parent is None:
-            continue
-
-        direction, distance = random.choice(ATTACHMENT_MOVE_PROMPTS)
-        tpl = random.choice(tpl_list)
-        question_text = tpl.format(
-            obj_parent=_the(parent["label"]),
-            obj_child=_the(child["label"]),
-            direction=direction,
-            direction_with_camera_hint=_direction_with_camera_hint(direction),
-            distance=distance,
-        )
-        options, answer = generate_options("Yes", YES_NO, n_options=2)
-        questions.append({
-            "level": "L2",
-            "type": "support_move_consequence",
-            "question": question_text,
-            "options": options,
-            "answer": answer,
-            "correct_value": "Yes",
-            "parent_id": parent_id,
-            "parent_label": parent["label"],
-            "child_id": child_id,
-            "child_label": child["label"],
-            "mentioned_objects": [
-                _mention("parent", parent["label"], parent_id),
-                _mention("child", child["label"], child_id),
-            ],
-            "relation_unchanged": False,
-        })
-
-    negative_added = 0
-    for parent_id_raw, child_ids in support_graph.items():
-        parent_id = int(parent_id_raw)
-        if not child_ids:
-            continue
-        parent = all_objects_map.get(parent_id)
-        if parent is None:
-            continue
-        parent_center = np.array(parent["center"], dtype=float)
-        moved_with_parent = set(get_support_chain_ids(parent_id, support_graph)) | {parent_id}
-
-        candidates = [
-            obj for obj in objects_uniq
-            if int(obj["id"]) not in moved_with_parent
-        ]
-        candidates.sort(
-            key=lambda obj: float(np.linalg.norm(np.array(obj["center"], dtype=float) - parent_center))
-        )
-        if not candidates:
-            continue
-
-        child = candidates[0]
-        direction, distance = random.choice(ATTACHMENT_MOVE_PROMPTS)
-        tpl = random.choice(tpl_list)
-        question_text = tpl.format(
-            obj_parent=_the(parent["label"]),
-            obj_child=_the(child["label"]),
-            direction=direction,
-            direction_with_camera_hint=_direction_with_camera_hint(direction),
-            distance=distance,
-        )
-        options, answer = generate_options("No", YES_NO, n_options=2)
-        questions.append({
-            "level": "L2",
-            "type": "support_move_consequence",
-            "question": question_text,
-            "options": options,
-            "answer": answer,
-            "correct_value": "No",
-            "parent_id": parent_id,
-            "parent_label": parent["label"],
-            "child_id": int(child["id"]),
-            "child_label": child["label"],
-            "mentioned_objects": [
-                _mention("parent", parent["label"], parent_id),
-                _mention("child", child["label"], int(child["id"])),
-            ],
-            "relation_unchanged": False,
-        })
-        negative_added += 1
-        if negative_added >= max_questions // 2:
-            break
-
-    if len(questions) > max_questions:
-        questions = random.sample(questions, max_questions)
-    return questions
-
 
 # ---------------------------------------------------------------------------
 #  L3 generators
@@ -3042,6 +2846,7 @@ def generate_all_questions(
     # L1 occlusion can rely on per-label VLM counts, so keep a pre-referable
     # pool of question-eligible visible objects for that path only.
     l1_occlusion_objects = list(objects_for_questions)
+    l2_collision_objects = list(objects_for_questions)
     graph_ids = {int(o["id"]) for o in all_objects_for_graph}
     attachment_edges = [
         e for e in attachment_edges
@@ -3192,15 +2997,6 @@ def generate_all_questions(
     all_questions.extend(l1_occ_qs)
     all_questions.extend(l1_dir_oc_qs)
     all_questions.extend(l1_dir_allo_qs)
-    all_questions.extend(
-        generate_l1_attachment_type(
-            all_objects_for_graph,
-            all_objects_map,
-            attachment_edges,
-            templates,
-        )
-    )
-
     # Rebuild movement graph restricted to question-eligible children plus
     # question-only parents that may still anchor attachment questions.
     support_graph_uniq = {
@@ -3214,7 +3010,7 @@ def generate_all_questions(
     # L2 — ego-centric (existing)
     all_questions.extend(
         generate_l2_object_move(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
-                                room_bounds=room_bounds)
+                                room_bounds=room_bounds, collision_objects=l2_collision_objects)
     )
     all_questions.extend(
         generate_l2_viewpoint_move(
@@ -3248,24 +3044,16 @@ def generate_all_questions(
         generate_l2_object_move_object_centric(
             objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
+            collision_objects=l2_collision_objects,
         )
     )
     all_questions.extend(
         generate_l2_object_move_allocentric(
             objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
+            collision_objects=l2_collision_objects,
         )
     )
-    all_questions.extend(
-        generate_l2_support_move_consequence(
-            all_objects_for_graph,
-            all_objects_map,
-            support_graph_uniq,
-            supported_by_uniq,
-            templates,
-        )
-    )
-
     # L3
     all_questions.extend(
         generate_l3_support_chain(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates)

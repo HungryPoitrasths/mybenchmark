@@ -98,7 +98,6 @@ def balance_answer_values(
     target_types: tuple[str, ...] = (
         "distance", "direction",
         "direction_object_centric", "direction_allocentric",
-        "attachment_type", "support_move_consequence",
     ),
 ) -> list[dict]:
     """Downsample questions so correct_value distribution is roughly uniform.
