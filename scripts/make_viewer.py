@@ -191,6 +191,16 @@ def main():
     )
     parser.add_argument("--output", default="viewer.html")
     parser.add_argument(
+        "--qtypes",
+        default="",
+        help="Comma-separated question types to keep, e.g. attachment_type,support_move_consequence",
+    )
+    parser.add_argument(
+        "--attachment_only",
+        action="store_true",
+        help="Shortcut for --qtypes attachment_type,support_move_consequence",
+    )
+    parser.add_argument(
         "--max_width",
         type=int,
         default=480,
@@ -201,6 +211,19 @@ def main():
     with open(args.questions, encoding="utf-8") as f:
         data = json.load(f)
     questions = data["questions"] if isinstance(data, dict) and "questions" in data else data
+
+    requested_qtypes: set[str] = set()
+    if args.qtypes:
+        requested_qtypes.update(
+            qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
+        )
+    if args.attachment_only:
+        requested_qtypes.update({"attachment_type", "support_move_consequence"})
+    if requested_qtypes:
+        questions = [
+            q for q in questions
+            if str(q.get("type", "")).strip() in requested_qtypes
+        ]
 
     image_root = Path(args.image_root)
     level_counter: Counter = Counter()
