@@ -23,6 +23,7 @@ import argparse
 import base64
 import json
 import logging
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -213,7 +214,12 @@ def main():
     args = parser.parse_args()
 
     from openai import OpenAI
-    client = OpenAI(api_key="EMPTY", base_url=args.vlm_url)
+    api_key = (
+        os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or "EMPTY"
+    )
+    client = OpenAI(api_key=api_key, base_url=args.vlm_url)
 
     # Test connection and resolve model name
     try:
