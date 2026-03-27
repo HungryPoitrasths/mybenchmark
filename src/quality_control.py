@@ -53,11 +53,18 @@ def quality_filter(questions: list[dict]) -> list[dict]:
             or q.get("obj_target_label")
             or ""
         )
+        secondary_labels = (
+            q.get("query_obj_label") or "",
+            q.get("obj_b_label") or "",
+            q.get("obj_c_label") or "",
+            q.get("obj_ref_label") or "",
+        )
         key = (
             q.get("scene_id"),
             q.get("image_name"),
             q.get("type"),
             primary_label,
+            *secondary_labels,
         )
         if key in seen_keys:
             removed_counts["near_duplicate"] += 1
