@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import random
 import sys
 from collections import Counter
 from io import BytesIO
@@ -74,6 +75,24 @@ OBJECT_MOVE_TYPES = {
     "object_move_allocentric",
 }
 REMOVED_TYPES = {"attachment_type", "support_move_consequence"}
+VIEWER_QTYPE_ORDER = [
+    "direction_agent",
+    "occlusion",
+    "distance",
+    "direction_object_centric",
+    "direction_allocentric",
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_occlusion",
+    "object_move_object_centric",
+    "object_move_allocentric",
+    "viewpoint_move",
+    "object_remove",
+    "support_chain",
+    "coordinate_rotation_agent",
+    "coordinate_rotation_object_centric",
+    "coordinate_rotation_allocentric",
+]
 
 
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
@@ -176,6 +195,27 @@ def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
     return "".join(parts)
 
 
+def order_questions_for_viewer(questions: list[dict], seed: int = 42) -> list[dict]:
+    rng = random.Random(seed)
+    order_index = {qtype: idx for idx, qtype in enumerate(VIEWER_QTYPE_ORDER)}
+    grouped: dict[str, list[dict]] = {}
+    for q in questions:
+        qtype = str(q.get("type", "")).strip() or "unknown"
+        grouped.setdefault(qtype, []).append(q)
+
+    for group in grouped.values():
+        rng.shuffle(group)
+
+    ordered_qtypes = sorted(
+        grouped,
+        key=lambda qtype: (order_index.get(qtype, len(VIEWER_QTYPE_ORDER)), qtype),
+    )
+    ordered_questions: list[dict] = []
+    for qtype in ordered_qtypes:
+        ordered_questions.extend(grouped[qtype])
+    return ordered_questions
+
+
 PAGE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -269,6 +309,12 @@ def main():
         default=480,
         help="Max image width in pixels (default 480)",
     )
+    parser.add_argument(
+        "--shuffle_seed",
+        type=int,
+        default=42,
+        help="Random seed used to shuffle questions within the same type",
+    )
     args = parser.parse_args()
 
     with open(args.questions, encoding="utf-8") as f:
@@ -289,6 +335,7 @@ def main():
             q for q in questions
             if str(q.get("type", "")).strip() in requested_qtypes
         ]
+    questions = order_questions_for_viewer(questions, seed=args.shuffle_seed)
 
     image_root = Path(args.image_root)
     level_counter: Counter = Counter()
