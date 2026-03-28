@@ -28,7 +28,6 @@ from src.utils.colmap_loader import (
     load_axis_alignment,
     load_scannet_depth_intrinsics,
     load_scannet_intrinsics,
-    load_scannet_poses,
 )
 from src.utils.depth_occlusion import load_depth_image
 
@@ -302,6 +301,45 @@ def build_support_rows(scene: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def load_selected_scannet_poses(
+    scene_dir: Path,
+    image_names: list[str],
+    axis_alignment: np.ndarray | None = None,
+) -> dict[str, Any]:
+    from src.utils.colmap_loader import CameraPose
+
+    pose_dir = scene_dir / "pose"
+    color_dir = scene_dir / "color"
+    if not pose_dir.exists():
+        return {}
+
+    alignment = axis_alignment if axis_alignment is not None else np.eye(4, dtype=np.float64)
+    poses: dict[str, CameraPose] = {}
+    for image_name in image_names:
+        if image_name in poses:
+            continue
+        frame_id = str(image_name).replace(".jpg", "")
+        pose_file = pose_dir / f"{frame_id}.txt"
+        if not pose_file.exists():
+            continue
+        if not (color_dir / image_name).exists():
+            continue
+        T_c2w = np.loadtxt(str(pose_file))
+        if not np.isfinite(T_c2w).all():
+            continue
+        T_c2w_aligned = alignment @ T_c2w
+        R_c2w = T_c2w_aligned[:3, :3]
+        t_c2w = T_c2w_aligned[:3, 3]
+        R_w2c = R_c2w.T
+        t_w2c = -R_c2w.T @ t_c2w
+        poses[image_name] = CameraPose(
+            image_name=image_name,
+            rotation=R_w2c.astype(np.float64),
+            translation=t_w2c.astype(np.float64),
+        )
+    return poses
+
+
 def build_frames(
     scene: dict[str, Any],
     scene_dir: Path | None,
@@ -319,20 +357,24 @@ def build_frames(
     support_ids = {int(k) for k in support_graph.keys()}
     for child_ids in support_graph.values():
         support_ids.update(int(child) for child in child_ids)
-    selected = select_frames(scene_dir, objects, support_graph, max_frames=max_frames) if scene_dir else []
-    selected_by_name = {frame["image_name"]: frame for frame in selected}
-    ordered_names = [frame["image_name"] for frame in selected]
+    ordered_names: list[str] = []
     for name in sorted(referability_frames.keys()):
         if name not in ordered_names:
             ordered_names.append(name)
     for name in sorted(scene_questions.keys()):
         if name not in ordered_names:
             ordered_names.append(name)
+    selected = []
+    if scene_dir and not ordered_names:
+        selected = select_frames(scene_dir, objects, support_graph, max_frames=max_frames)
+        ordered_names = [frame["image_name"] for frame in selected]
+    selected_by_name = {frame["image_name"]: frame for frame in selected}
     poses = {}
     color_intrinsics = None
     depth_intrinsics = None
     if scene_dir:
-        poses = load_scannet_poses(scene_dir, axis_alignment=load_axis_alignment(scene_dir))
+        axis_align = load_axis_alignment(scene_dir)
+        poses = load_selected_scannet_poses(scene_dir, ordered_names, axis_alignment=axis_align)
         try:
             color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception:
@@ -346,6 +388,7 @@ def build_frames(
         sel = selected_by_name.get(image_name)
         ref = referability_frames.get(image_name) or {}
         frame_selector_ids = [int(x) for x in sel.get("visible_object_ids", [])] if sel else []
+        frame_selector_score = int(sel.get("score", 0)) if sel else 0
         pipeline_ids = list(frame_selector_ids)
         visibility_rows = []
         if scene_dir and color_intrinsics is not None and image_name in poses:
@@ -360,6 +403,10 @@ def build_frames(
                     except Exception:
                         depth_image = None
             vis = compute_frame_object_visibility(objects, pose, color_intrinsics, image_path=image_path if image_path.exists() else None, depth_image=depth_image, depth_intrinsics=depth_intrinsics, strict_mode=True)
+            if not frame_selector_ids:
+                frame_selector_ids = [int(obj["id"]) for obj in get_visible_objects(objects, pose, color_intrinsics)]
+            if not frame_selector_score:
+                frame_selector_score = len(frame_selector_ids) * (1 + sum(1 for x in frame_selector_ids if x in support_ids))
             if ref:
                 pipeline_ids = [int(obj["id"]) for obj in get_visible_objects(objects, pose, color_intrinsics)]
             if strict_mode:
@@ -381,7 +428,7 @@ def build_frames(
             "image_uri": (scene_dir / "color" / image_name).resolve().as_uri() if scene_dir and (scene_dir / "color" / image_name).exists() else None,
             "image_width": getattr(color_intrinsics, "width", 640) if color_intrinsics is not None else 640,
             "image_height": getattr(color_intrinsics, "height", 480) if color_intrinsics is not None else 480,
-            "frame_selector_score": int(sel.get("score", 0)) if sel else 0,
+            "frame_selector_score": frame_selector_score,
             "frame_selector_visible_ids": frame_selector_ids,
             "frame_selector_label_counts": count_labels(frame_selector_ids, objects_by_id),
             "support_visible_count": sum(1 for x in frame_selector_ids if x in support_ids),
