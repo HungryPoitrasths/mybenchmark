@@ -15,6 +15,71 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 MAX_ANSWER_RATIO = 0.35  # no single option should exceed 35% of correct answers
+MAX_L1_OCCLUSION_NOT_VISIBLE_RATIO = 1.0 / 3.0
+L1_OCCLUSION_NOT_VISIBLE_DOWNSAMPLE_SEED = 42
+ATTACHMENT_NEAR_DUP_TYPES = {
+    "object_move",
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_occlusion",
+    "object_move_object_centric",
+    "object_move_allocentric",
+    "object_remove",
+    "support_chain",
+    "attachment_type",
+    "support_move_consequence",
+}
+ATTACHMENT_ID_FIELDS = (
+    "obj_a_id",
+    "moved_obj_id",
+    "obj_target_id",
+    "removed_obj_id",
+    "query_obj_id",
+    "obj_b_id",
+    "obj_c_id",
+    "obj_ref_id",
+    "obj_face_id",
+    "grandparent_id",
+    "parent_id",
+    "grandchild_id",
+    "neighbor_id",
+)
+
+
+def _label_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _id_key(value: Any) -> int | str:
+    if value is None or value == "":
+        return ""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _near_duplicate_key(q: dict[str, Any]) -> tuple:
+    base = (
+        q.get("scene_id"),
+        q.get("image_name"),
+        q.get("type"),
+    )
+    if q.get("type") in ATTACHMENT_NEAR_DUP_TYPES:
+        return base + tuple(_id_key(q.get(field)) for field in ATTACHMENT_ID_FIELDS)
+
+    primary_label = _label_key(
+        q.get("obj_a_label")
+        or q.get("moved_obj_label")
+        or q.get("obj_target_label")
+    )
+    secondary_labels = (
+        _label_key(q.get("query_obj_label")),
+        _label_key(q.get("obj_b_label")),
+        _label_key(q.get("obj_c_label")),
+        _label_key(q.get("obj_ref_label")),
+    )
+    return base + (primary_label, *secondary_labels)
 
 
 def quality_filter(questions: list[dict]) -> list[dict]:
@@ -23,7 +88,7 @@ def quality_filter(questions: list[dict]) -> list[dict]:
     Filters:
         1. Direction ambiguity > 0.7 (too close to boundary)
         2. Distance questions near bin boundaries
-        3. Near-duplicate questions (same frame + type + obj_a, keep one)
+        3. Near-duplicate questions (same frame + type + attachment ids or label tuple, keep one)
     """
     filtered: list[dict] = []
     removed_counts: Counter = Counter()
@@ -46,26 +111,7 @@ def quality_filter(questions: list[dict]) -> list[dict]:
     seen_keys: set[tuple] = set()
     deduped: list[dict] = []
     for q in filtered:
-        # Pick the most specific object label for dedup
-        primary_label = (
-            q.get("obj_a_label")
-            or q.get("moved_obj_label")
-            or q.get("obj_target_label")
-            or ""
-        )
-        secondary_labels = (
-            q.get("query_obj_label") or "",
-            q.get("obj_b_label") or "",
-            q.get("obj_c_label") or "",
-            q.get("obj_ref_label") or "",
-        )
-        key = (
-            q.get("scene_id"),
-            q.get("image_name"),
-            q.get("type"),
-            primary_label,
-            *secondary_labels,
-        )
+        key = _near_duplicate_key(q)
         if key in seen_keys:
             removed_counts["near_duplicate"] += 1
             continue
@@ -91,6 +137,62 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         len(questions), len(final), len(questions) - len(final),
     )
     return final
+
+
+def cap_l1_occlusion_not_visible_ratio(
+    questions: list[dict],
+    max_ratio: float = MAX_L1_OCCLUSION_NOT_VISIBLE_RATIO,
+    seed: int = L1_OCCLUSION_NOT_VISIBLE_DOWNSAMPLE_SEED,
+) -> list[dict]:
+    """Globally cap the share of L1 occlusion questions answered as not visible."""
+    if max_ratio <= 0.0 or max_ratio >= 1.0:
+        raise ValueError(f"max_ratio must be in (0, 1), got {max_ratio}")
+
+    l1_occlusion_indices = [
+        idx for idx, q in enumerate(questions)
+        if q.get("level") == "L1" and q.get("type") == "occlusion"
+    ]
+    if not l1_occlusion_indices:
+        return questions
+
+    not_visible_indices = [
+        idx for idx in l1_occlusion_indices
+        if questions[idx].get("correct_value") == "not visible"
+    ]
+    not_visible_count = len(not_visible_indices)
+    if not not_visible_count:
+        return questions
+
+    other_count = len(l1_occlusion_indices) - not_visible_count
+    max_not_visible = not_visible_count
+    while (
+        max_not_visible > 0
+        and max_not_visible / (other_count + max_not_visible) > max_ratio
+    ):
+        max_not_visible -= 1
+    if not_visible_count <= max_not_visible:
+        return questions
+
+    rng = random.Random(seed)
+    kept_not_visible_indices = set(rng.sample(not_visible_indices, max_not_visible)) if max_not_visible > 0 else set()
+    removed_count = not_visible_count - len(kept_not_visible_indices)
+    capped_questions = [
+        q
+        for idx, q in enumerate(questions)
+        if idx not in not_visible_indices or idx in kept_not_visible_indices
+    ]
+
+    final_l1_occlusion = len(l1_occlusion_indices) - removed_count
+    final_not_visible = len(kept_not_visible_indices)
+    logger.info(
+        "Capped L1 occlusion not-visible questions: total=%d, original_not_visible=%d, kept=%d, removed=%d, final_ratio=%.3f",
+        final_l1_occlusion + removed_count,
+        not_visible_count,
+        final_not_visible,
+        removed_count,
+        0.0 if final_l1_occlusion == 0 else final_not_visible / final_l1_occlusion,
+    )
+    return capped_questions
 
 
 def balance_answer_values(
@@ -327,10 +429,12 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
 
     Steps:
         1. Automatic quality filter
-        2. Answer distribution balancing
-        3. Log statistics
+        2. Cap global L1 occlusion not-visible ratio
+        3. Answer distribution balancing
+        4. Log statistics
     """
     questions = quality_filter(questions)
+    questions = cap_l1_occlusion_not_visible_ratio(questions)
     questions = balance_answer_values(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)
