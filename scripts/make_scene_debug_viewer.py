@@ -537,6 +537,16 @@ def render_html(
     frame_nav = "".join(f'<a class="pill" href="#frame-{i}">{h(frame["image_name"])}</a>' for i, frame in enumerate(frames))
     frame_sections = []
     for i, frame in enumerate(frames):
+        vlm_status = (
+            "usable"
+            if frame["frame_usable"]
+            else "rejected"
+            if frame["frame_usable"] is False
+            else "not loaded"
+        )
+        vlm_detail = frame["frame_reject_reason"]
+        if not vlm_detail:
+            vlm_detail = "referable=" + str(len(frame["referable_object_ids"]))
         image_block = (
             f'<div class="imgwrap"><img src="{h(frame["image_uri"])}" alt="{h(frame["image_name"])}">{render_overlay_svg(frame)}</div>'
             if frame["image_uri"] else '<div class="imgwrap img-missing">Image missing for this frame.</div>'
@@ -545,7 +555,7 @@ def render_html(
             f'<section class="card frame" id="frame-{i}"><h2>{h(frame["image_name"])}</h2>'
             f'<div class="metrics"><div class="metric"><div class="k">Frame Score</div><div class="v">{frame["frame_selector_score"]}</div><div class="s">n_visible={len(frame["frame_selector_visible_ids"])}, support_visible={frame["support_visible_count"]}</div></div>'
             f'<div class="metric"><div class="k">Pipeline Visible</div><div class="v">{len(frame["pipeline_visible_ids"])}</div><div class="s">strict_mode={"on" if strict_mode else "off"}</div></div>'
-            f'<div class="metric"><div class="k">VLM</div><div class="v">{h("usable" if frame["frame_usable"] else "rejected" if frame["frame_usable"] is False else "not loaded")}</div><div class="s">{h(frame["frame_reject_reason"] or f"referable={len(frame['referable_object_ids'])}")}</div></div>'
+            f'<div class="metric"><div class="k">VLM</div><div class="v">{h(vlm_status)}</div><div class="s">{h(vlm_detail)}</div></div>'
             f'<div class="metric"><div class="k">Questions</div><div class="v">{len(frame["questions"])}</div><div class="s">wrong={frame["question_wrong"]}</div></div></div>'
             f'<div class="twocol"><div><h3>Image Overlay</h3>{image_block}<div class="legend"><span class="cand">frame selector candidate</span><span class="pipe">pipeline visible</span><span class="ref">VLM referable</span></div></div>'
             f'<div><h3>Label Counts</h3>{render_count_table(frame)}</div></div>'
