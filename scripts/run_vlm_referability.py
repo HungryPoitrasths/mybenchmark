@@ -3,8 +3,8 @@
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
   1. whether the frame is usable for spatial reasoning;
-  2. for batches of candidate labels, how many clearly visible instances of
-     each label appear in the image.
+  2. for batches of candidate labels, how many visible instances of each
+     label appear in the image.
 
 The output is a cache that can be consumed by scripts/run_pipeline.py via
 --referability_cache.
@@ -106,9 +106,10 @@ def _count_prompt(candidate_labels: list[str]) -> str:
     return (
         "You are given one original scene image and a candidate label list extracted from scene metadata. "
         "Only use the image and this candidate label list. Do not invent new labels. "
-        "For each candidate label, return the exact number of clearly visible instances in the image. "
-        "Count only instances that are clear enough to support a spatial-reasoning question. "
-        "If a label is not clearly visible, return 0. "
+        "For each candidate label, return the exact number of visible instances in the image. "
+        "Count an instance as visible if any part of it is inside the image and it is not fully occluded by other objects. "
+        "Do not require the whole object to be visible. "
+        "If a label has no visible instance, return 0. "
         "Every candidate label must appear exactly once in the output. "
         f"Candidate labels: {labels_json}. "
         'Answer with strict JSON only using this schema: {"counts": {"chair": 3, "lamp": 1, "book": 0}}'
@@ -219,6 +220,36 @@ def _resolve_referable_object_ids(
             continue
         referable_ids.append(obj_ids[0])
     return sorted(referable_ids)
+
+
+def _count_labels_for_object_ids(
+    object_ids: list[int],
+    objects_by_id: dict[int, dict[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for obj_id in object_ids:
+        obj = objects_by_id.get(int(obj_id))
+        if obj is None:
+            continue
+        label = str(obj.get("label", "")).strip().lower()
+        if not label:
+            continue
+        counts[label] += 1
+    return dict(sorted(counts.items()))
+
+
+def _frame_entry_has_debug_fields(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    required_keys = {
+        "candidate_labels",
+        "label_to_object_ids",
+        "selector_visible_object_ids",
+        "selector_visible_label_counts",
+        "vlm_count_batches",
+        "vlm_unique_object_ids",
+    }
+    return required_keys.issubset(entry.keys())
 
 
 def main():
@@ -343,7 +374,11 @@ def main():
 
         scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         objects_by_id = {int(o["id"]): o for o in scene["objects"]}
-        pending_frames = [frame for frame in frames if frame["image_name"] not in scene_cache]
+        pending_frames = [
+            frame
+            for frame in frames
+            if not _frame_entry_has_debug_fields(scene_cache.get(frame["image_name"]))
+        ]
         if not pending_frames:
             logger.info("Scene %s already cached -> skipping", scene_id)
             continue
@@ -374,11 +409,25 @@ def main():
             frame_info = _frame_decision(client, model_name, image)
             label_counts: dict[str, int] = {}
             referable_object_ids: list[int] = []
+            vlm_count_batches: list[dict[str, Any]] = []
+            selector_visible_object_ids = [
+                int(obj_id)
+                for obj_id in frame["visible_object_ids"]
+                if int(obj_id) in objects_by_id
+            ]
+            selector_visible_label_counts = _count_labels_for_object_ids(
+                selector_visible_object_ids,
+                objects_by_id,
+            )
 
             if frame_info["frame_usable"]:
                 image_b64 = _image_to_base64(image)
                 for label_batch in _chunk_labels(candidate_labels):
                     batch_counts = _label_count_decision(client, model_name, image_b64, label_batch)
+                    vlm_count_batches.append({
+                        "labels": list(label_batch),
+                        "raw_counts": dict(sorted(batch_counts.items())),
+                    })
                     label_counts.update(batch_counts)
 
                 referable_object_ids = _resolve_referable_object_ids(
@@ -389,13 +438,19 @@ def main():
             frame_entry: dict[str, Any] = {
                 "frame_usable": frame_info["frame_usable"],
                 "frame_reject_reason": None if frame_info["frame_usable"] else frame_info["reason"],
-                "candidate_visible_object_ids": [
-                    int(obj_id)
-                    for obj_id in frame["visible_object_ids"]
-                    if int(obj_id) in objects_by_id
-                ],
-                "label_counts": label_counts,
+                "selector_score": int(frame.get("score", 0)),
+                "selector_visible_object_ids": selector_visible_object_ids,
+                "selector_visible_label_counts": selector_visible_label_counts,
+                "candidate_visible_object_ids": selector_visible_object_ids,
+                "candidate_labels": list(candidate_labels),
+                "label_to_object_ids": {
+                    str(label): [int(obj_id) for obj_id in obj_ids]
+                    for label, obj_ids in sorted(label_to_ids.items())
+                },
+                "vlm_count_batches": vlm_count_batches,
+                "label_counts": dict(sorted(label_counts.items())),
                 "referable_object_ids": referable_object_ids,
+                "vlm_unique_object_ids": list(referable_object_ids),
             }
             scene_cache[image_name] = frame_entry
 
