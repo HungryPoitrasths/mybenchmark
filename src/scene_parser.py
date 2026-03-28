@@ -238,7 +238,7 @@ def _sample_surface_points_from_triangles(
     n_samples: int,
     rng: np.random.RandomState,
 ) -> np.ndarray:
-    """Area-weighted barycentric surface sampling from selected triangles."""
+    """Sample surface points with area-weighting plus FPS-based rebalancing."""
     if len(triangle_ids) == 0 or n_samples <= 0:
         return np.empty((0, 3), dtype=np.float64)
 
@@ -250,31 +250,52 @@ def _sample_surface_points_from_triangles(
     areas = 0.5 * np.linalg.norm(cross, axis=1)
     positive_mask = areas > 1e-10
     if not np.any(positive_mask):
-        return tri_vertices.mean(axis=1)
+        centroids = tri_vertices.mean(axis=1).astype(np.float64)
+        if len(centroids) >= n_samples:
+            return centroids[:n_samples]
+        reps = int(np.ceil(n_samples / max(len(centroids), 1)))
+        return np.tile(centroids, (reps, 1))[:n_samples]
 
     tri_vertices = tri_vertices[positive_mask]
     areas = areas[positive_mask]
     probs = areas / areas.sum()
-    chosen = rng.choice(len(tri_vertices), size=n_samples, replace=True, p=probs)
+    n_candidates = n_samples * 4
+    chosen = rng.choice(len(tri_vertices), size=n_candidates, replace=True, p=probs)
     chosen_triangles = tri_vertices[chosen]
 
-    u = rng.rand(n_samples, 1)
-    v = rng.rand(n_samples, 1)
+    u = rng.rand(n_candidates, 1)
+    v = rng.rand(n_candidates, 1)
     sqrt_u = np.sqrt(u)
     bary_a = 1.0 - sqrt_u
     bary_b = sqrt_u * (1.0 - v)
     bary_c = sqrt_u * v
-    return (
+    candidates = (
         bary_a * chosen_triangles[:, 0]
         + bary_b * chosen_triangles[:, 1]
         + bary_c * chosen_triangles[:, 2]
     ).astype(np.float64)
 
+    if len(candidates) <= n_samples:
+        return candidates[:n_samples]
+
+    selected_indices = np.empty(n_samples, dtype=np.int64)
+    selected_indices[0] = int(rng.randint(len(candidates)))
+    min_dist_sq = np.sum(
+        (candidates - candidates[selected_indices[0]]) ** 2,
+        axis=1,
+    )
+    for out_idx in range(1, n_samples):
+        next_idx = int(np.argmax(min_dist_sq))
+        selected_indices[out_idx] = next_idx
+        dist_sq = np.sum((candidates - candidates[next_idx]) ** 2, axis=1)
+        min_dist_sq = np.minimum(min_dist_sq, dist_sq)
+    return candidates[selected_indices]
+
 
 def load_instance_mesh_data(
     scene_path: str | Path,
     instance_ids: list[int] | None = None,
-    n_surface_samples: int = 128,
+    n_surface_samples: int = 512,
     preloaded_geometry: SceneGeometry | None = None,
 ) -> InstanceMeshData:
     """Return instance triangle ownership and cached sampled surface points."""
@@ -339,9 +360,16 @@ def load_instance_mesh_data(
 
     surface_points_by_instance: dict[int, np.ndarray] = {}
     for inst_id in kept_instances:
-        tri_ids = triangle_arrays.get(inst_id)
-        if tri_ids is None or len(tri_ids) == 0:
+        tri_parts = [
+            arr for arr in (
+                triangle_arrays.get(inst_id),
+                boundary_arrays.get(inst_id),
+            )
+            if arr is not None and len(arr) > 0
+        ]
+        if not tri_parts:
             continue
+        tri_ids = np.unique(np.concatenate(tri_parts).astype(np.int64))
         rng = np.random.RandomState(inst_id % (2 ** 32))
         surface_points_by_instance[inst_id] = _sample_surface_points_from_triangles(
             vertices=vertices,

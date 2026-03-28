@@ -44,8 +44,8 @@ from .utils.depth_occlusion import (
     MIN_PROJECTED_AREA_PX,
     FULLY_VISIBLE_RATIO_MIN,
     PARTIALLY_VISIBLE_RATIO_MIN,
-    bbox_camera_facing_sample_points,
-    compute_depth_occlusion_metrics,
+    compute_mesh_depth_occlusion,
+    compute_mesh_depth_occlusion_metrics,
 )
 from .scene_parser import ALWAYS_EXCLUDED, QUESTION_ONLY_EXCLUDED, InstanceMeshData
 
@@ -72,6 +72,9 @@ L1_OCCLUSION_MIN_IN_FRAME_RATIO = 0.05
 L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.05
 L1_OCCLUSION_OCCLUDED_MIN = 0.20
 L1_OCCLUSION_GRAYZONE_FALLBACK = 0.10
+L1_OCCLUSION_SAMPLE_COUNT = 512
+L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
+L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
 L1_OCCLUSION_MASK_PAD_RATIO = 0.20
 L1_OCCLUSION_MASK_MIN_CROP_SIZE = 128
 L1_OCCLUSION_MASK_ALPHA = 0.35
@@ -91,8 +94,117 @@ class _L1OcclusionMetrics:
     in_frame_ratio: float
     occlusion_ratio_in_frame: float
     valid_in_frame_count: int
+    sampled_point_count: int
+    in_frame_sample_count: int
+    effective_ratio: float
+    sufficient_evidence: bool
     decision: str
     backend: str
+
+
+def _instance_triangle_id_set(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> set[int]:
+    if instance_mesh_data is None:
+        return set()
+
+    tri_parts = [
+        arr for arr in (
+            instance_mesh_data.triangle_ids_by_instance.get(int(obj_id)),
+            instance_mesh_data.boundary_triangle_ids_by_instance.get(int(obj_id)),
+        )
+        if arr is not None and len(arr) > 0
+    ]
+    if not tri_parts:
+        return set()
+    tri_ids = np.unique(np.concatenate(tri_parts).astype(np.int64))
+    return {int(tid) for tid in tri_ids.tolist()}
+
+
+def _instance_surface_samples(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> np.ndarray:
+    if instance_mesh_data is None:
+        return np.empty((0, 3), dtype=np.float64)
+    samples = instance_mesh_data.surface_points_by_instance.get(int(obj_id))
+    if samples is None:
+        return np.empty((0, 3), dtype=np.float64)
+    return np.asarray(samples, dtype=np.float64)
+
+
+def _make_l1_occlusion_metrics(
+    projected_area: float,
+    in_frame_ratio: float,
+    occlusion_ratio_in_frame: float,
+    valid_in_frame_count: int,
+    sampled_point_count: int,
+    in_frame_sample_count: int,
+    backend: str,
+) -> _L1OcclusionMetrics:
+    effective_ratio = (
+        float(valid_in_frame_count / in_frame_sample_count)
+        if in_frame_sample_count > 0 else 0.0
+    )
+    sufficient_evidence = (
+        valid_in_frame_count >= L1_OCCLUSION_MIN_EFFECTIVE_COUNT
+        and effective_ratio >= L1_OCCLUSION_MIN_EFFECTIVE_RATIO
+    )
+    metrics = _L1OcclusionMetrics(
+        projected_area=float(projected_area),
+        in_frame_ratio=float(in_frame_ratio),
+        occlusion_ratio_in_frame=float(occlusion_ratio_in_frame),
+        valid_in_frame_count=int(valid_in_frame_count),
+        sampled_point_count=int(sampled_point_count),
+        in_frame_sample_count=int(in_frame_sample_count),
+        effective_ratio=effective_ratio,
+        sufficient_evidence=bool(sufficient_evidence),
+        decision="skip",
+        backend=str(backend),
+    )
+    return _L1OcclusionMetrics(
+        projected_area=metrics.projected_area,
+        in_frame_ratio=metrics.in_frame_ratio,
+        occlusion_ratio_in_frame=metrics.occlusion_ratio_in_frame,
+        valid_in_frame_count=metrics.valid_in_frame_count,
+        sampled_point_count=metrics.sampled_point_count,
+        in_frame_sample_count=metrics.in_frame_sample_count,
+        effective_ratio=metrics.effective_ratio,
+        sufficient_evidence=metrics.sufficient_evidence,
+        decision=_classify_l1_occlusion_metrics(metrics),
+        backend=metrics.backend,
+    )
+
+
+def _depth_backend_inputs_ready(
+    *,
+    depth_image,
+    depth_intrinsics,
+    ray_caster,
+    context: str,
+) -> bool:
+    """Validate optional depth-evaluation inputs.
+
+    Returning ``False`` means the caller intentionally has no depth evidence
+    available and should skip the depth-based check. Partial configuration is
+    treated as an error because it usually means the caller requested the
+    depth backend but forgot one of the required resources.
+    """
+    has_depth_image = depth_image is not None
+    has_depth_intrinsics = depth_intrinsics is not None
+    if has_depth_image != has_depth_intrinsics:
+        missing = "depth_image" if not has_depth_image else "depth_intrinsics"
+        raise RuntimeError(
+            f"Depth backend for {context} requires both depth_image and depth_intrinsics; missing {missing}.",
+        )
+    if not has_depth_image:
+        return False
+    if ray_caster is None:
+        raise RuntimeError(
+            f"Depth backend for {context} requires ray_caster to compute target-mesh entry depth.",
+        )
+    return True
 
 
 def _the(label: str) -> str:
@@ -298,15 +410,37 @@ EXCLUDED_LABELS = {
 # Keep a single authoritative blacklist definition in scene_parser.
 EXCLUDED_LABELS = ALWAYS_EXCLUDED | QUESTION_ONLY_EXCLUDED
 
+_TEMPLATE_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "L2_object_move_object_centric": ("L2_object_rotate_object_centric",),
+}
+
+
+def _normalize_template_aliases(templates: dict) -> dict:
+    """Backfill template aliases so old and new names both work."""
+    normalized = dict(templates)
+    for canonical_key, alias_keys in _TEMPLATE_KEY_ALIASES.items():
+        source_value = normalized.get(canonical_key)
+        if source_value is None:
+            for alias_key in alias_keys:
+                if alias_key in normalized:
+                    source_value = normalized[alias_key]
+                    normalized[canonical_key] = source_value
+                    break
+        if source_value is None:
+            continue
+        for alias_key in alias_keys:
+            normalized.setdefault(alias_key, source_value)
+    return normalized
+
 
 def _load_templates() -> dict:
     """Load question templates from the JSON file."""
     tpl_path = _TEMPLATE_DIR / "question_templates.json"
     if tpl_path.exists():
         with open(tpl_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            return _normalize_template_aliases(json.load(f))
     # Fallback inline templates
-    return _default_templates()
+    return _normalize_template_aliases(_default_templates())
 
 
 def _default_templates() -> dict:
@@ -367,6 +501,9 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L2_object_move_object_centric": [
+            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?",
+        ],
+        "L2_object_rotate_object_centric": [
             "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?",
         ],
 
@@ -643,9 +780,14 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
     if (
         metrics.projected_area < MIN_PROJECTED_AREA_PX
         or metrics.in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
-        or metrics.valid_in_frame_count <= 0
+        or metrics.in_frame_sample_count <= 0
     ):
-        return "not visible"
+        return "skip"
+    if (
+        metrics.valid_in_frame_count <= 0
+        or not metrics.sufficient_evidence
+    ):
+        return "skip"
     if metrics.occlusion_ratio_in_frame <= L1_OCCLUSION_NOT_OCCLUDED_MAX:
         return "not occluded"
     if metrics.occlusion_ratio_in_frame >= L1_OCCLUSION_OCCLUDED_MIN:
@@ -655,7 +797,6 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
 
 def _compute_l1_occlusion_metrics(
     obj: dict[str, Any],
-    objects: list[dict[str, Any]],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
     depth_image,
@@ -666,9 +807,31 @@ def _compute_l1_occlusion_metrics(
 ) -> _L1OcclusionMetrics:
     backend = str(occlusion_backend)
     if color_intrinsics is None:
-        return _L1OcclusionMetrics(0.0, 0.0, 1.0, 0, "not visible", backend)
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=0,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
 
-    sample_points = _bbox_surface_sample_points(obj, camera_pose)
+    obj_id = int(obj["id"])
+    sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
+    sampled_point_count = int(len(sample_points))
+    if sampled_point_count <= 0 or not target_tri_ids:
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
     projected_records = _project_sample_point_records(
         sample_points, camera_pose, color_intrinsics,
     )
@@ -676,124 +839,92 @@ def _compute_l1_occlusion_metrics(
         projected_records, color_intrinsics,
     )
     in_frame_records = [rec for rec in projected_records if bool(rec["in_frame"])]
+    in_frame_sample_count = len(in_frame_records)
     if (
         projected_area < MIN_PROJECTED_AREA_PX
         or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
-        or not in_frame_records
+        or in_frame_sample_count <= 0
     ):
-        return _L1OcclusionMetrics(
-            projected_area, in_frame_ratio, 1.0, 0, "not visible", backend,
+        return _make_l1_occlusion_metrics(
+            projected_area=projected_area,
+            in_frame_ratio=in_frame_ratio,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=in_frame_sample_count,
+            backend=backend,
         )
 
-    obj_id = int(obj["id"])
-    bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
-    bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
+    in_frame_indices = np.asarray(
+        [int(rec["index"]) for rec in in_frame_records],
+        dtype=np.int64,
+    )
+    in_frame_points = sample_points[in_frame_indices]
 
-    if (
-        occlusion_backend == "depth"
-        and depth_image is not None
-        and depth_intrinsics is not None
-    ):
-        depth_metrics = compute_depth_occlusion_metrics(
-            bbox_min=bbox_min,
-            bbox_max=bbox_max,
+    if backend == "depth":
+        if not _depth_backend_inputs_ready(
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            ray_caster=ray_caster,
+            context="L1 occlusion",
+        ):
+            return _make_l1_occlusion_metrics(
+                projected_area=projected_area,
+                in_frame_ratio=in_frame_ratio,
+                occlusion_ratio_in_frame=1.0,
+                valid_in_frame_count=0,
+                sampled_point_count=sampled_point_count,
+                in_frame_sample_count=in_frame_sample_count,
+                backend=backend,
+            )
+        depth_metrics = compute_mesh_depth_occlusion_metrics(
+            # Share the same color-in-frame sample pool with mesh_ray so the
+            # evidence threshold uses the same denominator across backends.
+            target_points=in_frame_points,
+            target_tri_ids=target_tri_ids,
             camera_pose=camera_pose,
             intrinsics=depth_intrinsics,
             depth_image=depth_image,
+            ray_caster=ray_caster,
         )
-        metrics = _L1OcclusionMetrics(
-            float(depth_metrics["projected_area"]),
-            float(depth_metrics["in_frame_ratio"]),
-            float(depth_metrics["occlusion_ratio_in_frame"]),
-            int(depth_metrics["valid_in_frame_count"]),
-            "not visible",
-            backend,
-        )
-        return _L1OcclusionMetrics(
-            metrics.projected_area,
-            metrics.in_frame_ratio,
-            metrics.occlusion_ratio_in_frame,
-            metrics.valid_in_frame_count,
-            _classify_l1_occlusion_metrics(metrics),
-            backend,
+        return _make_l1_occlusion_metrics(
+            projected_area=projected_area,
+            in_frame_ratio=in_frame_ratio,
+            occlusion_ratio_in_frame=float(depth_metrics["occlusion_ratio_in_frame"]),
+            valid_in_frame_count=int(depth_metrics["valid_in_frame_count"]),
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=in_frame_sample_count,
+            backend=backend,
         )
 
-    if occlusion_backend == "mesh_ray" and ray_caster is not None and instance_mesh_data is not None:
-        tri_ids_arr = instance_mesh_data.triangle_ids_by_instance.get(obj_id)
-        if tri_ids_arr is not None and len(tri_ids_arr) > 0:
-            target_tri_ids = {int(tid) for tid in tri_ids_arr.tolist()}
-            camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
-            visible_count = 0
-            for rec in in_frame_records:
-                pt = sample_points[int(rec["index"])]
-                hit = ray_caster.first_visible_hit(
-                    camera_pos,
-                    pt - camera_pos,
-                )
-                if hit is None or int(hit[1]) in target_tri_ids:
-                    visible_count += 1
-            visible_ratio = float(visible_count / len(in_frame_records))
-            metrics = _L1OcclusionMetrics(
-                projected_area,
-                in_frame_ratio,
-                float(1.0 - visible_ratio),
-                len(in_frame_records),
-                "not visible",
-                backend,
-            )
-            return _L1OcclusionMetrics(
-                metrics.projected_area,
-                metrics.in_frame_ratio,
-                metrics.occlusion_ratio_in_frame,
-                metrics.valid_in_frame_count,
-                _classify_l1_occlusion_metrics(metrics),
-                backend,
-            )
-
-    bbox_cache = {
-        int(other["id"]): (
-            np.array(other["bbox_min"], dtype=np.float64),
-            np.array(other["bbox_max"], dtype=np.float64),
+    if backend == "mesh_ray" and ray_caster is not None:
+        camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+        visible_count, valid_count = ray_caster.mesh_visibility_stats(
+            camera_pos=camera_pos,
+            target_points=in_frame_points,
+            target_tri_ids=target_tri_ids,
         )
-        for other in objects
-    }
-    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
-    visible_count = 0
-    for rec in in_frame_records:
-        pt = sample_points[int(rec["index"])]
-        occluded = False
-        for other in objects:
-            other_id = int(other["id"])
-            if other_id == obj_id:
-                continue
-            other_bbox_min, other_bbox_max = bbox_cache[other_id]
-            if _ray_hits_aabb_before_point(
-                camera_pos,
-                pt,
-                other_bbox_min,
-                other_bbox_max,
-            ):
-                occluded = True
-                break
-        if not occluded:
-            visible_count += 1
+        occlusion_ratio = 1.0
+        if valid_count > 0:
+            occlusion_ratio = float(1.0 - (visible_count / valid_count))
+        return _make_l1_occlusion_metrics(
+            projected_area=projected_area,
+            in_frame_ratio=in_frame_ratio,
+            occlusion_ratio_in_frame=occlusion_ratio,
+            valid_in_frame_count=valid_count,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=in_frame_sample_count,
+            backend=backend,
+        )
 
-    visible_ratio = float(visible_count / len(in_frame_records))
-    metrics = _L1OcclusionMetrics(
-        projected_area,
-        in_frame_ratio,
-        float(1.0 - visible_ratio),
-        len(in_frame_records),
-        "not visible",
-        backend,
-    )
-    return _L1OcclusionMetrics(
-        metrics.projected_area,
-        metrics.in_frame_ratio,
-        metrics.occlusion_ratio_in_frame,
-        metrics.valid_in_frame_count,
-        _classify_l1_occlusion_metrics(metrics),
-        backend,
+    return _make_l1_occlusion_metrics(
+        projected_area=projected_area,
+        in_frame_ratio=in_frame_ratio,
+        occlusion_ratio_in_frame=1.0,
+        valid_in_frame_count=0,
+        sampled_point_count=sampled_point_count,
+        in_frame_sample_count=in_frame_sample_count,
+        backend=backend,
     )
 
 
@@ -805,8 +936,8 @@ def _render_instance_projection_mask(
 ) -> np.ndarray | None:
     if instance_mesh_data is None:
         return None
-    tri_ids = instance_mesh_data.triangle_ids_by_instance.get(int(obj_id))
-    if tri_ids is None or len(tri_ids) == 0:
+    tri_ids = _instance_triangle_id_set(instance_mesh_data, int(obj_id))
+    if not tri_ids:
         return None
 
     import cv2
@@ -817,7 +948,7 @@ def _render_instance_projection_mask(
     )
     vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
     faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)
-    for tri_id in tri_ids.tolist():
+    for tri_id in sorted(tri_ids):
         tri_vertices = vertices[faces[int(tri_id)]]
         projected: list[list[int]] = []
         invalid = False
@@ -938,7 +1069,6 @@ def generate_l1_occlusion_questions(
     ) -> None:
         metrics = _compute_l1_occlusion_metrics(
             obj=obj,
-            objects=objects,
             camera_pose=camera_pose,
             color_intrinsics=color_intrinsics,
             depth_image=depth_image,
@@ -948,6 +1078,8 @@ def generate_l1_occlusion_questions(
             instance_mesh_data=instance_mesh_data,
         )
         decision = metrics.decision
+        if decision == "skip":
+            return
         source_used = source
         overlay_available = False
         if (
@@ -990,6 +1122,10 @@ def generate_l1_occlusion_questions(
                     "geometry_in_frame_ratio": metrics.in_frame_ratio,
                     "geometry_occlusion_ratio_in_frame": metrics.occlusion_ratio_in_frame,
                     "geometry_valid_in_frame_count": metrics.valid_in_frame_count,
+                    "geometry_sampled_point_count": metrics.sampled_point_count,
+                    "geometry_in_frame_sample_count": metrics.in_frame_sample_count,
+                    "geometry_effective_ratio": metrics.effective_ratio,
+                    "geometry_sufficient_evidence": metrics.sufficient_evidence,
                     "geometry_backend": metrics.backend,
                     "mask_overlay_available": overlay_available,
                 },
@@ -1219,60 +1355,6 @@ def generate_l1_direction_allocentric(
 #  L2 generators
 # ---------------------------------------------------------------------------
 
-def _bbox_surface_sample_points(
-    obj: dict[str, Any],
-    camera_pose: CameraPose,
-) -> np.ndarray:
-    bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
-    bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
-    return bbox_camera_facing_sample_points(
-        bbox_min=bbox_min,
-        bbox_max=bbox_max,
-        camera_pos=np.array(camera_pose.position, dtype=np.float64),
-    )
-
-
-def _ray_hits_aabb_before_point(
-    camera_pos: np.ndarray,
-    target_point: np.ndarray,
-    bbox_min: np.ndarray,
-    bbox_max: np.ndarray,
-    epsilon: float = 0.05,
-) -> bool:
-    direction = target_point - camera_pos
-    dist_to_point = float(np.linalg.norm(direction))
-    if dist_to_point <= 1e-6:
-        return False
-
-    direction /= dist_to_point
-    t_min = 0.0
-    t_max = dist_to_point - epsilon
-    if t_max <= 0:
-        return False
-
-    for axis in range(3):
-        origin = float(camera_pos[axis])
-        inv_denom = float(direction[axis])
-        lo = float(bbox_min[axis])
-        hi = float(bbox_max[axis])
-
-        if abs(inv_denom) < 1e-8:
-            if origin < lo or origin > hi:
-                return False
-            continue
-
-        t0 = (lo - origin) / inv_denom
-        t1 = (hi - origin) / inv_denom
-        if t0 > t1:
-            t0, t1 = t1, t0
-        t_min = max(t_min, t0)
-        t_max = min(t_max, t1)
-        if t_max < t_min:
-            return False
-
-    return t_max >= max(t_min, 0.0)
-
-
 def _visibility_status_from_ratio(visible_ratio: float) -> str:
     if visible_ratio >= FULLY_VISIBLE_RATIO_MIN:
         return "fully visible"
@@ -1322,9 +1404,9 @@ def _build_modified_scene(
     ignored_tri_ids: set[int] = set()
     if instance_mesh_data is not None:
         for obj_id in removed_ids:
-            tri_ids = instance_mesh_data.triangle_ids_by_instance.get(int(obj_id))
-            if tri_ids is not None:
-                ignored_tri_ids.update(int(tid) for tid in tri_ids.tolist())
+            ignored_tri_ids.update(
+                _instance_triangle_id_set(instance_mesh_data, int(obj_id))
+            )
 
     return _ModifiedSceneContext(
         ray_caster=ray_caster,
@@ -1362,7 +1444,7 @@ def _compute_visibility_status_per_object(
     color_intrinsics: CameraIntrinsics | None,
     depth_image=None,
     depth_intrinsics=None,
-    occlusion_backend: str = "approx",
+    occlusion_backend: str = "depth",
     ray_caster=None,
     instance_mesh_data: InstanceMeshData | None = None,
     modified_scene: _ModifiedSceneContext | None = None,
@@ -1370,152 +1452,65 @@ def _compute_visibility_status_per_object(
     if color_intrinsics is None:
         return {int(obj["id"]): ("not visible", 0.0) for obj in objects}
 
+    backend = str(occlusion_backend)
     camera_pos = np.array(camera_pose.position, dtype=np.float64)
-    if occlusion_backend == "mesh_ray" and modified_scene is None:
+    if backend == "mesh_ray" and modified_scene is None:
         modified_scene = _build_modified_scene(
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
             removed_ids=set(),
         )
-    bbox_cache = {
-        int(obj["id"]): (
-            np.array(obj["bbox_min"], dtype=np.float64),
-            np.array(obj["bbox_max"], dtype=np.float64),
-        )
-        for obj in objects
-    }
-    mesh_triangle_sets = (
-        {
-            int(obj_id): {int(tid) for tid in tri_ids.tolist()}
-            for obj_id, tri_ids in instance_mesh_data.triangle_ids_by_instance.items()
-        }
-        if instance_mesh_data is not None
-        else {}
-    )
 
     visibility: dict[int, tuple[str, float]] = {}
     for obj in objects:
         obj_id = int(obj["id"])
-        bbox_sample_points = _bbox_surface_sample_points(obj, camera_pose)
-        mesh_sample_points = None
-        mesh_triangle_ids: set[int] | None = None
-        if instance_mesh_data is not None:
-            mesh_sample_points = instance_mesh_data.surface_points_by_instance.get(obj_id)
-            mesh_triangle_ids = mesh_triangle_sets.get(obj_id)
-
-        sample_points = (
-            mesh_sample_points
-            if mesh_sample_points is not None and len(mesh_sample_points) >= 16
-            else bbox_sample_points
-        )
+        sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+        target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
         projected_area, in_frame_ratio = _projected_area_summary(
             sample_points, camera_pose, color_intrinsics,
         )
-        if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
+        if (
+            len(sample_points) == 0
+            or not target_tri_ids
+            or projected_area < MIN_PROJECTED_AREA_PX
+            or in_frame_ratio < MIN_IN_FRAME_RATIO
+        ):
             visibility[obj_id] = ("not visible", 0.0)
             continue
 
-        if (
-            occlusion_backend == "mesh_ray"
-            and mesh_sample_points is not None
-            and len(mesh_sample_points) >= 16
-            and mesh_triangle_ids
-        ):
+        if backend == "mesh_ray":
             status, visible_ratio = _compute_target_visibility(
                 modified_scene=modified_scene,
-                target_surface_points=mesh_sample_points,
-                target_triangle_ids=mesh_triangle_ids,
+                target_surface_points=sample_points,
+                target_triangle_ids=target_tri_ids,
                 camera_pos=camera_pos,
             )
             visibility[obj_id] = (status, float(visible_ratio))
             continue
 
-        if (
-            occlusion_backend == "depth"
-            and depth_image is not None
-            and depth_intrinsics is not None
-        ):
-            from .utils.depth_occlusion import compute_depth_occlusion
-
-            status, visible_ratio = compute_depth_occlusion(
-                bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
-                bbox_max=np.array(obj["bbox_max"], dtype=np.float64),
+        if backend == "depth":
+            if not _depth_backend_inputs_ready(
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                ray_caster=ray_caster,
+                context="counterfactual visibility",
+            ):
+                visibility[obj_id] = ("not visible", 0.0)
+                continue
+            status, visible_ratio = compute_mesh_depth_occlusion(
+                target_points=sample_points,
+                target_tri_ids=target_tri_ids,
                 camera_pose=camera_pose,
                 intrinsics=depth_intrinsics,
                 depth_image=depth_image,
+                ray_caster=ray_caster,
             )
             visibility[obj_id] = (status, float(visible_ratio))
             continue
 
-        if occlusion_backend in ("ray", "mesh_ray") and ray_caster is not None:
-            ray_status = ray_caster.multi_ray_occlusion(
-                camera_pos=camera_pos,
-                target_bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
-                target_bbox_max=np.array(obj["bbox_max"], dtype=np.float64),
-            )
-            if ray_status == "fully_visible":
-                visibility[obj_id] = ("fully visible", 1.0)
-            elif ray_status == "partially_occluded":
-                visibility[obj_id] = ("partially occluded", 0.5)
-            else:
-                visibility[obj_id] = ("not visible", 0.0)
-            continue
-
-        valid = 0
-        visible = 0
-
-        for pt in sample_points:
-            uv, depth = project_to_image(pt, camera_pose, color_intrinsics)
-            if uv is None or depth <= 0:
-                continue
-            if not is_in_image(uv, color_intrinsics, margin=0):
-                continue
-
-            valid += 1
-            occluded = False
-            for other in objects:
-                other_id = int(other["id"])
-                if other_id == obj_id:
-                    continue
-                other_bbox_min, other_bbox_max = bbox_cache[other_id]
-                if _ray_hits_aabb_before_point(
-                    camera_pos,
-                    pt,
-                    other_bbox_min,
-                    other_bbox_max,
-                ):
-                    occluded = True
-                    break
-
-            if not occluded:
-                visible += 1
-
-        if valid == 0:
-            visibility[obj_id] = ("not visible", 0.0)
-            continue
-
-        visible_ratio = visible / valid
-        visibility[obj_id] = (
-            _visibility_status_from_ratio(visible_ratio),
-            float(visible_ratio),
-        )
+        raise ValueError(f"Unsupported occlusion backend: {backend}")
 
     return visibility
-
-
-def _ray_caster_without_object(ray_caster, removed_obj: dict):
-    if ray_caster is None or not hasattr(ray_caster, "mesh"):
-        return ray_caster
-
-    bbox_min = np.array(removed_obj["bbox_min"], dtype=np.float64) - 0.02
-    bbox_max = np.array(removed_obj["bbox_max"], dtype=np.float64) + 0.02
-    face_vertices = ray_caster.mesh.vertices[ray_caster.mesh.faces]
-    centroids = face_vertices.mean(axis=1)
-    remove_mask = np.all((centroids >= bbox_min) & (centroids <= bbox_max), axis=1)
-    tri_ids = set(np.nonzero(remove_mask)[0].tolist())
-    if not tri_ids:
-        return ray_caster
-    return ray_caster.remove_triangles(tri_ids)
 
 
 def _counterfactual_occlusion_backend(
@@ -1523,12 +1518,42 @@ def _counterfactual_occlusion_backend(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
 ) -> str:
-    """Return a single backend usable on both sides of an L2 comparison."""
-    if occlusion_backend == "mesh_ray" and ray_caster is not None and instance_mesh_data is not None:
-        return "mesh_ray"
-    if occlusion_backend in ("ray", "mesh_ray") and ray_caster is not None:
-        return "ray"
-    return "approx"
+    """Return the backend used for L2 counterfactual visibility comparisons.
+
+    Even when the primary per-frame backend is ``depth``, L2 comparisons still
+    use ``mesh_ray`` because a counterfactual camera/object edit does not come
+    with a newly rendered depth map.
+    """
+    requested_backend = str(occlusion_backend)
+    if requested_backend not in {"depth", "mesh_ray"}:
+        raise ValueError(f"Unsupported occlusion backend: {requested_backend}")
+    if ray_caster is None or instance_mesh_data is None:
+        raise RuntimeError(
+            "Counterfactual visibility requires mesh geometry for both depth and mesh_ray backends",
+        )
+    if requested_backend == "depth":
+        logger.debug(
+            "Counterfactual visibility requested with depth backend; falling back to mesh_ray because no counterfactual depth map exists.",
+        )
+    return "mesh_ray"
+
+
+def _cap_question_groups(
+    questions_by_key: dict[Any, list[dict]],
+    max_per_group: int | None,
+) -> list[dict]:
+    """Downsample question pools so each grouping key contributes at most N items."""
+    groups = list(questions_by_key.values())
+    if max_per_group is None or max_per_group <= 0:
+        return [q for group in groups for q in group]
+
+    capped: list[dict] = []
+    for group in groups:
+        if len(group) > max_per_group:
+            capped.extend(random.sample(group, max_per_group))
+        else:
+            capped.extend(group)
+    return capped
 
 def generate_l2_object_move(
     objects: list[dict],
@@ -1541,7 +1566,7 @@ def generate_l2_object_move(
     collision_objects: list[dict] | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
-    questions: list[dict] = []
+    questions_by_object: dict[int, list[dict]] = {}
     obj_map = {o["id"]: o for o in objects}
 
     for obj in objects:
@@ -1672,12 +1697,12 @@ def generate_l2_object_move(
                     "has_support_chain": len(get_support_chain_ids(move_source_id, support_graph)) > 0,
                 })
 
-        # Cap per moved object to avoid flooding from high-connectivity objects
-        if len(obj_questions) > max_per_object:
-            obj_questions = random.sample(obj_questions, max_per_object)
-        questions.extend(obj_questions)
+        if obj_questions:
+            object_key = int(obj["id"])
+            questions_by_object.setdefault(object_key, []).extend(obj_questions)
 
-    return questions
+    # Cap per query-object instance so repeated labels can still contribute.
+    return _cap_question_groups(questions_by_object, max_per_object)
 
 
 def generate_l2_viewpoint_move(
@@ -1702,10 +1727,7 @@ def generate_l2_viewpoint_move(
     compare_backend = _counterfactual_occlusion_backend(
         occlusion_backend, ray_caster, instance_mesh_data,
     )
-    scene_context = (
-        _build_modified_scene(ray_caster, instance_mesh_data, set())
-        if compare_backend == "mesh_ray" else None
-    )
+    scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
 
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
@@ -1792,10 +1814,7 @@ def generate_l2_object_remove(
     compare_backend = _counterfactual_occlusion_backend(
         occlusion_backend, ray_caster, instance_mesh_data,
     )
-    original_scene_context = (
-        _build_modified_scene(ray_caster, instance_mesh_data, set())
-        if compare_backend == "mesh_ray" else None
-    )
+    original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
     original_visibility = _compute_visibility_status_per_object(
         objects, camera_pose, color_intrinsics,
         depth_image=None,
@@ -1813,21 +1832,15 @@ def generate_l2_object_remove(
             continue
         remaining_ids = {int(other["id"]) for other in remaining}
         removed_ids = original_ids - remaining_ids
-        removal_ray_caster = (
-            _ray_caster_without_object(ray_caster, obj)
-            if compare_backend == "ray"
-            else None
-        )
-        removal_scene_context = (
-            _build_modified_scene(ray_caster, instance_mesh_data, removed_ids)
-            if compare_backend == "mesh_ray" else None
+        removal_scene_context = _build_modified_scene(
+            ray_caster, instance_mesh_data, removed_ids,
         )
         new_visibility = _compute_visibility_status_per_object(
             remaining, camera_pose, color_intrinsics,
             depth_image=None,
             depth_intrinsics=None,
             occlusion_backend=compare_backend,
-            ray_caster=(ray_caster if compare_backend == "mesh_ray" else removal_ray_caster),
+            ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
             modified_scene=removal_scene_context,
         )
@@ -1882,7 +1895,7 @@ def generate_l2_object_move_object_centric(
     collision_objects: list[dict] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in a query-centric object-centric frame."""
-    questions: list[dict] = []
+    questions_by_object: dict[int, list[dict]] = {}
     tpl_list = templates.get(
         "L2_object_move_object_centric",
         _default_templates()["L2_object_move_object_centric"],
@@ -2001,11 +2014,11 @@ def generate_l2_object_move_object_centric(
                         "relation_unchanged": False,
                     })
 
-        if len(obj_questions) > max_per_object:
-            obj_questions = random.sample(obj_questions, max_per_object)
-        questions.extend(obj_questions)
+        if obj_questions:
+            object_key = int(obj["id"])
+            questions_by_object.setdefault(object_key, []).extend(obj_questions)
 
-    return questions
+    return _cap_question_groups(questions_by_object, max_per_object)
 
 
 def generate_l2_object_move_allocentric(
@@ -2019,7 +2032,7 @@ def generate_l2_object_move_allocentric(
     collision_objects: list[dict] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
-    questions: list[dict] = []
+    questions_by_object: dict[int, list[dict]] = {}
     cam_cardinal = camera_cardinal_direction(camera_pose)
     tpl_list = templates.get(
         "L2_object_move_allocentric",
@@ -2104,11 +2117,11 @@ def generate_l2_object_move_allocentric(
                 "relation_unchanged": False,
             })
 
-        if len(obj_questions) > max_per_object:
-            obj_questions = random.sample(obj_questions, max_per_object)
-        questions.extend(obj_questions)
+        if obj_questions:
+            object_key = int(obj["id"])
+            questions_by_object.setdefault(object_key, []).extend(obj_questions)
 
-    return questions
+    return _cap_question_groups(questions_by_object, max_per_object)
 
 
 # ---------------------------------------------------------------------------
@@ -2597,54 +2610,6 @@ def _ensure_question_mentions(
     return question
 
 
-def _enforce_strict_visibility(
-    questions: list[dict[str, Any]],
-    object_visibility: dict[int, dict[str, Any]] | None,
-    id_to_object: dict[int, dict],
-    label_to_object: dict[str, dict],
-) -> list[dict[str, Any]]:
-    """Drop questions whose mentioned objects are not all strict-eligible."""
-    if not object_visibility:
-        return questions
-
-    kept: list[dict[str, Any]] = []
-    removed = 0
-    for question in questions:
-        if (
-            question.get("visibility_source") == "vlm_label_count"
-            or question.get("occlusion_decision_source") == "vlm_count"
-        ):
-            kept.append(question)
-            continue
-        question = _ensure_question_mentions(question, id_to_object, label_to_object)
-        mentions = question.get("mentioned_objects", [])
-        if not mentions:
-            removed += 1
-            continue
-
-        ok = True
-        rejected_meta: list[dict[str, Any]] = []
-        for mention in mentions:
-            obj_id = mention.get("obj_id")
-            meta = object_visibility.get(int(obj_id)) if obj_id is not None else None
-            if meta is None or not meta.get("eligible_as_reference", False):
-                ok = False
-                rejected_meta.append({
-                    "obj_id": obj_id,
-                    "label": mention.get("label"),
-                    "rejection_reasons": [] if meta is None else meta.get("rejection_reasons", []),
-                })
-        if ok:
-            kept.append(question)
-        else:
-            removed += 1
-            question["strict_visibility_rejections"] = rejected_meta
-
-    if removed:
-        logger.info("Strict visibility filter removed %d questions", removed)
-    return kept
-
-
 def _enforce_stable_facing_references(
     questions: list[dict[str, Any]],
     id_to_object: dict[int, dict],
@@ -2779,8 +2744,6 @@ def generate_all_questions(
     label_counts: dict[str, Any] | None = None,
     frame_image: np.ndarray | None = None,
     occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None = None,
-    object_visibility: dict[int, dict[str, Any]] | None = None,
-    strict_mode: bool = False,
     room_bounds: dict | None = None,
     wall_objects: list[dict] | None = None,
     attachment_edges: list[dict] | None = None,
@@ -3079,11 +3042,6 @@ def generate_all_questions(
     all_questions = _enforce_stable_facing_references(
         all_questions, id_to_object,
     )
-
-    if strict_mode:
-        all_questions = _enforce_strict_visibility(
-            all_questions, object_visibility, id_to_object, label_to_object,
-        )
 
     logger.info("Generated %d questions total", len(all_questions))
     return all_questions

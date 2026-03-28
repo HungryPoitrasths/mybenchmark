@@ -13,6 +13,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 MAX_RELIABLE_RETRY_RAYS = 10
+MIN_NUMPY2_TRIMESH_VERSION = (4, 6, 13)
+
+
+def _parse_version_tuple(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for token in version.split("."):
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def _ensure_trimesh_numpy_compat(trimesh_module) -> None:
+    """Reject known-bad trimesh/NumPy combinations up front.
+
+    Older trimesh releases call ``ndarray.ptp()``, which raises under NumPy 2.x.
+    Use a conservative lower bound here so the ray backends fail fast instead of
+    silently degrading to a non-ray fallback later in the pipeline.
+    """
+    if np.lib.NumpyVersion(np.__version__) < "2.0.0":
+        return
+
+    version_str = str(getattr(trimesh_module, "__version__", "0"))
+    version_tuple = _parse_version_tuple(version_str)
+    if version_tuple and version_tuple >= MIN_NUMPY2_TRIMESH_VERSION:
+        return
+
+    required = ".".join(str(x) for x in MIN_NUMPY2_TRIMESH_VERSION)
+    raise RuntimeError(
+        "Ray backends require a NumPy-2-compatible trimesh build. "
+        f"Detected numpy {np.__version__} and trimesh {version_str}. "
+        f"Upgrade trimesh to >= {required} or downgrade numpy to < 2.0."
+    )
 
 
 class RayCaster:
@@ -41,6 +75,7 @@ class RayCaster:
     @classmethod
     def from_ply(cls, ply_path: str, axis_alignment: Optional[np.ndarray] = None) -> "RayCaster":
         import trimesh
+        _ensure_trimesh_numpy_compat(trimesh)
         mesh = trimesh.load(ply_path, process=False)
         if isinstance(mesh, trimesh.Scene):
             mesh = mesh.dump(concatenate=True)
@@ -113,6 +148,105 @@ class RayCaster:
             if tri_id not in ignored_tri_ids:
                 return hit_point, tri_id, dist
         return None
+
+    def first_hit_for_triangles(
+        self,
+        origin: np.ndarray,
+        direction: np.ndarray,
+        target_tri_ids: set[int],
+        ignored_tri_ids: Optional[set[int]] = None,
+    ) -> tuple[np.ndarray, int, float] | None:
+        """Return the nearest hit whose triangle belongs to *target_tri_ids*."""
+        if not target_tri_ids:
+            return None
+        hits = self.cast_ray(origin, direction)
+        if not hits:
+            return None
+        for hit_point, tri_id, dist in hits:
+            if ignored_tri_ids and tri_id in ignored_tri_ids:
+                continue
+            if tri_id in target_tri_ids:
+                return hit_point, tri_id, dist
+        return None
+
+    def first_hits_for_triangles(
+        self,
+        origins: np.ndarray,
+        directions: np.ndarray,
+        target_tri_ids: set[int],
+        ignored_tri_ids: Optional[set[int]] = None,
+    ) -> dict[int, tuple[np.ndarray, int, float]]:
+        """Return the nearest target-triangle hit for each ray in a batch."""
+        if len(origins) == 0 or not target_tri_ids:
+            return {}
+
+        directions = np.asarray(directions, dtype=np.float64)
+        dir_norms = np.linalg.norm(directions, axis=1)
+        valid_mask = np.isfinite(dir_norms) & (dir_norms > 1e-12)
+        if not np.any(valid_mask):
+            return {}
+
+        valid_ray_indices = np.flatnonzero(valid_mask)
+        query_origins = np.asarray(origins, dtype=np.float64)[valid_mask]
+        query_directions = directions[valid_mask] / dir_norms[valid_mask][:, None]
+
+        locations, index_ray, index_tri = self.intersector.intersects_location(
+            ray_origins=query_origins,
+            ray_directions=query_directions,
+            multiple_hits=True,
+        )
+        if (
+            self.has_embree
+            and self._reliable_intersector is not None
+            and self._reliable_intersector is not self.intersector
+        ):
+            hit_query_indices = (
+                np.unique(index_ray.astype(np.int64))
+                if len(index_ray) > 0
+                else np.empty(0, dtype=np.int64)
+            )
+            missing_query_indices = np.setdiff1d(
+                np.arange(len(query_origins), dtype=np.int64),
+                hit_query_indices,
+                assume_unique=False,
+            )
+            if len(missing_query_indices) > 0:
+                retry_locations, retry_index_ray, retry_index_tri = self._reliable_intersector.intersects_location(
+                    ray_origins=query_origins[missing_query_indices],
+                    ray_directions=query_directions[missing_query_indices],
+                    multiple_hits=True,
+                )
+                if len(retry_locations) > 0:
+                    retry_index_ray = missing_query_indices[np.asarray(retry_index_ray, dtype=np.int64)]
+                    if len(locations) == 0:
+                        locations = retry_locations
+                        index_ray = retry_index_ray
+                        index_tri = retry_index_tri
+                    else:
+                        locations = np.concatenate([locations, retry_locations], axis=0)
+                        index_ray = np.concatenate([index_ray, retry_index_ray], axis=0)
+                        index_tri = np.concatenate([index_tri, retry_index_tri], axis=0)
+
+        if len(locations) == 0:
+            return {}
+
+        distances = np.linalg.norm(locations - query_origins[index_ray], axis=1)
+        order = np.lexsort((distances, index_ray))
+        first_hits: dict[int, tuple[np.ndarray, int, float]] = {}
+        for idx in order:
+            tri_id = int(index_tri[idx])
+            if ignored_tri_ids and tri_id in ignored_tri_ids:
+                continue
+            if tri_id not in target_tri_ids:
+                continue
+            ray_idx = int(valid_ray_indices[int(index_ray[idx])])
+            if ray_idx not in first_hits:
+                first_hits[ray_idx] = (
+                    np.asarray(locations[idx], dtype=np.float64),
+                    tri_id,
+                    float(distances[idx]),
+                )
+        return first_hits
 
     def _first_non_ignored_hits(
         self,
@@ -208,15 +342,15 @@ class RayCaster:
 
         return first_hits, has_any_hit, forced_blocked
 
-    def mesh_visibility_ratio(
+    def mesh_visibility_stats(
         self,
         camera_pos: np.ndarray,
         target_points: np.ndarray,
         target_tri_ids: set[int],
         ignored_tri_ids: Optional[set[int]] = None,
         hit_epsilon: float = 0.05,
-    ) -> float:
-        """Return the visible fraction of sampled target surface points.
+    ) -> tuple[int, int]:
+        """Return visible and valid counts for sampled target surface points.
 
         Visibility is inferred from point hits within ``hit_epsilon`` of the
         sampled point distance. Very thin objects whose back-facing samples sit
@@ -225,24 +359,22 @@ class RayCaster:
         not block visibility, such as removed objects or the target itself.
         """
         if len(target_points) == 0 or not target_tri_ids:
-            return 0.0
+            return 0, 0
 
         sampled_points = np.asarray(target_points, dtype=np.float64)
-        if not self.has_embree and len(sampled_points) > 32:
+        if not self.has_embree and len(sampled_points) > 128:
             if not self._warned_slow_mesh_visibility:
                 logger.warning(
-                    "Embree unavailable; downsampling mesh visibility rays from %d to 32",
+                    "Embree unavailable; mesh visibility with %d rays may be slow",
                     len(sampled_points),
                 )
                 self._warned_slow_mesh_visibility = True
-            sample_idx = np.linspace(0, len(sampled_points) - 1, num=32, dtype=int)
-            sampled_points = sampled_points[sample_idx]
 
         directions = sampled_points - np.asarray(camera_pos, dtype=np.float64)
         expected_dists = np.linalg.norm(directions, axis=1)
         valid_mask = np.isfinite(expected_dists) & (expected_dists > 1e-6)
         if not np.any(valid_mask):
-            return 0.0
+            return 0, 0
 
         directions = directions[valid_mask]
         expected_dists = expected_dists[valid_mask]
@@ -255,18 +387,39 @@ class RayCaster:
         )
 
         visible = 0
+        valid = 0
         for ray_idx, expected_dist in enumerate(expected_dists):
             if forced_blocked[ray_idx]:
                 continue
             hit = first_hits.get(ray_idx)
             if hit is None:
-                visible += 1
                 continue
+            valid += 1
             tri_id, hit_dist = hit
             if tri_id in target_tri_ids and abs(hit_dist - float(expected_dist)) <= hit_epsilon:
                 visible += 1
 
-        return float(visible / len(expected_dists))
+        return visible, valid
+
+    def mesh_visibility_ratio(
+        self,
+        camera_pos: np.ndarray,
+        target_points: np.ndarray,
+        target_tri_ids: set[int],
+        ignored_tri_ids: Optional[set[int]] = None,
+        hit_epsilon: float = 0.05,
+    ) -> float:
+        """Return the visible fraction of valid sampled target surface points."""
+        visible, valid = self.mesh_visibility_stats(
+            camera_pos=camera_pos,
+            target_points=target_points,
+            target_tri_ids=target_tri_ids,
+            ignored_tri_ids=ignored_tri_ids,
+            hit_epsilon=hit_epsilon,
+        )
+        if valid <= 0:
+            return 0.0
+        return float(visible / valid)
 
     def check_occlusion(
         self,

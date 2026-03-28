@@ -45,6 +45,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 5
+REFERABILITY_CACHE_VERSION = "4.0"
 
 
 def _image_to_base64(image: np.ndarray) -> str:
@@ -95,8 +96,9 @@ def _call_vlm_json(
 def _frame_prompt() -> str:
     return (
         "You are given one original scene image. "
-        "Decide whether this frame is usable for visual spatial-reasoning questions. "
-        "Reject frames that are too blurry, too dark, too unclear, or where most objects are hard to recognize. "
+        "Decide whether this frame is usable for object-level visual spatial-reasoning questions. "
+        "A usable frame should allow several scene objects to be recognized and referred to reliably from the image alone. "
+        "Reject frames that are too blurry, too dark, too unclear, or where most candidate objects are hard to identify or distinguish. "
         'Answer with strict JSON only: {"frame_usable": true, "reason": "clear_scene"}'
     )
 
@@ -106,9 +108,10 @@ def _count_prompt(candidate_labels: list[str]) -> str:
     return (
         "You are given one original scene image and a candidate label list extracted from scene metadata. "
         "Only use the image and this candidate label list. Do not invent new labels. "
-        "For each candidate label, return the exact number of visible instances in the image. "
-        "Count an instance as visible if any part of it is inside the image and it is not fully occluded by other objects. "
+        "For each candidate label, return the exact number of instances that are visually recognizable enough to support stable label-based reference in this image. "
+        "Count an instance if it is visible enough to identify as that label from the image, even if it is partially occluded or partially outside the frame. "
         "Do not require the whole object to be visible. "
+        "Do not count tiny fragments, extremely blurry objects, or ambiguous cases where the label cannot be identified reliably. "
         "If a label has no visible instance, return 0. "
         "Every candidate label must appear exactly once in the output. "
         f"Candidate labels: {labels_json}. "
@@ -324,7 +327,7 @@ def main():
 
     output_path = Path(args.output)
     cache: dict[str, Any] = {
-        "version": "3.0",
+        "version": REFERABILITY_CACHE_VERSION,
         "model": model_name,
         "frames": {},
     }
@@ -332,6 +335,12 @@ def main():
         with open(output_path, "r", encoding="utf-8") as f:
             loaded = json.load(f)
         if isinstance(loaded, dict) and "frames" in loaded:
+            loaded_version = str(loaded.get("version", ""))
+            if loaded_version != REFERABILITY_CACHE_VERSION:
+                raise RuntimeError(
+                    f"Cannot resume referability cache version {loaded_version or '<missing>'}; "
+                    f"expected {REFERABILITY_CACHE_VERSION}. Regenerate the cache from scratch."
+                )
             cache = loaded
             logger.info("Resuming from %s", output_path)
 

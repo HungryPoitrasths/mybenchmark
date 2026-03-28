@@ -17,7 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.frame_selector import compute_frame_object_visibility, get_visible_objects, select_frames
+from src.frame_selector import select_frames
 from src.scene_parser import (
     ALWAYS_EXCLUDED,
     QUESTION_ONLY_EXCLUDED,
@@ -26,8 +26,6 @@ from src.scene_parser import (
     parse_scene,
 )
 from src.support_graph import enrich_scene_with_support, get_scene_attachment_graph
-from src.utils.colmap_loader import load_axis_alignment, load_scannet_depth_intrinsics, load_scannet_intrinsics
-from src.utils.depth_occlusion import load_depth_image
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +43,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_frames", type=int, default=5)
     parser.add_argument("--question_limit_per_frame", type=int, default=200)
     parser.add_argument("--image_mode", choices=("inline", "file_uri"), default="inline")
-    parser.add_argument("--strict_mode", action="store_true")
     parser.add_argument("--show_rejected_frames", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
@@ -448,14 +445,6 @@ def normalize_object_rows(rows: Any) -> list[dict[str, Any]]:
             "label": str(row.get("label", "")),
             "tags": list(row.get("tags", [])),
             "attachment_summary": str(row.get("attachment_summary", "-")),
-            "occlusion_status": row.get("occlusion_status"),
-            "visible_ratio": row.get("visible_ratio"),
-            "projected_area_px": row.get("projected_area_px"),
-            "bbox_in_frame_ratio": row.get("bbox_in_frame_ratio"),
-            "roi_sharpness": row.get("roi_sharpness"),
-            "center_uv_px": row.get("center_uv_px"),
-            "eligible_as_reference": bool(row.get("eligible_as_reference", False)),
-            "rejection_reasons": list(row.get("rejection_reasons", [])),
         })
     out.sort(key=lambda row: ("VLM唯一" not in row["tags"], "Pipeline可用" not in row["tags"], str(row["label"]), int(row["id"])))
     return out
@@ -534,60 +523,35 @@ def build_fallback_frames(scene: dict[str, Any], scene_dir: Path | None, max_fra
         selected_frames = select_frames(scene_dir, objects, attachment_graph, max_frames=max_frames)
         ordered_names = [frame["image_name"] for frame in selected_frames]
     selected_by_name = {frame["image_name"]: frame for frame in selected_frames}
-    poses = {}
-    color_intrinsics = None
-    depth_intrinsics = None
-    if scene_dir is not None:
-        axis_align = load_axis_alignment(scene_dir)
-        poses = load_selected_scannet_poses(scene_dir, ordered_names, axis_alignment=axis_align)
-        try:
-            color_intrinsics = load_scannet_intrinsics(scene_dir)
-        except Exception:
-            color_intrinsics = None
-        try:
-            depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
-        except Exception:
-            depth_intrinsics = None
     frames: list[dict[str, Any]] = []
     for image_name in ordered_names:
         ref = referability_frames.get(image_name) or {}
         selector_visible_ids = normalize_object_ids(ref.get("selector_visible_object_ids") or ref.get("candidate_visible_object_ids") or selected_by_name.get(image_name, {}).get("visible_object_ids") or [])
         pipeline_visible_ids = list(selector_visible_ids)
         label_to_object_ids = normalize_label_to_object_ids(ref.get("label_to_object_ids")) or build_label_to_object_ids(selector_visible_ids, objects_by_id)
+        relevant_ids = set(selector_visible_ids) | set(pipeline_visible_ids) | set(normalize_object_ids(ref.get("referable_object_ids")))
+        attachment_rows = filter_frame_attachment_rows(scene_attachment_rows, relevant_ids)
         object_rows: list[dict[str, Any]] = []
-        attachment_rows: list[dict[str, Any]] = []
-        if scene_dir is not None and color_intrinsics is not None and image_name in poses:
-            pose = poses[image_name]
-            depth_image = None
-            if depth_intrinsics is not None:
-                depth_path = scene_dir / "depth" / image_name.replace(".jpg", ".png")
-                if depth_path.exists():
-                    try:
-                        depth_image = load_depth_image(depth_path)
-                    except Exception:
-                        depth_image = None
-            image_path = scene_dir / "color" / image_name
-            visibility_table = compute_frame_object_visibility(objects, pose, color_intrinsics, image_path=image_path if image_path.exists() else None, depth_image=depth_image, depth_intrinsics=depth_intrinsics, strict_mode=True)
-            if not pipeline_visible_ids:
-                pipeline_visible_ids = [int(obj["id"]) for obj in get_visible_objects(objects, pose, color_intrinsics)]
-            relevant_ids = set(selector_visible_ids) | set(pipeline_visible_ids) | set(normalize_object_ids(ref.get("referable_object_ids")))
-            attachment_rows = filter_frame_attachment_rows(scene_attachment_rows, relevant_ids)
-            for obj in objects:
-                obj_id = int(obj["id"])
-                if relevant_ids and obj_id not in relevant_ids:
-                    continue
-                meta = visibility_table.get(obj_id, {})
-                tags: list[str] = []
-                if obj_id in selector_visible_ids:
-                    tags.append("VLM候选")
-                if obj_id in normalize_object_ids(ref.get("referable_object_ids")):
-                    tags.append("VLM唯一")
-                if obj_id in pipeline_visible_ids:
-                    tags.append("Pipeline可用")
-                if any(obj_id in (int(row["parent_id"]), int(row["child_id"])) for row in attachment_rows):
-                    tags.append("被attachment约束")
-                object_rows.append({"id": obj_id, "label": str(obj.get("label", "")), "tags": tags, "attachment_summary": attachment_summary_for_object(obj_id, attachment_rows), "occlusion_status": meta.get("occlusion_status"), "visible_ratio": meta.get("visible_ratio"), "projected_area_px": meta.get("projected_area_px"), "bbox_in_frame_ratio": meta.get("bbox_in_frame_ratio"), "roi_sharpness": meta.get("roi_sharpness"), "center_uv_px": meta.get("center_uv_px"), "eligible_as_reference": bool(meta.get("eligible_as_reference", False)), "rejection_reasons": list(meta.get("rejection_reasons", []))})
-            object_rows = normalize_object_rows(object_rows)
+        for obj in objects:
+            obj_id = int(obj["id"])
+            if relevant_ids and obj_id not in relevant_ids:
+                continue
+            tags: list[str] = []
+            if obj_id in selector_visible_ids:
+                tags.append("VLM候选")
+            if obj_id in normalize_object_ids(ref.get("referable_object_ids")):
+                tags.append("VLM唯一")
+            if obj_id in pipeline_visible_ids:
+                tags.append("Pipeline可用")
+            if any(obj_id in (int(row["parent_id"]), int(row["child_id"])) for row in attachment_rows):
+                tags.append("被attachment约束")
+            object_rows.append({
+                "id": obj_id,
+                "label": str(obj.get("label", "")),
+                "tags": tags,
+                "attachment_summary": attachment_summary_for_object(obj_id, attachment_rows),
+            })
+        object_rows = normalize_object_rows(object_rows)
         questions = list(scene_questions.get(image_name, [])) or normalize_question_items([], question_limit_per_frame)
         wrong = sum(1 for item in questions if item.get("prediction_correct") is False)
         image_path = scene_dir / "color" / image_name if scene_dir is not None else None
@@ -626,19 +590,19 @@ def render_vlm_count_table(frame: dict[str, Any]) -> str:
 
 def render_object_table(frame: dict[str, Any]) -> str:
     if not frame["object_rows"]:
-        return '<div class="muted">这一帧没有逐物体审计数据。</div>'
+        return '<div class="muted">这一帧没有对象审计数据。</div>'
     rows = []
     for row in frame["object_rows"]:
         flags = " / ".join(row.get("tags", [])) or "-"
-        reasons = "，".join(zh_visibility_value(reason) for reason in row.get("rejection_reasons", [])) or "-"
         rows.append(
             "<tr>"
-            f"<td>{row['id']}</td><td>{h(row['label'])}</td><td>{h(flags)}</td><td>{h(row.get('attachment_summary', '-'))}</td>"
-            f"<td>{h(zh_visibility_value(row.get('occlusion_status', '-')))}</td><td>{n(row.get('visible_ratio'), 2)}</td>"
-            f"<td>{n(row.get('projected_area_px'), 0)}</td><td>{n(row.get('bbox_in_frame_ratio'), 2)}</td>"
-            f"<td>{n(row.get('roi_sharpness'), 1)}</td><td>{h(reasons)}</td></tr>"
+            f"<td>{row['id']}</td>"
+            f"<td>{h(row['label'])}</td>"
+            f"<td>{h(flags)}</td>"
+            f"<td>{h(row.get('attachment_summary', '-'))}</td>"
+            "</tr>"
         )
-    head = "<table><thead><tr><th>ID</th><th>类别</th><th>标记</th><th>attachment 关系</th><th>遮挡状态</th><th>可见比例</th><th>投影面积</th><th>框内比例</th><th>清晰度</th><th>过滤原因</th></tr></thead>"
+    head = "<table><thead><tr><th>ID</th><th>类别</th><th>标记</th><th>attachment 关系</th></tr></thead>"
     return head + "<tbody>" + "".join(rows) + "</tbody></table>"
 
 
@@ -673,35 +637,29 @@ def render_rejected_frames(rejected_frames: list[dict[str, str]]) -> str:
     return f'<details class="card"><summary>VLM 拒绝帧 ({len(rejected_frames)})</summary><table><thead><tr><th>帧名</th><th>拒绝原因</th></tr></thead><tbody>{rows}</tbody></table></details>'
 
 
-def render_metric_notes(strict_mode: bool) -> str:
-    strict_text = "开" if strict_mode else "关"
+def render_metric_notes() -> str:
     return """
 <section class="card"><h2>指标说明</h2>
-<div class="muted">页面默认只展示 VLM 通过帧；错位的 2D 叠框已经移除。过滤原因一列始终按严格审计规则计算，用来排错。</div>
+<div class="muted">页面默认只展示 VLM 通过帧；这里保留的是当前真实流程仍在使用的数据，而不是旧的 strict_mode 二次几何过滤结果。</div>
 <table><thead><tr><th>字段</th><th>含义</th></tr></thead><tbody>
-<tr><td>VLM候选</td><td>referability 阶段认为在这帧里可见的候选对象。</td></tr>
-<tr><td>VLM唯一</td><td>VLM 判断该类别数量为 1，且候选对象也只有 1 个。</td></tr>
+<tr><td>VLM候选</td><td>最前面的几何候选池，通常来自 referability cache 里的 candidate_visible_object_ids。</td></tr>
+<tr><td>VLM唯一</td><td>VLM 判断该标签在这一帧里可以稳定唯一指代，因此对象进入 referable_object_ids。</td></tr>
 <tr><td>Pipeline可用</td><td>这次 run_pipeline 实际传给 generate_all_questions() 的对象集合。</td></tr>
 <tr><td>被attachment约束</td><td>该物体在当前帧相关对象里参与了 attachment 边。</td></tr>
-<tr><td>可见比例</td><td>visible_in_frame_count / valid_in_frame_count。</td></tr>
-<tr><td>投影面积</td><td>3D bbox 采样点投影后的 2D 包围区域面积，单位像素。</td></tr>
-<tr><td>框内比例</td><td>投影采样点中落在图像范围内的比例。</td></tr>
-<tr><td>清晰度</td><td>投影 ROI 灰度图的 Laplacian variance。</td></tr>
-<tr><td>strict 阈值</td><td>visible_ratio>=0.6, projected_area_px>=800, bbox_in_frame_ratio>=0.6, edge_margin_px>=12, roi_sharpness>=45, 且标签唯一。当前运行 strict_mode=""" + strict_text + """。</td></tr>
 </tbody></table></section>
 """
 
 
-def render_frame_section(frame: dict[str, Any], index: int, strict_mode: bool) -> str:
+def render_frame_section(frame: dict[str, Any], index: int) -> str:
     image_block = f'<div class="imgwrap"><img src="{h(frame["image_uri"])}" alt="{h(frame["image_name"])}"></div>' if frame["image_uri"] else '<div class="imgwrap img-missing">这一帧缺少图像文件。</div>'
     return (
         f'<section class="card frame" id="frame-{index}"><h2>{h(frame["image_name"])}</h2>'
         f'<div class="metrics"><div class="metric"><div class="k">VLM</div><div class="v">通过</div><div class="s">{h(frame["frame_reject_reason"] or "该帧已通过 referability")}</div></div>'
-        f'<div class="metric"><div class="k">Pipeline</div><div class="v">{len(frame["pipeline_visible_ids"])}</div><div class="s">{h(zh_skip_reason(frame["pipeline_skip_reason"]))} | strict_mode={"开" if strict_mode else "关"}</div></div>'
-        f'<div class="metric"><div class="k">VLM 唯一对象</div><div class="v">{len(frame["referable_object_ids"])}</div><div class="s">selector 可见={len(frame["selector_visible_object_ids"])}</div></div>'
+        f'<div class="metric"><div class="k">Pipeline</div><div class="v">{len(frame["pipeline_visible_ids"])}</div><div class="s">{h(zh_skip_reason(frame["pipeline_skip_reason"]))}</div></div>'
+        f'<div class="metric"><div class="k">VLM 唯一对象</div><div class="v">{len(frame["referable_object_ids"])}</div><div class="s">几何候选={len(frame["selector_visible_object_ids"])}</div></div>'
         f'<div class="metric"><div class="k">题目数</div><div class="v">{len(frame["questions"])}</div><div class="s">错题={frame["question_wrong"]}</div></div></div>'
         f'<div class="twocol"><div><h3>原始帧</h3>{image_block}</div><div><h3>VLM 类别计数</h3>{render_vlm_count_table(frame)}</div></div>'
-        f'<h3>逐物体审计</h3>{render_object_table(frame)}<h3>这一帧的 attachment</h3>{render_attachment_table(frame["attachment_rows"], "这一帧没有相关 attachment 对。")}<h3>题目</h3>{render_questions(frame)}</section>'
+        f'<h3>对象审计</h3>{render_object_table(frame)}<h3>这一帧的 attachment</h3>{render_attachment_table(frame["attachment_rows"], "这一帧没有相关 attachment 对。")}<h3>题目</h3>{render_questions(frame)}</section>'
     )
 
 
@@ -712,10 +670,10 @@ def render_annotation_table(rows: list[dict[str, Any]]) -> str:
     return "<table><thead><tr><th>ID</th><th>原始标签</th><th>归一化标签</th><th>状态</th><th>分段数</th><th>顶点数</th></tr></thead><tbody>" + body + "</tbody></table>"
 
 
-def render_html(scene_id: str, source_mode: str, source_detail: str, notes: list[str], question_summary: dict[str, Any], frames: list[dict[str, Any]], rejected_frames: list[dict[str, str]], scene_attachment_rows: list[dict[str, Any]], annotation_rows: list[dict[str, Any]], open3d_cmd: str, strict_mode: bool) -> str:
+def render_html(scene_id: str, source_mode: str, source_detail: str, notes: list[str], question_summary: dict[str, Any], frames: list[dict[str, Any]], rejected_frames: list[dict[str, str]], scene_attachment_rows: list[dict[str, Any]], annotation_rows: list[dict[str, Any]], open3d_cmd: str) -> str:
     note_html = "".join(f"<li>{h(note)}</li>" for note in notes) or "<li>无额外说明。</li>"
     frame_nav = "".join(f'<a class="pill" href="#frame-{index}">{h(frame["image_name"])}</a>' for index, frame in enumerate(frames))
-    frame_sections = "".join(render_frame_section(frame, index, strict_mode) for index, frame in enumerate(frames))
+    frame_sections = "".join(render_frame_section(frame, index) for index, frame in enumerate(frames))
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{h(scene_id)} 场景调试页</title><style>
 body{{margin:0;background:#edf1f5;color:#132030;font:14px/1.5 "Microsoft YaHei","PingFang SC","Segoe UI",Arial,sans-serif}} .page{{max-width:1500px;margin:0 auto;padding:16px;display:grid;gap:16px}}
@@ -728,9 +686,9 @@ table{{width:100%;border-collapse:collapse}} th,td{{padding:8px 10px;border-bott
 pre{{background:#101722;color:#d7e0ea;padding:14px;border-radius:14px;overflow:auto}} ul{{margin:8px 0 0 18px}} details summary{{cursor:pointer;font-weight:700;margin-bottom:10px}} @media(max-width:1180px){{.metrics,.twocol{{grid-template-columns:1fr}}}}
 </style></head><body><div class="page">
 <section class="card"><h1>{h(scene_id)}</h1><div class="muted">主页面默认只显示 VLM 通过帧。页面优先读取 frame_debug/<scene_id>.json 的真实运行结果；如果没有，再回退到 viewer 现场重算。</div>
-<div class="metrics" style="margin-top:12px"><div class="metric"><div class="k">数据来源</div><div class="v">{h(source_mode)}</div><div class="s">{h(source_detail)}</div></div><div class="metric"><div class="k">展示帧数</div><div class="v">{len(frames)}</div><div class="s">VLM 拒绝帧={len(rejected_frames)}</div></div><div class="metric"><div class="k">题目统计</div><div class="v">{question_summary['total']}</div><div class="s">错题={question_summary['wrong']}</div></div><div class="metric"><div class="k">场景 attachment</div><div class="v">{len(scene_attachment_rows)}</div><div class="s">strict_mode={"开" if strict_mode else "关"}</div></div></div>
+<div class="metrics" style="margin-top:12px"><div class="metric"><div class="k">数据来源</div><div class="v">{h(source_mode)}</div><div class="s">{h(source_detail)}</div></div><div class="metric"><div class="k">展示帧数</div><div class="v">{len(frames)}</div><div class="s">VLM 拒绝帧={len(rejected_frames)}</div></div><div class="metric"><div class="k">题目统计</div><div class="v">{question_summary['total']}</div><div class="s">错题={question_summary['wrong']}</div></div><div class="metric"><div class="k">场景 attachment</div><div class="v">{len(scene_attachment_rows)}</div><div class="s">viewer 不再展示 strict_mode 二次过滤</div></div></div>
 <h3>Open3D 几何检查</h3><pre>{h(open3d_cmd)}</pre><h3>备注</h3><ul>{note_html}</ul><h3>帧索引</h3>{frame_nav or '<div class="muted">没有可展示的 VLM 通过帧。</div>'}</section>
-{render_rejected_frames(rejected_frames)}{render_metric_notes(strict_mode)}{frame_sections}
+{render_rejected_frames(rejected_frames)}{render_metric_notes()}{frame_sections}
 <section class="card"><h2>全场景 attachment</h2>{render_attachment_table(scene_attachment_rows, "整个场景没有可用的 attachment 边。")}</section>
 <section class="card"><h2>原始标注审计</h2>{render_annotation_table(annotation_rows)}</section>
 </div></body></html>"""
@@ -760,7 +718,7 @@ def main() -> None:
     scene_attachment_rows = build_scene_attachment_rows(scene)
     annotation_rows = build_annotation_audit(scene, scene_dir, args.scene_metadata)
     open3d_cmd = f'python scripts/view_scannet_bbox_open3d.py --scene_dir "{scene_dir}" --render_mode mesh --show_centers' if scene_dir is not None else f'python scripts/view_scannet_bbox_open3d.py --scene_metadata "{args.scene_metadata}" --render_mode mesh --show_centers'
-    html_text = render_html(scene_id, source_mode, source_detail, notes, question_summary, frames, rejected_frames, scene_attachment_rows, annotation_rows, open3d_cmd, args.strict_mode)
+    html_text = render_html(scene_id, source_mode, source_detail, notes, question_summary, frames, rejected_frames, scene_attachment_rows, annotation_rows, open3d_cmd)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(html_text, encoding="utf-8")
     print(f"wrote debug viewer to {args.output}")

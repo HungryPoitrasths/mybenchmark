@@ -260,6 +260,153 @@ def compute_depth_occlusion_metrics(
     }
 
 
+def _pixel_rays_world(
+    us: np.ndarray,
+    vs: np.ndarray,
+    camera_pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+) -> np.ndarray:
+    ray_dirs_cam = np.stack(
+        [
+            (us - intrinsics.cx) / intrinsics.fx,
+            (vs - intrinsics.cy) / intrinsics.fy,
+            np.ones_like(us, dtype=np.float64),
+        ],
+        axis=1,
+    )
+    return ray_dirs_cam @ camera_pose.rotation
+
+
+def compute_mesh_depth_occlusion_metrics(
+    target_points: np.ndarray,
+    target_tri_ids: set[int],
+    camera_pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    depth_image: np.ndarray,
+    ray_caster,
+    depth_tolerance: float = 0.10,
+) -> dict[str, float | int]:
+    """Return depth metrics using target-instance mesh hits instead of bbox hits."""
+    sample_points = np.asarray(target_points, dtype=np.float64)
+    if (
+        len(sample_points) == 0
+        or not target_tri_ids
+        or ray_caster is None
+        or depth_image is None
+    ):
+        return {
+            "in_frame_sample_count": 0,
+            "valid_in_frame_count": 0,
+            "visible_in_frame_count": 0,
+            "visible_ratio_in_frame": 0.0,
+            "occlusion_ratio_in_frame": 1.0,
+        }
+
+    h, w = depth_image.shape[:2]
+    query_us: list[float] = []
+    query_vs: list[float] = []
+    query_depths: list[float] = []
+    in_frame_sample_count = 0
+
+    for pt in sample_points:
+        p_cam = world_to_camera(pt, camera_pose)
+        if p_cam[2] <= 0:
+            continue
+        u = intrinsics.fx * p_cam[0] / p_cam[2] + intrinsics.cx
+        v = intrinsics.fy * p_cam[1] / p_cam[2] + intrinsics.cy
+        u_int = int(round(float(u)))
+        v_int = int(round(float(v)))
+        if u_int < 0 or u_int >= w or v_int < 0 or v_int >= h:
+            continue
+        in_frame_sample_count += 1
+        depth_val = float(depth_image[v_int, u_int])
+        if depth_val <= 0:
+            continue
+        query_us.append(float(u))
+        query_vs.append(float(v))
+        query_depths.append(depth_val)
+
+    if not query_us:
+        return {
+            "in_frame_sample_count": int(in_frame_sample_count),
+            "valid_in_frame_count": 0,
+            "visible_in_frame_count": 0,
+            "visible_ratio_in_frame": 0.0,
+            "occlusion_ratio_in_frame": 1.0,
+        }
+
+    query_us_arr = np.asarray(query_us, dtype=np.float64)
+    query_vs_arr = np.asarray(query_vs, dtype=np.float64)
+    query_depths_arr = np.asarray(query_depths, dtype=np.float64)
+    directions = _pixel_rays_world(query_us_arr, query_vs_arr, camera_pose, intrinsics)
+    origins = np.broadcast_to(
+        np.asarray(camera_pose.position, dtype=np.float64),
+        directions.shape,
+    ).copy()
+    target_hits = ray_caster.first_hits_for_triangles(
+        origins=origins,
+        directions=directions,
+        target_tri_ids=target_tri_ids,
+    )
+
+    valid_in_frame = 0
+    visible_in_frame = 0
+    for ray_idx, depth_val in enumerate(query_depths_arr):
+        hit = target_hits.get(ray_idx)
+        if hit is None:
+            continue
+        hit_cam = world_to_camera(np.asarray(hit[0], dtype=np.float64), camera_pose)
+        if hit_cam[2] <= 0:
+            continue
+        valid_in_frame += 1
+        if float(hit_cam[2]) - float(depth_val) <= depth_tolerance:
+            visible_in_frame += 1
+
+    visible_ratio_in_frame = (
+        float(visible_in_frame / valid_in_frame) if valid_in_frame > 0 else 0.0
+    )
+    occlusion_ratio_in_frame = (
+        float(1.0 - visible_ratio_in_frame) if valid_in_frame > 0 else 1.0
+    )
+    return {
+        "in_frame_sample_count": int(in_frame_sample_count),
+        "valid_in_frame_count": int(valid_in_frame),
+        "visible_in_frame_count": int(visible_in_frame),
+        "visible_ratio_in_frame": visible_ratio_in_frame,
+        "occlusion_ratio_in_frame": occlusion_ratio_in_frame,
+    }
+
+
+def compute_mesh_depth_occlusion(
+    target_points: np.ndarray,
+    target_tri_ids: set[int],
+    camera_pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    depth_image: np.ndarray,
+    ray_caster,
+    depth_tolerance: float = 0.10,
+) -> tuple[str, float]:
+    """Determine visibility from depth using target-mesh entry depth."""
+    metrics = compute_mesh_depth_occlusion_metrics(
+        target_points=target_points,
+        target_tri_ids=target_tri_ids,
+        camera_pose=camera_pose,
+        intrinsics=intrinsics,
+        depth_image=depth_image,
+        ray_caster=ray_caster,
+        depth_tolerance=depth_tolerance,
+    )
+    if int(metrics["valid_in_frame_count"]) <= 0:
+        return "not visible", 0.0
+
+    ratio = float(metrics["visible_ratio_in_frame"])
+    if ratio > FULLY_VISIBLE_RATIO_MIN:
+        return "fully visible", ratio
+    if ratio >= PARTIALLY_VISIBLE_RATIO_MIN:
+        return "partially occluded", ratio
+    return "not visible", ratio
+
+
 def _projected_bbox_stats(
     projected_points: list[tuple[float, float]],
     h: int,

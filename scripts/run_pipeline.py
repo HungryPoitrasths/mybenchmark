@@ -37,8 +37,6 @@ from src.support_graph import (
 )
 from src.frame_selector import (
     select_frames,
-    compute_frame_object_visibility,
-    get_visible_objects,
 )
 from src.qa_generator import generate_all_questions
 from src.quality_control import full_quality_pipeline, compute_statistics
@@ -58,6 +56,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
+EXPECTED_REFERABILITY_CACHE_VERSION = "4.0"
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -66,6 +65,12 @@ def _load_referability_cache(path: Path) -> dict | None:
         return None
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+    version = str(data.get("version", ""))
+    if version != EXPECTED_REFERABILITY_CACHE_VERSION:
+        raise ValueError(
+            f"Referability cache version mismatch: expected {EXPECTED_REFERABILITY_CACHE_VERSION}, got {version or '<missing>'}. "
+            "Regenerate the referability cache with the updated VLM prompts before running the pipeline."
+        )
     logger.info("Loaded referability cache from %s", path)
     return data
 
@@ -231,14 +236,6 @@ def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[
                     visible_object_ids.append(int(obj_id))
                 except (TypeError, ValueError):
                     continue
-        else:
-            object_decisions = entry.get("object_decisions", {})
-            if isinstance(object_decisions, dict):
-                for obj_id in object_decisions.keys():
-                    try:
-                        visible_object_ids.append(int(obj_id))
-                    except (TypeError, ValueError):
-                        continue
         frames.append(
             {
                 "image_name": image_name,
@@ -373,7 +370,6 @@ def _attachment_summary_for_object(
 
 def _build_object_debug_rows(
     scene_objects: list[dict],
-    visibility_table: dict[int, dict] | None,
     selector_visible_ids: list[int],
     pipeline_visible_ids: list[int],
     referability_entry: dict | None,
@@ -391,15 +387,12 @@ def _build_object_debug_rows(
         for row in frame_attachment_rows
     }
     relevant_ids = selector_set | pipeline_set | candidate_set | referable_set | attachment_set
-    if not relevant_ids and visibility_table:
-        relevant_ids = {int(obj_id) for obj_id, meta in visibility_table.items() if meta.get("center_in_frame")}
 
     rows: list[dict[str, object]] = []
     for obj in scene_objects:
         obj_id = int(obj["id"])
         if relevant_ids and obj_id not in relevant_ids:
             continue
-        meta = (visibility_table or {}).get(obj_id, {})
         tags: list[str] = []
         if obj_id in candidate_set:
             tags.append("VLM候选")
@@ -414,14 +407,6 @@ def _build_object_debug_rows(
             "label": str(obj.get("label", "")),
             "tags": tags,
             "attachment_summary": _attachment_summary_for_object(obj_id, frame_attachment_rows),
-            "occlusion_status": meta.get("occlusion_status"),
-            "visible_ratio": meta.get("visible_ratio"),
-            "projected_area_px": meta.get("projected_area_px"),
-            "bbox_in_frame_ratio": meta.get("bbox_in_frame_ratio"),
-            "roi_sharpness": meta.get("roi_sharpness"),
-            "center_uv_px": meta.get("center_uv_px"),
-            "eligible_as_reference": bool(meta.get("eligible_as_reference", False)),
-            "rejection_reasons": list(meta.get("rejection_reasons", [])),
         })
 
     rows.sort(key=lambda row: (
@@ -440,7 +425,6 @@ def _build_frame_debug_entry(
     selector_visible_ids: list[int],
     pipeline_visible_ids: list[int],
     referability_entry: dict | None,
-    audit_visibility_table: dict[int, dict] | None,
     frame_attachment_rows: list[dict[str, object]],
     generated_questions: list[dict] | None = None,
     pipeline_skip_reason: str | None = None,
@@ -466,7 +450,6 @@ def _build_frame_debug_entry(
         "vlm_count_batches": list((referability_entry or {}).get("vlm_count_batches", [])),
         "object_rows": _build_object_debug_rows(
             scene_objects,
-            audit_visibility_table,
             selector_visible_ids,
             pipeline_visible_ids,
             referability_entry,
@@ -483,7 +466,6 @@ def run_pipeline(
     max_scenes: int = 300,
     max_frames: int = 5,
     use_occlusion: bool = True,
-    strict_mode: bool = False,
     referability_cache: dict | None = None,
     occlusion_backend: str = "depth",
     use_occlusion_vlm: bool = False,
@@ -539,7 +521,11 @@ def run_pipeline(
 
         # ---- Stage 1: Parse ----
         preloaded_geometry = None
-        if occlusion_backend == "mesh_ray" or occlusion_vlm_adjudicator is not None:
+        needs_mesh_resources = (
+            occlusion_backend in ("depth", "mesh_ray")
+            or occlusion_vlm_adjudicator is not None
+        )
+        if needs_mesh_resources:
             try:
                 preloaded_geometry = _load_scene_geometry(scene_dir)
             except Exception as e:
@@ -576,7 +562,7 @@ def run_pipeline(
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
         ray_caster = None
-        if occlusion_backend in ("ray", "mesh_ray"):
+        if needs_mesh_resources:
             mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
             if not mesh_path.exists():
                 mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
@@ -595,17 +581,17 @@ def run_pipeline(
                 )
 
         instance_mesh_data = None
-        if occlusion_backend == "mesh_ray" or occlusion_vlm_adjudicator is not None:
+        if needs_mesh_resources:
             try:
                 instance_mesh_data = load_instance_mesh_data(
                     scene_dir,
                     instance_ids=[int(o["id"]) for o in scene["objects"]],
-                    n_surface_samples=128,
+                    n_surface_samples=512,
                     preloaded_geometry=preloaded_geometry,
                 )
             except Exception as e:
                 raise RuntimeError(
-                    f"mesh_ray backend requested for {scene_id}, "
+                    f"{occlusion_backend} backend requested for {scene_id}, "
                     f"but instance mesh data could not be loaded: {e}"
                 ) from e
 
@@ -643,7 +629,6 @@ def run_pipeline(
                         selector_visible_ids=selector_visible_ids,
                         pipeline_visible_ids=[],
                         referability_entry=_get_referability_entry(referability_cache, scene_id, image_name),
-                        audit_visibility_table=None,
                         frame_attachment_rows=frame_attachment_rows,
                         pipeline_skip_reason="missing_pose",
                     ))
@@ -665,100 +650,6 @@ def run_pipeline(
 
             selector_visible_ids = _normalize_object_ids(frame.get("visible_object_ids"))
             visible_ids = list(selector_visible_ids)
-            if referability_cache and color_intrinsics is not None:
-                visible_ids = [
-                    int(o["id"])
-                    for o in get_visible_objects(
-                        scene["objects"],
-                        camera_pose,
-                        color_intrinsics,
-                    )
-                ]
-            audit_visibility_table = None
-            if color_intrinsics is not None and image_path.exists():
-                audit_visibility_table = compute_frame_object_visibility(
-                    scene["objects"],
-                    camera_pose,
-                    color_intrinsics,
-                    image_path=image_path,
-                    depth_image=depth_image,
-                    depth_intrinsics=depth_intrinsics,
-                    strict_mode=True,
-                )
-
-            visibility_table = None
-            if strict_mode:
-                if depth_image is None or depth_intrinsics is None:
-                    if write_frame_debug:
-                        frame_attachment_rows = _filter_frame_attachment_rows(
-                            scene_attachment_rows,
-                            set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
-                        )
-                        scene_frame_debug_entries.append(_build_frame_debug_entry(
-                            image_name=image_name,
-                            scene_objects=scene["objects"],
-                            objects_by_id=objects_by_id,
-                            selector_visible_ids=selector_visible_ids,
-                            pipeline_visible_ids=list(visible_ids),
-                            referability_entry=_get_referability_entry(referability_cache, scene_id, image_name),
-                            audit_visibility_table=audit_visibility_table,
-                            frame_attachment_rows=frame_attachment_rows,
-                            pipeline_skip_reason="strict_mode_missing_depth",
-                        ))
-                    logger.debug(
-                        "Frame %s/%s: strict mode requires depth; skipping",
-                        scene_id, image_name,
-                    )
-                    continue
-                if color_intrinsics is None or not image_path.exists():
-                    if write_frame_debug:
-                        frame_attachment_rows = _filter_frame_attachment_rows(
-                            scene_attachment_rows,
-                            set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
-                        )
-                        scene_frame_debug_entries.append(_build_frame_debug_entry(
-                            image_name=image_name,
-                            scene_objects=scene["objects"],
-                            objects_by_id=objects_by_id,
-                            selector_visible_ids=selector_visible_ids,
-                            pipeline_visible_ids=list(visible_ids),
-                            referability_entry=_get_referability_entry(referability_cache, scene_id, image_name),
-                            audit_visibility_table=audit_visibility_table,
-                            frame_attachment_rows=frame_attachment_rows,
-                            pipeline_skip_reason="strict_mode_missing_color",
-                        ))
-                    logger.debug(
-                        "Frame %s/%s: strict mode requires readable color image; skipping",
-                        scene_id, image_name,
-                    )
-                    continue
-                visibility_table = audit_visibility_table
-                visible_ids = [
-                    obj_id for obj_id, meta in visibility_table.items()
-                    if meta.get("eligible_as_reference", False)
-                ]
-                if len(visible_ids) < 3:
-                    if write_frame_debug:
-                        frame_attachment_rows = _filter_frame_attachment_rows(
-                            scene_attachment_rows,
-                            set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
-                        )
-                        scene_frame_debug_entries.append(_build_frame_debug_entry(
-                            image_name=image_name,
-                            scene_objects=scene["objects"],
-                            objects_by_id=objects_by_id,
-                            selector_visible_ids=selector_visible_ids,
-                            pipeline_visible_ids=list(visible_ids),
-                            referability_entry=_get_referability_entry(referability_cache, scene_id, image_name),
-                            audit_visibility_table=audit_visibility_table,
-                            frame_attachment_rows=frame_attachment_rows,
-                            pipeline_skip_reason="strict_mode_too_few_objects",
-                        ))
-                    logger.debug(
-                        "Frame %s/%s: only %d strict-eligible objects; skipping",
-                        scene_id, image_name, len(visible_ids),
-                    )
-                    continue
 
             visible_id_set = set(int(obj_id) for obj_id in visible_ids)
             referable_ids = None
@@ -785,7 +676,6 @@ def run_pipeline(
                             selector_visible_ids=selector_visible_ids,
                             pipeline_visible_ids=list(visible_ids),
                             referability_entry=referability_entry,
-                            audit_visibility_table=audit_visibility_table,
                             frame_attachment_rows=frame_attachment_rows,
                             pipeline_skip_reason="no_referable_objects_or_l1_candidates",
                         ))
@@ -820,8 +710,6 @@ def run_pipeline(
                 label_counts=label_counts,
                 frame_image=frame_image,
                 occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
-                object_visibility=visibility_table,
-                strict_mode=strict_mode,
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),
@@ -844,7 +732,6 @@ def run_pipeline(
                     selector_visible_ids=selector_visible_ids,
                     pipeline_visible_ids=list(visible_ids),
                     referability_entry=referability_entry,
-                    audit_visibility_table=audit_visibility_table,
                     frame_attachment_rows=frame_attachment_rows,
                     generated_questions=questions,
                 ))
@@ -853,7 +740,6 @@ def run_pipeline(
         if write_frame_debug:
             scene_debug_records[scene_id] = {
                 "scene_id": scene_id,
-                "strict_mode": bool(strict_mode),
                 "occlusion_backend": occlusion_backend,
                 "scene_attachment_rows": scene_attachment_rows,
                 "frames": scene_frame_debug_entries,
@@ -946,13 +832,9 @@ def main():
     parser.add_argument(
         "--occlusion_backend",
         type=str,
-        choices=("depth", "ray", "approx", "mesh_ray"),
+        choices=("depth", "mesh_ray"),
         default="depth",
         help="Backend for visibility/occlusion estimation",
-    )
-    parser.add_argument(
-        "--strict_mode", action="store_true",
-        help="Require every mentioned object to pass strict per-frame visibility checks",
     )
     parser.add_argument(
         "--referability_cache", type=str, default=None,
@@ -995,7 +877,6 @@ def main():
         max_scenes=args.max_scenes,
         max_frames=args.max_frames,
         use_occlusion=not args.no_occlusion,
-        strict_mode=args.strict_mode,
         referability_cache=referability_cache,
         occlusion_backend=args.occlusion_backend,
         use_occlusion_vlm=args.use_occlusion_vlm,
