@@ -240,12 +240,21 @@ def compute_frame_object_visibility(
                 occlusion_status != "not visible"
                 if occlusion_status != "unknown" else center_in_frame
             ),
+            "center_uv_px": (
+                [float(uv[0]), float(uv[1])]
+                if uv is not None else None
+            ),
             "depth_m": float(depth),
             "occlusion_status": occlusion_status,
             "visible_ratio": float(visible_ratio),
+            "valid_projection_count": int(roi_info["valid_projection_count"]),
             "projected_area_px": float(roi_info["projected_area_px"]),
             "bbox_in_frame_ratio": float(roi_info["bbox_in_frame_ratio"]),
             "edge_margin_px": float(roi_info["edge_margin_px"]),
+            "roi_bounds_px": (
+                [int(v) for v in roi_info["roi_bounds"]]
+                if roi_info["roi_bounds"] is not None else None
+            ),
             "roi_sharpness": roi_sharpness,
             "label_unique_in_frame": True,
             "eligible_as_reference": center_in_frame,

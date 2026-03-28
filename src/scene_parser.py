@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import open3d as o3d
 
 from .utils.colmap_loader import load_axis_alignment
 
@@ -190,6 +189,8 @@ def _load_scene_geometry(
     scene_path: str | Path,
 ) -> SceneGeometry:
     """Load one scene's aligned vertices, faces, segment ids, and annotations."""
+    import open3d as o3d
+
     scene_path = Path(scene_path)
     scene_id, mesh_file, seg_file, anno_file = _resolve_scene_files(scene_path)
 
