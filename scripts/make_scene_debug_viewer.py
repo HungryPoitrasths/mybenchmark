@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
+import mimetypes
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -47,6 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=Path("scene_debug_viewer.html"))
     parser.add_argument("--max_frames", type=int, default=5)
     parser.add_argument("--question_limit_per_frame", type=int, default=200, help="0 means no limit.")
+    parser.add_argument("--image_mode", choices=("inline", "file_uri"), default="inline", help="How frame images are referenced in the HTML.")
     parser.add_argument("--strict_mode", action="store_true")
     return parser.parse_args()
 
@@ -69,6 +72,48 @@ def n(value: Any, digits: int = 2) -> str:
     if digits == 0:
         return f"{number:.0f}"
     return f"{number:.{digits}f}"
+
+
+def zh_visibility_value(value: Any) -> str:
+    mapping = {
+        "unknown": "未知",
+        "fully visible": "完全可见",
+        "partially occluded": "部分遮挡",
+        "not visible": "不可见",
+        "center_out_of_frame": "中心点不在画面内",
+        "missing_depth": "缺少深度图",
+        "depth_occluded": "被深度遮挡",
+        "low_visible_ratio": "可见比例过低",
+        "small_projection": "投影面积过小",
+        "bbox_cut_off": "边框被裁切",
+        "too_close_to_edge": "过于靠近图像边缘",
+        "missing_roi_sharpness": "缺少 ROI 清晰度",
+        "blurry_roi": "ROI 模糊",
+        "duplicate_label": "标签重复",
+    }
+    text = str(value)
+    return mapping.get(text, text)
+
+
+def zh_relation_value(value: Any) -> str:
+    mapping = {
+        "attachment": "附着",
+        "support": "支撑",
+        "attachment_edges": "附着边",
+        "support_graph": "支撑图",
+    }
+    text = str(value)
+    return mapping.get(text, text)
+
+
+def image_path_to_uri(image_path: Path | None, image_mode: str) -> str | None:
+    if image_path is None or not image_path.exists():
+        return None
+    if image_mode == "file_uri":
+        return image_path.resolve().as_uri()
+    mime_type = mimetypes.guess_type(str(image_path))[0] or "image/jpeg"
+    payload = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{payload}"
 
 
 def counter_dict(counter: Counter[str]) -> dict[str, int]:
@@ -106,20 +151,20 @@ def load_scene_with_fallback(
             if scene is None:
                 raise ValueError(f"parse_scene() returned no usable objects for {scene_dir}")
             enrich_scene_with_support(scene)
-            return scene, "raw_scene", str(scene_dir), notes
+            return scene, "原始场景", str(scene_dir), notes
         except Exception as exc:
             if scene_metadata is None:
                 raise
-            notes.append(f"raw scene parse failed; using metadata snapshot instead: {exc}")
+            notes.append(f"原始场景解析失败，已回退为元数据快照: {exc}")
     assert scene_metadata is not None
     scene = load_json(scene_metadata)
     if "attachment_graph" not in scene and "support_graph" not in scene:
         try:
             enrich_scene_with_support(scene)
-            notes.append("metadata had no support graph; rebuilt support/attachment fields in memory")
+            notes.append("元数据里没有支撑图，已在内存中重建附着/支撑字段")
         except Exception as exc:
-            notes.append(f"could not rebuild support graph from metadata only: {exc}")
-    return scene, "scene_metadata", str(scene_metadata), notes
+            notes.append(f"仅凭元数据无法重建支撑图: {exc}")
+    return scene, "场景元数据", str(scene_metadata), notes
 
 
 def resolve_scene_json_path(
@@ -255,13 +300,13 @@ def build_annotation_audit(scene: dict[str, Any], scene_dir: Path | None, scene_
         segments = [int(seg) for seg in group.get("segments", [])]
         vertex_count = int(np.isin(seg_indices, segments).sum()) if seg_indices is not None and segments else None
         if object_id in scene_ids:
-            status = "kept"
+            status = "保留"
         elif normalized in ALWAYS_EXCLUDED:
-            status = "always_excluded"
+            status = "始终排除"
         elif normalized in QUESTION_ONLY_EXCLUDED:
-            status = "question_only_context"
+            status = "仅题目上下文"
         else:
-            status = "filtered_or_missing"
+            status = "已过滤或缺失"
         audit.append({"object_id": object_id, "raw_label": raw_label, "normalized_label": normalized, "status": status, "segment_count": len(segments), "vertex_count": vertex_count})
     audit.sort(key=lambda x: (x["status"], x["normalized_label"], x["object_id"]))
     return audit
@@ -347,6 +392,7 @@ def build_frames(
     strict_mode: bool,
     referability_frames: dict[str, dict[str, Any]],
     scene_questions: dict[str, list[dict[str, Any]]],
+    image_mode: str,
 ) -> list[dict[str, Any]]:
     objects = list(scene.get("objects") or [])
     objects_by_id = {int(obj["id"]): obj for obj in objects}
@@ -387,13 +433,13 @@ def build_frames(
     for image_name in ordered_names:
         sel = selected_by_name.get(image_name)
         ref = referability_frames.get(image_name) or {}
+        image_path = scene_dir / "color" / image_name if scene_dir else None
         frame_selector_ids = [int(x) for x in sel.get("visible_object_ids", [])] if sel else []
         frame_selector_score = int(sel.get("score", 0)) if sel else 0
         pipeline_ids = list(frame_selector_ids)
         visibility_rows = []
         if scene_dir and color_intrinsics is not None and image_name in poses:
             pose = poses[image_name]
-            image_path = scene_dir / "color" / image_name
             depth_image = None
             if depth_intrinsics is not None:
                 depth_path = scene_dir / "depth" / image_name.replace(".jpg", ".png")
@@ -425,7 +471,7 @@ def build_frames(
         wrong = sum(1 for q in frame_questions if q.get("prediction_correct") is False)
         frames.append({
             "image_name": image_name,
-            "image_uri": (scene_dir / "color" / image_name).resolve().as_uri() if scene_dir and (scene_dir / "color" / image_name).exists() else None,
+            "image_uri": image_path_to_uri(image_path, image_mode),
             "image_width": getattr(color_intrinsics, "width", 640) if color_intrinsics is not None else 640,
             "image_height": getattr(color_intrinsics, "height", 480) if color_intrinsics is not None else 480,
             "frame_selector_score": frame_selector_score,
@@ -456,16 +502,16 @@ def render_count_table(frame: dict[str, Any]) -> str:
         delta = vlm - fs
         rows.append(f"<tr><td>{h(label)}</td><td>{fs}</td><td>{pipe}</td><td>{vlm}</td><td>{delta:+d}</td></tr>")
     if not rows:
-        return '<div class="muted">No VLM count data for this frame.</div>'
+        return '<div class="muted">这一帧没有 VLM 计数数据。</div>'
     return (
-        '<table><thead><tr><th>Label</th><th>Frame Selector</th><th>Pipeline</th><th>VLM</th><th>Delta(VLM-FS)</th></tr></thead>'
+        '<table><thead><tr><th>类别</th><th>帧筛选器</th><th>主流程</th><th>VLM</th><th>差值(VLM-FS)</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody></table>"
     )
 
 
 def render_overlay_svg(frame: dict[str, Any]) -> str:
     if not frame["image_uri"] or not frame["visibility_rows"]:
-        return '<div class="img-missing">Image or overlay data unavailable for this frame.</div>'
+        return '<div class="img-missing">这一帧缺少图像或叠加框数据。</div>'
     width = int(frame["image_width"])
     height = int(frame["image_height"])
     parts = [f'<svg class="overlay" viewBox="0 0 {width} {height}" preserveAspectRatio="none">']
@@ -497,45 +543,45 @@ def render_overlay_svg(frame: dict[str, Any]) -> str:
 
 def render_visibility_table(frame: dict[str, Any]) -> str:
     if not frame["visibility_rows"]:
-        return '<div class="muted">No per-object visibility table for this frame.</div>'
+        return '<div class="muted">这一帧没有逐物体可见性表。</div>'
     rows = []
     for row in sorted(frame["visibility_rows"], key=lambda x: (not x.get("is_vlm_referable", False), not x.get("is_pipeline_visible", False), x["label"], x["id"])):
         flags = []
         if row.get("is_frame_selector_candidate"):
-            flags.append("candidate")
+            flags.append("候选")
         if row.get("is_pipeline_visible"):
             flags.append("pipeline")
         if row.get("is_vlm_referable"):
-            flags.append("referable")
+            flags.append("可指代")
         if row.get("eligible_as_reference"):
-            flags.append("strict-ok")
-        reasons = ", ".join(row.get("rejection_reasons", [])) or "-"
+            flags.append("严格模式可用")
+        reasons = ", ".join(zh_visibility_value(x) for x in row.get("rejection_reasons", [])) or "-"
         rows.append(
             "<tr>"
             f"<td>{row['id']}</td><td>{h(row['label'])}</td><td>{h(' | '.join(flags) or '-')}</td>"
-            f"<td>{h(row.get('occlusion_status', '-'))}</td><td>{n(row.get('visible_ratio'), 2)}</td>"
+            f"<td>{h(zh_visibility_value(row.get('occlusion_status', '-')))}</td><td>{n(row.get('visible_ratio'), 2)}</td>"
             f"<td>{n(row.get('projected_area_px'), 0)}</td><td>{n(row.get('bbox_in_frame_ratio'), 2)}</td>"
             f"<td>{n(row.get('roi_sharpness'), 1)}</td><td>{h(reasons)}</td></tr>"
         )
     return (
-        '<table><thead><tr><th>ID</th><th>Label</th><th>Flags</th><th>Occlusion</th><th>Visible Ratio</th>'
-        f"<th>Proj Area</th><th>In Frame</th><th>Sharpness</th><th>Reasons</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
+        '<table><thead><tr><th>ID</th><th>类别</th><th>标记</th><th>遮挡</th><th>可见比例</th>'
+        f"<th>投影面积</th><th>框内比例</th><th>清晰度</th><th>原因</th></tr></thead><tbody>{''.join(rows)}</tbody></table>"
     )
 
 
 def render_questions(frame: dict[str, Any]) -> str:
     questions = frame["questions"]
     if not questions:
-        return '<div class="muted">No loaded questions for this frame.</div>'
+        return '<div class="muted">这一帧没有加载到题目。</div>'
     cards = []
     for q in questions:
         klass = "bad" if q.get("prediction_correct") is False else "ok" if q.get("prediction_correct") is True else ""
         status = (
-            f'<span class="pill bad">pred {h(q["prediction"])} / gt {h(q["answer"])}</span>'
+            f'<span class="pill bad">预测 {h(q["prediction"])} / 真值 {h(q["answer"])}</span>'
             if q.get("prediction_correct") is False else
-            '<span class="pill ok">correct</span>'
+            '<span class="pill ok">正确</span>'
             if q.get("prediction_correct") is True else
-            f'<span class="pill warn">answer {h(q["answer"])}</span>'
+            f'<span class="pill warn">答案 {h(q["answer"])}</span>'
         )
         options = "<br>".join(f"{chr(65 + i)}) {h(opt)}" for i, opt in enumerate(q["options"]))
         cards.append(
@@ -548,24 +594,24 @@ def render_questions(frame: dict[str, Any]) -> str:
 
 def render_support_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
-        return '<div class="muted">No attachment or support relations available.</div>'
+        return '<div class="muted">没有可用的附着 / 支撑关系。</div>'
     body = "".join(
         f"<tr><td>{h(r['parent_label'])} #{r['parent_id']}</td><td>{h(r['child_label'])} #{r['child_id']}</td>"
-        f"<td>{h(r['relation_type'])}</td><td>{n(r.get('score'), 3)}</td><td>{h(r['source'])}</td></tr>"
+        f"<td>{h(zh_relation_value(r['relation_type']))}</td><td>{n(r.get('score'), 3)}</td><td>{h(zh_relation_value(r['source']))}</td></tr>"
         for r in rows
     )
-    return f'<table><thead><tr><th>Parent</th><th>Child</th><th>Type</th><th>Score</th><th>Source</th></tr></thead><tbody>{body}</tbody></table>'
+    return f'<table><thead><tr><th>父物体</th><th>子物体</th><th>关系类型</th><th>分数</th><th>来源</th></tr></thead><tbody>{body}</tbody></table>'
 
 
 def render_annotation_table(rows: list[dict[str, Any]]) -> str:
     if not rows:
-        return '<div class="muted">No raw aggregation audit was available. Use `--scene_dir` to enable this table.</div>'
+        return '<div class="muted">没有原始 aggregation 审计数据。使用 `--scene_dir` 可启用这张表。</div>'
     body = "".join(
         f"<tr><td>{r['object_id']}</td><td>{h(r['raw_label'])}</td><td>{h(r['normalized_label'])}</td>"
         f"<td>{h(r['status'])}</td><td>{r['segment_count']}</td><td>{h(r['vertex_count']) if r['vertex_count'] is not None else '-'}</td></tr>"
         for r in rows
     )
-    return f'<table><thead><tr><th>ID</th><th>Raw Label</th><th>Normalized</th><th>Status</th><th>Segments</th><th>Vertices</th></tr></thead><tbody>{body}</tbody></table>'
+    return f'<table><thead><tr><th>ID</th><th>原始标签</th><th>归一化标签</th><th>状态</th><th>分段数</th><th>顶点数</th></tr></thead><tbody>{body}</tbody></table>'
 
 
 def render_html(
@@ -580,58 +626,58 @@ def render_html(
     open3d_cmd: str,
     strict_mode: bool,
 ) -> str:
-    note_html = "".join(f'<li>{h(note)}</li>' for note in notes) or "<li>No warnings.</li>"
+    note_html = "".join(f'<li>{h(note)}</li>' for note in notes) or "<li>无额外说明。</li>"
     frame_nav = "".join(f'<a class="pill" href="#frame-{i}">{h(frame["image_name"])}</a>' for i, frame in enumerate(frames))
     frame_sections = []
     for i, frame in enumerate(frames):
         vlm_status = (
-            "usable"
+            "可用"
             if frame["frame_usable"]
-            else "rejected"
+            else "已拒绝"
             if frame["frame_usable"] is False
-            else "not loaded"
+            else "未加载"
         )
         vlm_detail = frame["frame_reject_reason"]
         if not vlm_detail:
-            vlm_detail = "referable=" + str(len(frame["referable_object_ids"]))
+            vlm_detail = "可指代物体数=" + str(len(frame["referable_object_ids"]))
         image_block = (
             f'<div class="imgwrap"><img src="{h(frame["image_uri"])}" alt="{h(frame["image_name"])}">{render_overlay_svg(frame)}</div>'
-            if frame["image_uri"] else '<div class="imgwrap img-missing">Image missing for this frame.</div>'
+            if frame["image_uri"] else '<div class="imgwrap img-missing">这一帧缺少图像文件。</div>'
         )
         frame_sections.append(
             f'<section class="card frame" id="frame-{i}"><h2>{h(frame["image_name"])}</h2>'
-            f'<div class="metrics"><div class="metric"><div class="k">Frame Score</div><div class="v">{frame["frame_selector_score"]}</div><div class="s">n_visible={len(frame["frame_selector_visible_ids"])}, support_visible={frame["support_visible_count"]}</div></div>'
-            f'<div class="metric"><div class="k">Pipeline Visible</div><div class="v">{len(frame["pipeline_visible_ids"])}</div><div class="s">strict_mode={"on" if strict_mode else "off"}</div></div>'
+            f'<div class="metrics"><div class="metric"><div class="k">帧得分</div><div class="v">{frame["frame_selector_score"]}</div><div class="s">可见物体={len(frame["frame_selector_visible_ids"])}, 支撑相关可见={frame["support_visible_count"]}</div></div>'
+            f'<div class="metric"><div class="k">主流程可见物体</div><div class="v">{len(frame["pipeline_visible_ids"])}</div><div class="s">严格模式={"开" if strict_mode else "关"}</div></div>'
             f'<div class="metric"><div class="k">VLM</div><div class="v">{h(vlm_status)}</div><div class="s">{h(vlm_detail)}</div></div>'
-            f'<div class="metric"><div class="k">Questions</div><div class="v">{len(frame["questions"])}</div><div class="s">wrong={frame["question_wrong"]}</div></div></div>'
-            f'<div class="twocol"><div><h3>Image Overlay</h3>{image_block}<div class="legend"><span class="cand">frame selector candidate</span><span class="pipe">pipeline visible</span><span class="ref">VLM referable</span></div></div>'
-            f'<div><h3>Label Counts</h3>{render_count_table(frame)}</div></div>'
-            f'<h3>Per-Object Visibility</h3>{render_visibility_table(frame)}<h3>Questions</h3>{render_questions(frame)}</section>'
+            f'<div class="metric"><div class="k">题目数</div><div class="v">{len(frame["questions"])}</div><div class="s">答错={frame["question_wrong"]}</div></div></div>'
+            f'<div class="twocol"><div><h3>图像叠加显示</h3>{image_block}<div class="legend"><span class="cand">帧筛选器候选</span><span class="pipe">pipeline 可见</span><span class="ref">VLM 可指代</span></div></div>'
+            f'<div><h3>类别计数</h3>{render_count_table(frame)}</div></div>'
+            f'<h3>逐物体可见性</h3>{render_visibility_table(frame)}<h3>题目</h3>{render_questions(frame)}</section>'
         )
     return f"""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{h(scene_id)} debug viewer</title>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{h(scene_id)} 调试查看器</title>
 <style>
-body{{margin:0;background:#edf2f7;color:#102030;font:14px/1.45 "Segoe UI",Arial,sans-serif}} .page{{max-width:1600px;margin:0 auto;padding:16px;display:grid;gap:16px}}
+body{{margin:0;background:#edf2f7;color:#102030;font:14px/1.45 "Microsoft YaHei","PingFang SC","Segoe UI",Arial,sans-serif}} .page{{max-width:1600px;margin:0 auto;padding:16px;display:grid;gap:16px}}
 .card{{background:#fff;border:1px solid rgba(16,32,48,.08);border-radius:18px;box-shadow:0 14px 32px rgba(16,32,48,.07);padding:16px}} h1,h2,h3{{margin:0 0 10px}} h1{{font-size:26px}} h2{{font-size:21px}} h3{{font-size:17px;margin-top:16px}}
 .muted{{color:#607284}} .metrics{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}} .metric{{background:#f7fafc;border:1px solid rgba(16,32,48,.06);border-radius:14px;padding:10px 12px}} .k{{font-size:12px;color:#607284}} .v{{font-size:22px;font-weight:700}} .s{{font-size:12px;color:#708396;margin-top:4px}}
 .pill{{display:inline-block;padding:4px 9px;border-radius:999px;background:#eef4fa;border:1px solid rgba(16,32,48,.08);margin:0 6px 6px 0;color:#24476a;text-decoration:none}} .pill.ok{{background:#e9f7ef;color:#1e7a41}} .pill.bad{{background:#fff1f1;color:#9b2424}} .pill.warn{{background:#fff6e8;color:#8a5400}}
 .twocol{{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(360px,.9fr);gap:16px;align-items:start}} .imgwrap{{position:relative;background:#0f1b28;border-radius:14px;overflow:hidden;aspect-ratio:4/3}} .imgwrap img{{width:100%;height:100%;object-fit:contain;display:block}} .img-missing{{display:flex;align-items:center;justify-content:center;color:#d6dde6}}
-.overlay{{position:absolute;inset:0;width:100%;height:100%}} .overlay rect{{fill:none;stroke-width:2}} .overlay rect.cand{{stroke:#d0d7de}} .overlay rect.pipe{{stroke:#43a047}} .overlay rect.ref{{stroke:#1d6fd1;stroke-width:3}} .overlay text{{fill:#1d6fd1;font:12px "Segoe UI",Arial,sans-serif;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round}}
+.overlay{{position:absolute;inset:0;width:100%;height:100%}} .overlay rect{{fill:none;stroke-width:2}} .overlay rect.cand{{stroke:#d0d7de}} .overlay rect.pipe{{stroke:#43a047}} .overlay rect.ref{{stroke:#1d6fd1;stroke-width:3}} .overlay text{{fill:#1d6fd1;font:12px "Microsoft YaHei","PingFang SC","Segoe UI",Arial,sans-serif;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round}}
 .legend{{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}} .legend span{{padding:4px 8px;border-radius:999px;background:#f7fafc;border:1px solid rgba(16,32,48,.06)}} .legend .cand{{color:#54606c}} .legend .pipe{{color:#2f7d32}} .legend .ref{{color:#1d5fb0}}
 table{{width:100%;border-collapse:collapse}} th,td{{padding:8px 10px;border-bottom:1px solid rgba(16,32,48,.08);text-align:left;vertical-align:top}} th{{font-size:12px;color:#607284;background:#fff;position:sticky;top:0}}
 .qcard{{border:1px solid rgba(16,32,48,.08);border-radius:14px;padding:10px 12px;margin-bottom:10px;background:#fff}} .qcard.bad{{border-color:rgba(180,58,58,.18);background:#fff8f8}} .qcard.ok{{border-color:rgba(34,139,80,.18);background:#f8fffb}} .qmeta{{margin-bottom:6px}} .qtext{{margin-bottom:8px}} .qopts{{color:#42576b}}
 pre{{background:#0f1722;color:#d7e0ea;padding:14px;border-radius:14px;overflow:auto}} ul{{margin:8px 0 0 18px}} @media(max-width:1180px){{.metrics,.twocol{{grid-template-columns:1fr}}}}
 </style></head><body><div class="page">
-<section class="card"><h1>{h(scene_id)}</h1><div class="muted">Static scene debug report for frame selection, VLM referability, and question generation outputs.</div>
-<div class="metrics" style="margin-top:12px"><div class="metric"><div class="k">Source</div><div class="v">{h(source_mode)}</div><div class="s">{h(source_detail)}</div></div>
-<div class="metric"><div class="k">Frames</div><div class="v">{len(frames)}</div><div class="s">scene questions={scene_question_summary['total']}</div></div>
-<div class="metric"><div class="k">Wrong Predictions</div><div class="v">{scene_question_summary['wrong']}</div><div class="s">if predictions file was provided</div></div>
-<div class="metric"><div class="k">3D Viewer</div><div class="v">Use Open3D</div><div class="s">command below uses aligned raw scene/metadata</div></div></div>
-<h3>Open3D Geometry Check</h3><pre>{h(open3d_cmd)}</pre><h3>Notes</h3><ul>{note_html}</ul><h3>Frame Index</h3>{frame_nav}</section>
+<section class="card"><h1>{h(scene_id)}</h1><div class="muted">用于逐场景检查帧筛选、VLM 可指代性和题目生成结果的静态调试报告。</div>
+<div class="metrics" style="margin-top:12px"><div class="metric"><div class="k">数据来源</div><div class="v">{h(source_mode)}</div><div class="s">{h(source_detail)}</div></div>
+<div class="metric"><div class="k">帧数</div><div class="v">{len(frames)}</div><div class="s">场景题目数={scene_question_summary['total']}</div></div>
+<div class="metric"><div class="k">错误预测数</div><div class="v">{scene_question_summary['wrong']}</div><div class="s">仅在提供 predictions 文件时统计</div></div>
+<div class="metric"><div class="k">3D 查看</div><div class="v">使用 Open3D</div><div class="s">下方命令基于对齐后的原始场景/元数据</div></div></div>
+<h3>Open3D 几何检查</h3><pre>{h(open3d_cmd)}</pre><h3>备注</h3><ul>{note_html}</ul><h3>帧索引</h3>{frame_nav}</section>
 {''.join(frame_sections)}
-<section class="card"><h2>Attachment / Support Relations</h2>{render_support_table(support_rows)}</section>
-<section class="card"><h2>Raw Annotation Audit</h2>{render_annotation_table(annotation_rows)}</section>
+<section class="card"><h2>附着 / 支撑关系</h2>{render_support_table(support_rows)}</section>
+<section class="card"><h2>原始标注审计</h2>{render_annotation_table(annotation_rows)}</section>
 </div></body></html>"""
 
 
@@ -645,12 +691,12 @@ def main() -> None:
     scene_questions_summary, scene_questions, question_path = load_scene_questions(scene_id, args.questions, args.scene_metadata, args.predictions, args.question_limit_per_frame)
     referability_frames, cache_path = load_referability_frames(args.referability_cache, scene_id)
     if args.question_limit_per_frame > 0:
-        notes.append(f"question cards are truncated to the first {args.question_limit_per_frame} items per frame")
+        notes.append(f"每帧题目卡片已截断为前 {args.question_limit_per_frame} 条")
     if question_path is None:
-        notes.append("no scene question JSON found; question cards will be empty")
+        notes.append("未找到该场景的题目 JSON，题目卡片将为空")
     if cache_path is None:
-        notes.append("no referability cache loaded; VLM frame/object diagnostics will be empty")
-    frames = build_frames(scene, scene_dir, args.max_frames, args.strict_mode, referability_frames, scene_questions)
+        notes.append("未加载 referability cache，VLM 的帧/物体诊断信息将为空")
+    frames = build_frames(scene, scene_dir, args.max_frames, args.strict_mode, referability_frames, scene_questions, args.image_mode)
     support_rows = build_support_rows(scene)
     annotation_rows = build_annotation_audit(scene, scene_dir, args.scene_metadata)
     open3d_cmd = (
