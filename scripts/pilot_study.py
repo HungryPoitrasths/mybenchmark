@@ -5,7 +5,7 @@ Processes a small set of scenes (default 30), generates questions, and
 prints summary statistics to validate the pipeline before full-scale run.
 
 Usage:
-    python scripts/pilot_study.py --data_root data/scannet/scans --n_scenes 30
+    python scripts/pilot_study.py --data_root data/scannet/scans --referability_cache output/referability_cache.json --n_scenes 30
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.run_pipeline import run_pipeline
+from scripts.run_pipeline import _load_referability_cache, run_pipeline
 from src.scene_parser import load_scannet_label_map
 from src.quality_control import compute_statistics, sample_for_human_validation
 
@@ -40,6 +40,10 @@ def main():
     parser.add_argument("--output_dir", type=str, default="output/pilot")
     parser.add_argument("--n_scenes", type=int, default=30)
     parser.add_argument("--max_frames", type=int, default=3)
+    parser.add_argument(
+        "--referability_cache", type=str, required=True,
+        help="JSON cache of VLM frame/object referability decisions produced by scripts/run_vlm_referability.py",
+    )
     parser.add_argument("--no_occlusion", action="store_true",
                         help="Disable depth-map occlusion (fast but no occlusion questions)")
     parser.add_argument("--label_map", type=str, default=None,
@@ -59,6 +63,7 @@ def main():
         max_scenes=args.n_scenes,
         max_frames=args.max_frames,
         use_occlusion=not args.no_occlusion,
+        referability_cache=_load_referability_cache(Path(args.referability_cache)),
     )
 
     # Print detailed statistics

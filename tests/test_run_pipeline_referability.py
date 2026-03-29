@@ -62,6 +62,22 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected 4.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
+    def test_run_pipeline_requires_referability_cache(self) -> None:
+        root = make_case_dir("pipeline_requires_cache")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        data_root.mkdir(parents=True)
+
+        with self.assertRaisesRegex(ValueError, "requires a referability_cache"):
+            run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                use_occlusion=False,
+                referability_cache=None,
+                write_frame_debug=False,
+            )
+
     def test_run_pipeline_uses_cached_candidate_pool_directly(self) -> None:
         root = make_case_dir("pipeline")
         self.addCleanup(shutil.rmtree, root, True)
@@ -123,13 +139,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
             patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
             patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
             patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
             patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
             patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
             patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
             patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
             patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
-            patch.object(run_pipeline_module, "select_frames", side_effect=AssertionError("select_frames should not run with referability cache")),
             patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
             patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),

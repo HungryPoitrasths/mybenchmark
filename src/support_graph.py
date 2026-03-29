@@ -88,6 +88,7 @@ AFFIXED_PRIORS = {
 ATTACHMENT_MIN_CONFIDENCE = {
     "contained_in": 0.55,
     "resting_on_soft_surface": 0.60,
+    "supported_by": 0.45,
 }
 
 
@@ -691,6 +692,21 @@ def _edge_sort_key(edge: dict[str, Any]) -> tuple[float, int, float, float, floa
     )
 
 
+def _support_chain_edge_sort_key(edge: dict[str, Any]) -> tuple[int, float, float, float, float]:
+    evidence = edge.get("evidence") or {}
+    geometry = evidence.get("geometry_contact") or {}
+    overlap = evidence.get("xy_overlap") or {}
+    gap = float(geometry.get("z_gap", geometry.get("distance", 1e6)))
+    contact_z_parent = float(geometry.get("contact_z_parent", -1e6))
+    return (
+        ATTACHMENT_TYPE_PRIORITY.get(str(edge.get("type", "")), 0),
+        contact_z_parent,
+        -gap,
+        float(edge.get("confidence", 0.0)),
+        float(overlap.get("child_coverage", 0.0)),
+    )
+
+
 def _derive_graph_from_edges(
     edges: list[dict[str, Any]],
     *,
@@ -732,9 +748,16 @@ def detect_support(
 def build_attachment_graph(
     objects: list[dict],
     z_threshold: float | None = None,
-) -> tuple[dict[int, list[int]], dict[int, int], list[dict[str, Any]]]:
+) -> tuple[
+    dict[int, list[int]],
+    dict[int, int],
+    list[dict[str, Any]],
+    dict[int, list[int]],
+    dict[int, int],
+]:
     """Build attachment relations used for movement propagation."""
     candidates: dict[int, dict[str, Any]] = {}
+    support_chain_candidates: dict[int, dict[str, Any]] = {}
 
     for obj_a in objects:
         for obj_b in objects:
@@ -748,6 +771,13 @@ def build_attachment_graph(
             current = candidates.get(child_id)
             if current is None or _edge_sort_key(edge) > _edge_sort_key(current):
                 candidates[child_id] = edge
+            if str(edge.get("type", "")) in SUPPORT_LIKE_TYPES:
+                support_current = support_chain_candidates.get(child_id)
+                if (
+                    support_current is None
+                    or _support_chain_edge_sort_key(edge) > _support_chain_edge_sort_key(support_current)
+                ):
+                    support_chain_candidates[child_id] = edge
 
     final_edges: list[dict[str, Any]] = []
     attachment_graph: dict[int, list[int]] = {}
@@ -761,12 +791,27 @@ def build_attachment_graph(
         attachment_graph.setdefault(parent_id, []).append(child_id)
         final_edges.append(edge)
 
+    support_chain_graph: dict[int, list[int]] = {}
+    support_chain_by: dict[int, int] = {}
+    for edge in sorted(
+        support_chain_candidates.values(),
+        key=_support_chain_edge_sort_key,
+        reverse=True,
+    ):
+        parent_id = int(edge["parent_id"])
+        child_id = int(edge["child_id"])
+        if _would_create_cycle(parent_id, child_id, support_chain_by):
+            continue
+        support_chain_by[child_id] = parent_id
+        support_chain_graph.setdefault(parent_id, []).append(child_id)
+
     logger.info(
-        "Attachment graph: %d edges among %d objects",
+        "Attachment graph: movement=%d edges, support_chain=%d edges among %d objects",
         len(attached_by),
+        len(support_chain_by),
         len(objects),
     )
-    return attachment_graph, attached_by, final_edges
+    return attachment_graph, attached_by, final_edges, support_chain_graph, support_chain_by
 
 
 def get_attachment_chain(
@@ -858,14 +903,49 @@ def get_scene_attached_by(
     return {int(child_id): int(parent_id) for child_id, parent_id in raw_map.items()}
 
 
+def get_scene_support_chain_graph(
+    scene: dict[str, Any],
+    scene_id: str | None = None,
+) -> dict[int, list[int]]:
+    scene_label = scene_id or str(scene.get("scene_id", "<unknown>"))
+    raw_graph = scene.get("support_chain_graph")
+    if raw_graph is None:
+        raise KeyError(f"Scene {scene_label} is missing 'support_chain_graph'")
+
+    normalized: dict[int, list[int]] = {}
+    for parent_id, child_ids in raw_graph.items():
+        normalized[int(parent_id)] = [int(child_id) for child_id in child_ids]
+    return normalized
+
+
+def get_scene_support_chain_by(
+    scene: dict[str, Any],
+    scene_id: str | None = None,
+) -> dict[int, int]:
+    scene_label = scene_id or str(scene.get("scene_id", "<unknown>"))
+    raw_map = scene.get("support_chain_by")
+    if raw_map is None:
+        raise KeyError(f"Scene {scene_label} is missing 'support_chain_by'")
+
+    return {int(child_id): int(parent_id) for child_id, parent_id in raw_map.items()}
+
+
 def enrich_scene_with_attachment(
     scene: dict[str, Any],
     z_threshold: float | None = None,
 ) -> dict[str, Any]:
     """Add attachment graph fields to a scene dict (in-place)."""
     objects = scene["objects"]
-    attachment_graph, attached_by, attachment_edges = build_attachment_graph(objects, z_threshold)
+    (
+        attachment_graph,
+        attached_by,
+        attachment_edges,
+        support_chain_graph,
+        support_chain_by,
+    ) = build_attachment_graph(objects, z_threshold)
     scene["attachment_graph"] = {str(k): v for k, v in attachment_graph.items()}
     scene["attached_by"] = {str(k): v for k, v in attached_by.items()}
     scene["attachment_edges"] = attachment_edges
+    scene["support_chain_graph"] = {str(k): v for k, v in support_chain_graph.items()}
+    scene["support_chain_by"] = {str(k): v for k, v in support_chain_by.items()}
     return scene

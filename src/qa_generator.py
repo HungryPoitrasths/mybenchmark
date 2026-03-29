@@ -2717,6 +2717,8 @@ def generate_all_questions(
     attachment_graph: dict[int, list[int]],
     attached_by: dict[int, int],
     camera_pose: CameraPose,
+    support_chain_graph: dict[int, list[int]] | None = None,
+    support_chain_by: dict[int, int] | None = None,
     color_intrinsics: CameraIntrinsics | None = None,
     depth_image=None,
     depth_intrinsics=None,
@@ -2760,6 +2762,10 @@ def generate_all_questions(
         templates = _load_templates()
     if attachment_edges is None:
         attachment_edges = []
+    if support_chain_graph is None:
+        support_chain_graph = attachment_graph
+    if support_chain_by is None:
+        support_chain_by = attached_by
     attachment_edge_input = len(attachment_edges)
 
     # Restrict to objects visible in this frame so every question can be
@@ -2773,6 +2779,14 @@ def generate_all_questions(
             if k in vis_set
         }
         attached_by = {k: v for k, v in attached_by.items() if k in vis_set and v in vis_set}
+        support_chain_graph = {
+            k: [c for c in v if c in vis_set]
+            for k, v in support_chain_graph.items()
+            if k in vis_set
+        }
+        support_chain_by = {
+            k: v for k, v in support_chain_by.items() if k in vis_set and v in vis_set
+        }
         attachment_edges = [
             e for e in attachment_edges
             if int(e["parent_id"]) in vis_set and int(e["child_id"]) in vis_set
@@ -2799,53 +2813,58 @@ def generate_all_questions(
     attachment_edge_count_nonexcluded = len(attachment_edges)
     attachment_context_ids: set[int] = set()
 
-    if referable_object_ids is not None:
-        referable_set = _normalize_object_id_set(
-            referable_object_ids,
-            "referable_object_ids",
+    if referable_object_ids is None:
+        raise ValueError(
+            "generate_all_questions requires referable_object_ids from VLM referability filtering"
         )
-        attachment_parent_ids = {
-            int(e["parent_id"])
-            for e in attachment_edges
-            if int(e["child_id"]) in referable_set
-        }
-        attachment_context_ids = attachment_parent_ids
-        graph_allowed_ids = referable_set | attachment_context_ids
-        all_objects_for_graph = [
-            o for o in all_objects_for_graph
-            if int(o["id"]) in graph_allowed_ids
-        ]
-        objects_for_questions = [
-            o for o in objects_for_questions
-            if int(o["id"]) in referable_set
-        ]
-        attachment_graph = {
-            k: [c for c in v if c in graph_allowed_ids]
-            for k, v in attachment_graph.items()
-            if k in graph_allowed_ids
-        }
-        attached_by = {
-            k: v for k, v in attached_by.items()
-            if k in graph_allowed_ids and v in graph_allowed_ids
-        }
-        attachment_edges = [
-            e for e in attachment_edges
-            if int(e["parent_id"]) in graph_allowed_ids and int(e["child_id"]) in graph_allowed_ids
-        ]
-        unique_label_ids = {int(o["id"]) for o in objects_for_questions}
-        objects_uniq = list(objects_for_questions)
-    else:
-        # Fallback path without a referability cache: require per-frame unique
-        # labels so that bare label mentions remain unambiguous.
-        from collections import Counter
-        label_counts = Counter(o["label"] for o in objects_for_questions)
-        unique_label_ids = {
-            int(o["id"]) for o in objects_for_questions
-            if label_counts[o["label"]] == 1
-        }
-        objects_uniq = [o for o in objects_for_questions if int(o["id"]) in unique_label_ids]
 
-    graph_eligible_ids = unique_label_ids | attachment_context_ids
+    referable_set = _normalize_object_id_set(
+        referable_object_ids,
+        "referable_object_ids",
+    )
+    attachment_parent_ids = {
+        int(e["parent_id"])
+        for e in attachment_edges
+        if int(e["child_id"]) in referable_set
+    }
+    attachment_context_ids = attachment_parent_ids
+    graph_allowed_ids = referable_set | attachment_context_ids
+    all_objects_for_graph = [
+        o for o in all_objects_for_graph
+        if int(o["id"]) in graph_allowed_ids
+    ]
+    objects_for_questions = [
+        o for o in objects_for_questions
+        if int(o["id"]) in referable_set
+    ]
+    attachment_graph = {
+        k: [c for c in v if c in graph_allowed_ids]
+        for k, v in attachment_graph.items()
+        if k in graph_allowed_ids
+    }
+    attached_by = {
+        k: v for k, v in attached_by.items()
+        if k in graph_allowed_ids and v in graph_allowed_ids
+    }
+    attachment_edges = [
+        e for e in attachment_edges
+        if int(e["parent_id"]) in graph_allowed_ids and int(e["child_id"]) in graph_allowed_ids
+    ]
+    objects_uniq = list(objects_for_questions)
+    referable_question_ids = {int(o["id"]) for o in objects_uniq}
+    support_chain_graph = {
+        k: filtered_children
+        for k, v in support_chain_graph.items()
+        if k in referable_question_ids
+        for filtered_children in ([c for c in v if c in referable_question_ids],)
+        if filtered_children
+    }
+    support_chain_by = {
+        k: v for k, v in support_chain_by.items()
+        if k in referable_question_ids and v in referable_question_ids
+    }
+
+    graph_eligible_ids = referable_set | attachment_context_ids
     attachment_graph = {
         k: [c for c in v if c in graph_eligible_ids]
         for k, v in attachment_graph.items()
@@ -2866,7 +2885,7 @@ def generate_all_questions(
     movement_object_map = {int(o["id"]): o for o in movement_objects}
 
     logger.info(
-        "Attachment filter stats: edges input=%d visible=%d nonexcluded=%d final=%d, graph_objects=%d, question_objects=%d, unique_question_objects=%d",
+        "Attachment filter stats: edges input=%d visible=%d nonexcluded=%d final=%d, graph_objects=%d, question_objects=%d, referable_question_objects=%d",
         attachment_edge_input,
         attachment_edge_count_visible,
         attachment_edge_count_nonexcluded,
@@ -2948,6 +2967,17 @@ def generate_all_questions(
         k: v for k, v in attached_by.items()
         if k in graph_eligible_ids and v in graph_eligible_ids
     }
+    support_chain_graph_uniq = {
+        k: filtered_children
+        for k, v in support_chain_graph.items()
+        if k in referable_question_ids
+        for filtered_children in ([c for c in v if c in referable_question_ids],)
+        if filtered_children
+    }
+    support_chain_by_uniq = {
+        k: v for k, v in support_chain_by.items()
+        if k in referable_question_ids and v in referable_question_ids
+    }
 
     # L2 — ego-centric (existing)
     all_questions.extend(
@@ -3011,7 +3041,13 @@ def generate_all_questions(
     )
     # L3
     all_questions.extend(
-        generate_l3_attachment_chain(objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates)
+        generate_l3_attachment_chain(
+            objects_uniq,
+            support_chain_graph_uniq,
+            support_chain_by_uniq,
+            camera_pose,
+            templates,
+        )
     )
     # L3 coordinate rotation — all three reference frames
     all_questions.extend(

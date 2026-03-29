@@ -5,6 +5,7 @@ from src.support_graph import (
     _attachment_candidate,
     _contained_in_metrics,
     _supported_by_metrics,
+    build_attachment_graph,
 )
 
 
@@ -183,6 +184,80 @@ class SupportGraphHeuristicTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertEqual(candidate["type"], "supported_by")
         self.assertEqual(candidate["confidence"], 0.91)
+
+    def test_attachment_candidate_rejects_weak_supported_by(self) -> None:
+        obj_a = make_object(1, "book", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+        obj_b = make_object(2, "box", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+        with (
+            patch("src.support_graph._contained_in_metrics", return_value=None),
+            patch("src.support_graph._affixed_to_metrics", return_value=None),
+            patch("src.support_graph._resting_on_soft_surface_metrics", return_value=None),
+            patch("src.support_graph._supported_by_metrics", return_value={
+                "type": "supported_by",
+                "confidence": 0.44,
+                "evidence": {"geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.0}},
+            }),
+        ):
+            candidate = _attachment_candidate(obj_a, obj_b)
+
+        self.assertIsNone(candidate)
+
+    def test_build_attachment_graph_keeps_root_graph_for_movement_and_immediate_graph_for_support_chain(self) -> None:
+        objects = [
+            make_object(1, "table", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+            make_object(2, "box", (0.0, 0.0, 1.0), (1.0, 1.0, 2.0)),
+            make_object(3, "cup", (0.0, 0.0, 2.0), (1.0, 1.0, 2.2)),
+        ]
+
+        candidate_map = {
+            (2, 1): {
+                "parent_id": 1,
+                "child_id": 2,
+                "type": "supported_by",
+                "confidence": 0.80,
+                "evidence": {
+                    "geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.0},
+                    "xy_overlap": {"child_coverage": 1.0},
+                },
+            },
+            (3, 2): {
+                "parent_id": 2,
+                "child_id": 3,
+                "type": "supported_by",
+                "confidence": 0.82,
+                "evidence": {
+                    "geometry_contact": {"z_gap": 0.0, "contact_z_parent": 2.0},
+                    "xy_overlap": {"child_coverage": 1.0},
+                },
+            },
+            (3, 1): {
+                "parent_id": 1,
+                "child_id": 3,
+                "type": "supported_by",
+                "confidence": 0.95,
+                "evidence": {
+                    "geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.0},
+                    "xy_overlap": {"child_coverage": 1.0},
+                },
+            },
+        }
+
+        def fake_candidate(obj_a: dict, obj_b: dict, z_threshold=None):
+            return candidate_map.get((int(obj_a["id"]), int(obj_b["id"])))
+
+        with patch("src.support_graph._attachment_candidate", side_effect=fake_candidate):
+            (
+                attachment_graph,
+                attached_by,
+                _attachment_edges,
+                support_chain_graph,
+                support_chain_by,
+            ) = build_attachment_graph(objects)
+
+        self.assertEqual(attachment_graph, {1: [3, 2]})
+        self.assertEqual(attached_by, {3: 1, 2: 1})
+        self.assertEqual(support_chain_graph, {2: [3], 1: [2]})
+        self.assertEqual(support_chain_by, {3: 2, 2: 1})
 
 
 if __name__ == "__main__":
