@@ -2755,6 +2755,7 @@ def generate_l3_coordinate_rotation_object_centric(
     camera_pose: CameraPose,
     templates: dict,
     max_per_angle: int = 5,
+    max_questions: int = 3,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in object-centric frame.
 
@@ -2806,14 +2807,11 @@ def generate_l3_coordinate_rotation_object_centric(
                     if amb > 0.7:
                         continue
 
-                    # Check it differs from original
                     old_dir, _ = primary_direction_object_centric(
                         np.array(ref["center"]),
                         np.array(face["center"]),
                         np.array(target["center"]),
                     )
-                    if old_dir == new_dir:
-                        continue
 
                     tpl = random.choice(tpl_list)
                     question_text = tpl.format(
@@ -2847,12 +2845,15 @@ def generate_l3_coordinate_rotation_object_centric(
                         ],
                         "old_direction": old_dir,
                         "new_direction": new_dir,
-                        "relation_unchanged": False,
+                        "relation_unchanged": old_dir == new_dir,
                     })
 
         if len(candidates) > max_per_angle:
             candidates = random.sample(candidates, max_per_angle)
         questions.extend(candidates)
+
+    if len(questions) > max_questions:
+        questions = random.sample(questions, max_questions)
 
     return questions
 
