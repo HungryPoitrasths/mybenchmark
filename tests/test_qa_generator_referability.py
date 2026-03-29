@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from src.qa_generator import generate_all_questions
+from src.qa_generator import _cap_question_groups, generate_all_questions
 from src.utils.colmap_loader import CameraPose
 
 
@@ -42,6 +42,27 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
+    def test_cap_question_groups_keeps_attached_questions_even_when_group_exceeds_cap(self) -> None:
+        attached_questions = [
+            make_l2_object_move_question("object_move_agent", attached=True, text="attached 1"),
+            make_l2_object_move_question("object_move_agent", attached=True, text="attached 2"),
+        ]
+        unattached_questions = [
+            make_l2_object_move_question("object_move_agent", attached=False, text="free 1"),
+            make_l2_object_move_question("object_move_agent", attached=False, text="free 2"),
+            make_l2_object_move_question("object_move_agent", attached=False, text="free 3"),
+        ]
+
+        kept = _cap_question_groups(
+            {1: attached_questions + unattached_questions},
+            max_per_group=3,
+        )
+
+        kept_text = {q["question"] for q in kept}
+        self.assertIn("attached 1", kept_text)
+        self.assertIn("attached 2", kept_text)
+        self.assertEqual(sum(1 for q in kept if q.get("attachment_remapped", False)), 2)
+
     def test_l3_support_chain_only_sees_fully_referable_subgraph(self) -> None:
         captured: dict[str, object] = {}
 

@@ -30,13 +30,17 @@ from .relation_engine import (
     compute_distance,
 )
 from .virtual_ops import (
+    MOVEMENT_CANDIDATES,
     apply_movement,
     apply_viewpoint_change,
     apply_removal,
     apply_coordinate_rotation,
+    compute_room_bounds,
     find_meaningful_movement,
     find_meaningful_orbit_rotation,
     get_moved_object_ids,
+    has_terminal_bbox_collision,
+    is_within_room,
 )
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
@@ -1804,6 +1808,31 @@ def _merge_changed_relations(
     return list(merged.values())
 
 
+def _iter_valid_object_move_states(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    target_id: int,
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+):
+    """Yield physically valid movement candidates in the canonical search order."""
+    room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
+    moved_ids = get_moved_object_ids(target_id, attachment_graph)
+
+    for delta in MOVEMENT_CANDIDATES:
+        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
+        if not is_within_room(new_objects, room_min, room_max):
+            continue
+        if has_terminal_bbox_collision(
+            objects,
+            new_objects,
+            moved_ids,
+            collision_objects=collision_objects,
+        ):
+            continue
+        yield delta, new_objects, moved_ids
+
+
 def _find_object_move_occlusion_changes(
     original_objects: list[dict],
     moved_objects: list[dict],
@@ -1860,32 +1889,139 @@ def _find_object_move_occlusion_changes(
 
         if not changes:
             continue
+        old_relation = dict(relation)
+        old_relation["occlusion_a"] = old_a
+        old_relation["occlusion_b"] = old_b
+        new_relation = dict(relation)
+        new_relation["occlusion_a"] = new_a
+        new_relation["occlusion_b"] = new_b
         occlusion_changes.append({
             "obj_a_id": obj_a_id,
             "obj_b_id": obj_b_id,
             "changes": changes,
-            "old": relation,
-            "new": relation,
+            "old": old_relation,
+            "new": new_relation,
         })
 
     return occlusion_changes
+
+
+def _find_object_move_delta_and_changes(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    target_id: int,
+    camera_pose: CameraPose,
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
+    occlusion_backend: str = "depth",
+    ray_caster=None,
+    instance_mesh_data: InstanceMeshData | None = None,
+) -> tuple[np.ndarray | None, list[dict]]:
+    """Return the first valid movement delta that yields relation or visibility changes."""
+    delta, changed = find_meaningful_movement(
+        objects,
+        attachment_graph,
+        target_id,
+        camera_pose,
+        room_bounds=room_bounds,
+        collision_objects=collision_objects,
+    )
+    occlusion_enabled = (
+        color_intrinsics is not None
+        and ray_caster is not None
+        and instance_mesh_data is not None
+    )
+    if delta is not None:
+        if not occlusion_enabled:
+            return delta, changed
+        moved_scene_objects = apply_movement(
+            objects,
+            attachment_graph,
+            target_id,
+            delta,
+        )
+        moved_ids = get_moved_object_ids(target_id, attachment_graph)
+        occlusion_changed = _find_object_move_occlusion_changes(
+            original_objects=objects,
+            moved_objects=moved_scene_objects,
+            moved_ids=moved_ids,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            occlusion_backend=occlusion_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        return delta, _merge_changed_relations(changed, occlusion_changed)
+
+    if not occlusion_enabled:
+        return None, []
+
+    for candidate_delta, moved_scene_objects, moved_ids in _iter_valid_object_move_states(
+        objects,
+        attachment_graph,
+        target_id,
+        room_bounds=room_bounds,
+        collision_objects=collision_objects,
+    ):
+        occlusion_changed = _find_object_move_occlusion_changes(
+            original_objects=objects,
+            moved_objects=moved_scene_objects,
+            moved_ids=moved_ids,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            occlusion_backend=occlusion_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        if occlusion_changed:
+            return candidate_delta, occlusion_changed
+
+    return None, []
 
 
 def _cap_question_groups(
     questions_by_key: dict[Any, list[dict]],
     max_per_group: int | None,
 ) -> list[dict]:
-    """Downsample question pools so each grouping key contributes at most N items."""
+    """Downsample question pools while preserving attachment questions.
+
+    Attachment-mediated questions are harder to obtain and should not be
+    displaced by more numerous unattached variants from the same group.
+    """
     groups = list(questions_by_key.values())
     if max_per_group is None or max_per_group <= 0:
         return [q for group in groups for q in group]
 
     capped: list[dict] = []
     for group in groups:
-        if len(group) > max_per_group:
-            capped.extend(random.sample(group, max_per_group))
-        else:
+        if len(group) <= max_per_group:
             capped.extend(group)
+            continue
+
+        protected = [
+            question for question in group
+            if bool(question.get("attachment_remapped", False))
+        ]
+        remaining_slots = max(0, max_per_group - len(protected))
+        if remaining_slots == 0:
+            capped.extend(protected)
+            continue
+
+        unprotected = [
+            question for question in group
+            if not bool(question.get("attachment_remapped", False))
+        ]
+        if len(unprotected) <= remaining_slots:
+            kept_unprotected = unprotected
+        else:
+            sampled_ids = {id(question) for question in random.sample(unprotected, remaining_slots)}
+            kept_unprotected = [
+                question for question in unprotected
+                if id(question) in sampled_ids
+            ]
+        capped.extend(protected)
+        capped.extend(kept_unprotected)
     return capped
 
 
@@ -1952,7 +2088,6 @@ def generate_l2_object_move(
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
     }
-    occlusion_change_cache: dict[int, list[dict]] = {}
 
     for obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
@@ -1966,41 +2101,17 @@ def generate_l2_object_move(
             continue
         attachment_remapped = move_source_id != obj["id"]
 
-        delta, changed = find_meaningful_movement(
+        delta, changed = _find_object_move_delta_and_changes(
             movement_scene_objects, attachment_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
+            color_intrinsics=color_intrinsics,
+            occlusion_backend=occlusion_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
         )
         if delta is None:
             continue
-
-        if (
-            color_intrinsics is not None
-            and ray_caster is not None
-            and instance_mesh_data is not None
-        ):
-            if move_source_id not in occlusion_change_cache:
-                moved_scene_objects = apply_movement(
-                    movement_scene_objects,
-                    attachment_graph,
-                    move_source_id,
-                    delta,
-                )
-                moved_ids = get_moved_object_ids(move_source_id, attachment_graph)
-                occlusion_change_cache[move_source_id] = _find_object_move_occlusion_changes(
-                    original_objects=movement_scene_objects,
-                    moved_objects=moved_scene_objects,
-                    moved_ids=moved_ids,
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                    occlusion_backend=occlusion_backend,
-                    ray_caster=ray_caster,
-                    instance_mesh_data=instance_mesh_data,
-                )
-            changed = _merge_changed_relations(
-                changed,
-                occlusion_change_cache.get(move_source_id, []),
-            )
 
         # Only keep relation changes involving the queried object.
         changed = [
