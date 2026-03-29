@@ -30,11 +30,13 @@ from .relation_engine import (
     compute_distance,
 )
 from .virtual_ops import (
+    apply_movement,
     apply_viewpoint_change,
     apply_removal,
     apply_coordinate_rotation,
     find_meaningful_movement,
     find_meaningful_orbit_rotation,
+    get_moved_object_ids,
 )
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
@@ -1509,6 +1511,108 @@ def _compute_target_visibility(
     return _visibility_status_from_ratio(visible_ratio), float(visible_ratio)
 
 
+def _ray_aabb_entry_distance(
+    ray_origin: np.ndarray,
+    ray_direction: np.ndarray,
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+) -> float | None:
+    """Return the entry distance if a ray intersects an axis-aligned box."""
+    t_near = -np.inf
+    t_far = np.inf
+    for axis in range(3):
+        direction_component = float(ray_direction[axis])
+        if abs(direction_component) < 1e-12:
+            if ray_origin[axis] < bbox_min[axis] or ray_origin[axis] > bbox_max[axis]:
+                return None
+            continue
+
+        inv_direction = 1.0 / direction_component
+        t0 = (bbox_min[axis] - ray_origin[axis]) * inv_direction
+        t1 = (bbox_max[axis] - ray_origin[axis]) * inv_direction
+        t_axis_near = min(t0, t1)
+        t_axis_far = max(t0, t1)
+        t_near = max(t_near, t_axis_near)
+        t_far = min(t_far, t_axis_far)
+        if t_near > t_far:
+            return None
+
+    if t_far < 0.0:
+        return None
+    return float(max(t_near, 0.0))
+
+
+def _compute_counterfactual_target_visibility(
+    modified_scene: _ModifiedSceneContext | None,
+    target_surface_points: np.ndarray,
+    camera_pos: np.ndarray,
+    extra_blocker_boxes: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    hit_epsilon: float = 0.05,
+) -> tuple[str, float]:
+    """Estimate visibility for a target that may be moved off the original mesh.
+
+    The base mesh is queried with ignored triangles removed. Moved objects are
+    then reintroduced approximately as axis-aligned blocker boxes at their new
+    positions so object movement can affect visibility without rebuilding the
+    whole scene mesh.
+    """
+    if modified_scene is None or modified_scene.ray_caster is None or len(target_surface_points) == 0:
+        return "not visible", 0.0
+
+    sampled_points = np.asarray(target_surface_points, dtype=np.float64)
+    directions = sampled_points - np.asarray(camera_pos, dtype=np.float64)
+    expected_dists = np.linalg.norm(directions, axis=1)
+    valid_mask = np.isfinite(expected_dists) & (expected_dists > 1e-6)
+    if not np.any(valid_mask):
+        return "not visible", 0.0
+
+    directions = directions[valid_mask]
+    expected_dists = expected_dists[valid_mask]
+    sampled_points = sampled_points[valid_mask]
+
+    visible_count = 0
+    valid_count = 0
+    blocker_boxes = extra_blocker_boxes or []
+    ignored_tri_ids = set(modified_scene.ignored_tri_ids)
+
+    for point, direction, expected_dist in zip(sampled_points, directions, expected_dists):
+        direction_norm = direction / expected_dist
+        blocker_distance = None
+
+        mesh_hit = modified_scene.ray_caster.first_visible_hit(
+            np.asarray(camera_pos, dtype=np.float64),
+            direction_norm,
+            ignored_tri_ids=ignored_tri_ids,
+        )
+        if mesh_hit is not None:
+            _hit_point, _tri_id, hit_dist = mesh_hit
+            if hit_dist < float(expected_dist) - hit_epsilon:
+                blocker_distance = float(hit_dist)
+
+        for bbox_min, bbox_max in blocker_boxes:
+            bbox_entry = _ray_aabb_entry_distance(
+                np.asarray(camera_pos, dtype=np.float64),
+                direction_norm,
+                np.asarray(bbox_min, dtype=np.float64),
+                np.asarray(bbox_max, dtype=np.float64),
+            )
+            if bbox_entry is None:
+                continue
+            if bbox_entry >= float(expected_dist) - hit_epsilon:
+                continue
+            if blocker_distance is None or bbox_entry < blocker_distance:
+                blocker_distance = float(bbox_entry)
+
+        valid_count += 1
+        if blocker_distance is None:
+            visible_count += 1
+
+    if valid_count <= 0:
+        return "not visible", 0.0
+    visible_ratio = float(visible_count / valid_count)
+    return _visibility_status_from_ratio(visible_ratio), visible_ratio
+
+
 def _compute_visibility_status_per_object(
     objects: list[dict],
     camera_pose: CameraPose,
@@ -1584,6 +1688,72 @@ def _compute_visibility_status_per_object(
     return visibility
 
 
+def _compute_movement_visibility_status_per_object(
+    original_objects: list[dict],
+    moved_objects: list[dict],
+    moved_ids: set[int],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+) -> dict[int, tuple[str, float]]:
+    """Compute approximate post-move visibility using the original mesh plus moved AABBs."""
+    if color_intrinsics is None:
+        return {int(obj["id"]): ("not visible", 0.0) for obj in moved_objects}
+
+    original_map = {int(obj["id"]): obj for obj in original_objects}
+    moved_map = {int(obj["id"]): obj for obj in moved_objects}
+    moved_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set(moved_ids))
+    camera_pos = np.array(camera_pose.position, dtype=np.float64)
+    moved_blockers = {
+        int(obj["id"]): (
+            np.asarray(obj["bbox_min"], dtype=np.float64),
+            np.asarray(obj["bbox_max"], dtype=np.float64),
+        )
+        for obj in moved_objects
+        if int(obj["id"]) in moved_ids
+    }
+
+    visibility: dict[int, tuple[str, float]] = {}
+    for obj in moved_objects:
+        obj_id = int(obj["id"])
+        sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+        if obj_id in moved_ids:
+            original_obj = original_map.get(obj_id)
+            moved_obj = moved_map.get(obj_id)
+            if original_obj is not None and moved_obj is not None:
+                delta = (
+                    np.asarray(moved_obj["center"], dtype=np.float64)
+                    - np.asarray(original_obj["center"], dtype=np.float64)
+                )
+                sample_points = sample_points + delta
+
+        projected_area, in_frame_ratio = _projected_area_summary(
+            sample_points, camera_pose, color_intrinsics,
+        )
+        if (
+            len(sample_points) == 0
+            or projected_area < MIN_PROJECTED_AREA_PX
+            or in_frame_ratio < MIN_IN_FRAME_RATIO
+        ):
+            visibility[obj_id] = ("not visible", 0.0)
+            continue
+
+        extra_blocker_boxes = [
+            bbox for blocker_id, bbox in moved_blockers.items()
+            if blocker_id != obj_id
+        ]
+        status, visible_ratio = _compute_counterfactual_target_visibility(
+            modified_scene=moved_scene_context,
+            target_surface_points=sample_points,
+            camera_pos=camera_pos,
+            extra_blocker_boxes=extra_blocker_boxes,
+        )
+        visibility[obj_id] = (status, float(visible_ratio))
+
+    return visibility
+
+
 def _counterfactual_occlusion_backend(
     occlusion_backend: str,
     ray_caster,
@@ -1608,6 +1778,97 @@ def _counterfactual_occlusion_backend(
             requested_backend,
         )
     return "mesh_ray"
+
+
+def _merge_changed_relations(
+    primary_changed: list[dict],
+    extra_changed: list[dict],
+) -> list[dict]:
+    merged: dict[tuple[int, int], dict] = {}
+    for ch in primary_changed:
+        key = (int(ch["obj_a_id"]), int(ch["obj_b_id"]))
+        merged[key] = {
+            **ch,
+            "changes": dict(ch.get("changes", {})),
+        }
+
+    for ch in extra_changed:
+        key = (int(ch["obj_a_id"]), int(ch["obj_b_id"]))
+        if key not in merged:
+            merged[key] = {
+                **ch,
+                "changes": dict(ch.get("changes", {})),
+            }
+            continue
+        merged[key]["changes"].update(ch.get("changes", {}))
+    return list(merged.values())
+
+
+def _find_object_move_occlusion_changes(
+    original_objects: list[dict],
+    moved_objects: list[dict],
+    moved_ids: set[int],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    occlusion_backend: str,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+) -> list[dict]:
+    """Return relation diffs caused by post-move visibility changes."""
+    if color_intrinsics is None:
+        return []
+
+    compare_backend = _counterfactual_occlusion_backend(
+        occlusion_backend, ray_caster, instance_mesh_data,
+    )
+    original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
+    original_visibility = _compute_visibility_status_per_object(
+        original_objects, camera_pose, color_intrinsics,
+        depth_image=None,
+        depth_intrinsics=None,
+        occlusion_backend=compare_backend,
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+        modified_scene=original_scene_context,
+    )
+    new_visibility = _compute_movement_visibility_status_per_object(
+        original_objects=original_objects,
+        moved_objects=moved_objects,
+        moved_ids=moved_ids,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+    )
+
+    relations = compute_all_relations(original_objects, camera_pose, None, None)
+    occlusion_changes: list[dict] = []
+    for relation in relations:
+        obj_a_id = int(relation["obj_a_id"])
+        obj_b_id = int(relation["obj_b_id"])
+        changes: dict[str, dict[str, str]] = {}
+
+        old_a, _old_ratio_a = original_visibility.get(obj_a_id, ("not visible", 0.0))
+        new_a, _new_ratio_a = new_visibility.get(obj_a_id, ("not visible", 0.0))
+        if old_a != new_a:
+            changes["occlusion_a"] = {"old": old_a, "new": new_a}
+
+        old_b, _old_ratio_b = original_visibility.get(obj_b_id, ("not visible", 0.0))
+        new_b, _new_ratio_b = new_visibility.get(obj_b_id, ("not visible", 0.0))
+        if old_b != new_b:
+            changes["occlusion_b"] = {"old": old_b, "new": new_b}
+
+        if not changes:
+            continue
+        occlusion_changes.append({
+            "obj_a_id": obj_a_id,
+            "obj_b_id": obj_b_id,
+            "changes": changes,
+            "old": relation,
+            "new": relation,
+        })
+
+    return occlusion_changes
 
 
 def _cap_question_groups(
@@ -1680,6 +1941,10 @@ def generate_l2_object_move(
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
     object_map: dict[int, dict] | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
+    occlusion_backend: str = "depth",
+    ray_caster=None,
+    instance_mesh_data: InstanceMeshData | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -1687,6 +1952,7 @@ def generate_l2_object_move(
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
     }
+    occlusion_change_cache: dict[int, list[dict]] = {}
 
     for obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
@@ -1707,6 +1973,34 @@ def generate_l2_object_move(
         )
         if delta is None:
             continue
+
+        if (
+            color_intrinsics is not None
+            and ray_caster is not None
+            and instance_mesh_data is not None
+        ):
+            if move_source_id not in occlusion_change_cache:
+                moved_scene_objects = apply_movement(
+                    movement_scene_objects,
+                    attachment_graph,
+                    move_source_id,
+                    delta,
+                )
+                moved_ids = get_moved_object_ids(move_source_id, attachment_graph)
+                occlusion_change_cache[move_source_id] = _find_object_move_occlusion_changes(
+                    original_objects=movement_scene_objects,
+                    moved_objects=moved_scene_objects,
+                    moved_ids=moved_ids,
+                    camera_pose=camera_pose,
+                    color_intrinsics=color_intrinsics,
+                    occlusion_backend=occlusion_backend,
+                    ray_caster=ray_caster,
+                    instance_mesh_data=instance_mesh_data,
+                )
+            changed = _merge_changed_relations(
+                changed,
+                occlusion_change_cache.get(move_source_id, []),
+            )
 
         # Only keep relation changes involving the queried object.
         changed = [
@@ -3137,6 +3431,10 @@ def generate_all_questions(
             collision_objects=l2_collision_objects,
             movement_objects=movement_objects,
             object_map=movement_object_map,
+            color_intrinsics=color_intrinsics,
+            occlusion_backend=occlusion_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
         )
     )
     all_questions.extend(
