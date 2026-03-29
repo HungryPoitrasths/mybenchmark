@@ -763,6 +763,70 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
     return "grayzone"
 
 
+def _is_l1_occlusion_frame_skip(metrics: _L1OcclusionMetrics) -> bool:
+    return (
+        metrics.projected_area < MIN_PROJECTED_AREA_PX
+        or metrics.in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
+        or metrics.in_frame_sample_count <= 0
+    )
+
+
+def _should_retry_l1_with_mesh_ray(metrics: _L1OcclusionMetrics) -> bool:
+    if metrics.decision == "grayzone":
+        return True
+    if metrics.decision != "skip":
+        return False
+    return not _is_l1_occlusion_frame_skip(metrics)
+
+
+def _resolve_l1_occlusion_decision(
+    *,
+    obj_id: int,
+    label: str,
+    metrics: _L1OcclusionMetrics,
+    source_used: str,
+    grayzone_fallback_source: str,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    frame_image: np.ndarray | None,
+    occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None,
+) -> tuple[str | None, str, bool]:
+    decision = metrics.decision
+    overlay_available = False
+    if decision == "skip":
+        return None, source_used, overlay_available
+
+    if (
+        decision == "grayzone"
+        and frame_image is not None
+        and color_intrinsics is not None
+        and occlusion_vlm_adjudicator is not None
+    ):
+        mask = _render_instance_projection_mask(
+            obj_id,
+            camera_pose,
+            color_intrinsics,
+            instance_mesh_data,
+        )
+        overlay = _local_mask_overlay_image(frame_image, mask) if mask is not None else None
+        overlay_available = overlay is not None
+        if overlay is not None:
+            adjudicated = occlusion_vlm_adjudicator(overlay, label)
+            if adjudicated in {"not occluded", "occluded"}:
+                return adjudicated, "vlm_mask_adjudication", overlay_available
+
+    if decision == "grayzone":
+        fallback_decision = (
+            "occluded"
+            if metrics.occlusion_ratio_in_frame >= L1_OCCLUSION_GRAYZONE_FALLBACK
+            else "not occluded"
+        )
+        return fallback_decision, grayzone_fallback_source, overlay_available
+
+    return decision, source_used, overlay_available
+
+
 def _compute_l1_occlusion_metrics(
     obj: dict[str, Any],
     camera_pose: CameraPose,
@@ -1035,54 +1099,82 @@ def generate_l1_occlusion_questions(
         source: str,
         vlm_count: int | None,
     ) -> None:
-        metrics = _compute_l1_occlusion_metrics(
-            obj=obj,
+        obj_id = int(obj["id"])
+        cascade_used_mesh_ray = False
+        cascade_depth_metrics: _L1OcclusionMetrics | None = None
+
+        if str(occlusion_backend) == "cascade":
+            cascade_depth_metrics = _compute_l1_occlusion_metrics(
+                obj=obj,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                occlusion_backend="depth",
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+            metrics = cascade_depth_metrics
+            source_used = "cascade_depth"
+            grayzone_fallback_source = "cascade_depth_grayzone_fallback"
+
+            if _should_retry_l1_with_mesh_ray(cascade_depth_metrics):
+                cascade_used_mesh_ray = True
+                mesh_metrics = _compute_l1_occlusion_metrics(
+                    obj=obj,
+                    camera_pose=camera_pose,
+                    color_intrinsics=color_intrinsics,
+                    depth_image=depth_image,
+                    depth_intrinsics=depth_intrinsics,
+                    occlusion_backend="mesh_ray",
+                    ray_caster=ray_caster,
+                    instance_mesh_data=instance_mesh_data,
+                )
+                if mesh_metrics.decision in {"not occluded", "occluded"}:
+                    metrics = mesh_metrics
+                    source_used = "cascade_mesh_ray"
+                    grayzone_fallback_source = "cascade_mesh_ray_grayzone_fallback"
+                elif mesh_metrics.decision == "grayzone":
+                    metrics = mesh_metrics
+                    source_used = "cascade_mesh_ray"
+                    grayzone_fallback_source = "cascade_mesh_ray_grayzone_fallback"
+                else:
+                    return
+        else:
+            metrics = _compute_l1_occlusion_metrics(
+                obj=obj,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                occlusion_backend=occlusion_backend,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+            source_used = source
+            grayzone_fallback_source = "geometry_grayzone_fallback"
+
+        decision, source_used, overlay_available = _resolve_l1_occlusion_decision(
+            obj_id=obj_id,
+            label=label,
+            metrics=metrics,
+            source_used=source_used,
+            grayzone_fallback_source=grayzone_fallback_source,
             camera_pose=camera_pose,
             color_intrinsics=color_intrinsics,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-            occlusion_backend=occlusion_backend,
-            ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
+            frame_image=frame_image,
+            occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
         )
-        decision = metrics.decision
-        if decision == "skip":
+        if decision is None:
             return
-        source_used = source
-        overlay_available = False
-        if (
-            decision == "grayzone"
-            and frame_image is not None
-            and color_intrinsics is not None
-            and occlusion_vlm_adjudicator is not None
-        ):
-            mask = _render_instance_projection_mask(
-                int(obj["id"]),
-                camera_pose,
-                color_intrinsics,
-                instance_mesh_data,
-            )
-            overlay = _local_mask_overlay_image(frame_image, mask) if mask is not None else None
-            overlay_available = overlay is not None
-            if overlay is not None:
-                adjudicated = occlusion_vlm_adjudicator(overlay, label)
-                if adjudicated in {"not occluded", "occluded"}:
-                    decision = adjudicated
-                    source_used = "vlm_mask_adjudication"
-        if decision == "grayzone":
-            decision = (
-                "occluded"
-                if metrics.occlusion_ratio_in_frame >= L1_OCCLUSION_GRAYZONE_FALLBACK
-                else "not occluded"
-            )
-            source_used = "geometry_grayzone_fallback"
 
         questions.append(
             _l1_occlusion_question(
                 label=label,
                 correct=decision,
                 templates=templates,
-                obj_id=int(obj["id"]),
+                obj_id=obj_id,
                 extra={
                     "occlusion_decision_source": source_used,
                     "vlm_label_count": vlm_count,
@@ -1096,6 +1188,17 @@ def generate_l1_occlusion_questions(
                     "geometry_sufficient_evidence": metrics.sufficient_evidence,
                     "geometry_backend": metrics.backend,
                     "mask_overlay_available": overlay_available,
+                    "cascade_used_mesh_ray": cascade_used_mesh_ray,
+                    "cascade_depth_decision": (
+                        cascade_depth_metrics.decision
+                        if cascade_depth_metrics is not None
+                        else None
+                    ),
+                    "cascade_depth_occlusion_ratio": (
+                        cascade_depth_metrics.occlusion_ratio_in_frame
+                        if cascade_depth_metrics is not None
+                        else None
+                    ),
                 },
             )
         )
@@ -1493,15 +1596,16 @@ def _counterfactual_occlusion_backend(
     with a newly rendered depth map.
     """
     requested_backend = str(occlusion_backend)
-    if requested_backend not in {"depth", "mesh_ray"}:
+    if requested_backend not in {"depth", "mesh_ray", "cascade"}:
         raise ValueError(f"Unsupported occlusion backend: {requested_backend}")
     if ray_caster is None or instance_mesh_data is None:
         raise RuntimeError(
-            "Counterfactual visibility requires mesh geometry for both depth and mesh_ray backends",
+            "Counterfactual visibility requires mesh geometry for depth, cascade, and mesh_ray backends",
         )
-    if requested_backend == "depth":
+    if requested_backend in {"depth", "cascade"}:
         logger.debug(
-            "Counterfactual visibility requested with depth backend; falling back to mesh_ray because no counterfactual depth map exists.",
+            "Counterfactual visibility requested with %s backend; falling back to mesh_ray because no counterfactual depth map exists.",
+            requested_backend,
         )
     return "mesh_ray"
 
@@ -2764,7 +2868,7 @@ def generate_all_questions(
     color_intrinsics: CameraIntrinsics | None = None,
     depth_image=None,
     depth_intrinsics=None,
-    occlusion_backend: str = "depth",
+    occlusion_backend: str = "cascade",
     ray_caster=None,
     instance_mesh_data: InstanceMeshData | None = None,
     templates: dict | None = None,

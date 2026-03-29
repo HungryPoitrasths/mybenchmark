@@ -466,7 +466,7 @@ def run_pipeline(
     max_frames: int = 5,
     use_occlusion: bool = True,
     referability_cache: dict | None = None,
-    occlusion_backend: str = "depth",
+    occlusion_backend: str = "cascade",
     use_occlusion_vlm: bool = False,
     occlusion_vlm_url: str | None = None,
     occlusion_vlm_model: str | None = None,
@@ -518,7 +518,7 @@ def run_pipeline(
         # ---- Stage 1: Parse ----
         preloaded_geometry = None
         needs_mesh_resources = (
-            occlusion_backend in ("depth", "mesh_ray")
+            occlusion_backend in ("depth", "mesh_ray", "cascade")
             or occlusion_vlm_adjudicator is not None
         )
         if needs_mesh_resources:
@@ -829,8 +829,8 @@ def main():
     parser.add_argument(
         "--occlusion_backend",
         type=str,
-        choices=("depth", "mesh_ray"),
-        default="depth",
+        choices=("depth", "mesh_ray", "cascade"),
+        default="cascade",
         help="Backend for visibility/occlusion estimation",
     )
     parser.add_argument(
