@@ -259,6 +259,51 @@ class SupportGraphHeuristicTests(unittest.TestCase):
         self.assertEqual(support_chain_graph, {2: [3], 1: [2]})
         self.assertEqual(support_chain_by, {3: 2, 2: 1})
 
+    def test_build_attachment_graph_includes_containment_and_affixed_edges_in_support_chain(self) -> None:
+        objects = [
+            make_object(1, "cabinet", (0.0, 0.0, 0.0), (2.0, 2.0, 2.0)),
+            make_object(2, "drawer", (0.2, 0.2, 0.6), (1.8, 1.8, 1.2)),
+            make_object(3, "book", (0.4, 0.4, 0.7), (1.0, 1.0, 1.0)),
+        ]
+
+        candidate_map = {
+            (2, 1): {
+                "parent_id": 1,
+                "child_id": 2,
+                "type": "affixed_to",
+                "confidence": 0.88,
+                "evidence": {
+                    "geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.0},
+                },
+            },
+            (3, 2): {
+                "parent_id": 2,
+                "child_id": 3,
+                "type": "contained_in",
+                "confidence": 0.92,
+                "evidence": {
+                    "containment": {"score": 0.92},
+                },
+            },
+        }
+
+        def fake_candidate(obj_a: dict, obj_b: dict, z_threshold=None):
+            return candidate_map.get((int(obj_a["id"]), int(obj_b["id"])))
+
+        with patch("src.support_graph._attachment_candidate", side_effect=fake_candidate):
+            (
+                attachment_graph,
+                attached_by,
+                _attachment_edges,
+                support_chain_graph,
+                support_chain_by,
+            ) = build_attachment_graph(objects)
+
+        self.assertEqual(attachment_graph, {1: [2], 2: [3]})
+        self.assertEqual(attached_by, {2: 1, 3: 2})
+        self.assertEqual(support_chain_graph, {1: [2], 2: [3]})
+        self.assertEqual(support_chain_by, {2: 1, 3: 2})
+
 
 if __name__ == "__main__":
     unittest.main()

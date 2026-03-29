@@ -34,6 +34,11 @@ ATTACHMENT_TYPE_PRIORITY = {
     "supported_by": 1,
 }
 
+# support_chain_graph is used for L3 chain reasoning, so it should include all
+# attachment relations that can participate in a transitive dependency chain,
+# not just rigid/soft support contacts.
+SUPPORT_CHAIN_TYPES = set(ATTACHMENT_TYPE_PRIORITY)
+
 SOFT_PARENT_LABELS = {
     "bed",
     "sofa",
@@ -771,7 +776,7 @@ def build_attachment_graph(
             current = candidates.get(child_id)
             if current is None or _edge_sort_key(edge) > _edge_sort_key(current):
                 candidates[child_id] = edge
-            if str(edge.get("type", "")) in SUPPORT_LIKE_TYPES:
+            if str(edge.get("type", "")) in SUPPORT_CHAIN_TYPES:
                 support_current = support_chain_candidates.get(child_id)
                 if (
                     support_current is None
