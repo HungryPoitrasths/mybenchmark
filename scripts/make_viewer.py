@@ -85,6 +85,12 @@ SUMMARY_GROUPS = [
 ]
 
 
+QTYPE_DISPLAY: dict[str, str] = {
+    raw: label
+    for _, items in SUMMARY_GROUPS
+    for raw, label in items
+}
+
 OBJECT_MOVE_TYPES = {
     "object_move_agent",
     "object_move_distance",
@@ -420,7 +426,7 @@ def main():
             CARD.format(
                 img=img_html,
                 level=level,
-                qtype=qtype,
+                qtype=QTYPE_DISPLAY.get(qtype, qtype),
                 idx=idx,
                 question=q.get("question", ""),
                 options=opt_html,
