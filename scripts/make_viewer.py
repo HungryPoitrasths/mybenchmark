@@ -10,6 +10,12 @@ Usage:
         --questions output/pilot/human_validation_sample.json \
         --image_root /home/lihongxing/datasets/ScanNet/data/scans \
         --output output/pilot/viewer.html
+
+    python scripts/make_viewer.py \
+        --questions output/pilot_depth/benchmark.json \
+        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
+        --output output/pilot_depth/attachment_viewer.html \
+        --attachment_only
 """
 
 from __future__ import annotations
@@ -304,6 +310,11 @@ def main():
         help="Comma-separated question types to keep",
     )
     parser.add_argument(
+        "--attachment_only",
+        action="store_true",
+        help="Keep only attachment-chain questions (shorthand for --qtypes attachment_chain)",
+    )
+    parser.add_argument(
         "--max_width",
         type=int,
         default=480,
@@ -325,8 +336,13 @@ def main():
         if str(q.get("type", "")).strip() not in REMOVED_TYPES
     ]
 
+    if args.attachment_only and args.qtypes:
+        parser.error("--attachment_only cannot be combined with --qtypes")
+
     requested_qtypes: set[str] = set()
-    if args.qtypes:
+    if args.attachment_only:
+        requested_qtypes.add("attachment_chain")
+    elif args.qtypes:
         requested_qtypes.update(
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )

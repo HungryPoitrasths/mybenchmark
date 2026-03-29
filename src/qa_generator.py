@@ -1523,6 +1523,48 @@ def _cap_question_groups(
             capped.extend(group)
     return capped
 
+
+def _balance_l2_object_move_attachment_counts(
+    questions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Cap per-type unattached L2 object-move questions relative to attached count."""
+    keep_mask = [True] * len(questions)
+    grouped_indices: dict[str, list[int]] = {}
+    for idx, question in enumerate(questions):
+        if str(question.get("level", "")).strip() != "L2":
+            continue
+        qtype = str(question.get("type", "")).strip()
+        if not qtype.startswith("object_move_"):
+            continue
+        grouped_indices.setdefault(qtype, []).append(idx)
+
+    for qtype, indices in grouped_indices.items():
+        attached = [
+            idx for idx in indices
+            if bool(questions[idx].get("attachment_remapped", False))
+        ]
+        unattached = [
+            idx for idx in indices
+            if not bool(questions[idx].get("attachment_remapped", False))
+        ]
+        allowed_unattached = len(attached) if attached else 3
+        if len(unattached) <= allowed_unattached:
+            continue
+        for idx in unattached[allowed_unattached:]:
+            keep_mask[idx] = False
+        logger.info(
+            "Balanced %s questions for one frame: kept %d attached and %d/%d unattached",
+            qtype,
+            len(attached),
+            allowed_unattached,
+            len(unattached),
+        )
+
+    return [
+        question for idx, question in enumerate(questions)
+        if keep_mask[idx]
+    ]
+
 def generate_l2_object_move(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -3070,6 +3112,7 @@ def generate_all_questions(
     all_questions = _enforce_stable_facing_references(
         all_questions, id_to_object,
     )
+    all_questions = _balance_l2_object_move_attachment_counts(all_questions)
 
     logger.info("Generated %d questions total", len(all_questions))
     return all_questions
