@@ -1,7 +1,7 @@
 """Stage 4: Spatial relation computation engine.
 
 Computes three types of spatial relations between object pairs:
-  - Direction (egocentric, relative to camera viewpoint — 10 directions)
+  - Direction (egocentric, relative to camera viewpoint, 10 directions)
   - Distance (Euclidean, with categorical binning)
   - Occlusion (depth-map based per-object visibility)
 """
@@ -36,65 +36,313 @@ CARDINAL_DIRECTIONS_8 = [
 ]
 ALL_ALLOCENTRIC_10 = CARDINAL_DIRECTIONS_8 + VERTICAL_DIRECTIONS
 
+_GEOM_EPS = 1e-8
+_VERTICAL_CLEARANCE_TOL = 0.02  # metres
+
+
+def _rectangle_from_bbox_xy(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
+    return np.array([
+        [bbox_min[0], bbox_min[1]],
+        [bbox_max[0], bbox_min[1]],
+        [bbox_max[0], bbox_max[1]],
+        [bbox_min[0], bbox_max[1]],
+    ], dtype=float)
+
+
+def _object_bottom_hull_xy(obj: dict) -> np.ndarray:
+    support_geom = obj.get("support_geom", {})
+    hull = np.asarray(support_geom.get("bottom_hull_xy", []), dtype=float)
+    if hull.ndim == 2 and hull.shape[0] >= 3 and hull.shape[1] == 2:
+        return hull
+    bbox_min = np.asarray(obj.get("bbox_min", []), dtype=float)
+    bbox_max = np.asarray(obj.get("bbox_max", []), dtype=float)
+    if bbox_min.shape == (3,) and bbox_max.shape == (3,):
+        return _rectangle_from_bbox_xy(bbox_min, bbox_max)
+    center = np.asarray(obj.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    return np.array([center[:2]], dtype=float)
+
+
+def _point_on_segment_2d(a: np.ndarray, b: np.ndarray, p: np.ndarray, tol: float = _GEOM_EPS) -> bool:
+    ab = b - a
+    ap = p - a
+    cross = float(ab[0] * ap[1] - ab[1] * ap[0])
+    if abs(cross) > tol:
+        return False
+    dot = float(np.dot(ap, ab))
+    if dot < -tol:
+        return False
+    if dot > float(np.dot(ab, ab)) + tol:
+        return False
+    return True
+
+
+def _orientation_2d(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> float:
+    ab = b - a
+    ac = c - a
+    return float(ab[0] * ac[1] - ab[1] * ac[0])
+
+
+def _segments_intersect_2d(a1: np.ndarray, a2: np.ndarray, b1: np.ndarray, b2: np.ndarray, tol: float = _GEOM_EPS) -> bool:
+    o1 = _orientation_2d(a1, a2, b1)
+    o2 = _orientation_2d(a1, a2, b2)
+    o3 = _orientation_2d(b1, b2, a1)
+    o4 = _orientation_2d(b1, b2, a2)
+
+    if (
+        ((o1 > tol and o2 < -tol) or (o1 < -tol and o2 > tol))
+        and ((o3 > tol and o4 < -tol) or (o3 < -tol and o4 > tol))
+    ):
+        return True
+
+    return any((
+        abs(o1) <= tol and _point_on_segment_2d(a1, a2, b1, tol),
+        abs(o2) <= tol and _point_on_segment_2d(a1, a2, b2, tol),
+        abs(o3) <= tol and _point_on_segment_2d(b1, b2, a1, tol),
+        abs(o4) <= tol and _point_on_segment_2d(b1, b2, a2, tol),
+    ))
+
+
+def _point_in_polygon_2d(point: np.ndarray, polygon: np.ndarray, tol: float = _GEOM_EPS) -> bool:
+    n = len(polygon)
+    if n == 0:
+        return False
+    if n == 1:
+        return bool(np.linalg.norm(point - polygon[0]) <= tol)
+    for i in range(n):
+        a = polygon[i]
+        b = polygon[(i + 1) % n]
+        if _point_on_segment_2d(a, b, point, tol):
+            return True
+
+    x, y = float(point[0]), float(point[1])
+    inside = False
+    for i in range(n):
+        x1, y1 = float(polygon[i][0]), float(polygon[i][1])
+        x2, y2 = float(polygon[(i + 1) % n][0]), float(polygon[(i + 1) % n][1])
+        intersects = ((y1 > y) != (y2 > y))
+        if not intersects:
+            continue
+        x_at_y = x1 + (y - y1) * (x2 - x1) / max(y2 - y1, _GEOM_EPS)
+        if x_at_y >= x - tol:
+            inside = not inside
+    return inside
+
+
+def _polygons_overlap_xy(poly_a: np.ndarray, poly_b: np.ndarray) -> bool:
+    if len(poly_a) == 0 or len(poly_b) == 0:
+        return False
+
+    for i in range(len(poly_a)):
+        a1 = poly_a[i]
+        a2 = poly_a[(i + 1) % len(poly_a)]
+        for j in range(len(poly_b)):
+            b1 = poly_b[j]
+            b2 = poly_b[(j + 1) % len(poly_b)]
+            if _segments_intersect_2d(a1, a2, b1, b2):
+                return True
+
+    return _point_in_polygon_2d(poly_a[0], poly_b) or _point_in_polygon_2d(poly_b[0], poly_a)
+
+
+def _nearest_point_on_segment(p1: np.ndarray, p2: np.ndarray, query: np.ndarray) -> np.ndarray:
+    d = p2 - p1
+    denom = float(np.dot(d, d))
+    if denom < _GEOM_EPS:
+        return p1.copy()
+    t = float(np.clip(np.dot(query - p1, d) / denom, 0.0, 1.0))
+    return p1 + t * d
+
+
+def nearest_point_on_hull(hull_xy: np.ndarray | list[list[float]], query_2d: np.ndarray) -> np.ndarray:
+    """Nearest point on a polygon boundary to a query point."""
+    hull = np.asarray(hull_xy, dtype=float)
+    query = np.asarray(query_2d, dtype=float)
+    if hull.ndim != 2 or hull.shape[1] != 2 or len(hull) == 0:
+        return query.copy()
+    if len(hull) == 1:
+        return hull[0].copy()
+
+    best_point = hull[0].copy()
+    best_dist = float("inf")
+    for i in range(len(hull)):
+        point = _nearest_point_on_segment(hull[i], hull[(i + 1) % len(hull)], query)
+        dist = float(np.linalg.norm(point - query))
+        if dist < best_dist:
+            best_dist = dist
+            best_point = point
+    return best_point
+
+
+def _polygon_centroid_xy(hull_xy: np.ndarray, fallback_xy: np.ndarray) -> np.ndarray:
+    if hull_xy.ndim == 2 and hull_xy.shape[0] >= 1 and hull_xy.shape[1] == 2:
+        return np.mean(hull_xy, axis=0)
+    return np.asarray(fallback_xy, dtype=float).copy()
+
+
+def footprint_nearest_pair(
+    hull_a: np.ndarray | list[list[float]],
+    hull_b: np.ndarray | list[list[float]],
+    fallback_a_xy: np.ndarray,
+    fallback_b_xy: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return a stable nearest horizontal reference pair between two footprints."""
+    poly_a = np.asarray(hull_a, dtype=float)
+    poly_b = np.asarray(hull_b, dtype=float)
+    fallback_a = np.asarray(fallback_a_xy, dtype=float)
+    fallback_b = np.asarray(fallback_b_xy, dtype=float)
+
+    if poly_a.ndim != 2 or poly_a.shape[1] != 2 or len(poly_a) < 2:
+        return fallback_a.copy(), fallback_b.copy()
+    if poly_b.ndim != 2 or poly_b.shape[1] != 2 or len(poly_b) < 2:
+        return fallback_a.copy(), fallback_b.copy()
+
+    if _polygons_overlap_xy(poly_a, poly_b):
+        return _polygon_centroid_xy(poly_a, fallback_a), _polygon_centroid_xy(poly_b, fallback_b)
+
+    candidates: list[tuple[np.ndarray, np.ndarray, float]] = []
+
+    for a_point in poly_a:
+        b_point = nearest_point_on_hull(poly_b, a_point)
+        dist = float(np.linalg.norm(b_point - a_point))
+        candidates.append((a_point.copy(), b_point, dist))
+
+    for b_point in poly_b:
+        a_point = nearest_point_on_hull(poly_a, b_point)
+        dist = float(np.linalg.norm(a_point - b_point))
+        candidates.append((a_point, b_point.copy(), dist))
+
+    if not candidates:
+        return fallback_a.copy(), fallback_b.copy()
+
+    best_dist = min(item[2] for item in candidates)
+    near_best = [
+        (a_point, b_point)
+        for a_point, b_point, dist in candidates
+        if dist <= best_dist + 1e-6
+    ]
+    if not near_best:
+        return fallback_a.copy(), fallback_b.copy()
+
+    best_a = np.mean([item[0] for item in near_best], axis=0)
+    best_b = np.mean([item[1] for item in near_best], axis=0)
+    return np.asarray(best_a, dtype=float), np.asarray(best_b, dtype=float)
+
+
+def _horizontal_direction_from_components(
+    primary_comp: float,
+    secondary_comp: float,
+    labels: list[str],
+) -> tuple[str, float]:
+    horizontal_mag = math.sqrt(primary_comp * primary_comp + secondary_comp * secondary_comp)
+    if horizontal_mag < 1e-6:
+        return labels[0], 1.0
+
+    angle = math.degrees(math.atan2(secondary_comp, primary_comp))
+    if angle < 0:
+        angle += 360
+
+    bin_idx = int((angle + 22.5) % 360 / 45)
+    direction = labels[bin_idx]
+    bin_centre = bin_idx * 45.0
+    offset = abs(angle - bin_centre)
+    if offset > 180:
+        offset = 360 - offset
+    ambiguity = offset / 22.5
+    return direction, float(min(max(ambiguity, 0.0), 1.0))
+
+
+def _vertical_interval_direction(
+    a_bbox_min: np.ndarray | None,
+    a_bbox_max: np.ndarray | None,
+    b_bbox_min: np.ndarray | None,
+    b_bbox_max: np.ndarray | None,
+) -> tuple[str | None, float]:
+    if any(item is None for item in (a_bbox_min, a_bbox_max, b_bbox_min, b_bbox_max)):
+        return None, 0.0
+
+    a_min = np.asarray(a_bbox_min, dtype=float)
+    a_max = np.asarray(a_bbox_max, dtype=float)
+    b_min = np.asarray(b_bbox_min, dtype=float)
+    b_max = np.asarray(b_bbox_max, dtype=float)
+    if a_min.shape != (3,) or a_max.shape != (3,) or b_min.shape != (3,) or b_max.shape != (3,):
+        return None, 0.0
+
+    gap_up = float(b_min[2] - a_max[2])
+    gap_down = float(a_min[2] - b_max[2])
+    extent = max(
+        float(a_max[2] - a_min[2]),
+        float(b_max[2] - b_min[2]),
+        _VERTICAL_CLEARANCE_TOL,
+    )
+
+    if gap_up > _VERTICAL_CLEARANCE_TOL:
+        ambiguity = 1.0 - min(gap_up / extent, 1.0)
+        return "above", float(max(ambiguity, 0.0))
+    if gap_down > _VERTICAL_CLEARANCE_TOL:
+        ambiguity = 1.0 - min(gap_down / extent, 1.0)
+        return "below", float(max(ambiguity, 0.0))
+    return None, 0.0
+
+
+def _pairwise_horizontal_reference_points(obj_a: dict, obj_b: dict) -> tuple[np.ndarray, np.ndarray]:
+    a_center = np.asarray(obj_a.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    b_center = np.asarray(obj_b.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    hull_a = _object_bottom_hull_xy(obj_a)
+    hull_b = _object_bottom_hull_xy(obj_b)
+    return footprint_nearest_pair(hull_a, hull_b, a_center[:2], b_center[:2])
+
+
+def compute_pairwise_direction(
+    obj_a: dict,
+    obj_b: dict,
+    camera_pose: CameraPose,
+) -> tuple[str, float]:
+    """Direction of B relative to A using footprint geometry where available."""
+    vertical_label, vertical_ambiguity = _vertical_interval_direction(
+        np.asarray(obj_a.get("bbox_min", []), dtype=float) if "bbox_min" in obj_a else None,
+        np.asarray(obj_a.get("bbox_max", []), dtype=float) if "bbox_max" in obj_a else None,
+        np.asarray(obj_b.get("bbox_min", []), dtype=float) if "bbox_min" in obj_b else None,
+        np.asarray(obj_b.get("bbox_max", []), dtype=float) if "bbox_max" in obj_b else None,
+    )
+    if vertical_label is not None:
+        return vertical_label, vertical_ambiguity
+
+    a_ref_xy, b_ref_xy = _pairwise_horizontal_reference_points(obj_a, obj_b)
+    a_ref = np.array([a_ref_xy[0], a_ref_xy[1], 0.0], dtype=float)
+    b_ref = np.array([b_ref_xy[0], b_ref_xy[1], 0.0], dtype=float)
+    return primary_direction(a_ref, b_ref, camera_pose, horizontal_only=True)
+
 
 def primary_direction(
     obj_a_center: np.ndarray,
     obj_b_center: np.ndarray,
     camera_pose: CameraPose,
+    *,
+    horizontal_only: bool = False,
 ) -> tuple[str, float]:
-    """Return the single most dominant direction of B relative to A.
-
-    Uses a 10-direction system: 8 horizontal bins (45° each, centred at
-    0°/45°/90°/…/315°) plus "above"/"below" for vertical dominance.
-
-    Camera convention (OpenCV): x→right, y→down, z→forward.
-
-    Returns (direction_label, ambiguity_score) where ambiguity_score ∈ [0,1].
-    Higher ambiguity means the direction is close to a bin boundary.
-    """
-    a_cam = world_to_camera(obj_a_center, camera_pose)
-    b_cam = world_to_camera(obj_b_center, camera_pose)
+    """Return the single most dominant direction of B relative to A."""
+    a_cam = world_to_camera(np.asarray(obj_a_center, dtype=float), camera_pose)
+    b_cam = world_to_camera(np.asarray(obj_b_center, dtype=float), camera_pose)
     delta = b_cam - a_cam  # x=right, y=down, z=forward
 
     dx, dy, dz = float(delta[0]), float(delta[1]), float(delta[2])
-
     horizontal_mag = math.sqrt(dx * dx + dz * dz)
     vertical_mag = abs(dy)
 
-    # If vertical component dominates → above/below
-    if vertical_mag > horizontal_mag:
+    if not horizontal_only and vertical_mag > horizontal_mag:
         direction = "below" if dy > 0 else "above"  # OpenCV y-down
         if horizontal_mag < 1e-6:
             ambiguity = 0.0
         else:
-            ambiguity = horizontal_mag / vertical_mag  # how close to switching
+            ambiguity = horizontal_mag / vertical_mag
         return direction, float(min(ambiguity, 1.0))
 
-    if horizontal_mag < 1e-6:
-        return "front", 1.0
+    direction, ambiguity = _horizontal_direction_from_components(dz, dx, HORIZONTAL_DIRECTIONS)
+    if horizontal_only:
+        return direction, ambiguity
 
-    # Compute angle in horizontal plane: atan2(dx, dz)
-    # dz = forward direction (0°), dx = right (90°)
-    angle = math.degrees(math.atan2(dx, dz))  # range [-180, 180]
-    if angle < 0:
-        angle += 360  # → [0, 360)
-
-    # Bin into 8 sectors (each 45°, centred at 0°, 45°, …, 315°)
-    bin_idx = int((angle + 22.5) % 360 / 45)
-    direction = HORIZONTAL_DIRECTIONS[bin_idx]
-
-    # Ambiguity: distance from bin centre, normalised to [0,1]
-    bin_centre = bin_idx * 45.0
-    offset = abs(angle - bin_centre)
-    if offset > 180:
-        offset = 360 - offset
-    horiz_ambiguity = offset / 22.5  # 0 at centre, 1 at boundary
-
-    # Also factor in vertical component ratio
-    vert_ratio = vertical_mag / horizontal_mag if horizontal_mag > 1e-6 else 0
-    ambiguity = max(horiz_ambiguity, vert_ratio)
-
-    return direction, float(min(ambiguity, 1.0))
+    vert_ratio = vertical_mag / horizontal_mag if horizontal_mag > 1e-6 else 0.0
+    return direction, float(min(max(ambiguity, vert_ratio), 1.0))
 
 
 # ---- Object-centric direction (reference-pair frame) ----
@@ -104,59 +352,56 @@ def primary_direction_object_centric(
     anchor_center: np.ndarray,
     facing_center: np.ndarray,
     target_center: np.ndarray,
+    *,
+    anchor_hull_xy: np.ndarray | list[list[float]] | None = None,
+    target_hull_xy: np.ndarray | list[list[float]] | None = None,
+    anchor_bbox_min: np.ndarray | list[float] | None = None,
+    anchor_bbox_max: np.ndarray | list[float] | None = None,
+    target_bbox_min: np.ndarray | list[float] | None = None,
+    target_bbox_max: np.ndarray | list[float] | None = None,
 ) -> tuple[str, float]:
-    """Direction of *target* as seen from *anchor* facing toward *facing*.
+    """Direction of *target* as seen from *anchor* facing toward *facing*."""
+    anchor_center = np.asarray(anchor_center, dtype=float)
+    facing_center = np.asarray(facing_center, dtype=float)
+    target_center = np.asarray(target_center, dtype=float)
 
-    Defines a local reference frame:
-        forward = anchor → facing (projected to horizontal plane)
-        right   = cross(forward, z_up)
-        up      = z_up
-
-    Returns (direction_label, ambiguity_score) using the same 10-direction
-    system as ego-centric (front/right/back-left/above/below …).
-    """
     fwd_3d = facing_center - anchor_center
-    fwd_horiz = np.array([fwd_3d[0], fwd_3d[1], 0.0])
+    fwd_horiz = np.array([fwd_3d[0], fwd_3d[1], 0.0], dtype=float)
     horiz_len = np.linalg.norm(fwd_horiz)
     if horiz_len < 1e-6:
-        return "front", 1.0  # degenerate (anchor == facing or purely vertical)
+        return "front", 1.0
     fwd_horiz /= horiz_len
 
-    # Right = forward × z_up  (z-up world: [0,0,1])
-    right_horiz = np.array([fwd_horiz[1], -fwd_horiz[0], 0.0])
+    vertical_label, vertical_ambiguity = _vertical_interval_direction(
+        np.asarray(anchor_bbox_min, dtype=float) if anchor_bbox_min is not None else None,
+        np.asarray(anchor_bbox_max, dtype=float) if anchor_bbox_max is not None else None,
+        np.asarray(target_bbox_min, dtype=float) if target_bbox_min is not None else None,
+        np.asarray(target_bbox_max, dtype=float) if target_bbox_max is not None else None,
+    )
+    if vertical_label is not None:
+        return vertical_label, vertical_ambiguity
 
-    delta = target_center - anchor_center
+    right_horiz = np.array([fwd_horiz[1], -fwd_horiz[0], 0.0], dtype=float)
+
+    if anchor_hull_xy is not None and target_hull_xy is not None:
+        anchor_ref_xy, target_ref_xy = footprint_nearest_pair(
+            anchor_hull_xy,
+            target_hull_xy,
+            anchor_center[:2],
+            target_center[:2],
+        )
+        delta = np.array([
+            target_ref_xy[0] - anchor_ref_xy[0],
+            target_ref_xy[1] - anchor_ref_xy[1],
+            0.0,
+        ], dtype=float)
+    else:
+        delta = target_center - anchor_center
+        delta[2] = 0.0
+
     fwd_comp = float(np.dot(delta, fwd_horiz))
     right_comp = float(np.dot(delta, right_horiz))
-    vert_comp = float(delta[2])
-
-    horiz_mag = math.sqrt(fwd_comp * fwd_comp + right_comp * right_comp)
-    vert_mag = abs(vert_comp)
-
-    if vert_mag > horiz_mag:
-        direction = "above" if vert_comp > 0 else "below"
-        ambiguity = horiz_mag / vert_mag if vert_mag > 1e-6 else 0.0
-        return direction, float(min(ambiguity, 1.0))
-
-    if horiz_mag < 1e-6:
-        return "front", 1.0
-
-    angle = math.degrees(math.atan2(right_comp, fwd_comp))
-    if angle < 0:
-        angle += 360
-
-    bin_idx = int((angle + 22.5) % 360 / 45)
-    direction = HORIZONTAL_DIRECTIONS[bin_idx]
-
-    bin_centre = bin_idx * 45.0
-    offset = abs(angle - bin_centre)
-    if offset > 180:
-        offset = 360 - offset
-    horiz_ambiguity = offset / 22.5
-    vert_ratio = vert_mag / horiz_mag if horiz_mag > 1e-6 else 0
-    ambiguity = max(horiz_ambiguity, vert_ratio)
-
-    return direction, float(min(ambiguity, 1.0))
+    return _horizontal_direction_from_components(fwd_comp, right_comp, HORIZONTAL_DIRECTIONS)
 
 
 # ---- Allocentric direction (world-frame, axis-aligned) ----
@@ -165,52 +410,45 @@ def primary_direction_object_centric(
 def primary_direction_allocentric(
     obj_a_center: np.ndarray,
     obj_b_center: np.ndarray,
+    *,
+    obj_a_hull_xy: np.ndarray | list[list[float]] | None = None,
+    obj_b_hull_xy: np.ndarray | list[list[float]] | None = None,
+    obj_a_bbox_min: np.ndarray | list[float] | None = None,
+    obj_a_bbox_max: np.ndarray | list[float] | None = None,
+    obj_b_bbox_min: np.ndarray | list[float] | None = None,
+    obj_b_bbox_max: np.ndarray | list[float] | None = None,
 ) -> tuple[str, float]:
-    """Cardinal direction of A as seen from B in axis-aligned world coords.
+    """Cardinal direction of A as seen from B in axis-aligned world coords."""
+    obj_a_center = np.asarray(obj_a_center, dtype=float)
+    obj_b_center = np.asarray(obj_b_center, dtype=float)
 
-    Convention after ScanNet axis alignment:
-        +x = east,  +y = north,  +z = up
+    vertical_label, vertical_ambiguity = _vertical_interval_direction(
+        np.asarray(obj_b_bbox_min, dtype=float) if obj_b_bbox_min is not None else None,
+        np.asarray(obj_b_bbox_max, dtype=float) if obj_b_bbox_max is not None else None,
+        np.asarray(obj_a_bbox_min, dtype=float) if obj_a_bbox_min is not None else None,
+        np.asarray(obj_a_bbox_max, dtype=float) if obj_a_bbox_max is not None else None,
+    )
+    if vertical_label is not None:
+        return vertical_label, vertical_ambiguity
 
-    Returns (cardinal_label, ambiguity_score) with 8+2 directions.
-    """
-    delta = obj_a_center - obj_b_center  # B → A
-    dx, dy, dz = float(delta[0]), float(delta[1]), float(delta[2])
+    if obj_a_hull_xy is not None and obj_b_hull_xy is not None:
+        a_ref_xy, b_ref_xy = footprint_nearest_pair(
+            obj_a_hull_xy,
+            obj_b_hull_xy,
+            obj_a_center[:2],
+            obj_b_center[:2],
+        )
+        dx = float(a_ref_xy[0] - b_ref_xy[0])
+        dy = float(a_ref_xy[1] - b_ref_xy[1])
+    else:
+        delta = obj_a_center - obj_b_center
+        dx, dy = float(delta[0]), float(delta[1])
 
-    horiz_mag = math.sqrt(dx * dx + dy * dy)
-    vert_mag = abs(dz)
-
-    if vert_mag > horiz_mag:
-        direction = "above" if dz > 0 else "below"
-        ambiguity = horiz_mag / vert_mag if vert_mag > 1e-6 else 0.0
-        return direction, float(min(ambiguity, 1.0))
-
-    if horiz_mag < 1e-6:
-        return "north", 1.0
-
-    # atan2(east_comp, north_comp) → 0° = north, 90° = east
-    angle = math.degrees(math.atan2(dx, dy))
-    if angle < 0:
-        angle += 360
-
-    bin_idx = int((angle + 22.5) % 360 / 45)
-    direction = CARDINAL_DIRECTIONS_8[bin_idx]
-
-    bin_centre = bin_idx * 45.0
-    offset = abs(angle - bin_centre)
-    if offset > 180:
-        offset = 360 - offset
-    horiz_ambiguity = offset / 22.5
-    vert_ratio = vert_mag / horiz_mag if horiz_mag > 1e-6 else 0
-    ambiguity = max(horiz_ambiguity, vert_ratio)
-
-    return direction, float(min(ambiguity, 1.0))
+    return _horizontal_direction_from_components(dy, dx, CARDINAL_DIRECTIONS_8)
 
 
 def camera_cardinal_direction(camera_pose: CameraPose) -> str:
-    """Return the cardinal direction the camera is facing.
-
-    Uses the camera forward vector projected to the horizontal plane.
-    """
+    """Return the cardinal direction the camera is facing."""
     from .utils.coordinate_transform import get_camera_forward
     fwd = get_camera_forward(camera_pose)
     fwd_horiz = np.array([fwd[0], fwd[1]])
@@ -233,7 +471,7 @@ DISTANCE_BINS = [
 ]
 
 # Minimum centre-to-centre distance for direction questions.
-# Below this threshold, bbox annotation errors (±0.1–0.2 m) make direction
+# Below this threshold, bbox annotation errors (~0.1-0.2 m) make direction
 # judgements unreliable.
 MIN_DIRECTION_DISTANCE = 0.5  # metres
 
@@ -244,12 +482,8 @@ def compute_distance(
     obj_a_center: np.ndarray,
     obj_b_center: np.ndarray,
 ) -> tuple[str, float, bool]:
-    """Compute Euclidean distance and categorical bin.
-
-    Returns (bin_label, raw_distance, near_boundary).
-    near_boundary is True if the distance is within 0.2 m of a bin edge.
-    """
-    dist = float(np.linalg.norm(obj_a_center - obj_b_center))
+    """Compute Euclidean distance and categorical bin."""
+    dist = float(np.linalg.norm(np.asarray(obj_a_center, dtype=float) - np.asarray(obj_b_center, dtype=float)))
     near_boundary = any(abs(dist - b) < 0.2 for b in DISTANCE_BIN_BOUNDARIES)
 
     for threshold, label in DISTANCE_BINS:
@@ -261,19 +495,14 @@ def compute_distance(
 
 # ---- Occlusion relation (per-object, depth-map based) ----
 
+
 def compute_occlusion_per_object(
     objects: list[dict],
     camera_pose: CameraPose,
     depth_image: np.ndarray | None = None,
     depth_intrinsics=None,
 ) -> dict[int, tuple[str, float]]:
-    """Compute per-object occlusion status using the depth map.
-
-    Returns a dict mapping obj_id → (status, visibility_ratio).
-    Status is one of: "fully visible", "partially occluded", "not visible".
-
-    If depth_image is None, returns "unknown" for all objects.
-    """
+    """Compute per-object occlusion status using the depth map."""
     if depth_image is None or depth_intrinsics is None:
         return {o["id"]: ("unknown", 0.0) for o in objects}
 
@@ -294,21 +523,14 @@ def compute_occlusion_per_object(
 
 # ---- Batch computation ----
 
+
 def compute_all_relations(
     objects: list[dict],
     camera_pose: CameraPose,
     depth_image: np.ndarray | None = None,
     depth_intrinsics=None,
 ) -> list[dict[str, Any]]:
-    """Compute pairwise spatial relations for all object pairs.
-
-    Occlusion is computed per-object (not pairwise) using depth maps.
-
-    Returns a list of relation dicts, each containing:
-        obj_a_id, obj_b_id, direction, distance_bin, distance_m,
-        occlusion_a, occlusion_b
-    """
-    # Pre-compute per-object occlusion (each object checked once, not per pair)
+    """Compute pairwise spatial relations for all object pairs."""
     occ_cache = compute_occlusion_per_object(
         objects, camera_pose, depth_image, depth_intrinsics
     )
@@ -322,10 +544,7 @@ def compute_all_relations(
             a_center = np.array(a["center"])
             b_center = np.array(b["center"])
 
-            # Direction: B relative to A
-            dir_label, ambiguity = primary_direction(a_center, b_center, camera_pose)
-
-            # Distance
+            dir_label, ambiguity = compute_pairwise_direction(a, b, camera_pose)
             dist_bin, dist_m, near_bound = compute_distance(a_center, b_center)
 
             relations.append(
@@ -351,10 +570,7 @@ def find_changed_relations(
     old_relations: list[dict],
     new_relations: list[dict],
 ) -> list[dict]:
-    """Compare two relation sets and return entries that changed.
-
-    Returns a list of dicts with old and new values for changed pairs.
-    """
+    """Compare two relation sets and return entries that changed."""
     old_map = {(r["obj_a_id"], r["obj_b_id"]): r for r in old_relations}
     new_map = {(r["obj_a_id"], r["obj_b_id"]): r for r in new_relations}
 

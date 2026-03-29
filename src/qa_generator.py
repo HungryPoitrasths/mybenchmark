@@ -88,6 +88,36 @@ L1_OCCLUSION_MASK_FILL_BGR = (40, 40, 255)
 L1_OCCLUSION_MASK_BORDER_BGR = (0, 255, 255)
 
 
+def _bbox_rect_xy(obj: dict) -> np.ndarray:
+    bbox_min = np.asarray(obj.get("bbox_min", [0.0, 0.0, 0.0]), dtype=float)
+    bbox_max = np.asarray(obj.get("bbox_max", [0.0, 0.0, 0.0]), dtype=float)
+    return np.array([
+        [bbox_min[0], bbox_min[1]],
+        [bbox_max[0], bbox_min[1]],
+        [bbox_max[0], bbox_max[1]],
+        [bbox_min[0], bbox_max[1]],
+    ], dtype=float)
+
+
+def _object_bottom_hull_xy(obj: dict) -> np.ndarray:
+    hull = np.asarray(obj.get("support_geom", {}).get("bottom_hull_xy", []), dtype=float)
+    if hull.ndim == 2 and hull.shape[0] >= 3 and hull.shape[1] == 2:
+        return hull
+    return _bbox_rect_xy(obj)
+
+
+def _translated_bottom_hull_xy(obj: dict, delta: np.ndarray) -> np.ndarray:
+    return _object_bottom_hull_xy(obj) + np.asarray(delta, dtype=float)[:2]
+
+
+def _translated_bbox(obj: dict, delta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    offset = np.asarray(delta, dtype=float)
+    return (
+        np.asarray(obj["bbox_min"], dtype=float) + offset,
+        np.asarray(obj["bbox_max"], dtype=float) + offset,
+    )
+
+
 @dataclass(frozen=True)
 class _ModifiedSceneContext:
     ray_caster: Any
@@ -1316,7 +1346,15 @@ def generate_l1_direction_object_centric(
                     continue
 
                 direction, ambiguity = primary_direction_object_centric(
-                    ref_c, face_c, target_c,
+                    ref_c,
+                    face_c,
+                    target_c,
+                    anchor_hull_xy=_object_bottom_hull_xy(ref),
+                    target_hull_xy=_object_bottom_hull_xy(target),
+                    anchor_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                    anchor_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                    target_bbox_min=np.array(target["bbox_min"], dtype=float),
+                    target_bbox_max=np.array(target["bbox_max"], dtype=float),
                 )
                 if ambiguity > 0.7:
                     continue
@@ -1389,7 +1427,16 @@ def generate_l1_direction_allocentric(
             b_c = np.array(b["center"])
             if np.linalg.norm(b_c - a_c) < MIN_DIRECTION_DISTANCE:
                 continue
-            direction, ambiguity = primary_direction_allocentric(a_c, b_c)
+            direction, ambiguity = primary_direction_allocentric(
+                a_c,
+                b_c,
+                obj_a_hull_xy=_object_bottom_hull_xy(a),
+                obj_b_hull_xy=_object_bottom_hull_xy(b),
+                obj_a_bbox_min=np.array(a["bbox_min"], dtype=float),
+                obj_a_bbox_max=np.array(a["bbox_max"], dtype=float),
+                obj_b_bbox_min=np.array(b["bbox_min"], dtype=float),
+                obj_b_bbox_max=np.array(b["bbox_max"], dtype=float),
+            )
             if ambiguity > 0.7:
                 continue
             if direction not in CARDINAL_DIRECTIONS_8:
@@ -2028,7 +2075,7 @@ def _cap_question_groups(
 def _balance_l2_object_move_attachment_counts(
     questions: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Cap per-type unattached L2 object-move questions relative to attached count."""
+    """Cap per-type unattached L2 object-move questions at 2x attached count."""
     keep_mask = [True] * len(questions)
     grouped_indices: dict[str, list[int]] = {}
     for idx, question in enumerate(questions):
@@ -2048,7 +2095,7 @@ def _balance_l2_object_move_attachment_counts(
             idx for idx in indices
             if not bool(questions[idx].get("attachment_remapped", False))
         ]
-        allowed_unattached = len(attached) if attached else 3
+        allowed_unattached = (2 * len(attached)) if attached else 3
         if len(unattached) <= allowed_unattached:
             continue
         for idx in unattached[allowed_unattached:]:
@@ -2491,10 +2538,26 @@ def generate_l2_object_move_object_centric(
 
                     ref_c = np.array(ref["center"], dtype=float)
                     old_dir, old_amb = primary_direction_object_centric(
-                        query_center, face_c, ref_c,
+                        query_center,
+                        face_c,
+                        ref_c,
+                        anchor_hull_xy=_object_bottom_hull_xy(obj),
+                        target_hull_xy=_object_bottom_hull_xy(ref),
+                        anchor_bbox_min=np.array(obj["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(obj["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
                     )
                     new_dir, new_amb = primary_direction_object_centric(
-                        new_query_center, face_c, ref_c,
+                        new_query_center,
+                        face_c,
+                        ref_c,
+                        anchor_hull_xy=_object_bottom_hull_xy(rotated_query),
+                        target_hull_xy=_object_bottom_hull_xy(ref),
+                        anchor_bbox_min=np.array(rotated_query["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(rotated_query["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
                     )
                     if old_dir not in horizontal_answer_pool or new_dir not in horizontal_answer_pool:
                         continue
@@ -2608,13 +2671,32 @@ def generate_l2_object_move_allocentric(
                 continue
 
             ref_c = np.array(ref["center"])
-            new_dir, amb = primary_direction_allocentric(new_center, ref_c)
+            new_bbox_min, new_bbox_max = _translated_bbox(obj, delta)
+            new_dir, amb = primary_direction_allocentric(
+                new_center,
+                ref_c,
+                obj_a_hull_xy=_translated_bottom_hull_xy(obj, delta),
+                obj_b_hull_xy=_object_bottom_hull_xy(ref),
+                obj_a_bbox_min=new_bbox_min,
+                obj_a_bbox_max=new_bbox_max,
+                obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
+            )
             if amb > 0.7:
                 continue
             if new_dir not in CARDINAL_DIRECTIONS_8:
                 continue
 
-            old_dir, _ = primary_direction_allocentric(np.array(obj["center"]), ref_c)
+            old_dir, _ = primary_direction_allocentric(
+                np.array(obj["center"]),
+                ref_c,
+                obj_a_hull_xy=_object_bottom_hull_xy(obj),
+                obj_b_hull_xy=_object_bottom_hull_xy(ref),
+                obj_a_bbox_min=np.array(obj["bbox_min"], dtype=float),
+                obj_a_bbox_max=np.array(obj["bbox_max"], dtype=float),
+                obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
+            )
             if old_dir == new_dir:
                 continue
 
@@ -2914,6 +2996,12 @@ def generate_l3_coordinate_rotation_object_centric(
                         ref_rot_c,
                         face_rot_c,
                         target_rot_c,
+                        anchor_hull_xy=_object_bottom_hull_xy(ref_rot),
+                        target_hull_xy=_object_bottom_hull_xy(target_rot),
+                        anchor_bbox_min=np.array(ref_rot["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(ref_rot["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(target_rot["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(target_rot["bbox_max"], dtype=float),
                     )
                     if amb > 0.7:
                         continue
@@ -2922,6 +3010,12 @@ def generate_l3_coordinate_rotation_object_centric(
                         np.array(ref["center"]),
                         np.array(face["center"]),
                         np.array(target["center"]),
+                        anchor_hull_xy=_object_bottom_hull_xy(ref),
+                        target_hull_xy=_object_bottom_hull_xy(target),
+                        anchor_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(target["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(target["bbox_max"], dtype=float),
                     )
 
                     tpl = random.choice(tpl_list)
@@ -3006,7 +3100,14 @@ def generate_l3_coordinate_rotation_allocentric(
                     continue
 
                 new_dir, amb = primary_direction_allocentric(
-                    np.array(a_rot["center"]), np.array(b_rot["center"]),
+                    np.array(a_rot["center"]),
+                    np.array(b_rot["center"]),
+                    obj_a_hull_xy=_object_bottom_hull_xy(a_rot),
+                    obj_b_hull_xy=_object_bottom_hull_xy(b_rot),
+                    obj_a_bbox_min=np.array(a_rot["bbox_min"], dtype=float),
+                    obj_a_bbox_max=np.array(a_rot["bbox_max"], dtype=float),
+                    obj_b_bbox_min=np.array(b_rot["bbox_min"], dtype=float),
+                    obj_b_bbox_max=np.array(b_rot["bbox_max"], dtype=float),
                 )
                 if amb > 0.7:
                     continue
@@ -3014,7 +3115,14 @@ def generate_l3_coordinate_rotation_allocentric(
                     continue
 
                 old_dir, _ = primary_direction_allocentric(
-                    np.array(a["center"]), np.array(b["center"]),
+                    np.array(a["center"]),
+                    np.array(b["center"]),
+                    obj_a_hull_xy=_object_bottom_hull_xy(a),
+                    obj_b_hull_xy=_object_bottom_hull_xy(b),
+                    obj_a_bbox_min=np.array(a["bbox_min"], dtype=float),
+                    obj_a_bbox_max=np.array(a["bbox_max"], dtype=float),
+                    obj_b_bbox_min=np.array(b["bbox_min"], dtype=float),
+                    obj_b_bbox_max=np.array(b["bbox_max"], dtype=float),
                 )
                 if old_dir == new_dir:
                     continue

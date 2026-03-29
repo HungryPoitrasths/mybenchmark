@@ -195,11 +195,50 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 unattached += 1
             counts[qtype] = (attached, unattached)
 
-        self.assertEqual(counts["object_move_agent"], (2, 2))
-        self.assertEqual(counts["object_move_distance"], (1, 1))
-        self.assertEqual(counts["object_move_object_centric"], (1, 1))
+        self.assertEqual(counts["object_move_agent"], (2, 3))
+        self.assertEqual(counts["object_move_distance"], (1, 2))
+        self.assertEqual(counts["object_move_object_centric"], (1, 2))
         self.assertEqual(counts.get("object_move_allocentric", (0, 0)), (0, 3))
         self.assertEqual(sum(1 for q in questions if q.get("type") == "viewpoint_move"), 1)
+
+    def test_full_quality_pipeline_enforces_global_attachment_dominance_for_l2_object_move(self) -> None:
+        from src.quality_control import full_quality_pipeline
+
+        questions = [
+            make_l2_object_move_question("object_move_agent", attached=True, text="agent attached 1"),
+            make_l2_object_move_question("object_move_agent", attached=False, text="agent free 1"),
+            make_l2_object_move_question("object_move_agent", attached=False, text="agent free 2"),
+            make_l2_object_move_question("object_move_distance", attached=False, text="distance free 1"),
+            make_l2_object_move_question("object_move_distance", attached=False, text="distance free 2"),
+            {
+                "level": "L2",
+                "type": "viewpoint_move",
+                "question": "viewpoint",
+                "options": ["fully visible", "partially occluded", "not visible", "unknown"],
+                "answer": "A",
+                "correct_value": "fully visible",
+            },
+        ]
+        for q in questions:
+            q.setdefault("correct_value", "A")
+
+        filtered = full_quality_pipeline(questions)
+
+        counts: dict[str, tuple[int, int]] = {}
+        for q in filtered:
+            qtype = str(q.get("type", ""))
+            if not qtype.startswith("object_move_"):
+                continue
+            attached, unattached = counts.get(qtype, (0, 0))
+            if q.get("attachment_remapped", False):
+                attached += 1
+            else:
+                unattached += 1
+            counts[qtype] = (attached, unattached)
+
+        self.assertLessEqual(counts["object_move_agent"][1], 2 * counts["object_move_agent"][0])
+        self.assertEqual(counts.get("object_move_distance", (0, 0)), (0, 0))
+        self.assertEqual(sum(1 for q in filtered if q.get("type") == "viewpoint_move"), 1)
 
 
 if __name__ == "__main__":

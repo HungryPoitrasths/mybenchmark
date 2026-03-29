@@ -195,6 +195,69 @@ def cap_l1_occlusion_not_visible_ratio(
     return capped_questions
 
 
+def enforce_l2_attachment_dominance(
+    questions: list[dict],
+) -> list[dict]:
+    """Globally enforce without_attachment <= 2 * with_attachment for L2 object-move types."""
+    target_types = sorted({
+        str(q.get("type", "")).strip()
+        for q in questions
+        if q.get("level") == "L2" and str(q.get("type", "")).strip().startswith("object_move_")
+    })
+    if not target_types:
+        return questions
+
+    keep_mask = [True] * len(questions)
+    removed_counts: Counter = Counter()
+
+    for qtype in target_types:
+        attached_indices = [
+            idx for idx, q in enumerate(questions)
+            if q.get("level") == "L2"
+            and str(q.get("type", "")).strip() == qtype
+            and bool(q.get("attachment_remapped", False))
+        ]
+        unattached_indices = [
+            idx for idx, q in enumerate(questions)
+            if q.get("level") == "L2"
+            and str(q.get("type", "")).strip() == qtype
+            and not bool(q.get("attachment_remapped", False))
+        ]
+        allowed_unattached = 2 * len(attached_indices)
+        if len(unattached_indices) <= allowed_unattached:
+            continue
+
+        kept_unattached = set(
+            random.sample(unattached_indices, allowed_unattached)
+        ) if allowed_unattached > 0 else set()
+        for idx in unattached_indices:
+            if idx not in kept_unattached:
+                keep_mask[idx] = False
+                removed_counts[qtype] += 1
+
+        logger.info(
+            "Attachment dominance (%s): kept %d attached and %d/%d unattached",
+            qtype,
+            len(attached_indices),
+            allowed_unattached,
+            len(unattached_indices),
+        )
+
+    if not removed_counts:
+        return questions
+
+    final_questions = [
+        q for idx, q in enumerate(questions)
+        if keep_mask[idx]
+    ]
+    logger.info(
+        "Attachment dominance removed %d questions: %s",
+        sum(removed_counts.values()),
+        dict(removed_counts),
+    )
+    return final_questions
+
+
 def balance_answer_values(
     questions: list[dict],
     target_types: tuple[str, ...] = (
@@ -430,11 +493,13 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
     Steps:
         1. Automatic quality filter
         2. Cap global L1 occlusion not-visible ratio
-        3. Answer distribution balancing
-        4. Log statistics
+        3. Enforce global L2 attachment dominance
+        4. Answer distribution balancing
+        5. Log statistics
     """
     questions = quality_filter(questions)
     questions = cap_l1_occlusion_not_visible_ratio(questions)
+    questions = enforce_l2_attachment_dominance(questions)
     questions = balance_answer_values(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)

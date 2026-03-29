@@ -77,16 +77,73 @@ def get_moved_object_ids(
     return set(dependents) | {target_obj_id}
 
 
+def _translate_support_geom_in_place(obj: dict, delta_position: np.ndarray) -> None:
+    support_geom = obj.get("support_geom")
+    if not isinstance(support_geom, dict):
+        return
+
+    delta_xy = np.asarray(delta_position, dtype=float)[:2]
+    for key in ("bottom_hull_xy", "top_hull_xy"):
+        points = np.asarray(support_geom.get(key, []), dtype=float)
+        if points.ndim == 2 and points.shape[1] == 2 and len(points) > 0:
+            support_geom[key] = (points + delta_xy).tolist()
+
+    candidates = support_geom.get("top_surface_candidates", [])
+    if not isinstance(candidates, list):
+        return
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
+        if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
+            candidate["hull_xy"] = (hull_xy + delta_xy).tolist()
+
+
 def _translate_object_in_place(obj: dict, delta_position: np.ndarray) -> None:
     delta = np.asarray(delta_position, dtype=float)
     obj["center"] = (np.asarray(obj["center"], dtype=float) + delta).tolist()
     obj["bbox_min"] = (np.asarray(obj["bbox_min"], dtype=float) + delta).tolist()
     obj["bbox_max"] = (np.asarray(obj["bbox_max"], dtype=float) + delta).tolist()
+    _translate_support_geom_in_place(obj, delta)
 
 
 def _rotate_points(points: np.ndarray, rotation: np.ndarray, pivot: np.ndarray) -> np.ndarray:
     centered = np.asarray(points, dtype=float) - np.asarray(pivot, dtype=float)
     return (rotation @ centered.T).T + np.asarray(pivot, dtype=float)
+
+
+def _rotate_points_xy(points_xy: np.ndarray, rotation: np.ndarray, pivot_xy: np.ndarray) -> np.ndarray:
+    if len(points_xy) == 0:
+        return np.asarray(points_xy, dtype=float)
+    points_xyz = np.column_stack([
+        np.asarray(points_xy, dtype=float),
+        np.zeros(len(points_xy), dtype=float),
+    ])
+    pivot_xyz = np.array([pivot_xy[0], pivot_xy[1], 0.0], dtype=float)
+    rotated_xyz = _rotate_points(points_xyz, rotation, pivot_xyz)
+    return rotated_xyz[:, :2]
+
+
+def _rotate_support_geom_in_place(obj: dict, rotation: np.ndarray, pivot: np.ndarray) -> None:
+    support_geom = obj.get("support_geom")
+    if not isinstance(support_geom, dict):
+        return
+
+    pivot_xy = np.asarray(pivot, dtype=float)[:2]
+    for key in ("bottom_hull_xy", "top_hull_xy"):
+        points = np.asarray(support_geom.get(key, []), dtype=float)
+        if points.ndim == 2 and points.shape[1] == 2 and len(points) > 0:
+            support_geom[key] = _rotate_points_xy(points, rotation, pivot_xy).tolist()
+
+    candidates = support_geom.get("top_surface_candidates", [])
+    if not isinstance(candidates, list):
+        return
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
+        if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
+            candidate["hull_xy"] = _rotate_points_xy(hull_xy, rotation, pivot_xy).tolist()
 
 
 def _rotate_aabb(
@@ -426,6 +483,7 @@ def apply_coordinate_rotation(
         )
         obj["bbox_min"] = bbox_min.tolist()
         obj["bbox_max"] = bbox_max.tolist()
+        _rotate_support_geom_in_place(obj, R, room_center)
 
     return rotated
 
