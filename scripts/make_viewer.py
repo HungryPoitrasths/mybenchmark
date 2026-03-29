@@ -16,6 +16,18 @@ Usage:
         --image_root /home/lihongxing/datasets/ScanNet/data/scans \
         --output output/pilot_depth/attachment_viewer.html \
         --attachment_only
+
+    python scripts/make_viewer.py \
+        --questions output/pilot_meshray/benchmark.json \
+        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
+        --output output/pilot_meshray/attachment_viewer.html \
+        --attachment_only
+
+    python scripts/make_viewer.py \
+        --questions output/pilot_cascade/benchmark.json \
+        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
+        --output output/pilot_cascade/attachment_viewer.html \
+        --attachment_only
 """
 
 from __future__ import annotations
@@ -222,6 +234,33 @@ def order_questions_for_viewer(questions: list[dict], seed: int = 42) -> list[di
     return ordered_questions
 
 
+def is_attachment_viewer_question(question: dict) -> bool:
+    qtype = str(question.get("type", "")).strip()
+    if qtype == "attachment_chain":
+        return True
+    return qtype in OBJECT_MOVE_TYPES and bool(question.get("attachment_remapped", False))
+
+
+def filter_viewer_questions(
+    questions: list[dict],
+    *,
+    requested_qtypes: set[str] | None = None,
+    attachment_only: bool = False,
+) -> list[dict]:
+    filtered = [
+        q for q in questions
+        if str(q.get("type", "")).strip() not in REMOVED_TYPES
+    ]
+    if attachment_only:
+        return [q for q in filtered if is_attachment_viewer_question(q)]
+    if requested_qtypes:
+        return [
+            q for q in filtered
+            if str(q.get("type", "")).strip() in requested_qtypes
+        ]
+    return filtered
+
+
 PAGE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -312,7 +351,7 @@ def main():
     parser.add_argument(
         "--attachment_only",
         action="store_true",
-        help="Keep only attachment-chain questions (shorthand for --qtypes attachment_chain)",
+        help="Keep only attachment-related questions: attachment_chain and attached object_move_* items",
     )
     parser.add_argument(
         "--max_width",
@@ -331,26 +370,20 @@ def main():
     with open(args.questions, encoding="utf-8") as f:
         data = json.load(f)
     questions = data["questions"] if isinstance(data, dict) and "questions" in data else data
-    questions = [
-        q for q in questions
-        if str(q.get("type", "")).strip() not in REMOVED_TYPES
-    ]
 
     if args.attachment_only and args.qtypes:
         parser.error("--attachment_only cannot be combined with --qtypes")
 
     requested_qtypes: set[str] = set()
-    if args.attachment_only:
-        requested_qtypes.add("attachment_chain")
-    elif args.qtypes:
+    if args.qtypes:
         requested_qtypes.update(
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )
-    if requested_qtypes:
-        questions = [
-            q for q in questions
-            if str(q.get("type", "")).strip() in requested_qtypes
-        ]
+    questions = filter_viewer_questions(
+        questions,
+        requested_qtypes=requested_qtypes,
+        attachment_only=args.attachment_only,
+    )
     questions = order_questions_for_viewer(questions, seed=args.shuffle_seed)
 
     image_root = Path(args.image_root)
