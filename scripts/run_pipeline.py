@@ -30,7 +30,7 @@ from src.scene_parser import (
     parse_scene,
 )
 from src.support_graph import (
-    enrich_scene_with_support,
+    enrich_scene_with_attachment,
     get_scene_attached_by,
     get_scene_attachment_graph,
     has_nontrivial_attachment,
@@ -329,7 +329,7 @@ def _build_scene_attachment_rows(scene: dict) -> list[dict[str, object]]:
                 "parent_label": str(obj_map.get(parent_int, {}).get("label", "object")),
                 "child_id": child_int,
                 "child_label": str(obj_map.get(child_int, {}).get("label", "object")),
-                "relation_type": "support",
+                "relation_type": "attachment",
                 "confidence": None,
             })
     rows.sort(key=lambda row: (row["parent_label"], row["child_label"], row["parent_id"], row["child_id"]))
@@ -534,8 +534,8 @@ def run_pipeline(
         if scene is None:
             continue
 
-        # ---- Stage 2: Support graph ----
-        enrich_scene_with_support(scene)
+        # ---- Stage 2: Attachment graph ----
+        enrich_scene_with_attachment(scene)
         attachment_graph = get_scene_attachment_graph(scene, scene_id=scene_id)
         attached_by = get_scene_attached_by(scene, scene_id=scene_id)
         scene_attachment_rows = _build_scene_attachment_rows(scene)
@@ -696,8 +696,8 @@ def run_pipeline(
 
             questions = generate_all_questions(
                 objects=scene["objects"],
-                support_graph=attachment_graph,
-                supported_by=attached_by,
+                attachment_graph=attachment_graph,
+                attached_by=attached_by,
                 camera_pose=camera_pose,
                 color_intrinsics=color_intrinsics,
                 depth_image=depth_image,

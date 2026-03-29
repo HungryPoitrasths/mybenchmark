@@ -28,6 +28,12 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.scene_parser import EXCLUDED_LABELS
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -80,30 +86,13 @@ def _get_object_labels(q: dict) -> list[str]:
         if v:
             labels.add(v)
 
-    # L3 support_chain (labels stored explicitly since #chain_ids)
+    # L3 attachment_chain (labels stored explicitly since #chain_ids)
     for key in ("grandparent_label", "parent_label", "grandchild_label", "neighbor_label"):
         v = q.get(key)
         if v:
             labels.add(v)
 
-    _EXCLUDED = {
-        "object", "unknown", "", "floor", "wall", "ceiling",
-        "otherfurniture", "otherprop", "otherstructure",
-        "room", "ground", "door", "window", "stairs",
-        "mirror", "glass", "monitor", "tv",
-        "doorframe", "windowsill", "hand rail", "shower",
-        "shower curtain rod", "bathroom stall", "bathroom stall door",
-        "ledge", "structure", "closet", "breakfast bar", "shower curtain",
-        "case", "tube", "board", "sign", "frame", "paper", "lotion",
-        "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
-        "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
-        "shelf", "bookshelf", "shelves", "rack", "storage shelf",
-        "power outlet", "light switch", "fire alarm", "controller",
-        "power strip", "soda can", "starbucks cup", "battery disposal jar",
-        "can", "water bottle", "paper cutter",
-        "pillar", "column",
-    }
-    labels -= _EXCLUDED
+    labels -= EXCLUDED_LABELS
     return list(labels)
 
 

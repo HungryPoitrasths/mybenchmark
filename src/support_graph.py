@@ -1,9 +1,4 @@
-"""Stage 2: attachment/support graph construction.
-
-This module keeps the historical ``support_graph`` API for compatibility, while
-internally introducing a more general attachment relation used for movement
-propagation.
-"""
+"""Stage 2: attachment graph construction."""
 
 from __future__ import annotations
 
@@ -702,34 +697,16 @@ def build_attachment_graph(
     return attachment_graph, attached_by, final_edges
 
 
-def build_support_graph(
-    objects: list[dict],
-    z_threshold: float | None = None,
-) -> tuple[dict[int, list[int]], dict[int, int]]:
-    """Build legacy support relationships as a subset of attachment edges."""
-    _attachment_graph, _attached_by, attachment_edges = build_attachment_graph(objects, z_threshold)
-    support_graph, supported_by = _derive_graph_from_edges(
-        attachment_edges,
-        allowed_types=SUPPORT_LIKE_TYPES,
-    )
-    logger.info(
-        "Support graph: %d support-like edges among %d objects",
-        len(supported_by),
-        len(objects),
-    )
-    return support_graph, supported_by
-
-
-def get_support_chain(
+def get_attachment_chain(
     obj_id: int,
-    support_graph: dict[int, list[int]] | dict[str, list[int]],
+    attachment_graph: dict[int, list[int]] | dict[str, list[int]],
 ) -> list[int]:
     """Return all transitive dependents of *obj_id* (depth-first)."""
     dependents: list[int] = []
     visited: set[int] = set()
 
     def _dfs(oid: int):
-        children = support_graph.get(oid) or support_graph.get(str(oid)) or []
+        children = attachment_graph.get(oid) or attachment_graph.get(str(oid)) or []
         for child in children:
             child_id = int(child)
             if child_id in visited:
@@ -742,19 +719,12 @@ def get_support_chain(
     return dependents
 
 
-def get_attachment_chain(
+def get_support_chain(
     obj_id: int,
     attachment_graph: dict[int, list[int]] | dict[str, list[int]],
 ) -> list[int]:
-    """Alias for movement-dependency traversal."""
-    return get_support_chain(obj_id, attachment_graph)
-
-
-def has_nontrivial_support(
-    support_graph: dict[int, list[int]] | dict[str, list[int]],
-) -> bool:
-    """Return True if the graph has at least one support/dependency edge."""
-    return len(support_graph) > 0
+    """Backward-compatible alias for movement-dependency traversal."""
+    return get_attachment_chain(obj_id, attachment_graph)
 
 
 def has_nontrivial_attachment(
@@ -820,24 +790,10 @@ def enrich_scene_with_attachment(
     scene: dict[str, Any],
     z_threshold: float | None = None,
 ) -> dict[str, Any]:
-    """Add attachment/support graph fields to a scene dict (in-place)."""
+    """Add attachment graph fields to a scene dict (in-place)."""
     objects = scene["objects"]
     attachment_graph, attached_by, attachment_edges = build_attachment_graph(objects, z_threshold)
-    support_graph, supported_by = _derive_graph_from_edges(
-        attachment_edges,
-        allowed_types=SUPPORT_LIKE_TYPES,
-    )
     scene["attachment_graph"] = {str(k): v for k, v in attachment_graph.items()}
     scene["attached_by"] = {str(k): v for k, v in attached_by.items()}
     scene["attachment_edges"] = attachment_edges
-    scene["support_graph"] = {str(k): v for k, v in support_graph.items()}
-    scene["supported_by"] = {str(k): v for k, v in supported_by.items()}
     return scene
-
-
-def enrich_scene_with_support(
-    scene: dict[str, Any],
-    z_threshold: float | None = None,
-) -> dict[str, Any]:
-    """Backward-compatible wrapper that now also writes attachment fields."""
-    return enrich_scene_with_attachment(scene, z_threshold)

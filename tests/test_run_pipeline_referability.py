@@ -96,7 +96,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 make_object(2, "table"),
             ],
             "attachment_edges": [
-                {"parent_id": 2, "child_id": 1, "type": "support"},
+                {"parent_id": 2, "child_id": 1, "type": "attachment"},
             ],
             "room_bounds": None,
             "wall_objects": [],
@@ -120,7 +120,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         with (
             patch.object(run_pipeline_module, "parse_scene", return_value=scene),
-            patch.object(run_pipeline_module, "enrich_scene_with_support", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
             patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
             patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
             patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),

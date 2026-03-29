@@ -433,14 +433,14 @@ def _angular_distance(pose_a: CameraPose, pose_b: CameraPose) -> float:
     return float(np.degrees(np.arccos(cos_angle)))
 
 
-def _count_support_objects(visible: list[dict], support_ids: set[int]) -> int:
-    return sum(1 for o in visible if o["id"] in support_ids)
+def _count_attachment_objects(visible: list[dict], attachment_ids: set[int]) -> int:
+    return sum(1 for o in visible if o["id"] in attachment_ids)
 
 
 def select_frames(
     scene_path: str | Path,
     objects: list[dict],
-    support_graph: dict[int, list[int]] | None = None,
+    attachment_graph: dict[int, list[int]] | None = None,
     max_frames: int = DEFAULT_MAX_FRAMES,
 ) -> list[dict[str, Any]]:
     """Select representative frames for a ScanNet scene.
@@ -475,12 +475,12 @@ def select_frames(
         logger.warning("No valid poses found for %s", scene_path.name)
         return []
 
-    # Collect support-participating object IDs
-    support_ids: set[int] = set()
-    if support_graph:
-        for parent_id, children in support_graph.items():
-            support_ids.add(int(parent_id))
-            support_ids.update(children)
+    # Collect attachment-participating object IDs.
+    attachment_ids: set[int] = set()
+    if attachment_graph:
+        for parent_id, children in attachment_graph.items():
+            attachment_ids.add(int(parent_id))
+            attachment_ids.update(children)
 
     # Score every frame — but stride to avoid processing thousands of frames.
     # ScanNet captures ~30 fps; stride=30 samples every ~1s which is still
@@ -507,8 +507,8 @@ def select_frames(
             n_quality_rejected += 1
             continue
 
-        n_support = _count_support_objects(visible, support_ids)
-        score = len(visible) * (1 + n_support)
+        n_attachment = _count_attachment_objects(visible, attachment_ids)
+        score = len(visible) * (1 + n_attachment)
         frame_entries.append(
             {
                 "image_name":        image_name,

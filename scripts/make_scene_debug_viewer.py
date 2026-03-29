@@ -19,13 +19,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.frame_selector import select_frames
 from src.scene_parser import (
-    ALWAYS_EXCLUDED,
-    QUESTION_ONLY_EXCLUDED,
+    EXCLUDED_LABELS,
     load_scannet_label_map,
     normalize_label,
     parse_scene,
 )
-from src.support_graph import enrich_scene_with_support, get_scene_attachment_graph
+from src.support_graph import enrich_scene_with_attachment, get_scene_attachment_graph
 
 
 def parse_args() -> argparse.Namespace:
@@ -200,7 +199,7 @@ def load_scene_with_fallback(scene_id: str, scene_dir: Path | None, scene_metada
             scene = parse_scene(scene_dir)
             if scene is None:
                 raise ValueError(f"parse_scene() returned no usable objects for {scene_dir}")
-            enrich_scene_with_support(scene)
+            enrich_scene_with_attachment(scene)
             return scene, "原始场景", str(scene_dir), notes
         except Exception as exc:
             if scene_metadata is None:
@@ -210,7 +209,7 @@ def load_scene_with_fallback(scene_id: str, scene_dir: Path | None, scene_metada
     scene = load_json(scene_metadata)
     if "attachment_graph" not in scene and "support_graph" not in scene:
         try:
-            enrich_scene_with_support(scene)
+            enrich_scene_with_attachment(scene)
             notes.append("元数据里缺少附着图，已在内存中重建")
         except Exception as exc:
             notes.append(f"仅凭元数据无法重建附着图: {exc}")
@@ -335,10 +334,8 @@ def build_annotation_audit(scene: dict[str, Any], scene_dir: Path | None, scene_
         vertex_count = int(np.isin(seg_indices, segments).sum()) if seg_indices is not None and segments else None
         if object_id in scene_ids:
             status = "保留"
-        elif normalized in ALWAYS_EXCLUDED:
+        elif normalized in EXCLUDED_LABELS:
             status = "始终排除"
-        elif normalized in QUESTION_ONLY_EXCLUDED:
-            status = "仅题目上下文"
         else:
             status = "已过滤或缺失"
         audit.append({"object_id": object_id, "raw_label": raw_label, "normalized_label": normalized, "status": status, "segment_count": len(segments), "vertex_count": vertex_count})
@@ -366,7 +363,7 @@ def build_scene_attachment_rows(scene: dict[str, Any]) -> list[dict[str, Any]]:
         return rows
     for parent_id, child_ids in graph.items():
         for child_id in child_ids:
-            rows.append({"parent_id": int(parent_id), "parent_label": str(obj_map.get(int(parent_id), {}).get("label", "object")), "child_id": int(child_id), "child_label": str(obj_map.get(int(child_id), {}).get("label", "object")), "relation_type": "support", "confidence": None})
+            rows.append({"parent_id": int(parent_id), "parent_label": str(obj_map.get(int(parent_id), {}).get("label", "object")), "child_id": int(child_id), "child_label": str(obj_map.get(int(child_id), {}).get("label", "object")), "relation_type": "attachment", "confidence": None})
     rows.sort(key=lambda row: (row["parent_label"], row["child_label"], row["parent_id"], row["child_id"]))
     return rows
 

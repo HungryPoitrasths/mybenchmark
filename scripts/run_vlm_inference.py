@@ -339,7 +339,7 @@ def main() -> None:
                         choices=["L1", "L2", "L3"],
                         help="Restrict to one level (optional)")
     parser.add_argument("--qtype",  default=None,
-                        help="Restrict to one question type, e.g. support_chain (optional)")
+                        help="Restrict to one question type, e.g. attachment_chain (optional)")
     args = parser.parse_args()
 
     # ── Load benchmark ────────────────────────────────────────────────────────

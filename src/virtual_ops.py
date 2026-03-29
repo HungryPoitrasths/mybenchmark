@@ -24,13 +24,13 @@ from .utils.coordinate_transform import (
     rotation_matrix_z,
 )
 from .relation_engine import compute_all_relations, find_changed_relations
-from .support_graph import get_support_chain
+from .support_graph import get_attachment_chain
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# L2.1  Object movement (with support-chain propagation)
+# L2.1  Object movement (with attachment-chain propagation)
 # ---------------------------------------------------------------------------
 
 MOVEMENT_CANDIDATES = [
@@ -70,10 +70,10 @@ ROOM_BBOX_TOL = 1e-6
 
 def get_moved_object_ids(
     target_obj_id: int,
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
 ) -> set[int]:
     """Return all object IDs that move together with the target."""
-    dependents = get_support_chain(target_obj_id, support_graph)
+    dependents = get_attachment_chain(target_obj_id, attachment_graph)
     return set(dependents) | {target_obj_id}
 
 
@@ -105,7 +105,7 @@ def _rotate_aabb(
 
 def apply_movement(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     target_obj_id: int,
     delta_position: np.ndarray,
 ) -> list[dict]:
@@ -117,7 +117,7 @@ def apply_movement(
     updated = copy.deepcopy(objects)
 
     # Collect all IDs that must move together
-    to_move = get_moved_object_ids(target_obj_id, support_graph)
+    to_move = get_moved_object_ids(target_obj_id, attachment_graph)
 
     for obj in updated:
         if obj["id"] in to_move:
@@ -193,7 +193,7 @@ def has_terminal_bbox_collision(
 
 def find_meaningful_movement(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     target_id: int,
     camera_pose: CameraPose,
     room_bounds: dict | None = None,
@@ -206,10 +206,10 @@ def find_meaningful_movement(
     # No depth/occlusion needed — we only need direction/distance changes.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
-    moved_ids = get_moved_object_ids(target_id, support_graph)
+    moved_ids = get_moved_object_ids(target_id, attachment_graph)
 
     for delta in MOVEMENT_CANDIDATES:
-        new_objects = apply_movement(objects, support_graph, target_id, delta)
+        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
         if has_terminal_bbox_collision(
@@ -229,19 +229,19 @@ def find_meaningful_movement(
 
 def apply_orbit_rotation(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     target_id: int,
     pivot_id: int,
     angle_deg: float,
 ) -> list[dict]:
-    """Orbit a moved support chain around a static pivot in the horizontal plane.
+    """Orbit a moved attachment chain around a static pivot in the horizontal plane.
 
     This rotates the target chain's position around *pivot_id* as seen from
     above. It does not rotate any object's intrinsic orientation.
     """
-    moved_ids = get_moved_object_ids(target_id, support_graph)
+    moved_ids = get_moved_object_ids(target_id, attachment_graph)
     if pivot_id in moved_ids:
-        raise ValueError("Pivot object must stay outside the moved support chain")
+        raise ValueError("Pivot object must stay outside the moved attachment chain")
 
     obj_map = {obj["id"]: obj for obj in objects}
     target = obj_map.get(target_id)
@@ -264,7 +264,7 @@ def apply_orbit_rotation(
 
 def find_meaningful_orbit_rotation(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     target_id: int,
     pivot_id: int,
     room_bounds: dict | None = None,
@@ -272,7 +272,7 @@ def find_meaningful_orbit_rotation(
 ) -> list[dict[str, Any]]:
     """Enumerate physically valid orbit rotations around a static pivot."""
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
-    moved_ids = get_moved_object_ids(target_id, support_graph)
+    moved_ids = get_moved_object_ids(target_id, attachment_graph)
     if pivot_id in moved_ids:
         return []
 
@@ -280,7 +280,7 @@ def find_meaningful_orbit_rotation(
     for angle, rotation_direction, signed_angle in ORBIT_ROTATION_CANDIDATES:
         rotated_objects = apply_orbit_rotation(
             objects,
-            support_graph,
+            attachment_graph,
             target_id,
             pivot_id,
             signed_angle,
@@ -355,7 +355,7 @@ def apply_viewpoint_change(
 
 def apply_removal(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     target_id: int,
     cascade: bool = False,
 ) -> list[dict]:
@@ -368,7 +368,7 @@ def apply_removal(
     """
     to_remove = {target_id}
     if cascade:
-        to_remove.update(get_support_chain(target_id, support_graph))
+        to_remove.update(get_attachment_chain(target_id, attachment_graph))
 
     return [copy.deepcopy(o) for o in objects if o["id"] not in to_remove]
 
@@ -379,7 +379,7 @@ def apply_removal(
 
 def apply_counterfactual_placement(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     target_id: int,
     new_position: np.ndarray,
 ) -> list[dict]:
@@ -390,7 +390,7 @@ def apply_counterfactual_placement(
     obj_map = {o["id"]: o for o in objects}
     old_center = np.array(obj_map[target_id]["center"])
     delta = new_position - old_center
-    return apply_movement(objects, support_graph, target_id, delta)
+    return apply_movement(objects, attachment_graph, target_id, delta)
 
 
 # ---------------------------------------------------------------------------

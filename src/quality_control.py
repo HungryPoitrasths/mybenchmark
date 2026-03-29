@@ -25,7 +25,7 @@ ATTACHMENT_NEAR_DUP_TYPES = {
     "object_move_object_centric",
     "object_move_allocentric",
     "object_remove",
-    "support_chain",
+    "attachment_chain",
     "attachment_type",
     "support_move_consequence",
 }

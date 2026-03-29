@@ -296,7 +296,7 @@ def main():
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
     from src.scene_parser import load_scannet_label_map, parse_scene
     from src.support_graph import (
-        enrich_scene_with_support,
+        enrich_scene_with_attachment,
         get_scene_attachment_graph,
         has_nontrivial_attachment,
     )
@@ -368,7 +368,7 @@ def main():
         if scene is None:
             continue
 
-        enrich_scene_with_support(scene)
+        enrich_scene_with_attachment(scene)
         attachment_graph = get_scene_attachment_graph(scene, scene_id=scene_id)
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)

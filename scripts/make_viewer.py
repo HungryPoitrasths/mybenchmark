@@ -46,7 +46,7 @@ SUMMARY_GROUPS = [
             ("object_move_agent", "L2_object_move_agent"),
             ("object_move_distance", "L2_object_move_distance"),
             ("object_move_occlusion", "L2_object_move_occlusion"),
-            ("object_move_object_centric", "L2_object_move_object_centric"),
+            ("object_move_object_centric", "L2_object_rotate_object_centric"),
             ("object_move_allocentric", "L2_object_move_allocentric"),
             ("viewpoint_move", "L2_viewpoint_move"),
             ("object_remove", "L2_object_remove"),
@@ -55,7 +55,7 @@ SUMMARY_GROUPS = [
     (
         "L3 多跳 / 反事实",
         [
-            ("support_chain", "L3_support_chain"),
+            ("attachment_chain", "L3_attachment_chain"),
             ("coordinate_rotation_agent", "L3_coordinate_rotation_agent"),
             (
                 "coordinate_rotation_object_centric",
@@ -88,7 +88,7 @@ VIEWER_QTYPE_ORDER = [
     "object_move_allocentric",
     "viewpoint_move",
     "object_remove",
-    "support_chain",
+    "attachment_chain",
     "coordinate_rotation_agent",
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
@@ -151,7 +151,7 @@ def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
         if qtype not in OBJECT_MOVE_TYPES:
             continue
         total_counter[qtype] += 1
-        if bool(q.get("support_remapped", False)):
+        if bool(q.get("attachment_remapped", False)):
             attached_counter[qtype] += 1
 
     parts: list[str] = []

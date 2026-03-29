@@ -47,7 +47,7 @@ from .utils.depth_occlusion import (
     compute_mesh_depth_occlusion,
     compute_mesh_depth_occlusion_metrics,
 )
-from .scene_parser import ALWAYS_EXCLUDED, QUESTION_ONLY_EXCLUDED, InstanceMeshData
+from .scene_parser import EXCLUDED_LABELS, InstanceMeshData
 
 logger = logging.getLogger(__name__)
 
@@ -378,38 +378,6 @@ def _build_visible_wall_anchor(
     best.pop("major_axis", None)
     return best
 
-# Labels to exclude from ALL question types (not just L2).
-# Structural elements, generic labels, and uninformative categories.
-# Must stay in sync with scene_parser.EXCLUDED_LABELS.
-EXCLUDED_LABELS = {
-    # Structural / architectural
-    "floor", "wall", "ceiling", "room", "ground",
-    "door", "window", "stairs", "pillar", "column",
-    "doorframe", "windowsill", "hand rail", "shower",
-    "shower curtain rod", "bathroom stall", "bathroom stall door",
-    "ledge", "structure", "closet", "breakfast bar", "shower curtain",
-    # Generic / uninformative
-    "object", "otherfurniture", "otherprop", "otherstructure",
-    "unknown", "misc", "stuff",
-    # Reflective / transparent — depth sensor unreliable
-    "mirror", "glass", "monitor", "tv",
-    # Ambiguous / vague
-    "case", "tube", "board", "sign", "frame", "paper", "lotion",
-    "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
-    # Boundary-unclear / large amorphous / unreliable 3D annotation
-    "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
-    "cabinet",
-    "shelf", "bookshelf", "shelves", "rack", "storage shelf",
-    "refrigerator", "refridgerator",
-    # Too small to reliably identify in images
-    "power outlet", "light switch", "fire alarm", "controller",
-    "power strip", "soda can", "starbucks cup", "battery disposal jar",
-    "can", "water bottle", "paper cutter",
-}
-
-# Keep a single authoritative blacklist definition in scene_parser.
-EXCLUDED_LABELS = ALWAYS_EXCLUDED | QUESTION_ONLY_EXCLUDED
-
 _TEMPLATE_KEY_ALIASES: dict[str, tuple[str, ...]] = {
     "L2_object_move_object_centric": ("L2_object_rotate_object_centric",),
 }
@@ -515,7 +483,7 @@ def _default_templates() -> dict:
 
         # ==== L3 — Counterfactual / multi-hop ====
 
-        "L3_support_chain": [
+        "L3_attachment_chain": [
             "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",
             "If {obj_a} were relocated elsewhere in the room, which of the following objects would also change position?",
             "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?",
@@ -1557,17 +1525,22 @@ def _cap_question_groups(
 
 def generate_l2_object_move(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
-    supported_by: dict[int, int],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    movement_objects: list[dict] | None = None,
+    object_map: dict[int, dict] | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions_by_object: dict[int, list[dict]] = {}
-    obj_map = {o["id"]: o for o in objects}
+    movement_scene_objects = movement_objects if movement_objects is not None else objects
+    obj_map = object_map if object_map is not None else {
+        int(o["id"]): o for o in movement_scene_objects
+    }
 
     for obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
@@ -1575,14 +1548,14 @@ def generate_l2_object_move(
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        move_source_id = _resolve_support_root_id(obj["id"], supported_by)
+        move_source_id = _resolve_attachment_root_id(obj["id"], attached_by)
         move_source = obj_map.get(move_source_id)
         if move_source is None:
             continue
-        support_remapped = move_source_id != obj["id"]
+        attachment_remapped = move_source_id != obj["id"]
 
         delta, changed = find_meaningful_movement(
-            objects, support_graph, move_source_id, camera_pose,
+            movement_scene_objects, attachment_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
         )
@@ -1681,7 +1654,7 @@ def generate_l2_object_move(
                     "moved_obj_label": move_source["label"],
                     "query_obj_id": obj["id"],
                     "query_obj_label": obj["label"],
-                    "support_remapped": support_remapped,
+                    "attachment_remapped": attachment_remapped,
                     "obj_b_id": relation_obj_b_id,
                     "obj_b_label": obj_b_label,
                     "obj_c_id": relation_obj_c_id,
@@ -1694,7 +1667,7 @@ def generate_l2_object_move(
                     ],
                     "delta": delta.tolist(),
                     "relation_unchanged": False,
-                    "has_support_chain": len(get_support_chain_ids(move_source_id, support_graph)) > 0,
+                    "has_attachment_chain": len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0,
                 })
 
         if obj_questions:
@@ -1796,7 +1769,7 @@ def generate_l2_viewpoint_move(
 
 def generate_l2_object_remove(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
+    attachment_graph: dict[int, list[int]],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
     depth_image,
@@ -1827,7 +1800,7 @@ def generate_l2_object_remove(
 
     original_ids = {int(obj["id"]) for obj in objects}
     for obj in objects:
-        remaining = apply_removal(objects, support_graph, obj["id"], cascade=False)
+        remaining = apply_removal(objects, attachment_graph, obj["id"], cascade=False)
         if len(remaining) < 2:
             continue
         remaining_ids = {int(other["id"]) for other in remaining}
@@ -1886,16 +1859,22 @@ def generate_l2_object_remove(
 
 def generate_l2_object_move_object_centric(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
-    supported_by: dict[int, int],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    movement_objects: list[dict] | None = None,
+    object_map: dict[int, dict] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
+    movement_scene_objects = movement_objects if movement_objects is not None else objects
+    obj_map = object_map if object_map is not None else {
+        int(o["id"]): o for o in movement_scene_objects
+    }
     tpl_list = templates.get(
         "L2_object_move_object_centric",
         _default_templates()["L2_object_move_object_centric"],
@@ -1906,14 +1885,14 @@ def generate_l2_object_move_object_centric(
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        move_source_id = _resolve_support_root_id(obj["id"], supported_by)
-        move_source = next((o for o in objects if o["id"] == move_source_id), None)
+        move_source_id = _resolve_attachment_root_id(obj["id"], attached_by)
+        move_source = obj_map.get(move_source_id)
         if move_source is None:
             continue
-        moved_ids = set(get_support_chain_ids(move_source_id, support_graph)) | {move_source_id}
+        moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         if obj["id"] not in moved_ids:
             continue
-        support_remapped = move_source_id != obj["id"]
+        attachment_remapped = move_source_id != obj["id"]
         query_center = np.array(obj["center"], dtype=float)
 
         obj_questions: list[dict] = []
@@ -1925,8 +1904,8 @@ def generate_l2_object_move_object_centric(
                 continue
 
             valid_rotations = find_meaningful_orbit_rotation(
-                objects,
-                support_graph,
+                movement_scene_objects,
+                attachment_graph,
                 move_source_id,
                 face["id"],
                 room_bounds=room_bounds,
@@ -1995,7 +1974,7 @@ def generate_l2_object_move_object_centric(
                         "moved_obj_label": move_source["label"],
                         "query_obj_id": obj["id"],
                         "query_obj_label": obj["label"],
-                        "support_remapped": support_remapped,
+                        "attachment_remapped": attachment_remapped,
                         "obj_ref_id": ref["id"],
                         "obj_ref_label": ref["label"],
                         "obj_face_id": face["id"],
@@ -2023,16 +2002,22 @@ def generate_l2_object_move_object_centric(
 
 def generate_l2_object_move_allocentric(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
-    supported_by: dict[int, int],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
     max_per_object: int = 3,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    movement_objects: list[dict] | None = None,
+    object_map: dict[int, dict] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions_by_object: dict[int, list[dict]] = {}
+    movement_scene_objects = movement_objects if movement_objects is not None else objects
+    obj_map = object_map if object_map is not None else {
+        int(o["id"]): o for o in movement_scene_objects
+    }
     cam_cardinal = camera_cardinal_direction(camera_pose)
     tpl_list = templates.get(
         "L2_object_move_allocentric",
@@ -2043,17 +2028,17 @@ def generate_l2_object_move_allocentric(
         if obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        move_source_id = _resolve_support_root_id(obj["id"], supported_by)
-        move_source = next((o for o in objects if o["id"] == move_source_id), None)
+        move_source_id = _resolve_attachment_root_id(obj["id"], attached_by)
+        move_source = obj_map.get(move_source_id)
         if move_source is None:
             continue
-        moved_ids = set(get_support_chain_ids(move_source_id, support_graph)) | {move_source_id}
+        moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         if obj["id"] not in moved_ids:
             continue
-        support_remapped = move_source_id != obj["id"]
+        attachment_remapped = move_source_id != obj["id"]
 
         delta, _changed = find_meaningful_movement(
-            objects, support_graph, move_source_id, camera_pose,
+            movement_scene_objects, attachment_graph, move_source_id, camera_pose,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
         )
@@ -2105,7 +2090,7 @@ def generate_l2_object_move_allocentric(
                 "moved_obj_label": move_source["label"],
                 "query_obj_id": obj["id"],
                 "query_obj_label": obj["label"],
-                "support_remapped": support_remapped,
+                "attachment_remapped": attachment_remapped,
                 "obj_ref_id": ref["id"],
                 "obj_ref_label": ref["label"],
                 "mentioned_objects": [
@@ -2125,17 +2110,17 @@ def generate_l2_object_move_allocentric(
 
 
 # ---------------------------------------------------------------------------
-#  Attachment / support relation generators
+#  Attachment relation generators
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 #  L3 generators
 # ---------------------------------------------------------------------------
 
-def generate_l3_support_chain(
+def generate_l3_attachment_chain(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
-    supported_by: dict[int, int],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
 ) -> list[dict]:
@@ -2156,9 +2141,9 @@ def generate_l3_support_chain(
     """
     questions: list[dict] = []
     obj_map = {o["id"]: o for o in objects}
-    tpl_list = templates.get("L3_support_chain", _default_templates()["L3_support_chain"])
+    tpl_list = templates.get("L3_attachment_chain", _default_templates()["L3_attachment_chain"])
 
-    for grandparent_id, parent_ids in support_graph.items():
+    for grandparent_id, parent_ids in attachment_graph.items():
         grandparent_id = int(grandparent_id)
         grandparent = obj_map.get(grandparent_id)
         if grandparent is None:
@@ -2166,8 +2151,8 @@ def generate_l3_support_chain(
 
         for parent_id in parent_ids:
             parent_id = int(parent_id)
-            # Second hop: does parent itself support anything?
-            grandchild_ids = support_graph.get(parent_id) or []
+            # Second hop: does the intermediate object itself attach to anything?
+            grandchild_ids = attachment_graph.get(parent_id) or []
             if not grandchild_ids:
                 continue  # no depth-2 chain here
 
@@ -2177,7 +2162,7 @@ def generate_l3_support_chain(
 
             # All objects in this grandparent's chain (not eligible as neighbour D)
             this_chain: set[int] = (
-                set(get_support_chain_ids(grandparent_id, support_graph))
+                set(get_attachment_chain_ids(grandparent_id, attachment_graph))
                 | {grandparent_id}
             )
             non_chain = [o for o in objects if o["id"] not in this_chain]
@@ -2215,7 +2200,7 @@ def generate_l3_support_chain(
 
                 questions.append({
                     "level": "L3",
-                    "type": "support_chain",
+                    "type": "attachment_chain",
                     "question": question_text,
                     "options": options,
                     "answer": answer_letter,
@@ -2524,20 +2509,20 @@ def generate_l3_coordinate_rotation_allocentric(
 #  Helpers
 # ---------------------------------------------------------------------------
 
-def get_support_chain_ids(obj_id: int, support_graph: dict) -> list[int]:
+def get_attachment_chain_ids(obj_id: int, attachment_graph: dict) -> list[int]:
     """Get all dependent IDs (wrapper for import convenience)."""
-    from .support_graph import get_support_chain
-    return get_support_chain(obj_id, support_graph)
+    from .support_graph import get_attachment_chain
+    return get_attachment_chain(obj_id, attachment_graph)
 
 
-def _resolve_support_root_id(obj_id: int, supported_by: dict[int, int]) -> int:
-    """Return the lowest supporting ancestor of *obj_id*, or itself if unsupported."""
+def _resolve_attachment_root_id(obj_id: int, attached_by: dict[int, int]) -> int:
+    """Return the lowest attachment ancestor of *obj_id*, or itself if unattached."""
     current = int(obj_id)
     seen: set[int] = set()
 
     while current not in seen:
         seen.add(current)
-        parent = supported_by.get(current)
+        parent = attached_by.get(current)
         if parent is None:
             break
         try:
@@ -2729,8 +2714,8 @@ def _delta_to_cardinal_description(delta: np.ndarray) -> str:
 
 def generate_all_questions(
     objects: list[dict],
-    support_graph: dict[int, list[int]],
-    supported_by: dict[int, int],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None = None,
     depth_image=None,
@@ -2782,13 +2767,12 @@ def generate_all_questions(
     if visible_object_ids is not None:
         vis_set = _normalize_object_id_set(visible_object_ids, "visible_object_ids")
         objects = [o for o in objects if o["id"] in vis_set]
-        # Rebuild support graph restricted to visible objects
-        support_graph = {
+        attachment_graph = {
             k: [c for c in v if c in vis_set]
-            for k, v in support_graph.items()
+            for k, v in attachment_graph.items()
             if k in vis_set
         }
-        supported_by = {k: v for k, v in supported_by.items() if k in vis_set and v in vis_set}
+        attached_by = {k: v for k, v in attached_by.items() if k in vis_set and v in vis_set}
         attachment_edges = [
             e for e in attachment_edges
             if int(e["parent_id"]) in vis_set and int(e["child_id"]) in vis_set
@@ -2796,16 +2780,13 @@ def generate_all_questions(
 
     attachment_edge_count_visible = len(attachment_edges)
 
-    # Keep question-only excluded labels in the graph so they can still serve
-    # as attachment parents. Ordinary question subjects exclude them.
+    # Apply the shared hard blacklist once for both graph construction and
+    # question generation.
     all_objects_for_graph = [
         o for o in objects
-        if o.get("label", "").lower() not in ALWAYS_EXCLUDED
+        if o.get("label", "").lower() not in EXCLUDED_LABELS
     ]
-    objects_for_questions = [
-        o for o in all_objects_for_graph
-        if o.get("label", "").lower() not in QUESTION_ONLY_EXCLUDED
-    ]
+    objects_for_questions = list(all_objects_for_graph)
     # L1 occlusion can rely on per-label VLM counts, so keep a pre-referable
     # pool of question-eligible visible objects for that path only.
     l1_occlusion_objects = list(objects_for_questions)
@@ -2823,17 +2804,13 @@ def generate_all_questions(
             referable_object_ids,
             "referable_object_ids",
         )
-        question_only_ids = {
-            int(o["id"]) for o in all_objects_for_graph
-            if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED
-        }
         attachment_parent_ids = {
             int(e["parent_id"])
             for e in attachment_edges
             if int(e["child_id"]) in referable_set
         }
         attachment_context_ids = attachment_parent_ids
-        graph_allowed_ids = referable_set | question_only_ids | attachment_context_ids
+        graph_allowed_ids = referable_set | attachment_context_ids
         all_objects_for_graph = [
             o for o in all_objects_for_graph
             if int(o["id"]) in graph_allowed_ids
@@ -2842,13 +2819,13 @@ def generate_all_questions(
             o for o in objects_for_questions
             if int(o["id"]) in referable_set
         ]
-        support_graph = {
+        attachment_graph = {
             k: [c for c in v if c in graph_allowed_ids]
-            for k, v in support_graph.items()
+            for k, v in attachment_graph.items()
             if k in graph_allowed_ids
         }
-        supported_by = {
-            k: v for k, v in supported_by.items()
+        attached_by = {
+            k: v for k, v in attached_by.items()
             if k in graph_allowed_ids and v in graph_allowed_ids
         }
         attachment_edges = [
@@ -2868,25 +2845,25 @@ def generate_all_questions(
         }
         objects_uniq = [o for o in objects_for_questions if int(o["id"]) in unique_label_ids]
 
-    question_only_ids = {
-        int(o["id"]) for o in all_objects_for_graph
-        if o.get("label", "").lower() in QUESTION_ONLY_EXCLUDED
-    }
-    graph_eligible_ids = unique_label_ids | question_only_ids | attachment_context_ids
-    support_graph = {
+    graph_eligible_ids = unique_label_ids | attachment_context_ids
+    attachment_graph = {
         k: [c for c in v if c in graph_eligible_ids]
-        for k, v in support_graph.items()
+        for k, v in attachment_graph.items()
         if k in graph_eligible_ids
     }
-    supported_by = {
-        k: v for k, v in supported_by.items()
+    attached_by = {
+        k: v for k, v in attached_by.items()
         if k in graph_eligible_ids and v in graph_eligible_ids
     }
     attachment_edges = [
         e for e in attachment_edges
         if int(e["parent_id"]) in graph_eligible_ids and int(e["child_id"]) in graph_eligible_ids
     ]
-    all_objects_map = {int(o["id"]): o for o in all_objects_for_graph}
+    movement_objects = [
+        o for o in all_objects_for_graph
+        if int(o["id"]) in graph_eligible_ids
+    ]
+    movement_object_map = {int(o["id"]): o for o in movement_objects}
 
     logger.info(
         "Attachment filter stats: edges input=%d visible=%d nonexcluded=%d final=%d, graph_objects=%d, question_objects=%d, unique_question_objects=%d",
@@ -2960,20 +2937,31 @@ def generate_all_questions(
     all_questions.extend(l1_occ_qs)
     all_questions.extend(l1_dir_oc_qs)
     all_questions.extend(l1_dir_allo_qs)
-    # Rebuild movement graph restricted to question-eligible children plus
-    # question-only parents that may still anchor attachment questions.
-    support_graph_uniq = {
+    # Rebuild the movement graph for question-eligible objects plus any
+    # attachment-context ancestors kept to preserve attachment roots.
+    attachment_graph_uniq = {
         k: [c for c in v if c in graph_eligible_ids]
-        for k, v in support_graph.items()
+        for k, v in attachment_graph.items()
         if k in graph_eligible_ids
     }
-    supported_by_uniq = {k: v for k, v in supported_by.items()
-                         if k in graph_eligible_ids and v in graph_eligible_ids}
+    attached_by_uniq = {
+        k: v for k, v in attached_by.items()
+        if k in graph_eligible_ids and v in graph_eligible_ids
+    }
 
     # L2 — ego-centric (existing)
     all_questions.extend(
-        generate_l2_object_move(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
-                                room_bounds=room_bounds, collision_objects=l2_collision_objects)
+        generate_l2_object_move(
+            objects_uniq,
+            attachment_graph_uniq,
+            attached_by_uniq,
+            camera_pose,
+            templates,
+            room_bounds=room_bounds,
+            collision_objects=l2_collision_objects,
+            movement_objects=movement_objects,
+            object_map=movement_object_map,
+        )
     )
     all_questions.extend(
         generate_l2_viewpoint_move(
@@ -2991,7 +2979,7 @@ def generate_all_questions(
     all_questions.extend(
         generate_l2_object_remove(
             objects_uniq,
-            support_graph_uniq,
+            attachment_graph_uniq,
             camera_pose,
             color_intrinsics,
             depth_image,
@@ -3005,21 +2993,25 @@ def generate_all_questions(
     # L2 — new reference frames
     all_questions.extend(
         generate_l2_object_move_object_centric(
-            objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
+            objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
             collision_objects=l2_collision_objects,
+            movement_objects=movement_objects,
+            object_map=movement_object_map,
         )
     )
     all_questions.extend(
         generate_l2_object_move_allocentric(
-            objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates,
+            objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
             collision_objects=l2_collision_objects,
+            movement_objects=movement_objects,
+            object_map=movement_object_map,
         )
     )
     # L3
     all_questions.extend(
-        generate_l3_support_chain(objects_uniq, support_graph_uniq, supported_by_uniq, camera_pose, templates)
+        generate_l3_attachment_chain(objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates)
     )
     # L3 coordinate rotation — all three reference frames
     all_questions.extend(

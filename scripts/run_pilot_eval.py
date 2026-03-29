@@ -215,7 +215,7 @@ def evaluate(questions: list[dict], predictions: list[dict], model_name: str):
 
     type_order = ["direction", "distance", "occlusion",
                   "object_move", "viewpoint_move", "object_remove",
-                  "support_chain", "coordinate_rotation"]
+                  "attachment_chain", "coordinate_rotation"]
     for t in type_order:
         if t not in type_groups:
             continue

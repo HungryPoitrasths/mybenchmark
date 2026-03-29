@@ -110,7 +110,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
 
         delta, changed = find_meaningful_movement(
             objects,
-            support_graph={},
+            attachment_graph={},
             target_id=1,
             camera_pose=make_camera_pose(),
             room_bounds=room_bounds,
@@ -132,13 +132,13 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
 
         delta_without_collision, _ = find_meaningful_movement(
             objects,
-            support_graph={},
+            attachment_graph={},
             target_id=1,
             camera_pose=make_camera_pose(),
         )
         delta_with_collision, _ = find_meaningful_movement(
             objects,
-            support_graph={},
+            attachment_graph={},
             target_id=1,
             camera_pose=make_camera_pose(),
             collision_objects=collision_objects,
@@ -162,14 +162,14 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
 
         rotations_without_collision = find_meaningful_orbit_rotation(
             objects,
-            support_graph={},
+            attachment_graph={},
             target_id=1,
             pivot_id=2,
             room_bounds=room_bounds,
         )
         rotations_with_collision = find_meaningful_orbit_rotation(
             objects,
-            support_graph={},
+            attachment_graph={},
             target_id=1,
             pivot_id=2,
             room_bounds=room_bounds,
