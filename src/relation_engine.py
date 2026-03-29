@@ -38,6 +38,8 @@ ALL_ALLOCENTRIC_10 = CARDINAL_DIRECTIONS_8 + VERTICAL_DIRECTIONS
 
 _GEOM_EPS = 1e-8
 _VERTICAL_CLEARANCE_TOL = 0.02  # metres
+_SPINE_ELONGATION_RATIO_MIN = 1.8
+_SPINE_ELONGATION_DELTA_MIN = 0.35  # metres
 
 
 def _rectangle_from_bbox_xy(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
@@ -179,6 +181,81 @@ def _polygon_centroid_xy(hull_xy: np.ndarray, fallback_xy: np.ndarray) -> np.nda
     return np.asarray(fallback_xy, dtype=float).copy()
 
 
+def _compute_min_area_obb_2d(hull_xy: np.ndarray | list[list[float]]) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float] | None:
+    poly = np.asarray(hull_xy, dtype=float)
+    if poly.ndim != 2 or poly.shape[1] != 2 or len(poly) < 3:
+        return None
+
+    best: tuple[np.ndarray, np.ndarray, np.ndarray, float, float] | None = None
+    best_area = float("inf")
+
+    for i in range(len(poly)):
+        edge = poly[(i + 1) % len(poly)] - poly[i]
+        edge_len = float(np.linalg.norm(edge))
+        if edge_len < _GEOM_EPS:
+            continue
+        axis0 = edge / edge_len
+        axis1 = np.array([-axis0[1], axis0[0]], dtype=float)
+
+        proj0 = poly @ axis0
+        proj1 = poly @ axis1
+        min0, max0 = float(np.min(proj0)), float(np.max(proj0))
+        min1, max1 = float(np.min(proj1)), float(np.max(proj1))
+        len0 = max0 - min0
+        len1 = max1 - min1
+        area = len0 * len1
+        if area >= best_area:
+            continue
+
+        center = axis0 * (0.5 * (min0 + max0)) + axis1 * (0.5 * (min1 + max1))
+        if len0 >= len1:
+            major_dir = axis0
+            minor_dir = axis1
+            length = len0
+            width = len1
+        else:
+            major_dir = axis1
+            minor_dir = axis0
+            length = len1
+            width = len0
+
+        best_area = area
+        best = (
+            np.asarray(center, dtype=float),
+            np.asarray(major_dir, dtype=float),
+            np.asarray(minor_dir, dtype=float),
+            float(length),
+            float(width),
+        )
+
+    return best
+
+
+def _spine_endpoints(center_xy: np.ndarray, major_dir: np.ndarray, length: float, width: float) -> tuple[np.ndarray, np.ndarray]:
+    half_len = max(0.5 * (length - width), 0.0)
+    return (
+        np.asarray(center_xy, dtype=float) + half_len * np.asarray(major_dir, dtype=float),
+        np.asarray(center_xy, dtype=float) - half_len * np.asarray(major_dir, dtype=float),
+    )
+
+
+def _project_point_to_segment(query_xy: np.ndarray, seg_start: np.ndarray, seg_end: np.ndarray) -> np.ndarray:
+    return _nearest_point_on_segment(
+        np.asarray(seg_start, dtype=float),
+        np.asarray(seg_end, dtype=float),
+        np.asarray(query_xy, dtype=float),
+    )
+
+
+def _should_use_spine_override(length: float, width: float) -> bool:
+    safe_width = max(float(width), _GEOM_EPS)
+    return (
+        float(length) > float(width)
+        and (float(length) / safe_width) >= _SPINE_ELONGATION_RATIO_MIN
+        and (float(length) - float(width)) >= _SPINE_ELONGATION_DELTA_MIN
+    )
+
+
 def footprint_nearest_pair(
     hull_a: np.ndarray | list[list[float]],
     hull_b: np.ndarray | list[list[float]],
@@ -284,12 +361,60 @@ def _vertical_interval_direction(
     return None, 0.0
 
 
+def _horizontal_reference_points_with_spine_override(
+    anchor_center_xy: np.ndarray,
+    target_center_xy: np.ndarray,
+    anchor_hull_xy: np.ndarray | list[list[float]],
+    target_hull_xy: np.ndarray | list[list[float]],
+) -> tuple[np.ndarray, np.ndarray]:
+    anchor_hull = np.asarray(anchor_hull_xy, dtype=float)
+    target_hull = np.asarray(target_hull_xy, dtype=float)
+    anchor_center_xy = np.asarray(anchor_center_xy, dtype=float)
+    target_center_xy = np.asarray(target_center_xy, dtype=float)
+    target_hull_valid = (
+        target_hull.ndim == 2
+        and target_hull.shape[1] == 2
+        and len(target_hull) >= 3
+    )
+
+    anchor_ref_xy, target_ref_xy = footprint_nearest_pair(
+        anchor_hull,
+        target_hull,
+        anchor_center_xy,
+        target_center_xy,
+    )
+
+    if (
+        anchor_hull.ndim != 2
+        or anchor_hull.shape[1] != 2
+        or len(anchor_hull) < 3
+        or (target_hull_valid and _polygons_overlap_xy(anchor_hull, target_hull))
+    ):
+        return anchor_ref_xy, target_ref_xy
+
+    obb = _compute_min_area_obb_2d(anchor_hull)
+    if obb is None:
+        return anchor_ref_xy, target_ref_xy
+    center_xy, major_dir, _minor_dir, length, width = obb
+    if not _should_use_spine_override(length, width):
+        return anchor_ref_xy, target_ref_xy
+
+    spine_start, spine_end = _spine_endpoints(center_xy, major_dir, length, width)
+    anchor_spine_xy = _project_point_to_segment(target_ref_xy, spine_start, spine_end)
+    return anchor_spine_xy, target_ref_xy
+
+
 def _pairwise_horizontal_reference_points(obj_a: dict, obj_b: dict) -> tuple[np.ndarray, np.ndarray]:
     a_center = np.asarray(obj_a.get("center", [0.0, 0.0, 0.0]), dtype=float)
     b_center = np.asarray(obj_b.get("center", [0.0, 0.0, 0.0]), dtype=float)
     hull_a = _object_bottom_hull_xy(obj_a)
     hull_b = _object_bottom_hull_xy(obj_b)
-    return footprint_nearest_pair(hull_a, hull_b, a_center[:2], b_center[:2])
+    return _horizontal_reference_points_with_spine_override(
+        a_center[:2],
+        b_center[:2],
+        hull_a,
+        hull_b,
+    )
 
 
 def compute_pairwise_direction(
@@ -432,11 +557,11 @@ def primary_direction_allocentric(
         return vertical_label, vertical_ambiguity
 
     if obj_a_hull_xy is not None and obj_b_hull_xy is not None:
-        a_ref_xy, b_ref_xy = footprint_nearest_pair(
-            obj_a_hull_xy,
-            obj_b_hull_xy,
+        a_ref_xy, b_ref_xy = _horizontal_reference_points_with_spine_override(
             obj_a_center[:2],
             obj_b_center[:2],
+            obj_a_hull_xy,
+            obj_b_hull_xy,
         )
         dx = float(a_ref_xy[0] - b_ref_xy[0])
         dy = float(a_ref_xy[1] - b_ref_xy[1])
