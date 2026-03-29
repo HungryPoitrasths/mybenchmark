@@ -135,6 +135,32 @@ class SupportGraphHeuristicTests(unittest.TestCase):
         self.assertIsNotNone(_contained_in_metrics(child_pass, parent))
         self.assertIsNone(_contained_in_metrics(child_fail, parent))
 
+    def test_contained_in_center_inside_xyz_does_not_add_xy_tolerance(self) -> None:
+        parent = make_object(
+            10,
+            "bin",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_hull_xy=_rect(0.0, 0.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.8, 0.8, 0.2),
+            (1.2, 1.2, 0.8),
+            bottom_hull_xy=_rect(0.8, 0.8, 1.2, 1.2),
+        )
+
+        metrics = _contained_in_metrics(child, parent)
+
+        self.assertIsNone(metrics)
+
     def test_attachment_candidate_falls_through_weak_contained_in(self) -> None:
         obj_a = make_object(1, "book", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
         obj_b = make_object(2, "box", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))

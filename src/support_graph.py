@@ -542,8 +542,8 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     center_inside_xy = _point_in_convex_polygon(child_center[:2], parent_hull)
     center_inside_xyz = bool(
         center_inside_xy
-        and np.all(child_center >= (parent_min - z_tol))
-        and np.all(child_center <= (parent_max + z_tol))
+        and child_center[2] >= parent_min[2] - z_tol
+        and child_center[2] <= parent_max[2] + z_tol
     )
     child_height = float(max(child_max[2] - child_min[2], 0.0))
     z_overlap = max(
