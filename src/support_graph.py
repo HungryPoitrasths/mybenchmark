@@ -44,18 +44,14 @@ SOFT_PARENT_LABELS = {
 }
 SOFT_CHILD_LABELS = {
     "pillow",
-    "blanket",
     "cushion",
-    "clothing",
     "towel",
     "sheet",
 }
 SOFT_SURFACE_PRIORS = {
     ("pillow", "bed"),
-    ("blanket", "bed"),
     ("cushion", "sofa"),
     ("cushion", "chair"),
-    ("clothing", "bed"),
     ("towel", "bed"),
 }
 
@@ -89,14 +85,21 @@ AFFIXED_PRIORS = {
     ("lamp", "wall"),
 }
 
+ATTACHMENT_MIN_CONFIDENCE = {
+    "contained_in": 0.55,
+    "resting_on_soft_surface": 0.60,
+}
+
 
 def _vertical_tolerance(obj_a: dict, obj_b: dict, z_threshold: float | None = None) -> float:
     a_height = float(obj_a["bbox_max"][2] - obj_a["bbox_min"][2])
     b_height = float(obj_b["bbox_max"][2] - obj_b["bbox_min"][2])
-    adaptive = float(np.clip(0.02 + 0.05 * min(a_height, b_height), 0.03, 0.08))
+    base = float(np.clip(0.02 + 0.05 * b_height, 0.03, 0.10))
+    child_cap = float(max(0.30 * a_height, 0.03))
+    adaptive = float(min(base, child_cap))
     if z_threshold is None:
         return adaptive
-    return float(np.clip(z_threshold, 0.03, 0.08))
+    return float(min(np.clip(z_threshold, 0.03, 0.10), child_cap))
 
 
 def _is_on_floor(obj: dict) -> bool:
@@ -207,6 +210,30 @@ def _support_face_polygon(obj: dict, face_key: str) -> np.ndarray:
     return arr if len(arr) >= 3 else np.empty((0, 2), dtype=float)
 
 
+def _bbox_xy_polygon(obj: dict) -> np.ndarray:
+    bbox_min = np.asarray(obj["bbox_min"][:2], dtype=float)
+    bbox_max = np.asarray(obj["bbox_max"][:2], dtype=float)
+    return np.array([
+        [bbox_min[0], bbox_min[1]],
+        [bbox_max[0], bbox_min[1]],
+        [bbox_max[0], bbox_max[1]],
+        [bbox_min[0], bbox_max[1]],
+    ], dtype=float)
+
+
+def _point_in_convex_polygon(point: np.ndarray, poly: np.ndarray) -> bool:
+    if len(poly) < 3:
+        return False
+    poly = _ensure_ccw(poly)
+    point = np.asarray(point, dtype=float)
+    for i in range(len(poly)):
+        start = poly[i]
+        end = poly[(i + 1) % len(poly)]
+        if _cross_2d(start, end, point) < -GEOM_EPS:
+            return False
+    return True
+
+
 def _top_surface_candidates(obj: dict) -> list[dict[str, Any]]:
     support_geom = obj.get("support_geom") or {}
     raw_candidates = support_geom.get("top_surface_candidates") or []
@@ -239,6 +266,17 @@ def _top_surface_candidates(obj: dict) -> list[dict[str, Any]]:
             "score": 0.0,
         }]
     return []
+
+
+def _largest_top_surface_polygon(obj: dict) -> tuple[np.ndarray, str]:
+    candidates = _top_surface_candidates(obj)
+    if candidates:
+        best = max(candidates, key=lambda item: float(item["area"]))
+        return np.asarray(best["hull_xy"], dtype=float), "top_surface_candidates"
+    legacy_hull = _support_face_polygon(obj, "top_hull_xy")
+    if len(legacy_hull) >= 3:
+        return legacy_hull, "top_hull_xy"
+    return _bbox_xy_polygon(obj), "bbox"
 
 
 def _bbox_axis_gaps(obj_a: dict, obj_b: dict) -> np.ndarray:
@@ -276,12 +314,14 @@ def _surface_attachment_metrics(
     child_hull = _support_face_polygon(obj_a, "bottom_hull_xy")
     child_hull_area = _polygon_area(child_hull)
     z_tol = _vertical_tolerance(obj_a, obj_b, z_threshold) * gap_scale
+    under_tol = min(0.02, 0.5 * z_tol)
     best: dict[str, float | bool] | None = None
 
     for surface in _top_surface_candidates(obj_b):
-        gap = abs(float(obj_a["bbox_min"][2]) - float(surface["z"]))
-        if gap > z_tol:
+        signed_gap = float(obj_a["bbox_min"][2]) - float(surface["z"])
+        if signed_gap < -under_tol or signed_gap > z_tol:
             continue
+        gap = abs(signed_gap)
 
         parent_hull = np.asarray(surface["hull_xy"], dtype=float)
         parent_hull_area = _polygon_area(parent_hull)
@@ -307,7 +347,9 @@ def _surface_attachment_metrics(
 
         metrics = {
             "gap": float(gap),
+            "signed_gap": float(signed_gap),
             "z_tol": float(z_tol),
+            "under_tol": float(under_tol),
             "contact_z_parent": float(surface["z"]),
             "contact_z_child": float(obj_a["bbox_min"][2]),
             "aabb_overlap_area": float(overlap_area),
@@ -387,9 +429,11 @@ def _surface_evidence(
     return {
         "geometry_contact": {
             "z_gap": float(metrics["gap"]),
+            "signed_z_gap": float(metrics["signed_gap"]),
             "contact_z_parent": float(metrics["contact_z_parent"]),
             "contact_z_child": float(metrics["contact_z_child"]),
             "z_tolerance": float(metrics["z_tol"]),
+            "under_tolerance": float(metrics["under_tol"]),
         },
         "xy_overlap": {
             "child_coverage": float(metrics["coverage_score"]),
@@ -473,12 +517,19 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     if prior <= 0.0:
         return None
 
-    child_area = _bbox_xy_area(obj_a)
-    parent_area = _bbox_xy_area(obj_b)
+    child_hull = _support_face_polygon(obj_a, "bottom_hull_xy")
+    child_source = "bottom_hull_xy"
+    if len(child_hull) < 3:
+        child_hull = _bbox_xy_polygon(obj_a)
+        child_source = "bbox"
+    parent_hull, parent_source = _largest_top_surface_polygon(obj_b)
+
+    child_area = _polygon_area(child_hull)
+    parent_area = _polygon_area(parent_hull)
     if child_area <= GEOM_EPS or parent_area <= GEOM_EPS or parent_area <= child_area * 1.05:
         return None
 
-    overlap_area = _bbox_xy_overlap_area(obj_a, obj_b)
+    overlap_area = _convex_intersection_area(child_hull, parent_hull)
     xy_coverage = overlap_area / max(child_area, GEOM_EPS)
 
     child_min = np.asarray(obj_a["bbox_min"], dtype=float)
@@ -488,19 +539,30 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     child_center = np.asarray(obj_a["center"], dtype=float)
     z_tol = 0.05 + 0.05 * float(obj_b["bbox_max"][2] - obj_b["bbox_min"][2])
 
-    center_inside_xy = bool(np.all(child_center[:2] >= parent_min[:2]) and np.all(child_center[:2] <= parent_max[:2]))
-    center_inside_xyz = bool(np.all(child_center >= (parent_min - z_tol)) and np.all(child_center <= (parent_max + z_tol)))
-    z_inside = bool(child_min[2] >= parent_min[2] - z_tol and child_center[2] <= parent_max[2] + z_tol)
+    center_inside_xy = _point_in_convex_polygon(child_center[:2], parent_hull)
+    center_inside_xyz = bool(
+        center_inside_xy
+        and np.all(child_center >= (parent_min - z_tol))
+        and np.all(child_center <= (parent_max + z_tol))
+    )
+    child_height = float(max(child_max[2] - child_min[2], 0.0))
+    z_overlap = max(
+        0.0,
+        min(child_max[2], parent_max[2] + z_tol) - max(child_min[2], parent_min[2] - z_tol),
+    )
+    z_ratio = z_overlap / max(child_height, GEOM_EPS)
+    child_bottom_inside = bool(child_min[2] >= parent_min[2] - z_tol)
     size_score = float(np.clip((parent_area - child_area) / max(parent_area, GEOM_EPS), 0.0, 1.0))
 
+    z_inside = bool(child_bottom_inside and z_ratio >= 0.60)
     strong_geometry = xy_coverage >= 0.80 and center_inside_xy and z_inside
-    if not strong_geometry and not (prior > 0.0 and xy_coverage >= 0.65 and center_inside_xy):
+    if not strong_geometry and not (prior > 0.0 and xy_coverage >= 0.65 and center_inside_xy and z_inside):
         return None
 
     containment_score = float(np.clip(
         0.55 * xy_coverage +
         0.15 * float(center_inside_xy) +
-        0.15 * float(center_inside_xyz) +
+        0.15 * min(z_ratio, 1.0) +
         0.15 * size_score,
         0.0,
         1.0,
@@ -516,12 +578,19 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
             "xy_overlap": {
                 "child_coverage": float(xy_coverage),
                 "overlap_area": float(overlap_area),
+                "geometry_source": {
+                    "child": child_source,
+                    "parent": parent_source,
+                },
             },
             "containment": {
                 "score": containment_score,
                 "center_inside_xy": center_inside_xy,
                 "center_inside_xyz": center_inside_xyz,
                 "z_inside": z_inside,
+                "child_bottom_inside": child_bottom_inside,
+                "z_overlap": float(z_overlap),
+                "z_ratio": float(z_ratio),
                 "size_score": size_score,
             },
             "semantic_prior": {
@@ -591,6 +660,9 @@ def _attachment_candidate(
     ):
         candidate = builder()
         if candidate is None:
+            continue
+        min_confidence = ATTACHMENT_MIN_CONFIDENCE.get(str(candidate["type"]), 0.0)
+        if float(candidate["confidence"]) < min_confidence:
             continue
         return {
             "parent_id": int(obj_b["id"]),
