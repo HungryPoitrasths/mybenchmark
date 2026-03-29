@@ -86,7 +86,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator.generate_l2_object_move", return_value=[]),
             patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
             patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
-            patch("src.qa_generator.generate_l2_object_move_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
             patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
             patch("src.qa_generator.generate_l3_attachment_chain", side_effect=capture_l3),
             patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
@@ -132,9 +132,9 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             make_l2_object_move_question("object_move_distance", attached=False, text="distance free 2"),
         ]
         l2_object_centric_questions = [
-            make_l2_object_move_question("object_move_object_centric", attached=True, text="oc attached 1"),
-            make_l2_object_move_question("object_move_object_centric", attached=False, text="oc free 1"),
-            make_l2_object_move_question("object_move_object_centric", attached=False, text="oc free 2"),
+            make_l2_object_move_question("object_rotate_object_centric", attached=True, text="oc attached 1"),
+            make_l2_object_move_question("object_rotate_object_centric", attached=False, text="oc free 1"),
+            make_l2_object_move_question("object_rotate_object_centric", attached=False, text="oc free 2"),
         ]
         l2_allocentric_questions = [
             make_l2_object_move_question("object_move_allocentric", attached=False, text="allo free 1"),
@@ -160,7 +160,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator.generate_l2_object_move", return_value=l2_move_questions),
             patch("src.qa_generator.generate_l2_viewpoint_move", return_value=viewpoint_questions),
             patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
-            patch("src.qa_generator.generate_l2_object_move_object_centric", return_value=l2_object_centric_questions),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=l2_object_centric_questions),
             patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=l2_allocentric_questions),
             patch("src.qa_generator.generate_l3_attachment_chain", return_value=[]),
             patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
@@ -186,7 +186,10 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         counts: dict[str, tuple[int, int]] = {}
         for q in questions:
             qtype = q.get("type")
-            if not str(qtype).startswith("object_move_"):
+            if not (
+                str(qtype).startswith("object_move_")
+                or str(qtype) == "object_rotate_object_centric"
+            ):
                 continue
             attached, unattached = counts.get(qtype, (0, 0))
             if q.get("attachment_remapped", False):
@@ -197,7 +200,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(counts["object_move_agent"], (2, 3))
         self.assertEqual(counts["object_move_distance"], (1, 2))
-        self.assertEqual(counts["object_move_object_centric"], (1, 2))
+        self.assertEqual(counts["object_rotate_object_centric"], (1, 2))
         self.assertEqual(counts.get("object_move_allocentric", (0, 0)), (0, 3))
         self.assertEqual(sum(1 for q in questions if q.get("type") == "viewpoint_move"), 1)
 

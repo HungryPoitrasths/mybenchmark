@@ -415,7 +415,7 @@ def _build_visible_wall_anchor(
     return best
 
 _TEMPLATE_KEY_ALIASES: dict[str, tuple[str, ...]] = {
-    "L2_object_move_object_centric": ("L2_object_rotate_object_centric",),
+    "L2_object_rotate_object_centric": ("L2_object_move_object_centric",),
 }
 
 
@@ -504,10 +504,10 @@ def _default_templates() -> dict:
         ],
 
         # --- Object-centric ---
-        "L2_object_move_object_centric": [
+        "L2_object_rotate_object_centric": [
             "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?",
         ],
-        "L2_object_rotate_object_centric": [
+        "L2_object_move_object_centric": [
             "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?",
         ],
 
@@ -2455,7 +2455,7 @@ def generate_l2_object_remove(
 #  L2 generators — new reference frames
 # ---------------------------------------------------------------------------
 
-def generate_l2_object_move_object_centric(
+def generate_l2_object_rotate_object_centric(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
     attached_by: dict[int, int],
@@ -2467,15 +2467,15 @@ def generate_l2_object_move_object_centric(
     movement_objects: list[dict] | None = None,
     object_map: dict[int, dict] | None = None,
 ) -> list[dict]:
-    """L2 object-move questions answered in a query-centric object-centric frame."""
+    """L2 object-rotation questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
     }
     tpl_list = templates.get(
-        "L2_object_move_object_centric",
-        _default_templates()["L2_object_move_object_centric"],
+        "L2_object_rotate_object_centric",
+        _default_templates()["L2_object_rotate_object_centric"],
     )
     horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
 
@@ -2578,7 +2578,7 @@ def generate_l2_object_move_object_centric(
                     options, answer = generate_options(new_dir, horizontal_answer_pool)
                     obj_questions.append({
                         "level": "L2",
-                        "type": "object_move_object_centric",
+                        "type": "object_rotate_object_centric",
                         "reference_frame": "object_centric",
                         "question": question_text,
                         "options": options,
@@ -2612,6 +2612,33 @@ def generate_l2_object_move_object_centric(
             questions_by_object.setdefault(object_key, []).extend(obj_questions)
 
     return _cap_question_groups(questions_by_object, max_per_object)
+
+
+def generate_l2_object_move_object_centric(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
+    camera_pose: CameraPose,
+    templates: dict,
+    max_per_object: int = 3,
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+    movement_objects: list[dict] | None = None,
+    object_map: dict[int, dict] | None = None,
+) -> list[dict]:
+    """Backward-compatible alias for the renamed rotation-based L2 generator."""
+    return generate_l2_object_rotate_object_centric(
+        objects,
+        attachment_graph,
+        attached_by,
+        camera_pose,
+        templates,
+        max_per_object=max_per_object,
+        room_bounds=room_bounds,
+        collision_objects=collision_objects,
+        movement_objects=movement_objects,
+        object_map=object_map,
+    )
 
 
 def generate_l2_object_move_allocentric(
@@ -3684,9 +3711,9 @@ def generate_all_questions(
             templates,
         )
     )
-    # L2 — new reference frames
+    # L2 - new reference frames
     all_questions.extend(
-        generate_l2_object_move_object_centric(
+        generate_l2_object_rotate_object_centric(
             objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
             room_bounds=room_bounds,
             collision_objects=l2_collision_objects,

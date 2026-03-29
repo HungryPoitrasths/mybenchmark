@@ -23,11 +23,15 @@ ATTACHMENT_NEAR_DUP_TYPES = {
     "object_move_distance",
     "object_move_occlusion",
     "object_move_object_centric",
+    "object_rotate_object_centric",
     "object_move_allocentric",
     "object_remove",
     "attachment_chain",
     "attachment_type",
     "support_move_consequence",
+}
+QUESTION_TYPE_ALIASES = {
+    "object_move_object_centric": "object_rotate_object_centric",
 }
 ATTACHMENT_ID_FIELDS = (
     "obj_a_id",
@@ -60,12 +64,13 @@ def _id_key(value: Any) -> int | str:
 
 
 def _near_duplicate_key(q: dict[str, Any]) -> tuple:
+    qtype = QUESTION_TYPE_ALIASES.get(q.get("type"), q.get("type"))
     base = (
         q.get("scene_id"),
         q.get("image_name"),
-        q.get("type"),
+        qtype,
     )
-    if q.get("type") in ATTACHMENT_NEAR_DUP_TYPES:
+    if qtype in ATTACHMENT_NEAR_DUP_TYPES:
         return base + tuple(_id_key(q.get(field)) for field in ATTACHMENT_ID_FIELDS)
 
     primary_label = _label_key(
@@ -199,10 +204,16 @@ def enforce_l2_attachment_dominance(
     questions: list[dict],
 ) -> list[dict]:
     """Globally enforce without_attachment <= 2 * with_attachment for L2 object-move types."""
+    def _dominance_bucket(qtype: str) -> str:
+        canonical = str(QUESTION_TYPE_ALIASES.get(qtype, qtype)).strip()
+        if canonical.startswith("object_move_") or canonical == "object_rotate_object_centric":
+            return canonical
+        return ""
+
     target_types = sorted({
-        str(q.get("type", "")).strip()
+        _dominance_bucket(str(q.get("type", "")).strip())
         for q in questions
-        if q.get("level") == "L2" and str(q.get("type", "")).strip().startswith("object_move_")
+        if q.get("level") == "L2" and _dominance_bucket(str(q.get("type", "")).strip())
     })
     if not target_types:
         return questions
@@ -214,13 +225,13 @@ def enforce_l2_attachment_dominance(
         attached_indices = [
             idx for idx, q in enumerate(questions)
             if q.get("level") == "L2"
-            and str(q.get("type", "")).strip() == qtype
+            and _dominance_bucket(str(q.get("type", "")).strip()) == qtype
             and bool(q.get("attachment_remapped", False))
         ]
         unattached_indices = [
             idx for idx, q in enumerate(questions)
             if q.get("level") == "L2"
-            and str(q.get("type", "")).strip() == qtype
+            and _dominance_bucket(str(q.get("type", "")).strip()) == qtype
             and not bool(q.get("attachment_remapped", False))
         ]
         allowed_unattached = 2 * len(attached_indices)
