@@ -112,10 +112,8 @@ def normalize_label(label: str) -> str:
     return LABEL_NORMALIZE.get(low, low)
 
 
-# Labels to exclude — structural elements, uninformative categories,
-# reflective/transparent surfaces, and ambiguous objects.
-# Shared with qa_generator.py (duplicated for simplicity).
-ALWAYS_EXCLUDED = {
+# Hard blacklist shared across parsing, question generation, and filtering.
+EXCLUDED_LABELS = {
     # Structural / architectural
     "floor", "wall", "ceiling", "room", "ground",
     "door", "window", "stairs", "pillar", "column",
@@ -123,27 +121,23 @@ ALWAYS_EXCLUDED = {
     "shower curtain rod", "bathroom stall", "bathroom stall door",
     "ledge", "structure", "closet", "breakfast bar", "shower curtain",
     # Generic / uninformative
-    "object", "otherfurniture", "otherprop", "otherstructure",
+    "", "object", "otherfurniture", "otherprop", "otherstructure",
     "unknown", "misc", "stuff",
     # Reflective / transparent — depth sensor unreliable
     "mirror", "glass", "monitor", "tv",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
     "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
+    # Boundary-unclear / large amorphous / historically noisy labels
+    "blanket", "cloth", "clothes", "clothing", "refridgerator", "rug",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
     "can", "water bottle", "paper cutter",
 }
 
-QUESTION_ONLY_EXCLUDED = {
-    "counter", "couch", "clothing", "clothes", "cloth", "blanket", "rug",
-    "cabinet",
-    "shelf", "bookshelf", "shelves", "rack", "storage shelf",
-    "refrigerator", "refridgerator",
-}
-
-EXCLUDED_LABELS = ALWAYS_EXCLUDED | QUESTION_ONLY_EXCLUDED
+# Backward-compatible alias for older imports; prefer EXCLUDED_LABELS.
+ALWAYS_EXCLUDED = EXCLUDED_LABELS
 
 SceneGeometry = tuple[str, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]
 
@@ -316,7 +310,7 @@ def load_instance_mesh_data(
             continue
 
         label = normalize_label(anno.get("label", "unknown"))
-        if label.lower() in ALWAYS_EXCLUDED:
+        if label.lower() in EXCLUDED_LABELS:
             continue
 
         seg_ids = set(anno.get("segments", []))
@@ -631,10 +625,9 @@ def parse_scene(
             "bbox_max": all_maxs.max(axis=0).tolist(),
         }
 
-    # Keep question-only excluded labels so they can remain as attachment
-    # parents. Ordinary question-subject filtering happens downstream.
+    # Apply the shared hard blacklist before downstream support / question logic.
     n_before = len(objects)
-    objects = [o for o in objects if o["label"].lower() not in ALWAYS_EXCLUDED]
+    objects = [o for o in objects if o["label"].lower() not in EXCLUDED_LABELS]
     if n_before != len(objects):
         logger.debug(
             "Scene %s: %d -> %d objects after excluded-label filter",
