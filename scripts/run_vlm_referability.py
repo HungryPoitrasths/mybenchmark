@@ -32,8 +32,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.frame_selector import select_frames
 from src.utils.colmap_loader import (
     load_axis_alignment,
+    load_scannet_depth_intrinsics,
     load_scannet_poses,
 )
+from src.utils.depth_occlusion import compute_depth_occlusion, load_depth_image
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,7 +47,9 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 5
-REFERABILITY_CACHE_VERSION = "4.0"
+REFERABILITY_CACHE_VERSION = "5.0"
+DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO = 0.20
+DEPTH_DISAMBIGUATION_MIN_GAP = 0.15
 
 
 def _image_to_base64(image: np.ndarray) -> str:
@@ -213,16 +217,111 @@ def _build_frame_label_candidates(
 def _resolve_referable_object_ids(
     label_counts: dict[str, int],
     label_to_ids: dict[str, list[int]],
-) -> list[int]:
+) -> tuple[list[int], dict[str, list[int]]]:
     referable_ids: list[int] = []
+    ambiguous_labels_to_ids: dict[str, list[int]] = {}
     for label, count in label_counts.items():
         if count != 1:
             continue
         obj_ids = label_to_ids.get(label, [])
-        if len(obj_ids) != 1:
+        if len(obj_ids) == 1:
+            referable_ids.append(obj_ids[0])
             continue
-        referable_ids.append(obj_ids[0])
-    return sorted(referable_ids)
+        if len(obj_ids) > 1:
+            ambiguous_labels_to_ids[str(label)] = [int(obj_id) for obj_id in obj_ids]
+    return sorted(referable_ids), dict(sorted(ambiguous_labels_to_ids.items()))
+
+
+def _disambiguate_by_depth(
+    obj_ids: list[int],
+    objects_by_id: dict[int, dict[str, Any]],
+    camera_pose,
+    depth_image: np.ndarray,
+    depth_intrinsics,
+    min_winner_ratio: float = DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO,
+    min_gap: float = DEPTH_DISAMBIGUATION_MIN_GAP,
+) -> tuple[int | None, dict[str, Any]]:
+    scores: list[tuple[float, int]] = []
+    for obj_id in obj_ids:
+        obj = objects_by_id.get(int(obj_id))
+        if obj is None:
+            continue
+        try:
+            _status, ratio = compute_depth_occlusion(
+                bbox_min=np.array(obj["bbox_min"], dtype=np.float64),
+                bbox_max=np.array(obj["bbox_max"], dtype=np.float64),
+                camera_pose=camera_pose,
+                intrinsics=depth_intrinsics,
+                depth_image=depth_image,
+            )
+        except Exception as exc:
+            logger.warning("Depth disambiguation failed for object %s: %s", obj_id, exc)
+            continue
+        scores.append((float(ratio), int(obj_id)))
+
+    scores.sort(reverse=True)
+    candidate_scores = [
+        {
+            "object_id": int(obj_id),
+            "visible_ratio": float(ratio),
+        }
+        for ratio, obj_id in scores
+    ]
+    meta: dict[str, Any] = {
+        "decision": "no_valid_scores",
+        "selected_object_id": None,
+        "candidate_scores": candidate_scores,
+    }
+    if not scores:
+        return None, meta
+
+    best_ratio, best_id = scores[0]
+    if best_ratio < min_winner_ratio:
+        meta["decision"] = "winner_below_min_ratio"
+        return None, meta
+    if len(scores) >= 2 and (best_ratio - scores[1][0]) < min_gap:
+        meta["decision"] = "gap_too_small"
+        return None, meta
+
+    meta["decision"] = "selected"
+    meta["selected_object_id"] = int(best_id)
+    return int(best_id), meta
+
+
+def _augment_with_depth_disambiguation(
+    ambiguous_labels_to_ids: dict[str, list[int]],
+    objects_by_id: dict[int, dict[str, Any]],
+    camera_pose,
+    depth_image: np.ndarray | None,
+    depth_intrinsics,
+) -> tuple[list[int], dict[str, dict[str, Any]]]:
+    if not ambiguous_labels_to_ids:
+        return [], {}
+
+    if depth_image is None or depth_intrinsics is None:
+        return [], {
+            str(label): {
+                "decision": "missing_depth",
+                "selected_object_id": None,
+                "candidate_scores": [],
+            }
+            for label in sorted(ambiguous_labels_to_ids.keys())
+        }
+
+    extra_ids: list[int] = []
+    depth_disambiguation: dict[str, dict[str, Any]] = {}
+    for label, obj_ids in sorted(ambiguous_labels_to_ids.items()):
+        best_id, meta = _disambiguate_by_depth(
+            obj_ids=obj_ids,
+            objects_by_id=objects_by_id,
+            camera_pose=camera_pose,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+        )
+        depth_disambiguation[str(label)] = meta
+        if best_id is not None:
+            extra_ids.append(int(best_id))
+    return sorted(extra_ids), depth_disambiguation
 
 
 def _count_labels_for_object_ids(
@@ -329,6 +428,10 @@ def main():
     cache: dict[str, Any] = {
         "version": REFERABILITY_CACHE_VERSION,
         "model": model_name,
+        "depth_disambiguation_config": {
+            "min_winner_ratio": DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO,
+            "min_gap": DEPTH_DISAMBIGUATION_MIN_GAP,
+        },
         "frames": {},
     }
     if args.resume and output_path.exists():
@@ -343,6 +446,10 @@ def main():
                 )
             cache = loaded
             logger.info("Resuming from %s", output_path)
+    cache["depth_disambiguation_config"] = {
+        "min_winner_ratio": DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO,
+        "min_gap": DEPTH_DISAMBIGUATION_MIN_GAP,
+    }
 
     data_root = Path(args.data_root)
     scene_dirs = sorted(
@@ -380,6 +487,11 @@ def main():
 
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        try:
+            depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
+        except Exception as e:
+            logger.warning("Depth intrinsics load failed for %s: %s", scene_id, e)
+            depth_intrinsics = None
 
         scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         objects_by_id = {int(o["id"]): o for o in scene["objects"]}
@@ -418,6 +530,7 @@ def main():
             frame_info = _frame_decision(client, model_name, image)
             label_counts: dict[str, int] = {}
             referable_object_ids: list[int] = []
+            depth_disambiguation: dict[str, dict[str, Any]] = {}
             vlm_count_batches: list[dict[str, Any]] = []
             selector_visible_object_ids = [
                 int(obj_id)
@@ -430,6 +543,7 @@ def main():
             )
 
             if frame_info["frame_usable"]:
+                camera_pose = poses[image_name]
                 image_b64 = _image_to_base64(image)
                 for label_batch in _chunk_labels(candidate_labels):
                     batch_counts = _label_count_decision(client, model_name, image_b64, label_batch)
@@ -439,10 +553,27 @@ def main():
                     })
                     label_counts.update(batch_counts)
 
-                referable_object_ids = _resolve_referable_object_ids(
+                referable_object_ids, ambiguous_labels_to_ids = _resolve_referable_object_ids(
                     label_counts,
                     label_to_ids,
                 )
+                if ambiguous_labels_to_ids:
+                    depth_image = None
+                    frame_id = Path(image_name).stem
+                    depth_path = scene_dir / "depth" / f"{frame_id}.png"
+                    if depth_intrinsics is not None and depth_path.exists():
+                        try:
+                            depth_image = load_depth_image(depth_path)
+                        except Exception as e:
+                            logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
+                    extra_ids, depth_disambiguation = _augment_with_depth_disambiguation(
+                        ambiguous_labels_to_ids=ambiguous_labels_to_ids,
+                        objects_by_id=objects_by_id,
+                        camera_pose=camera_pose,
+                        depth_image=depth_image,
+                        depth_intrinsics=depth_intrinsics,
+                    )
+                    referable_object_ids = sorted(set(referable_object_ids) | set(extra_ids))
 
             frame_entry: dict[str, Any] = {
                 "frame_usable": frame_info["frame_usable"],
@@ -459,6 +590,7 @@ def main():
                 "vlm_count_batches": vlm_count_batches,
                 "label_counts": dict(sorted(label_counts.items())),
                 "referable_object_ids": referable_object_ids,
+                "depth_disambiguation": depth_disambiguation,
                 "vlm_unique_object_ids": list(referable_object_ids),
             }
             scene_cache[image_name] = frame_entry
