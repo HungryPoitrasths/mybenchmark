@@ -3926,7 +3926,6 @@ def generate_all_questions(
     all_questions = _enforce_stable_facing_references(
         all_questions, id_to_object,
     )
-    all_questions = _balance_l2_object_move_attachment_counts(all_questions)
 
     logger.info("Generated %d questions total", len(all_questions))
     return all_questions

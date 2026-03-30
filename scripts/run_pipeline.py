@@ -745,8 +745,11 @@ def run_pipeline(
             "Scene %s: %d questions accumulated", scene_id, len(all_questions),
         )
 
-    # ---- Stage 7: Quality control ----
-    logger.info("Running quality control on %d raw questions…", len(all_questions))
+    # ---- Stage 7: Benchmark quality control ----
+    logger.info(
+        "Running benchmark quality control on %d raw questions (viewer-only attachment filtering excluded)…",
+        len(all_questions),
+    )
     final_questions = full_quality_pipeline(all_questions)
 
     by_scene: dict[str, list] = defaultdict(list)

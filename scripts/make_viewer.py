@@ -176,6 +176,9 @@ def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
         for _, items in SUMMARY_GROUPS
         for key, _ in items
     }
+    canonical_type_counter: Counter = Counter()
+    for qtype, count in type_counter.items():
+        canonical_type_counter[_canonical_qtype(str(qtype).strip()) or "unknown"] += count
     total_counter: Counter = Counter()
     attached_counter: Counter = Counter()
     for q in questions:
@@ -209,13 +212,13 @@ def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
                 )
             else:
                 lines.append(
-                f'<div class="summary-line">{label}: {type_counter.get(key, 0)}</div>'
+                f'<div class="summary-line">{label}: {canonical_type_counter.get(key, 0)}</div>'
                 )
         parts.append(f'<div class="summary-section">{"".join(lines)}</div>')
 
     other_items = [
         (qtype, count)
-        for qtype, count in sorted(type_counter.items())
+        for qtype, count in sorted(canonical_type_counter.items())
         if qtype not in known_keys
     ]
     if other_items:
@@ -248,6 +251,45 @@ def order_questions_for_viewer(questions: list[dict], seed: int = 42) -> list[di
     return ordered_questions
 
 
+def _apply_attachment_viewer_filter(questions: list[dict]) -> list[dict]:
+    """Apply viewer-only attachment balancing per (scene, frame, canonical qtype)."""
+    keep_mask = [True] * len(questions)
+    grouped_indices: dict[tuple[str, str, str], list[int]] = {}
+    for idx, question in enumerate(questions):
+        qtype = _canonical_qtype(str(question.get("type", "")).strip())
+        if qtype not in OBJECT_MOVE_TYPES:
+            continue
+        key = (
+            str(question.get("scene_id", "")).strip(),
+            str(question.get("image_name", "")).strip(),
+            qtype,
+        )
+        grouped_indices.setdefault(key, []).append(idx)
+
+    for indices in grouped_indices.values():
+        attached = [
+            idx for idx in indices
+            if bool(questions[idx].get("attachment_remapped", False))
+        ]
+        unattached = [
+            idx for idx in indices
+            if not bool(questions[idx].get("attachment_remapped", False))
+        ]
+        if not unattached:
+            continue
+
+        allowed_unattached = (2 * len(attached)) if attached else 1
+        if len(unattached) <= allowed_unattached:
+            continue
+
+        kept_unattached = set(unattached[:allowed_unattached])
+        for idx in unattached:
+            if idx not in kept_unattached:
+                keep_mask[idx] = False
+
+    return [q for idx, q in enumerate(questions) if keep_mask[idx]]
+
+
 def is_attachment_viewer_question(question: dict) -> bool:
     qtype = _canonical_qtype(str(question.get("type", "")).strip())
     if qtype == "attachment_chain":
@@ -266,13 +308,20 @@ def filter_viewer_questions(
         if _canonical_qtype(str(q.get("type", "")).strip()) not in REMOVED_TYPES
     ]
     if attachment_only:
-        return [q for q in filtered if is_attachment_viewer_question(q)]
+        filtered = [q for q in filtered if is_attachment_viewer_question(q)]
+        return _apply_attachment_viewer_filter(filtered)
     if requested_qtypes:
-        return [
+        canonical_requested_qtypes = {
+            _canonical_qtype(str(qtype).strip())
+            for qtype in requested_qtypes
+            if str(qtype).strip()
+        }
+        filtered = [
             q for q in filtered
-            if _canonical_qtype(str(q.get("type", "")).strip()) in requested_qtypes
+            if _canonical_qtype(str(q.get("type", "")).strip()) in canonical_requested_qtypes
         ]
-    return filtered
+        return _apply_attachment_viewer_filter(filtered)
+    return _apply_attachment_viewer_filter(filtered)
 
 
 PAGE = """\
@@ -407,7 +456,7 @@ def main():
 
     for idx, q in enumerate(questions, 1):
         level = q.get("level", "?")
-        qtype = q.get("type", "")
+        qtype = _canonical_qtype(str(q.get("type", "")).strip()) or "unknown"
         scene = q.get("scene_id", "")
         frame = q.get("image_name", "")
         answer = q.get("answer", "")

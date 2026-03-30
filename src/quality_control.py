@@ -496,18 +496,20 @@ def compute_inter_annotator_agreement(
 
 
 def full_quality_pipeline(questions: list[dict]) -> list[dict]:
-    """Run the complete quality control pipeline.
+    """Run the benchmark quality-control pipeline.
 
     Steps:
         1. Automatic quality filter
         2. Cap global L1 occlusion not-visible ratio
-        3. Enforce global L2 attachment dominance
-        4. Answer distribution balancing
-        5. Log statistics
+        3. Answer distribution balancing
+        4. Log statistics
+
+    Attachment-heavy L2 object-move filtering is intentionally deferred to the
+    viewer build step, where it can be applied per (scene, frame, qtype)
+    instead of globally across the whole benchmark.
     """
     questions = quality_filter(questions)
     questions = cap_l1_occlusion_not_visible_ratio(questions)
-    questions = enforce_l2_attachment_dominance(questions)
     questions = balance_answer_values(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)
