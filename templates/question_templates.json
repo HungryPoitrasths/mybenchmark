@@ -32,10 +32,10 @@
     "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how visible would {obj_b} be with respect to {obj_c}?"
   ],
   "L2_object_rotate_object_centric": [
-    "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?"
+    "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face}, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?"
   ],
   "L2_object_move_object_centric": [
-    "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were rotated {angle} degrees {rotation_direction} around {obj_face} (viewed from above), from your perspective, in which direction would {obj_ref} be?"
+    "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face}, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?"
   ],
   "_comments": {
     "L2_object_move_object_centric": [
