@@ -58,6 +58,15 @@ logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXPECTED_REFERABILITY_CACHE_VERSION = "5.0"
+QUESTION_ANSWER_REVIEW_TYPES = {
+    "direction_agent",
+    "occlusion",
+    "distance",
+    "direction_object_centric",
+    "direction_allocentric",
+    "viewpoint_move",
+    "object_remove",
+}
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -180,12 +189,81 @@ def _question_presence_prompt(question_text: str, labels: list[str]) -> str:
     )
 
 
-def _build_question_presence_reviewer(
+def _question_answer_prompt(question: dict[str, object]) -> str | None:
+    question_text = str(question.get("question", "")).strip()
+    options = question.get("options")
+    if not question_text or not isinstance(options, list) or not options:
+        return None
+
+    prompt_lines = [question_text, ""]
+    for idx, option in enumerate(options):
+        prompt_lines.append(f"{chr(65 + idx)}) {option}")
+    prompt_lines.append("")
+    letters = [chr(65 + idx) for idx in range(len(options))]
+    if len(letters) == 1:
+        answer_choices = letters[0]
+    elif len(letters) == 2:
+        answer_choices = " or ".join(letters)
+    else:
+        answer_choices = ", ".join(letters[:-1]) + f", or {letters[-1]}"
+    prompt_lines.append(f"Answer with a single letter only ({answer_choices}). Do not explain.")
+    return "\n".join(prompt_lines)
+
+
+def _parse_mcq_answer(raw: str) -> str | None:
+    if not raw:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+
+    upper = stripped.upper()
+    if re.fullmatch(r"[ABCD]", upper):
+        return upper
+
+    match = re.match(r"^[\(\[]?([ABCD])(?:[\)\].:\s-]*)?$", upper)
+    if match:
+        return match.group(1)
+
+    explicit_patterns = [
+        r"\bANSWER(?:\s+IS)?\s*[:\-]?\s*[\(\[]?([ABCD])(?:[\)\]]|\b)",
+        r"\bOPTION\s+([ABCD])\b",
+        r"\bI\s+CHOOSE\s+([ABCD])\b",
+        r"\bMY\s+ANSWER\s+IS\s+([ABCD])\b",
+    ]
+    for pattern in explicit_patterns:
+        match = re.search(pattern, upper)
+        if match:
+            return match.group(1)
+
+    standalone_letters = re.findall(r"\b([ABCD])\b", upper)
+    unique_letters = []
+    for letter in standalone_letters:
+        if letter not in unique_letters:
+            unique_letters.append(letter)
+    return unique_letters[0] if len(unique_letters) == 1 else None
+
+
+def _question_option_for_answer(question: dict[str, object], answer: str | None) -> str | None:
+    if answer not in {"A", "B", "C", "D"}:
+        return None
+    options = question.get("options")
+    if not isinstance(options, list):
+        return None
+    idx = ord(answer) - ord("A")
+    if idx < 0 or idx >= len(options):
+        return None
+    return str(options[idx])
+
+
+def _resolve_question_review_vlm(
     vlm_url: str | None,
     vlm_model: str | None,
+    *,
+    purpose: str,
 ):
     if not vlm_url:
-        raise ValueError("Question presence review requires a VLM URL")
+        raise ValueError(f"{purpose} requires a VLM URL")
 
     from openai import OpenAI
 
@@ -204,8 +282,12 @@ def _build_question_presence_reviewer(
                 raise RuntimeError("No VLM models available")
             model_name = available[0]
         except Exception as e:
-            raise RuntimeError(f"Cannot reach question-review VLM at {vlm_url}: {e}") from e
+            raise RuntimeError(f"Cannot reach {purpose} VLM at {vlm_url}: {e}") from e
 
+    return client, model_name
+
+
+def _make_question_presence_reviewer(client, model_name: str):
     logger.info("Using question presence review VLM model: %s", model_name)
 
     def _review(image_path: Path, question: dict[str, object], labels: list[str]) -> dict[str, object]:
@@ -273,6 +355,98 @@ def _build_question_presence_reviewer(
     return model_name, _review
 
 
+def _build_question_presence_reviewer(
+    vlm_url: str | None,
+    vlm_model: str | None,
+):
+    client, model_name = _resolve_question_review_vlm(
+        vlm_url,
+        vlm_model,
+        purpose="question presence review",
+    )
+    return _make_question_presence_reviewer(client, model_name)
+
+
+def _build_question_answer_reviewer(
+    vlm_url: str | None,
+    vlm_model: str | None,
+):
+    client, model_name = _resolve_question_review_vlm(
+        vlm_url,
+        vlm_model,
+        purpose="question answer review",
+    )
+    return _make_question_answer_reviewer(client, model_name)
+
+
+def _make_question_answer_reviewer(client, model_name: str):
+    logger.info("Using question answer review VLM model: %s", model_name)
+
+    def _review(image_path: Path, question: dict[str, object]) -> dict[str, object]:
+        prompt = _question_answer_prompt(question)
+        gold_answer = str(question.get("answer", "")).strip().upper()
+        if prompt is None:
+            return {
+                "decision": "manual_review",
+                "predicted_answer": None,
+                "gold_answer": gold_answer or None,
+                "predicted_option": None,
+                "gold_option": _question_option_for_answer(question, gold_answer),
+                "reason": "missing question text or options",
+                "raw_response": "",
+            }
+        if gold_answer not in {"A", "B", "C", "D"}:
+            return {
+                "decision": "manual_review",
+                "predicted_answer": None,
+                "gold_answer": gold_answer or None,
+                "predicted_option": None,
+                "gold_option": _question_option_for_answer(question, gold_answer),
+                "reason": f"invalid gold answer: {gold_answer or '<missing>'}",
+                "raw_response": "",
+            }
+
+        image_b64, mime = _image_path_to_base64(image_path)
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+            max_tokens=32,
+            temperature=0,
+        )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        predicted_answer = _parse_mcq_answer(raw_text)
+        gold_option = _question_option_for_answer(question, gold_answer)
+        predicted_option = _question_option_for_answer(question, predicted_answer)
+
+        if predicted_answer is None:
+            decision = "manual_review"
+            reason = "could not parse model answer"
+        elif predicted_answer != gold_answer:
+            decision = "manual_review"
+            reason = f"model answered {predicted_answer} but gold answer is {gold_answer}"
+        else:
+            decision = "pass"
+            reason = ""
+
+        return {
+            "decision": decision,
+            "predicted_answer": predicted_answer,
+            "gold_answer": gold_answer or None,
+            "predicted_option": predicted_option,
+            "gold_option": gold_option,
+            "reason": reason,
+            "raw_response": raw_text,
+        }
+
+    return model_name, _review
+
+
 def _manual_review_reason_from_presence_review(review: dict[str, object]) -> str:
     object_reviews = review.get("object_reviews", [])
     if not isinstance(object_reviews, list):
@@ -291,8 +465,56 @@ def _manual_review_reason_from_presence_review(review: dict[str, object]) -> str
     return "VLM marked this question for manual review."
 
 
+def _manual_review_reason_from_answer_review(review: dict[str, object]) -> str:
+    predicted_answer = str(review.get("predicted_answer", "")).strip().upper()
+    gold_answer = str(review.get("gold_answer", "")).strip().upper()
+    predicted_option = str(review.get("predicted_option", "")).strip()
+    gold_option = str(review.get("gold_option", "")).strip()
+    reason = str(review.get("reason", "")).strip()
+
+    if predicted_answer in {"A", "B", "C", "D"} and gold_answer in {"A", "B", "C", "D"} and predicted_answer != gold_answer:
+        detail = f"VLM answered {predicted_answer}"
+        if predicted_option:
+            detail += f" ({predicted_option})"
+        detail += f" but gold answer is {gold_answer}"
+        if gold_option:
+            detail += f" ({gold_option})"
+        return detail
+    if reason:
+        return f"VLM answer review flagged this question: {reason}"
+    return "VLM answer review marked this question for manual review."
+
+
+def _combine_manual_review_reasons(reasons: list[str]) -> str:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        text = reason.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+    return " | ".join(cleaned)
+
+
+def _should_review_question_answer(question: dict[str, object]) -> bool:
+    qtype = str(question.get("type", "")).strip()
+    return qtype in QUESTION_ANSWER_REVIEW_TYPES
+
+
+def _is_answer_mismatch_review(review: dict[str, object]) -> bool:
+    predicted_answer = str(review.get("predicted_answer", "")).strip().upper()
+    gold_answer = str(review.get("gold_answer", "")).strip().upper()
+    return (
+        predicted_answer in {"A", "B", "C", "D"}
+        and gold_answer in {"A", "B", "C", "D"}
+        and predicted_answer != gold_answer
+    )
+
+
 def _review_question_object_presence(
     review_fn,
+    answer_review_fn,
     *,
     question_index: int,
     question: dict[str, object],
@@ -300,36 +522,21 @@ def _review_question_object_presence(
 ) -> dict[str, object]:
     reviewed_question = dict(question)
     reviewed_question["benchmark_index"] = int(question_index)
-
-    labels = _collect_question_presence_labels(question)
-    if not labels:
-        reviewed_question["question_presence_review"] = {
-            "decision": "pass",
-            "flagged_labels": [],
-            "object_reviews": [],
-        }
-        return reviewed_question
+    review_reasons: list[str] = []
 
     scene_id = str(question.get("scene_id", "")).strip()
     image_name = str(question.get("image_name", "")).strip()
     image_path = data_root / scene_id / "color" / image_name
-    if not image_path.exists():
+
+    labels = _collect_question_presence_labels(question)
+    if not labels:
         review = {
-            "decision": "manual_review",
-            "flagged_labels": list(labels),
-            "object_reviews": [
-                {
-                    "label": label,
-                    "status": "unsure",
-                    "reason": f"image not found: {image_path.name}",
-                }
-                for label in labels
-            ],
+            "decision": "pass",
+            "flagged_labels": [],
+            "object_reviews": [],
         }
     else:
-        try:
-            review = review_fn(image_path, question, labels)
-        except Exception as e:
+        if not image_path.exists():
             review = {
                 "decision": "manual_review",
                 "flagged_labels": list(labels),
@@ -337,15 +544,66 @@ def _review_question_object_presence(
                     {
                         "label": label,
                         "status": "unsure",
-                        "reason": f"VLM review failed: {e}",
+                        "reason": f"image not found: {image_path.name}",
                     }
                     for label in labels
                 ],
             }
+        else:
+            try:
+                review = review_fn(image_path, question, labels)
+            except Exception as e:
+                review = {
+                    "decision": "manual_review",
+                    "flagged_labels": list(labels),
+                    "object_reviews": [
+                        {
+                            "label": label,
+                            "status": "unsure",
+                            "reason": f"VLM review failed: {e}",
+                        }
+                        for label in labels
+                    ],
+                }
 
     reviewed_question["question_presence_review"] = review
     if review.get("decision") == "manual_review":
-        reviewed_question["manual_review_reason"] = _manual_review_reason_from_presence_review(review)
+        review_reasons.append(_manual_review_reason_from_presence_review(review))
+
+    answer_review: dict[str, object] = {"decision": "skipped"}
+    if _should_review_question_answer(question):
+        gold_answer = str(question.get("answer", "")).strip().upper()
+        if not image_path.exists():
+            answer_review = {
+                "decision": "manual_review",
+                "predicted_answer": None,
+                "gold_answer": gold_answer or None,
+                "predicted_option": None,
+                "gold_option": _question_option_for_answer(question, gold_answer),
+                "reason": f"image not found: {image_path.name}",
+                "raw_response": "",
+            }
+        else:
+            try:
+                answer_review = answer_review_fn(image_path, question)
+            except Exception as e:
+                answer_review = {
+                    "decision": "manual_review",
+                    "predicted_answer": None,
+                    "gold_answer": gold_answer or None,
+                    "predicted_option": None,
+                    "gold_option": _question_option_for_answer(question, gold_answer),
+                    "reason": f"VLM answer review failed: {e}",
+                    "raw_response": "",
+                }
+        if answer_review.get("decision") == "manual_review":
+            review_reasons.append(_manual_review_reason_from_answer_review(answer_review))
+    reviewed_question["question_answer_review"] = answer_review
+
+    if review_reasons:
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+    else:
+        reviewed_question.pop("manual_review_reason", None)
     return reviewed_question
 
 
@@ -360,7 +618,14 @@ def _run_question_presence_review(
 ) -> dict[str, object]:
     from scripts.make_viewer import build_viewer_html
 
-    model_name, review_fn = _build_question_presence_reviewer(vlm_url, vlm_model)
+    client, model_name = _resolve_question_review_vlm(
+        vlm_url,
+        vlm_model,
+        purpose="question post-review",
+    )
+    answer_model_name = model_name
+    _, review_fn = _make_question_presence_reviewer(client, model_name)
+    _, answer_review_fn = _make_question_answer_reviewer(client, model_name)
     reviewed_questions: list[dict[str, object]] = []
 
     if questions:
@@ -369,6 +634,7 @@ def _run_question_presence_review(
                 pool.submit(
                     _review_question_object_presence,
                     review_fn,
+                    answer_review_fn,
                     question_index=idx,
                     question=question,
                     data_root=data_root,
@@ -381,22 +647,42 @@ def _run_question_presence_review(
 
     flagged_questions = [
         question for question in reviewed_questions
-        if isinstance(question.get("question_presence_review"), dict)
-        and question["question_presence_review"].get("decision") == "manual_review"
+        if (
+            isinstance(question.get("question_presence_review"), dict)
+            and question["question_presence_review"].get("decision") == "manual_review"
+        ) or (
+            isinstance(question.get("question_answer_review"), dict)
+            and question["question_answer_review"].get("decision") == "manual_review"
+        )
     ]
+    answer_review_question_count = sum(
+        1 for question in reviewed_questions if _should_review_question_answer(question)
+    )
+    answer_mismatch_count = sum(
+        1
+        for question in reviewed_questions
+        if isinstance(question.get("question_answer_review"), dict)
+        and _is_answer_mismatch_review(question["question_answer_review"])
+    )
 
     review_payload = {
         "name": "CausalSpatial-Bench question presence review",
         "model": model_name,
+        "answer_review_model": answer_model_name,
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
+        "answer_review_question_count": answer_review_question_count,
+        "answer_mismatch_count": answer_mismatch_count,
         "questions": reviewed_questions,
     }
     flagged_payload = {
         "name": "CausalSpatial-Bench question presence review (flagged)",
         "model": model_name,
+        "answer_review_model": answer_model_name,
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
+        "answer_review_question_count": answer_review_question_count,
+        "answer_mismatch_count": answer_mismatch_count,
         "questions": flagged_questions,
     }
 
@@ -426,8 +712,11 @@ def _run_question_presence_review(
     )
     return {
         "model": model_name,
+        "answer_review_model": answer_model_name,
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
+        "answer_review_question_count": answer_review_question_count,
+        "answer_mismatch_count": answer_mismatch_count,
         "review_json_path": review_json_path,
         "flagged_json_path": flagged_json_path,
         "flagged_html_path": flagged_html_path,
@@ -797,6 +1086,8 @@ def run_pipeline(
     use_occlusion_vlm: bool = False,
     occlusion_vlm_url: str | None = None,
     occlusion_vlm_model: str | None = None,
+    question_review_vlm_url: str | None = None,
+    question_review_vlm_model: str | None = None,
     write_frame_debug: bool = True,
     run_question_presence_review: bool = False,
     question_presence_review_workers: int = 8,
@@ -1127,12 +1418,14 @@ def run_pipeline(
         json.dump(benchmark, f, indent=2, ensure_ascii=False)
 
     if run_question_presence_review:
+        review_vlm_url = question_review_vlm_url or occlusion_vlm_url
+        review_vlm_model = question_review_vlm_model or occlusion_vlm_model
         _run_question_presence_review(
             questions=final_questions,
             data_root=data_root,
             output_dir=output_dir,
-            vlm_url=occlusion_vlm_url,
-            vlm_model=occlusion_vlm_model,
+            vlm_url=review_vlm_url,
+            vlm_model=review_vlm_model,
             workers=question_presence_review_workers,
         )
 
@@ -1205,13 +1498,25 @@ def main():
         "--question_presence_review",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="After benchmark generation, ask the VLM whether question-mentioned objects are present in the image and export flagged samples for manual review",
+        help="After benchmark generation, ask the VLM whether question-mentioned objects are present in the image, then answer selected question types and export any flagged samples for manual review",
     )
     parser.add_argument(
         "--question_presence_review_workers",
         type=int,
         default=8,
         help="Thread pool size for post-generation question presence review",
+    )
+    parser.add_argument(
+        "--question_review_vlm_url",
+        type=str,
+        default=None,
+        help="Optional OpenAI-compatible VLM API base URL for question presence/answer review; falls back to --vlm_url",
+    )
+    parser.add_argument(
+        "--question_review_vlm_model",
+        type=str,
+        default=None,
+        help="Optional model name for question presence/answer review; falls back to --vlm_model",
     )
     args = parser.parse_args()
 
@@ -1231,6 +1536,8 @@ def main():
         use_occlusion_vlm=args.use_occlusion_vlm,
         occlusion_vlm_url=args.vlm_url,
         occlusion_vlm_model=args.vlm_model,
+        question_review_vlm_url=args.question_review_vlm_url,
+        question_review_vlm_model=args.question_review_vlm_model,
         write_frame_debug=args.write_frame_debug,
         run_question_presence_review=args.question_presence_review,
         question_presence_review_workers=args.question_presence_review_workers,
