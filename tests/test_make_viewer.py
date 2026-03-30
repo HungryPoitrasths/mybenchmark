@@ -1,7 +1,10 @@
-from collections import Counter
 import unittest
 
-from scripts.make_viewer import build_task_summary_v2, filter_viewer_questions
+from scripts.make_viewer import (
+    build_task_summary_v2,
+    filter_viewer_questions,
+    select_viewer_source_questions,
+)
 
 
 def make_object_move_question(
@@ -33,7 +36,7 @@ class MakeViewerTests(unittest.TestCase):
             {"type": "attachment_type"},
         ]
 
-        filtered = filter_viewer_questions(questions, attachment_only=True)
+        filtered = select_viewer_source_questions(questions, attachment_only=True)
 
         self.assertEqual(
             [q["type"] for q in filtered],
@@ -52,10 +55,9 @@ class MakeViewerTests(unittest.TestCase):
             {"type": "attachment_type"},
         ]
 
-        filtered = filter_viewer_questions(
+        filtered = select_viewer_source_questions(
             questions,
             requested_qtypes={"viewpoint_move"},
-            attachment_only=False,
         )
 
         self.assertEqual(filtered, [{"type": "viewpoint_move"}])
@@ -66,15 +68,14 @@ class MakeViewerTests(unittest.TestCase):
             {"type": "object_move_agent", "attachment_remapped": True},
         ]
 
-        filtered = filter_viewer_questions(
+        filtered = select_viewer_source_questions(
             questions,
             requested_qtypes={"object_rotate_object_centric"},
-            attachment_only=False,
         )
 
         self.assertEqual(filtered, [{"type": "object_move_object_centric", "attachment_remapped": True}])
 
-    def test_viewer_attachment_filter_keeps_one_unattached_per_frame_when_no_attached(self) -> None:
+    def test_viewer_attachment_filter_drops_unattached_when_no_attached_globally(self) -> None:
         questions = [
             make_object_move_question(qtype="object_move_distance", attached=False, text="keep 1"),
             make_object_move_question(qtype="object_move_distance", attached=False, text="drop 2"),
@@ -90,10 +91,7 @@ class MakeViewerTests(unittest.TestCase):
 
         filtered = filter_viewer_questions(questions)
 
-        self.assertEqual(
-            [q["question"] for q in filtered],
-            ["keep 1", "keep other frame"],
-        )
+        self.assertEqual(filtered, [])
 
     def test_viewer_attachment_filter_keeps_two_to_one_ratio_per_frame(self) -> None:
         questions = [
@@ -111,34 +109,67 @@ class MakeViewerTests(unittest.TestCase):
             ["attached", "free 1", "free 2"],
         )
 
+    def test_viewer_attachment_filter_caps_unattached_globally_per_qtype(self) -> None:
+        questions = [
+            make_object_move_question(qtype="object_move_agent", attached=True, text="attached"),
+            make_object_move_question(qtype="object_move_agent", attached=False, text="free 1"),
+            make_object_move_question(qtype="object_move_agent", attached=False, text="free 2"),
+            make_object_move_question(
+                qtype="object_move_agent",
+                image_name="001.jpg",
+                attached=False,
+                text="drop 3",
+            ),
+            make_object_move_question(
+                qtype="object_move_agent",
+                image_name="002.jpg",
+                attached=False,
+                text="drop 4",
+            ),
+        ]
+
+        filtered = filter_viewer_questions(questions)
+
+        self.assertEqual(
+            [q["question"] for q in filtered],
+            ["attached", "free 1", "free 2"],
+        )
+
     def test_task_summary_v2_canonicalizes_legacy_object_centric_type(self) -> None:
         questions = [
             {"type": "object_move_object_centric", "attachment_remapped": True},
         ]
 
-        summary = build_task_summary_v2(
-            questions,
-            Counter({"object_move_object_centric": 1}),
-        )
+        summary = build_task_summary_v2(questions)
 
         self.assertIn(
-            "L2_object_rotate_object_centric: total=1, with_attachment=1, without_attachment=0",
+            "L2_object_rotate_object_centric: with_attachment=1, without_attachment=0",
             summary,
         )
+        self.assertIn(
+            "L2_object_move_all: with_attachment=1, without_attachment=0",
+            summary,
+        )
+        self.assertNotIn("Viewer Slice", summary)
+        self.assertNotIn("raw=", summary)
+        self.assertNotIn("shown=", summary)
+        self.assertNotIn("hidden=", summary)
+        self.assertNotIn("total=", summary)
+        self.assertNotIn("with_attachment_changed=", summary)
+        self.assertNotIn("with_attachment_unchanged=", summary)
         self.assertNotIn("object_move_object_centric", summary)
 
     def test_task_summary_v2_does_not_list_object_rotate_in_other_types(self) -> None:
         questions = [
             {"type": "object_rotate_object_centric", "attachment_remapped": True},
+            {"type": "custom_unknown"},
+            {"type": "custom_unknown"},
         ]
 
-        summary = build_task_summary_v2(
-            questions,
-            Counter({"object_rotate_object_centric": 1, "custom_unknown": 2}),
-        )
+        summary = build_task_summary_v2(questions)
 
         self.assertIn(
-            "L2_object_rotate_object_centric: total=1, with_attachment=1, without_attachment=0",
+            "L2_object_rotate_object_centric: with_attachment=1, without_attachment=0",
             summary,
         )
         self.assertIn("Other Types:</strong> custom_unknown=2", summary)

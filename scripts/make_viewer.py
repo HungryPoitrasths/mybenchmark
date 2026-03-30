@@ -146,27 +146,19 @@ def _canonical_type_counter(questions: list[dict]) -> Counter:
 
 def _summarize_object_move_questions(
     questions: list[dict],
-) -> tuple[Counter, Counter, Counter, Counter]:
-    total_counter: Counter = Counter()
-    attached_changed_counter: Counter = Counter()
-    attached_unchanged_counter: Counter = Counter()
+) -> tuple[Counter, Counter]:
+    attached_counter: Counter = Counter()
     unattached_counter: Counter = Counter()
     for question in questions:
         qtype = _canonical_qtype(str(question.get("type", "")).strip())
         if qtype not in OBJECT_MOVE_TYPES:
             continue
-        total_counter[qtype] += 1
         if bool(question.get("attachment_remapped", False)):
-            if bool(question.get("relation_unchanged", False)):
-                attached_unchanged_counter[qtype] += 1
-            else:
-                attached_changed_counter[qtype] += 1
+            attached_counter[qtype] += 1
         else:
             unattached_counter[qtype] += 1
     return (
-        total_counter,
-        attached_changed_counter,
-        attached_unchanged_counter,
+        attached_counter,
         unattached_counter,
     )
 
@@ -239,73 +231,34 @@ def build_task_summary(type_counter: Counter) -> str:
     return "".join(parts)
 
 
-def build_task_summary_v2(
-    raw_questions: list[dict],
-    displayed_questions: list[dict],
-) -> str:
+def build_task_summary_v2(displayed_questions: list[dict]) -> str:
     known_keys = {
         key
         for _, items in SUMMARY_GROUPS
         for key, _ in items
     }
     displayed_type_counter = _canonical_type_counter(displayed_questions)
-    (
-        raw_total_counter,
-        raw_attached_changed_counter,
-        raw_attached_unchanged_counter,
-        raw_unattached_counter,
-    ) = _summarize_object_move_questions(raw_questions)
-    (
-        displayed_total_counter,
-        _displayed_attached_changed_counter,
-        _displayed_attached_unchanged_counter,
-        _displayed_unattached_counter,
-    ) = _summarize_object_move_questions(displayed_questions)
-    displayed_ids = {id(question) for question in displayed_questions}
-    hidden_attachment_unchanged = sum(
-        1
-        for question in raw_questions
-        if is_attachment_unchanged_object_move(question)
-        and id(question) not in displayed_ids
+    displayed_attached_counter, displayed_unattached_counter = (
+        _summarize_object_move_questions(displayed_questions)
     )
     parts: list[str] = []
-    viewer_lines = ['<div class="summary-line"><strong>Viewer Slice</strong></div>']
-    viewer_lines.append(
-        f'<div class="summary-line">raw={len(raw_questions)}, shown={len(displayed_questions)}, '
-        f'hidden={len(raw_questions) - len(displayed_questions)}</div>'
-    )
-    if hidden_attachment_unchanged:
-        viewer_lines.append(
-            f'<div class="summary-line">hidden_attachment_unchanged={hidden_attachment_unchanged}</div>'
-        )
-    parts.append(f'<div class="summary-section">{"".join(viewer_lines)}</div>')
 
     for section_title, items in SUMMARY_GROUPS:
         lines = [f'<div class="summary-line"><strong>{section_title}</strong></div>']
         object_move_keys = [key for key, _ in items if key in OBJECT_MOVE_TYPES]
         if object_move_keys:
-            raw_total = sum(raw_total_counter.get(key, 0) for key in object_move_keys)
-            shown_total = sum(displayed_total_counter.get(key, 0) for key in object_move_keys)
-            attached_changed = sum(raw_attached_changed_counter.get(key, 0) for key in object_move_keys)
-            attached_unchanged = sum(raw_attached_unchanged_counter.get(key, 0) for key in object_move_keys)
-            unattached = sum(raw_unattached_counter.get(key, 0) for key in object_move_keys)
+            attached = sum(displayed_attached_counter.get(key, 0) for key in object_move_keys)
+            unattached = sum(displayed_unattached_counter.get(key, 0) for key in object_move_keys)
             lines.append(
-                f'<div class="summary-line">L2_object_move_all: raw={raw_total}, shown={shown_total}, '
-                f'with_attachment_changed={attached_changed}, '
-                f'with_attachment_unchanged={attached_unchanged}, '
+                f'<div class="summary-line">L2_object_move_all: with_attachment={attached}, '
                 f'without_attachment={unattached}</div>'
             )
         for key, label in items:
             if key in OBJECT_MOVE_TYPES:
-                raw_total = raw_total_counter.get(key, 0)
-                shown_total = displayed_total_counter.get(key, 0)
-                attached_changed = raw_attached_changed_counter.get(key, 0)
-                attached_unchanged = raw_attached_unchanged_counter.get(key, 0)
-                unattached = raw_unattached_counter.get(key, 0)
+                attached = displayed_attached_counter.get(key, 0)
+                unattached = displayed_unattached_counter.get(key, 0)
                 lines.append(
-                    f'<div class="summary-line">{label}: raw={raw_total}, shown={shown_total}, '
-                    f'with_attachment_changed={attached_changed}, '
-                    f'with_attachment_unchanged={attached_unchanged}, '
+                    f'<div class="summary-line">{label}: with_attachment={attached}, '
                     f'without_attachment={unattached}</div>'
                 )
             else:
@@ -388,6 +341,34 @@ def _apply_attachment_viewer_filter(questions: list[dict]) -> list[dict]:
     return [q for idx, q in enumerate(questions) if keep_mask[idx]]
 
 
+def _apply_global_object_move_ratio_filter(questions: list[dict]) -> list[dict]:
+    """Cap unattached object-move questions to a 2:1 ratio per canonical qtype."""
+    keep_mask = [True] * len(questions)
+    grouped_indices: dict[str, list[int]] = {}
+    for idx, question in enumerate(questions):
+        qtype = _canonical_qtype(str(question.get("type", "")).strip())
+        if qtype not in OBJECT_MOVE_TYPES:
+            continue
+        grouped_indices.setdefault(qtype, []).append(idx)
+
+    for indices in grouped_indices.values():
+        attached = [
+            idx for idx in indices
+            if bool(questions[idx].get("attachment_remapped", False))
+        ]
+        unattached = [
+            idx for idx in indices
+            if not bool(questions[idx].get("attachment_remapped", False))
+        ]
+        allowed_unattached = 2 * len(attached)
+        kept_unattached = set(unattached[:allowed_unattached])
+        for idx in unattached:
+            if idx not in kept_unattached:
+                keep_mask[idx] = False
+
+    return [q for idx, q in enumerate(questions) if keep_mask[idx]]
+
+
 def is_attachment_viewer_question(question: dict) -> bool:
     qtype = _canonical_qtype(str(question.get("type", "")).strip())
     if qtype == "attachment_chain":
@@ -406,7 +387,8 @@ def filter_viewer_questions(
             question for question in filtered
             if not is_attachment_unchanged_object_move(question)
         ]
-    return _apply_attachment_viewer_filter(filtered)
+    filtered = _apply_attachment_viewer_filter(filtered)
+    return _apply_global_object_move_ratio_filter(filtered)
 
 
 def question_badges(question: dict) -> str:
@@ -604,7 +586,7 @@ def main():
     levels_str = " &nbsp;&middot;&nbsp; ".join(
         f"{k}: {v}" for k, v in sorted(level_counter.items())
     )
-    task_summary = build_task_summary_v2(source_questions, questions)
+    task_summary = build_task_summary_v2(questions)
     html = PAGE.format(
         n=len(questions),
         levels=levels_str,
