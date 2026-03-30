@@ -127,6 +127,75 @@ def _canonical_qtype(qtype: str) -> str:
     return QUESTION_TYPE_ALIASES.get(canonical, canonical)
 
 
+def is_attachment_unchanged_object_move(question: dict) -> bool:
+    qtype = _canonical_qtype(str(question.get("type", "")).strip())
+    return (
+        qtype in OBJECT_MOVE_TYPES
+        and bool(question.get("attachment_remapped", False))
+        and bool(question.get("relation_unchanged", False))
+    )
+
+
+def _canonical_type_counter(questions: list[dict]) -> Counter:
+    counter: Counter = Counter()
+    for question in questions:
+        qtype = _canonical_qtype(str(question.get("type", "")).strip()) or "unknown"
+        counter[qtype] += 1
+    return counter
+
+
+def _summarize_object_move_questions(
+    questions: list[dict],
+) -> tuple[Counter, Counter, Counter, Counter]:
+    total_counter: Counter = Counter()
+    attached_changed_counter: Counter = Counter()
+    attached_unchanged_counter: Counter = Counter()
+    unattached_counter: Counter = Counter()
+    for question in questions:
+        qtype = _canonical_qtype(str(question.get("type", "")).strip())
+        if qtype not in OBJECT_MOVE_TYPES:
+            continue
+        total_counter[qtype] += 1
+        if bool(question.get("attachment_remapped", False)):
+            if bool(question.get("relation_unchanged", False)):
+                attached_unchanged_counter[qtype] += 1
+            else:
+                attached_changed_counter[qtype] += 1
+        else:
+            unattached_counter[qtype] += 1
+    return (
+        total_counter,
+        attached_changed_counter,
+        attached_unchanged_counter,
+        unattached_counter,
+    )
+
+
+def select_viewer_source_questions(
+    questions: list[dict],
+    *,
+    requested_qtypes: set[str] | None = None,
+    attachment_only: bool = False,
+) -> list[dict]:
+    filtered = [
+        q for q in questions
+        if _canonical_qtype(str(q.get("type", "")).strip()) not in REMOVED_TYPES
+    ]
+    if attachment_only:
+        return [q for q in filtered if is_attachment_viewer_question(q)]
+    if requested_qtypes:
+        canonical_requested_qtypes = {
+            _canonical_qtype(str(qtype).strip())
+            for qtype in requested_qtypes
+            if str(qtype).strip()
+        }
+        return [
+            q for q in filtered
+            if _canonical_qtype(str(q.get("type", "")).strip()) in canonical_requested_qtypes
+        ]
+    return filtered
+
+
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
     try:
         img = Image.open(path).convert("RGB")
@@ -170,55 +239,84 @@ def build_task_summary(type_counter: Counter) -> str:
     return "".join(parts)
 
 
-def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
+def build_task_summary_v2(
+    raw_questions: list[dict],
+    displayed_questions: list[dict],
+) -> str:
     known_keys = {
         key
         for _, items in SUMMARY_GROUPS
         for key, _ in items
     }
-    canonical_type_counter: Counter = Counter()
-    for qtype, count in type_counter.items():
-        canonical_type_counter[_canonical_qtype(str(qtype).strip()) or "unknown"] += count
-    total_counter: Counter = Counter()
-    attached_counter: Counter = Counter()
-    for q in questions:
-        qtype = _canonical_qtype(str(q.get("type", "")).strip())
-        if qtype not in OBJECT_MOVE_TYPES:
-            continue
-        total_counter[qtype] += 1
-        if bool(q.get("attachment_remapped", False)):
-            attached_counter[qtype] += 1
-
+    displayed_type_counter = _canonical_type_counter(displayed_questions)
+    (
+        raw_total_counter,
+        raw_attached_changed_counter,
+        raw_attached_unchanged_counter,
+        raw_unattached_counter,
+    ) = _summarize_object_move_questions(raw_questions)
+    (
+        displayed_total_counter,
+        _displayed_attached_changed_counter,
+        _displayed_attached_unchanged_counter,
+        _displayed_unattached_counter,
+    ) = _summarize_object_move_questions(displayed_questions)
+    displayed_ids = {id(question) for question in displayed_questions}
+    hidden_attachment_unchanged = sum(
+        1
+        for question in raw_questions
+        if is_attachment_unchanged_object_move(question)
+        and id(question) not in displayed_ids
+    )
     parts: list[str] = []
+    viewer_lines = ['<div class="summary-line"><strong>Viewer Slice</strong></div>']
+    viewer_lines.append(
+        f'<div class="summary-line">raw={len(raw_questions)}, shown={len(displayed_questions)}, '
+        f'hidden={len(raw_questions) - len(displayed_questions)}</div>'
+    )
+    if hidden_attachment_unchanged:
+        viewer_lines.append(
+            f'<div class="summary-line">hidden_attachment_unchanged={hidden_attachment_unchanged}</div>'
+        )
+    parts.append(f'<div class="summary-section">{"".join(viewer_lines)}</div>')
+
     for section_title, items in SUMMARY_GROUPS:
         lines = [f'<div class="summary-line"><strong>{section_title}</strong></div>']
         object_move_keys = [key for key, _ in items if key in OBJECT_MOVE_TYPES]
         if object_move_keys:
-            total = sum(total_counter.get(key, 0) for key in object_move_keys)
-            attached = sum(attached_counter.get(key, 0) for key in object_move_keys)
-            unattached = total - attached
+            raw_total = sum(raw_total_counter.get(key, 0) for key in object_move_keys)
+            shown_total = sum(displayed_total_counter.get(key, 0) for key in object_move_keys)
+            attached_changed = sum(raw_attached_changed_counter.get(key, 0) for key in object_move_keys)
+            attached_unchanged = sum(raw_attached_unchanged_counter.get(key, 0) for key in object_move_keys)
+            unattached = sum(raw_unattached_counter.get(key, 0) for key in object_move_keys)
             lines.append(
-                f'<div class="summary-line">L2_object_move_all: total={total}, '
-                f'with_attachment={attached}, without_attachment={unattached}</div>'
+                f'<div class="summary-line">L2_object_move_all: raw={raw_total}, shown={shown_total}, '
+                f'with_attachment_changed={attached_changed}, '
+                f'with_attachment_unchanged={attached_unchanged}, '
+                f'without_attachment={unattached}</div>'
             )
         for key, label in items:
             if key in OBJECT_MOVE_TYPES:
-                total = total_counter.get(key, 0)
-                attached = attached_counter.get(key, 0)
-                unattached = total - attached
+                raw_total = raw_total_counter.get(key, 0)
+                shown_total = displayed_total_counter.get(key, 0)
+                attached_changed = raw_attached_changed_counter.get(key, 0)
+                attached_unchanged = raw_attached_unchanged_counter.get(key, 0)
+                unattached = raw_unattached_counter.get(key, 0)
                 lines.append(
-                    f'<div class="summary-line">{label}: total={total}, '
-                    f'with_attachment={attached}, without_attachment={unattached}</div>'
+                    f'<div class="summary-line">{label}: raw={raw_total}, shown={shown_total}, '
+                    f'with_attachment_changed={attached_changed}, '
+                    f'with_attachment_unchanged={attached_unchanged}, '
+                    f'without_attachment={unattached}</div>'
                 )
             else:
                 lines.append(
-                f'<div class="summary-line">{label}: {canonical_type_counter.get(key, 0)}</div>'
+                f'<div class="summary-line">{label}: {displayed_type_counter.get(key, 0)}</div>'
                 )
         parts.append(f'<div class="summary-section">{"".join(lines)}</div>')
 
     other_items = [
         (qtype, count)
-        for qtype, count in sorted(canonical_type_counter.items())
+        for qtype, count in sorted(displayed_type_counter.items())
         if qtype not in known_keys
     ]
     if other_items:
@@ -298,30 +396,26 @@ def is_attachment_viewer_question(question: dict) -> bool:
 
 
 def filter_viewer_questions(
-    questions: list[dict],
+    source_questions: list[dict],
     *,
-    requested_qtypes: set[str] | None = None,
-    attachment_only: bool = False,
+    include_attachment_unchanged: bool = False,
 ) -> list[dict]:
-    filtered = [
-        q for q in questions
-        if _canonical_qtype(str(q.get("type", "")).strip()) not in REMOVED_TYPES
-    ]
-    if attachment_only:
-        filtered = [q for q in filtered if is_attachment_viewer_question(q)]
-        return _apply_attachment_viewer_filter(filtered)
-    if requested_qtypes:
-        canonical_requested_qtypes = {
-            _canonical_qtype(str(qtype).strip())
-            for qtype in requested_qtypes
-            if str(qtype).strip()
-        }
+    filtered = list(source_questions)
+    if not include_attachment_unchanged:
         filtered = [
-            q for q in filtered
-            if _canonical_qtype(str(q.get("type", "")).strip()) in canonical_requested_qtypes
+            question for question in filtered
+            if not is_attachment_unchanged_object_move(question)
         ]
-        return _apply_attachment_viewer_filter(filtered)
     return _apply_attachment_viewer_filter(filtered)
+
+
+def question_badges(question: dict) -> str:
+    badges: list[str] = []
+    if bool(question.get("attachment_remapped", False)):
+        badges.append('<span class="badge extra attachment">attachment</span>')
+    if bool(question.get("relation_unchanged", False)):
+        badges.append('<span class="badge extra unchanged">unchanged</span>')
+    return "".join(badges)
 
 
 PAGE = """\
@@ -357,6 +451,9 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .L1{{background:#dbeafe;color:#1d4ed8}}
 .L2{{background:#fce7f3;color:#9d174d}}
 .L3{{background:#ede9fe;color:#5b21b6}}
+.extra{{background:#f3f4f6;color:#374151}}
+.attachment{{background:#d1fae5;color:#065f46}}
+.unchanged{{background:#fef3c7;color:#92400e}}
 .qtext{{font-size:15px;font-weight:600;color:#111;margin:0 0 14px}}
 .opt{{padding:7px 12px;margin:4px 0;border-radius:6px;font-size:14px;
       background:#f8f9fa;border:1px solid #e5e7eb}}
@@ -384,6 +481,7 @@ CARD = """\
     <div class="meta">
       <span class="badge {level}">{level}</span>
       <span class="badge" style="background:#f3f4f6;color:#374151">{qtype}</span>
+      {extra_badges}
       <span class="idx">#{idx}</span>
     </div>
     <p class="qtext">{question}</p>
@@ -417,6 +515,11 @@ def main():
         help="Keep only attachment-related questions: attachment_chain and attached object_move_* items",
     )
     parser.add_argument(
+        "--include_attachment_unchanged",
+        action="store_true",
+        help="Include attachment-mediated object_move_* questions whose answer is unchanged after the move",
+    )
+    parser.add_argument(
         "--max_width",
         type=int,
         default=480,
@@ -442,16 +545,19 @@ def main():
         requested_qtypes.update(
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )
-    questions = filter_viewer_questions(
+    source_questions = select_viewer_source_questions(
         questions,
         requested_qtypes=requested_qtypes,
         attachment_only=args.attachment_only,
+    )
+    questions = filter_viewer_questions(
+        source_questions,
+        include_attachment_unchanged=args.include_attachment_unchanged,
     )
     questions = order_questions_for_viewer(questions, seed=args.shuffle_seed)
 
     image_root = Path(args.image_root)
     level_counter: Counter = Counter()
-    type_counter: Counter = Counter()
     cards: list[str] = []
 
     for idx, q in enumerate(questions, 1):
@@ -463,7 +569,6 @@ def main():
         opts = q.get("options", [])
 
         level_counter[level] += 1
-        type_counter[qtype or "unknown"] += 1
 
         img_path = image_root / scene / "color" / frame
         b64 = img_to_b64(img_path, args.max_width)
@@ -484,6 +589,7 @@ def main():
                 img=img_html,
                 level=level,
                 qtype=QTYPE_DISPLAY.get(qtype, qtype),
+                extra_badges=question_badges(q),
                 idx=idx,
                 question=q.get("question", ""),
                 options=opt_html,
@@ -498,7 +604,7 @@ def main():
     levels_str = " &nbsp;&middot;&nbsp; ".join(
         f"{k}: {v}" for k, v in sorted(level_counter.items())
     )
-    task_summary = build_task_summary_v2(questions, type_counter)
+    task_summary = build_task_summary_v2(source_questions, questions)
     html = PAGE.format(
         n=len(questions),
         levels=levels_str,
