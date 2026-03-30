@@ -50,7 +50,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             "obj_a_id": 1,
             "obj_b_id": 2,
             "direction_b_rel_a": "right",
-            "distance_bin": "close (1.5-3m)",
+            "distance_bin": "close (1.0-2.0m)",
             "occlusion_a": "unknown",
             "occlusion_b": "unknown",
         }

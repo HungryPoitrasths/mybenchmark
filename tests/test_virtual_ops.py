@@ -117,7 +117,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(delta)
-        self.assertEqual(delta.tolist(), [-0.5, 0.0, 0.0])
+        self.assertEqual(delta.tolist(), [-1.0, 0.0, 0.0])
         self.assertTrue(changed)
 
     def test_find_meaningful_movement_uses_collision_objects(self) -> None:

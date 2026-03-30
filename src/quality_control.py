@@ -92,8 +92,7 @@ def quality_filter(questions: list[dict]) -> list[dict]:
 
     Filters:
         1. Direction ambiguity > 0.7 (too close to boundary)
-        2. Distance questions near bin boundaries
-        3. Near-duplicate questions (same frame + type + attachment ids or label tuple, keep one)
+        2. Near-duplicate questions (same frame + type + attachment ids or label tuple, keep one)
     """
     filtered: list[dict] = []
     removed_counts: Counter = Counter()
@@ -104,14 +103,9 @@ def quality_filter(questions: list[dict]) -> list[dict]:
             removed_counts["ambiguous_direction"] += 1
             continue
 
-        # Filter 2: distance near boundary
-        if q.get("type") == "distance" and q.get("near_boundary", False):
-            removed_counts["near_boundary"] += 1
-            continue
-
         filtered.append(q)
 
-    # Filter 3: deduplicate near-identical questions.
+    # Filter 2: deduplicate near-identical questions.
     # Same (scene, frame, type, primary_object) → keep only one.
     seen_keys: set[tuple] = set()
     deduped: list[dict] = []
@@ -203,7 +197,7 @@ def cap_l1_occlusion_not_visible_ratio(
 def enforce_l2_attachment_dominance(
     questions: list[dict],
 ) -> list[dict]:
-    """Globally enforce without_attachment <= 2 * with_attachment for L2 object-move types."""
+    """Globally enforce unattached <= 2 * attached, with a small zero-attachment fallback."""
     def _dominance_bucket(qtype: str) -> str:
         canonical = str(QUESTION_TYPE_ALIASES.get(qtype, qtype)).strip()
         if canonical.startswith("object_move_") or canonical == "object_rotate_object_centric":
@@ -234,7 +228,10 @@ def enforce_l2_attachment_dominance(
             and _dominance_bucket(str(q.get("type", "")).strip()) == qtype
             and not bool(q.get("attachment_remapped", False))
         ]
-        allowed_unattached = 2 * len(attached_indices)
+        # Mirror the per-frame generator safeguard: if a type has no attachment
+        # examples at all, keep a small unattached sample instead of wiping the
+        # type out globally.
+        allowed_unattached = (2 * len(attached_indices)) if attached_indices else 3
         if len(unattached_indices) <= allowed_unattached:
             continue
 

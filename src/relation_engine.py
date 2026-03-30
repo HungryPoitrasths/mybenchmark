@@ -589,10 +589,10 @@ def camera_cardinal_direction(camera_pose: CameraPose) -> str:
 # ---- Distance relation ----
 
 DISTANCE_BINS = [
-    (0.5, "touching (<0.5m)"),
-    (1.5, "very close (0.5-1.5m)"),
-    (3.0, "close (1.5-3m)"),
-    (float("inf"), "far (>3m)"),
+    (1.0, "very close (<1.0m)"),
+    (2.0, "close (1.0-2.0m)"),
+    (3.3, "moderate (2.0-3.3m)"),
+    (float("inf"), "far (>3.3m)"),
 ]
 
 # Minimum centre-to-centre distance for direction questions.
@@ -600,7 +600,8 @@ DISTANCE_BINS = [
 # judgements unreliable.
 MIN_DIRECTION_DISTANCE = 0.5  # metres
 
-DISTANCE_BIN_BOUNDARIES = [b[0] for b in DISTANCE_BINS[:-1]]  # [0.5, 1.5, 3.0]
+DISTANCE_BIN_BOUNDARIES = [b[0] for b in DISTANCE_BINS[:-1]]  # [1.0, 2.0, 3.3]
+DISTANCE_BOUNDARY_MARGIN = 0.1
 
 
 def compute_distance(
@@ -609,7 +610,7 @@ def compute_distance(
 ) -> tuple[str, float, bool]:
     """Compute Euclidean distance and categorical bin."""
     dist = float(np.linalg.norm(np.asarray(obj_a_center, dtype=float) - np.asarray(obj_b_center, dtype=float)))
-    near_boundary = any(abs(dist - b) < 0.2 for b in DISTANCE_BIN_BOUNDARIES)
+    near_boundary = any(abs(dist - b) < DISTANCE_BOUNDARY_MARGIN for b in DISTANCE_BIN_BOUNDARIES)
 
     for threshold, label in DISTANCE_BINS:
         if dist < threshold:

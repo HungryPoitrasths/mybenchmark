@@ -19,6 +19,7 @@ import numpy as np
 from .relation_engine import (
     ALL_DIRECTIONS_10,
     CARDINAL_DIRECTIONS_8,
+    DISTANCE_BINS,
     HORIZONTAL_DIRECTIONS,
     MIN_DIRECTION_DISTANCE,
     compute_all_relations,
@@ -62,10 +63,18 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
-ALL_DISTANCES = ["touching (<0.5m)", "very close (0.5-1.5m)", "close (1.5-3m)", "far (>3m)"]
+ALL_DISTANCES = [label for _, label in DISTANCE_BINS]
 ALL_OCCLUSION = ["fully visible", "partially occluded", "not visible"]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
 YES_NO = ["Yes", "No"]
+DISTANCE_MOVE_SEARCH_STEP_M = 0.1
+DISTANCE_MOVE_SEARCH_MAX_M = 3.0
+DISTANCE_MOVE_DIRECTIONS = [
+    np.array([1.0, 0.0, 0.0], dtype=np.float64),
+    np.array([-1.0, 0.0, 0.0], dtype=np.float64),
+    np.array([0.0, 1.0, 0.0], dtype=np.float64),
+    np.array([0.0, -1.0, 0.0], dtype=np.float64),
+]
 
 # Object-centric questions need a stable horizontal facing direction.
 MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE = 0.3
@@ -2027,6 +2036,165 @@ def _find_object_move_delta_and_changes(
     return None, []
 
 
+def _distance_bin_index(label: str) -> int | None:
+    for idx, (_, candidate_label) in enumerate(DISTANCE_BINS):
+        if candidate_label == label:
+            return idx
+    return None
+
+
+def _iter_distance_move_deltas():
+    max_steps = int(round(DISTANCE_MOVE_SEARCH_MAX_M / DISTANCE_MOVE_SEARCH_STEP_M))
+    for step_idx in range(1, max_steps + 1):
+        magnitude = round(step_idx * DISTANCE_MOVE_SEARCH_STEP_M, 1)
+        for direction in DISTANCE_MOVE_DIRECTIONS:
+            yield np.round(direction * magnitude, 1)
+
+
+def _find_stable_distance_move_for_relation(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    target_id: int,
+    relation: dict[str, Any],
+    *,
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+) -> tuple[np.ndarray | None, str | None]:
+    """Find the smallest valid horizontal move that stably crosses one distance bin."""
+    old_label = str(relation.get("distance_bin", "")).strip()
+    old_idx = _distance_bin_index(old_label)
+    if old_idx is None:
+        return None, None
+
+    obj_a_id = int(relation["obj_a_id"])
+    obj_b_id = int(relation["obj_b_id"])
+    moved_ids = get_moved_object_ids(target_id, attachment_graph)
+    affects_a = obj_a_id in moved_ids
+    affects_b = obj_b_id in moved_ids
+    if affects_a == affects_b:
+        return None, None
+
+    room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
+    obj_map = {int(obj["id"]): obj for obj in objects}
+    if obj_a_id not in obj_map or obj_b_id not in obj_map:
+        return None, None
+
+    for delta in _iter_distance_move_deltas():
+        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
+        if not is_within_room(new_objects, room_min, room_max):
+            continue
+        if has_terminal_bbox_collision(
+            objects,
+            new_objects,
+            moved_ids,
+            collision_objects=collision_objects,
+        ):
+            continue
+
+        new_map = {int(obj["id"]): obj for obj in new_objects}
+        new_label, _new_dist, new_near_boundary = compute_distance(
+            np.asarray(new_map[obj_a_id]["center"], dtype=float),
+            np.asarray(new_map[obj_b_id]["center"], dtype=float),
+        )
+        new_idx = _distance_bin_index(new_label)
+        if new_idx is None or abs(new_idx - old_idx) != 1:
+            continue
+        if new_near_boundary:
+            continue
+        return np.asarray(delta, dtype=np.float64), new_label
+
+    return None, None
+
+
+def _generate_l2_distance_questions_for_object(
+    *,
+    query_obj: dict[str, Any],
+    move_source: dict[str, Any],
+    move_source_id: int,
+    attachment_remapped: bool,
+    relations: list[dict[str, Any]],
+    movement_scene_objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    templates: dict[str, Any],
+    obj_map: dict[int, dict[str, Any]],
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+) -> list[dict[str, Any]]:
+    """Generate L2 distance questions using pair-specific stable cross-bin moves."""
+    tpl_list = templates.get(
+        "L2_object_move_distance",
+        _default_templates()["L2_object_move_distance"],
+    )
+    has_attachment_chain = len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0
+    questions: list[dict[str, Any]] = []
+
+    for relation in relations:
+        if query_obj["id"] not in (relation["obj_a_id"], relation["obj_b_id"]):
+            continue
+
+        delta, answer_value = _find_stable_distance_move_for_relation(
+            movement_scene_objects,
+            attachment_graph,
+            move_source_id,
+            relation,
+            room_bounds=room_bounds,
+            collision_objects=collision_objects,
+        )
+        if delta is None or answer_value is None:
+            continue
+
+        if query_obj["id"] == relation["obj_b_id"]:
+            relation_obj_b_id = relation["obj_b_id"]
+            relation_obj_c_id = relation["obj_a_id"]
+        else:
+            relation_obj_b_id = relation["obj_a_id"]
+            relation_obj_c_id = relation["obj_b_id"]
+
+        obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
+        obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+        direction_desc = _delta_to_description(delta, camera_pose)
+        distance_desc = f"{np.linalg.norm(delta):.1f}m"
+        tpl = random.choice(tpl_list)
+        question_text = tpl.format(
+            obj_a=_the(move_source["label"]),
+            direction=direction_desc,
+            direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
+            distance=distance_desc,
+            obj_b=_the(obj_b_label),
+            obj_c=_the(obj_c_label),
+        )
+        options, answer = generate_options(answer_value, ALL_DISTANCES)
+        questions.append({
+            "level": "L2",
+            "type": "object_move_distance",
+            "question": question_text,
+            "options": options,
+            "answer": answer,
+            "correct_value": answer_value,
+            "moved_obj_id": move_source_id,
+            "moved_obj_label": move_source["label"],
+            "query_obj_id": query_obj["id"],
+            "query_obj_label": query_obj["label"],
+            "attachment_remapped": attachment_remapped,
+            "obj_b_id": relation_obj_b_id,
+            "obj_b_label": obj_b_label,
+            "obj_c_id": relation_obj_c_id,
+            "obj_c_label": obj_c_label,
+            "mentioned_objects": [
+                _mention("moved_object", move_source["label"], move_source_id),
+                _mention("query_object", query_obj["label"], query_obj["id"]),
+                _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
+                _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
+            ],
+            "delta": delta.tolist(),
+            "relation_unchanged": False,
+            "has_attachment_chain": has_attachment_chain,
+        })
+
+    return questions
+
+
 def _cap_question_groups(
     questions_by_key: dict[Any, list[dict]],
     max_per_group: int | None,
@@ -2135,6 +2303,7 @@ def generate_l2_object_move(
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
     }
+    base_relations = compute_all_relations(movement_scene_objects, camera_pose, None, None)
 
     for obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
@@ -2157,116 +2326,112 @@ def generate_l2_object_move(
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
         )
-        if delta is None:
-            continue
-
-        # Only keep relation changes involving the queried object.
-        changed = [
-            ch for ch in changed
-            if obj["id"] in (ch["obj_a_id"], ch["obj_b_id"])
-        ]
-        if not changed:
-            continue
-
-        # Describe the movement in natural language
-        direction_desc = _delta_to_description(delta, camera_pose)
-        distance_desc = f"{np.linalg.norm(delta):.1f}m"
-
-        tpl_list = templates.get(
-            "L2_object_move_agent",
-            templates.get("L2_object_move", _default_templates()["L2_object_move_agent"]),
-        )
-
         obj_questions: list[dict] = []
-        for ch in changed:
-            # Ensure the changed relation directly involves the queried object.
-            if obj["id"] not in (ch["obj_a_id"], ch["obj_b_id"]):
-                continue
+        if delta is not None:
+            changed = [
+                ch for ch in changed
+                if obj["id"] in (ch["obj_a_id"], ch["obj_b_id"])
+            ]
+            if changed:
+                direction_desc = _delta_to_description(delta, camera_pose)
+                distance_desc = f"{np.linalg.norm(delta):.1f}m"
+                has_attachment_chain = len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0
 
-            # Pick a changed relation field
-            for field, vals in ch["changes"].items():
-                if field == "direction_b_rel_a":
-                    pool = ALL_DIRECTIONS
-                    field_tpl_key = "L2_object_move_agent"
-                elif field == "distance_bin":
-                    pool = ALL_DISTANCES
-                    field_tpl_key = "L2_object_move_distance"
-                elif field in ("occlusion_a", "occlusion_b"):
-                    pool = ALL_OCCLUSION
-                    field_tpl_key = "L2_object_move_occlusion"
-                else:
-                    continue
+                for ch in changed:
+                    for field, vals in ch["changes"].items():
+                        if field == "distance_bin":
+                            continue
+                        if field == "direction_b_rel_a":
+                            pool = ALL_DIRECTIONS
+                            field_tpl_key = "L2_object_move_agent"
+                        elif field in ("occlusion_a", "occlusion_b"):
+                            pool = ALL_OCCLUSION
+                            field_tpl_key = "L2_object_move_occlusion"
+                        else:
+                            continue
 
-                if obj["id"] == ch["obj_b_id"]:
-                    relation_obj_b_id = ch["obj_b_id"]
-                    relation_obj_c_id = ch["obj_a_id"]
-                    answer_value = vals["new"]
-                elif obj["id"] == ch["obj_a_id"]:
-                    relation_obj_b_id = ch["obj_a_id"]
-                    relation_obj_c_id = ch["obj_b_id"]
-                    answer_value = (
-                        _invert_direction(vals["new"])
-                        if field == "direction_b_rel_a"
-                        else vals["new"]
-                    )
-                else:
-                    continue
+                        if obj["id"] == ch["obj_b_id"]:
+                            relation_obj_b_id = ch["obj_b_id"]
+                            relation_obj_c_id = ch["obj_a_id"]
+                            answer_value = vals["new"]
+                        elif obj["id"] == ch["obj_a_id"]:
+                            relation_obj_b_id = ch["obj_a_id"]
+                            relation_obj_c_id = ch["obj_b_id"]
+                            answer_value = (
+                                _invert_direction(vals["new"])
+                                if field == "direction_b_rel_a"
+                                else vals["new"]
+                            )
+                        else:
+                            continue
 
-                obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
-                obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
-
-                field_tpl_list = templates.get(
-                    field_tpl_key,
-                    templates.get(
-                        field_tpl_key.removesuffix("_agent"),
-                        _default_templates()[field_tpl_key],
-                    ),
-                )
-                tpl = random.choice(field_tpl_list)
-                question_text = tpl.format(
-                    obj_a=_the(move_source["label"]),
-                    direction=direction_desc,
-                    direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
-                    distance=distance_desc,
-                    obj_b=_the(obj_b_label),
-                    obj_c=_the(obj_c_label),
-                )
-                options, answer = generate_options(answer_value, pool)
-
-                obj_questions.append({
-                    "level": "L2",
-                    "type": (
-                        "object_move_distance"
-                        if field_tpl_key == "L2_object_move_distance"
-                        else (
-                            "object_move_occlusion"
-                            if field_tpl_key == "L2_object_move_occlusion"
-                            else "object_move_agent"
+                        obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
+                        obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+                        field_tpl_list = templates.get(
+                            field_tpl_key,
+                            templates.get(
+                                field_tpl_key.removesuffix("_agent"),
+                                _default_templates()[field_tpl_key],
+                            ),
                         )
-                    ),
-                    "question": question_text,
-                    "options": options,
-                    "answer": answer,
-                    "correct_value": answer_value,
-                    "moved_obj_id": move_source_id,
-                    "moved_obj_label": move_source["label"],
-                    "query_obj_id": obj["id"],
-                    "query_obj_label": obj["label"],
-                    "attachment_remapped": attachment_remapped,
-                    "obj_b_id": relation_obj_b_id,
-                    "obj_b_label": obj_b_label,
-                    "obj_c_id": relation_obj_c_id,
-                    "obj_c_label": obj_c_label,
-                    "mentioned_objects": [
-                        _mention("moved_object", move_source["label"], move_source_id),
-                        _mention("query_object", obj["label"], obj["id"]),
-                        _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
-                        _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
-                    ],
-                    "delta": delta.tolist(),
-                    "relation_unchanged": False,
-                    "has_attachment_chain": len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0,
-                })
+                        tpl = random.choice(field_tpl_list)
+                        question_text = tpl.format(
+                            obj_a=_the(move_source["label"]),
+                            direction=direction_desc,
+                            direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
+                            distance=distance_desc,
+                            obj_b=_the(obj_b_label),
+                            obj_c=_the(obj_c_label),
+                        )
+                        options, answer = generate_options(answer_value, pool)
+
+                        obj_questions.append({
+                            "level": "L2",
+                            "type": (
+                                "object_move_occlusion"
+                                if field_tpl_key == "L2_object_move_occlusion"
+                                else "object_move_agent"
+                            ),
+                            "question": question_text,
+                            "options": options,
+                            "answer": answer,
+                            "correct_value": answer_value,
+                            "moved_obj_id": move_source_id,
+                            "moved_obj_label": move_source["label"],
+                            "query_obj_id": obj["id"],
+                            "query_obj_label": obj["label"],
+                            "attachment_remapped": attachment_remapped,
+                            "obj_b_id": relation_obj_b_id,
+                            "obj_b_label": obj_b_label,
+                            "obj_c_id": relation_obj_c_id,
+                            "obj_c_label": obj_c_label,
+                            "mentioned_objects": [
+                                _mention("moved_object", move_source["label"], move_source_id),
+                                _mention("query_object", obj["label"], obj["id"]),
+                                _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
+                                _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
+                            ],
+                            "delta": delta.tolist(),
+                            "relation_unchanged": False,
+                            "has_attachment_chain": has_attachment_chain,
+                        })
+
+        obj_questions.extend(
+            _generate_l2_distance_questions_for_object(
+                query_obj=obj,
+                move_source=move_source,
+                move_source_id=move_source_id,
+                attachment_remapped=attachment_remapped,
+                relations=base_relations,
+                movement_scene_objects=movement_scene_objects,
+                attachment_graph=attachment_graph,
+                camera_pose=camera_pose,
+                templates=templates,
+                obj_map=obj_map,
+                room_bounds=room_bounds,
+                collision_objects=collision_objects,
+            )
+        )
 
         if obj_questions:
             object_key = int(obj["id"])
