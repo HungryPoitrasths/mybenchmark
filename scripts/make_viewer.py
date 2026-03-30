@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import json
 import random
 import sys
@@ -44,7 +45,7 @@ from pathlib import Path
 try:
     from PIL import Image
 except ImportError:
-    sys.exit("Pillow is required: pip install Pillow")
+    Image = None
 
 
 SUMMARY_GROUPS = [
@@ -189,6 +190,8 @@ def select_viewer_source_questions(
 
 
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
+    if Image is None:
+        return None
     try:
         img = Image.open(path).convert("RGB")
         w, h = img.size
@@ -397,7 +400,66 @@ def question_badges(question: dict) -> str:
         badges.append('<span class="badge extra attachment">attachment</span>')
     if bool(question.get("relation_unchanged", False)):
         badges.append('<span class="badge extra unchanged">unchanged</span>')
+    if bool(question.get("manual_review_reason")):
+        badges.append('<span class="badge extra review">manual-review</span>')
     return "".join(badges)
+
+
+def question_review_notes(question: dict) -> str:
+    parts: list[str] = []
+
+    manual_review_reason = str(question.get("manual_review_reason", "")).strip()
+    if manual_review_reason:
+        parts.append(
+            '<div class="review-block">'
+            '<div class="review-title">Manual Review</div>'
+            f'<div class="review-line">{html.escape(manual_review_reason)}</div>'
+            '</div>'
+        )
+
+    review = question.get("question_presence_review")
+    if isinstance(review, dict):
+        lines: list[str] = []
+        decision = str(review.get("decision", "")).strip()
+        if decision:
+            lines.append(f"decision: {decision}")
+
+        flagged_labels = review.get("flagged_labels", [])
+        if isinstance(flagged_labels, list) and flagged_labels:
+            labels_text = ", ".join(str(label) for label in flagged_labels if str(label).strip())
+            if labels_text:
+                lines.append(f"flagged labels: {labels_text}")
+
+        object_reviews = review.get("object_reviews", [])
+        if isinstance(object_reviews, list):
+            for obj_review in object_reviews:
+                if not isinstance(obj_review, dict):
+                    continue
+                label = str(obj_review.get("label", "")).strip()
+                status = str(obj_review.get("status", "")).strip()
+                reason = str(obj_review.get("reason", "")).strip()
+                if not label and not status:
+                    continue
+                line = f"{label}: {status}" if label else status
+                if reason:
+                    line = f"{line} ({reason})"
+                lines.append(line)
+
+        if lines:
+            review_lines = "".join(
+                f'<div class="review-line">{html.escape(line)}</div>'
+                for line in lines
+            )
+            parts.append(
+                '<div class="review-block">'
+                '<div class="review-title">VLM Review</div>'
+                f"{review_lines}"
+                "</div>"
+            )
+
+    if not parts:
+        return ""
+    return f'<div class="review-notes">{"".join(parts)}</div>'
 
 
 PAGE = """\
@@ -405,7 +467,7 @@ PAGE = """\
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>predictive spatial reasoning benchmark</title>
+<title>{title}</title>
 <style>
 *{{box-sizing:border-box}}
 body{{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}}
@@ -436,16 +498,23 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .extra{{background:#f3f4f6;color:#374151}}
 .attachment{{background:#d1fae5;color:#065f46}}
 .unchanged{{background:#fef3c7;color:#92400e}}
+.review{{background:#fee2e2;color:#991b1b}}
 .qtext{{font-size:15px;font-weight:600;color:#111;margin:0 0 14px}}
 .opt{{padding:7px 12px;margin:4px 0;border-radius:6px;font-size:14px;
       background:#f8f9fa;border:1px solid #e5e7eb}}
 .opt.correct{{background:#dcfce7;border-color:#86efac;font-weight:700}}
+.review-notes{{margin-top:14px;padding:12px 14px;border-radius:8px;background:#fff7ed;
+              border:1px solid #fed7aa}}
+.review-block + .review-block{{margin-top:10px}}
+.review-title{{font-size:12px;font-weight:700;color:#9a3412;margin-bottom:6px;
+              text-transform:uppercase;letter-spacing:.04em}}
+.review-line{{font-size:13px;color:#7c2d12;line-height:1.5}}
 .footer{{margin-top:14px;font-size:11px;color:#aaa}}
 .idx{{float:right;color:#ccc;font-size:12px}}
 </style>
 </head>
 <body>
-<h1>predictive spatial reasoning benchmark</h1>
+<h1>{title}</h1>
 <div class="stats">{n} questions &nbsp;&middot;&nbsp; {levels}</div>
 <div class="summary">
   <h2>Task Summary</h2>
@@ -468,9 +537,93 @@ CARD = """\
     </div>
     <p class="qtext">{question}</p>
     {options}
+    {notes}
     <div class="footer">{scene_id} &nbsp;/&nbsp; {image_name}</div>
   </div>
 </div>"""
+
+
+def build_viewer_html(
+    questions: list[dict],
+    image_root: Path,
+    *,
+    max_width: int = 480,
+    shuffle_seed: int = 42,
+    title: str = "predictive spatial reasoning benchmark",
+    requested_qtypes: set[str] | None = None,
+    attachment_only: bool = False,
+    include_attachment_unchanged: bool = False,
+    apply_filters: bool = True,
+) -> str:
+    displayed_questions = list(questions)
+    if apply_filters:
+        source_questions = select_viewer_source_questions(
+            displayed_questions,
+            requested_qtypes=requested_qtypes,
+            attachment_only=attachment_only,
+        )
+        displayed_questions = filter_viewer_questions(
+            source_questions,
+            include_attachment_unchanged=include_attachment_unchanged,
+        )
+    displayed_questions = order_questions_for_viewer(displayed_questions, seed=shuffle_seed)
+
+    level_counter: Counter = Counter()
+    cards: list[str] = []
+
+    for idx, q in enumerate(displayed_questions, 1):
+        level = q.get("level", "?")
+        qtype = _canonical_qtype(str(q.get("type", "")).strip()) or "unknown"
+        scene = str(q.get("scene_id", ""))
+        frame = str(q.get("image_name", ""))
+        answer = str(q.get("answer", ""))
+        opts = q.get("options", [])
+
+        level_counter[level] += 1
+
+        img_path = image_root / scene / "color" / frame
+        b64 = img_to_b64(img_path, max_width)
+        img_html = (
+            f'<img src="data:image/jpeg;base64,{b64}">'
+            if b64
+            else '<div class="no-img">image not found</div>'
+        )
+
+        opt_html = ""
+        if isinstance(opts, list):
+            for i, opt in enumerate(opts):
+                letter = chr(65 + i)
+                cls = "opt correct" if letter == answer else "opt"
+                opt_html += (
+                    f'<div class="{cls}">{letter}.&nbsp; {html.escape(str(opt))}</div>\n    '
+                )
+
+        cards.append(
+            CARD.format(
+                img=img_html,
+                level=html.escape(str(level)),
+                qtype=html.escape(QTYPE_DISPLAY.get(qtype, qtype)),
+                extra_badges=question_badges(q),
+                idx=idx,
+                question=html.escape(str(q.get("question", ""))),
+                options=opt_html,
+                notes=question_review_notes(q),
+                scene_id=html.escape(scene),
+                image_name=html.escape(frame),
+            )
+        )
+
+    levels_str = " &nbsp;&middot;&nbsp; ".join(
+        f"{html.escape(str(k))}: {v}" for k, v in sorted(level_counter.items())
+    )
+    task_summary = build_task_summary_v2(displayed_questions)
+    return PAGE.format(
+        title=html.escape(title),
+        n=len(displayed_questions),
+        levels=levels_str,
+        task_summary=task_summary,
+        cards="\n".join(cards),
+    )
 
 
 def main():
@@ -515,6 +668,9 @@ def main():
     )
     args = parser.parse_args()
 
+    if Image is None:
+        sys.exit("Pillow is required: pip install Pillow")
+
     with open(args.questions, encoding="utf-8") as f:
         data = json.load(f)
     questions = data["questions"] if isinstance(data, dict) and "questions" in data else data
@@ -527,76 +683,21 @@ def main():
         requested_qtypes.update(
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )
-    source_questions = select_viewer_source_questions(
+    image_root = Path(args.image_root)
+    html_text = build_viewer_html(
         questions,
+        image_root,
+        max_width=args.max_width,
+        shuffle_seed=args.shuffle_seed,
         requested_qtypes=requested_qtypes,
         attachment_only=args.attachment_only,
-    )
-    questions = filter_viewer_questions(
-        source_questions,
         include_attachment_unchanged=args.include_attachment_unchanged,
-    )
-    questions = order_questions_for_viewer(questions, seed=args.shuffle_seed)
-
-    image_root = Path(args.image_root)
-    level_counter: Counter = Counter()
-    cards: list[str] = []
-
-    for idx, q in enumerate(questions, 1):
-        level = q.get("level", "?")
-        qtype = _canonical_qtype(str(q.get("type", "")).strip()) or "unknown"
-        scene = q.get("scene_id", "")
-        frame = q.get("image_name", "")
-        answer = q.get("answer", "")
-        opts = q.get("options", [])
-
-        level_counter[level] += 1
-
-        img_path = image_root / scene / "color" / frame
-        b64 = img_to_b64(img_path, args.max_width)
-        img_html = (
-            f'<img src="data:image/jpeg;base64,{b64}">'
-            if b64
-            else '<div class="no-img">image not found</div>'
-        )
-
-        opt_html = ""
-        for i, opt in enumerate(opts):
-            letter = chr(65 + i)
-            cls = "opt correct" if letter == answer else "opt"
-            opt_html += f'<div class="{cls}">{letter}.&nbsp; {opt}</div>\n    '
-
-        cards.append(
-            CARD.format(
-                img=img_html,
-                level=level,
-                qtype=QTYPE_DISPLAY.get(qtype, qtype),
-                extra_badges=question_badges(q),
-                idx=idx,
-                question=q.get("question", ""),
-                options=opt_html,
-                scene_id=scene,
-                image_name=frame,
-            )
-        )
-
-        if idx % 20 == 0:
-            print(f"  {idx}/{len(questions)} processed...", flush=True)
-
-    levels_str = " &nbsp;&middot;&nbsp; ".join(
-        f"{k}: {v}" for k, v in sorted(level_counter.items())
-    )
-    task_summary = build_task_summary_v2(questions)
-    html = PAGE.format(
-        n=len(questions),
-        levels=levels_str,
-        task_summary=task_summary,
-        cards="\n".join(cards),
+        apply_filters=True,
     )
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(html, encoding="utf-8")
+    out.write_text(html_text, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
     print(f"Saved: {out}  ({size_kb} KB)")
 

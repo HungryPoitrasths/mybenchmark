@@ -50,6 +50,21 @@ def make_case_dir(prefix: str) -> Path:
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_collect_question_presence_labels_prefers_mentioned_objects(self) -> None:
+        labels = run_pipeline_module._collect_question_presence_labels(
+            {
+                "mentioned_objects": [
+                    {"label": "Cup"},
+                    {"label": "cup"},
+                    {"label": "Table"},
+                ],
+                "obj_a_label": "Chair",
+                "obj_b_label": "Lamp",
+            }
+        )
+
+        self.assertEqual(labels, ["Cup", "Table"])
+
     def test_load_referability_cache_rejects_old_version(self) -> None:
         case_dir = make_case_dir("cache")
         self.addCleanup(shutil.rmtree, case_dir, True)
@@ -166,6 +181,76 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["referable_object_ids"], [1])
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(len(questions), 1)
+
+    def test_run_question_presence_review_writes_flagged_outputs(self) -> None:
+        root = make_case_dir("presence_review")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        color_dir = data_root / scene_id / "color"
+        color_dir.mkdir(parents=True)
+        output_dir.mkdir(parents=True)
+        (color_dir / image_name).write_bytes(b"not-a-real-jpeg")
+
+        questions = [
+            {
+                "scene_id": scene_id,
+                "image_name": image_name,
+                "question": "Is the cup on the table?",
+                "answer": "A",
+                "options": ["yes", "no"],
+                "type": "direction_agent",
+                "level": "L1",
+                "mentioned_objects": [
+                    {"label": "cup"},
+                    {"label": "table"},
+                ],
+            }
+        ]
+
+        def fake_builder(vlm_url, vlm_model):
+            def fake_review(image_path, question, labels):
+                self.assertEqual(image_path.name, image_name)
+                self.assertEqual(labels, ["cup", "table"])
+                return {
+                    "decision": "manual_review",
+                    "flagged_labels": ["cup"],
+                    "object_reviews": [
+                        {"label": "cup", "status": "absent", "reason": "not visible"},
+                        {"label": "table", "status": "present", "reason": "visible"},
+                    ],
+                }
+
+            return "fake-vlm", fake_review
+
+        with patch.object(run_pipeline_module, "_build_question_presence_reviewer", side_effect=fake_builder):
+            summary = run_pipeline_module._run_question_presence_review(
+                questions=questions,
+                data_root=data_root,
+                output_dir=output_dir,
+                vlm_url="http://example.com/v1",
+                vlm_model="fake-vlm",
+                workers=1,
+            )
+
+        self.assertEqual(summary["model"], "fake-vlm")
+        self.assertEqual(summary["reviewed_question_count"], 1)
+        self.assertEqual(summary["manual_review_count"], 1)
+
+        review_json = json.loads((output_dir / "question_presence_review.json").read_text(encoding="utf-8"))
+        flagged_json = json.loads((output_dir / "question_presence_review_flagged.json").read_text(encoding="utf-8"))
+        flagged_html = (output_dir / "question_presence_review_flagged.html").read_text(encoding="utf-8")
+
+        self.assertEqual(review_json["manual_review_count"], 1)
+        self.assertEqual(flagged_json["manual_review_count"], 1)
+        self.assertEqual(len(flagged_json["questions"]), 1)
+        self.assertEqual(
+            flagged_json["questions"][0]["manual_review_reason"],
+            "VLM flagged mentioned objects: cup=absent",
+        )
+        self.assertIn("VLM flagged mentioned objects: cup=absent", flagged_html)
 
 
 if __name__ == "__main__":
