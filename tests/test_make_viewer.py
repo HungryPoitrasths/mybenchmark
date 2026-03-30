@@ -9,6 +9,7 @@ class MakeViewerTests(unittest.TestCase):
             {"type": "attachment_chain"},
             {"type": "object_move_agent", "attachment_remapped": True},
             {"type": "object_move_distance", "attachment_remapped": False},
+            {"type": "object_move_object_centric", "attachment_remapped": True},
             {"type": "object_move_allocentric", "attachment_remapped": True},
             {"type": "viewpoint_move"},
             {"type": "attachment_type"},
@@ -18,7 +19,12 @@ class MakeViewerTests(unittest.TestCase):
 
         self.assertEqual(
             [q["type"] for q in filtered],
-            ["attachment_chain", "object_move_agent", "object_move_allocentric"],
+            [
+                "attachment_chain",
+                "object_move_agent",
+                "object_move_object_centric",
+                "object_move_allocentric",
+            ],
         )
 
     def test_qtypes_filter_still_works_without_attachment_only(self) -> None:
@@ -35,6 +41,20 @@ class MakeViewerTests(unittest.TestCase):
         )
 
         self.assertEqual(filtered, [{"type": "viewpoint_move"}])
+
+    def test_qtypes_filter_accepts_canonical_object_rotate_label_for_legacy_input(self) -> None:
+        questions = [
+            {"type": "object_move_object_centric", "attachment_remapped": True},
+            {"type": "object_move_agent", "attachment_remapped": True},
+        ]
+
+        filtered = filter_viewer_questions(
+            questions,
+            requested_qtypes={"object_rotate_object_centric"},
+            attachment_only=False,
+        )
+
+        self.assertEqual(filtered, [{"type": "object_move_object_centric", "attachment_remapped": True}])
 
 
 if __name__ == "__main__":

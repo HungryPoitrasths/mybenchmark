@@ -64,7 +64,7 @@ SUMMARY_GROUPS = [
             ("object_move_agent", "L2_object_move_agent"),
             ("object_move_distance", "L2_object_move_distance"),
             ("object_move_occlusion", "L2_object_move_occlusion"),
-            ("object_move_object_centric", "L2_object_rotate_object_centric"),
+            ("object_rotate_object_centric", "L2_object_rotate_object_centric"),
             ("object_move_allocentric", "L2_object_move_allocentric"),
             ("viewpoint_move", "L2_viewpoint_move"),
             ("object_remove", "L2_object_remove"),
@@ -90,12 +90,15 @@ QTYPE_DISPLAY: dict[str, str] = {
     for _, items in SUMMARY_GROUPS
     for raw, label in items
 }
+QUESTION_TYPE_ALIASES = {
+    "object_move_object_centric": "object_rotate_object_centric",
+}
 
 OBJECT_MOVE_TYPES = {
     "object_move_agent",
     "object_move_distance",
     "object_move_occlusion",
-    "object_move_object_centric",
+    "object_rotate_object_centric",
     "object_move_allocentric",
 }
 REMOVED_TYPES = {"attachment_type", "support_move_consequence"}
@@ -108,7 +111,7 @@ VIEWER_QTYPE_ORDER = [
     "object_move_agent",
     "object_move_distance",
     "object_move_occlusion",
-    "object_move_object_centric",
+    "object_rotate_object_centric",
     "object_move_allocentric",
     "viewpoint_move",
     "object_remove",
@@ -117,6 +120,11 @@ VIEWER_QTYPE_ORDER = [
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 ]
+
+
+def _canonical_qtype(qtype: str) -> str:
+    canonical = str(qtype or "").strip()
+    return QUESTION_TYPE_ALIASES.get(canonical, canonical)
 
 
 def img_to_b64(path: Path, max_width: int = 480) -> str | None:
@@ -171,7 +179,7 @@ def build_task_summary_v2(questions: list[dict], type_counter: Counter) -> str:
     total_counter: Counter = Counter()
     attached_counter: Counter = Counter()
     for q in questions:
-        qtype = str(q.get("type", "")).strip()
+        qtype = _canonical_qtype(str(q.get("type", "")).strip())
         if qtype not in OBJECT_MOVE_TYPES:
             continue
         total_counter[qtype] += 1
@@ -224,7 +232,7 @@ def order_questions_for_viewer(questions: list[dict], seed: int = 42) -> list[di
     order_index = {qtype: idx for idx, qtype in enumerate(VIEWER_QTYPE_ORDER)}
     grouped: dict[str, list[dict]] = {}
     for q in questions:
-        qtype = str(q.get("type", "")).strip() or "unknown"
+        qtype = _canonical_qtype(str(q.get("type", "")).strip()) or "unknown"
         grouped.setdefault(qtype, []).append(q)
 
     for group in grouped.values():
@@ -241,7 +249,7 @@ def order_questions_for_viewer(questions: list[dict], seed: int = 42) -> list[di
 
 
 def is_attachment_viewer_question(question: dict) -> bool:
-    qtype = str(question.get("type", "")).strip()
+    qtype = _canonical_qtype(str(question.get("type", "")).strip())
     if qtype == "attachment_chain":
         return True
     return qtype in OBJECT_MOVE_TYPES and bool(question.get("attachment_remapped", False))
@@ -255,14 +263,14 @@ def filter_viewer_questions(
 ) -> list[dict]:
     filtered = [
         q for q in questions
-        if str(q.get("type", "")).strip() not in REMOVED_TYPES
+        if _canonical_qtype(str(q.get("type", "")).strip()) not in REMOVED_TYPES
     ]
     if attachment_only:
         return [q for q in filtered if is_attachment_viewer_question(q)]
     if requested_qtypes:
         return [
             q for q in filtered
-            if str(q.get("type", "")).strip() in requested_qtypes
+            if _canonical_qtype(str(q.get("type", "")).strip()) in requested_qtypes
         ]
     return filtered
 
