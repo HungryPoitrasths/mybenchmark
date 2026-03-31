@@ -3,7 +3,14 @@ from unittest.mock import patch
 
 import numpy as np
 
-from src.qa_generator import _cap_question_groups, generate_all_questions
+from src.qa_generator import (
+    _cap_question_groups,
+    generate_all_questions,
+    generate_l1_occlusion_questions,
+    generate_l2_object_move,
+    generate_l2_object_move_allocentric,
+    generate_l2_object_rotate_object_centric,
+)
 from src.utils.colmap_loader import CameraPose
 
 
@@ -203,6 +210,118 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(counts["object_rotate_object_centric"], (1, 2))
         self.assertEqual(counts.get("object_move_allocentric", (0, 0)), (0, 4))
         self.assertEqual(sum(1 for q in questions if q.get("type") == "viewpoint_move"), 1)
+
+    def test_generate_all_questions_drops_questions_with_nonreferable_mentions(self) -> None:
+        objects = [
+            make_object(1, "cup"),
+            make_object(2, "table"),
+            make_object(3, "lamp"),
+        ]
+
+        leaked_question = {
+            "level": "L2",
+            "type": "object_move_agent",
+            "question": "If the table moves, where is the cup relative to the lamp?",
+            "options": ["A", "B", "C", "D"],
+            "answer": "A",
+            "correct_value": "left",
+            "moved_obj_id": 2,
+            "moved_obj_label": "table",
+            "mentioned_objects": [
+                {"role": "moved_object", "obj_id": 2, "label": "table"},
+                {"role": "query_object", "obj_id": 1, "label": "cup"},
+                {"role": "reference_object", "obj_id": 3, "label": "lamp"},
+            ],
+        }
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move", return_value=[leaked_question]),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l3_attachment_chain", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                support_chain_graph={},
+                support_chain_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3],
+                referable_object_ids=[1, 3],
+                attachment_edges=[
+                    {"parent_id": 2, "child_id": 1, "type": "supported_by"},
+                ],
+            )
+
+        self.assertEqual(questions, [])
+
+    def test_l1_occlusion_skips_multiple_status_without_unique_instance(self) -> None:
+        questions = generate_l1_occlusion_questions(
+            objects=[make_object(1, "cup")],
+            camera_pose=make_camera_pose(),
+            color_intrinsics=None,
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend="depth",
+            ray_caster=None,
+            instance_mesh_data=None,
+            templates={},
+            label_statuses={"cup": "multiple"},
+            referable_object_ids=[1],
+        )
+
+        self.assertEqual(questions, [])
+
+    def test_l2_generators_skip_attachment_remapped_nonreferable_move_source(self) -> None:
+        referable_child = make_object(1, "cup")
+        hidden_parent = make_object(2, "table")
+        attached_by = {1: 2}
+        attachment_graph = {2: [1]}
+        movement_objects = [referable_child, hidden_parent]
+        object_map = {1: referable_child, 2: hidden_parent}
+
+        move_questions = generate_l2_object_move(
+            objects=[referable_child],
+            attachment_graph=attachment_graph,
+            attached_by=attached_by,
+            camera_pose=make_camera_pose(),
+            templates={},
+            movement_objects=movement_objects,
+            object_map=object_map,
+        )
+        rotate_questions = generate_l2_object_rotate_object_centric(
+            objects=[referable_child],
+            attachment_graph=attachment_graph,
+            attached_by=attached_by,
+            camera_pose=make_camera_pose(),
+            templates={},
+            movement_objects=movement_objects,
+            object_map=object_map,
+        )
+        allocentric_questions = generate_l2_object_move_allocentric(
+            objects=[referable_child],
+            attachment_graph=attachment_graph,
+            attached_by=attached_by,
+            camera_pose=make_camera_pose(),
+            templates={},
+            movement_objects=movement_objects,
+            object_map=object_map,
+        )
+
+        self.assertEqual(move_questions, [])
+        self.assertEqual(rotate_questions, [])
+        self.assertEqual(allocentric_questions, [])
 
     def test_full_quality_pipeline_leaves_attachment_counts_untouched(self) -> None:
         from src.quality_control import full_quality_pipeline

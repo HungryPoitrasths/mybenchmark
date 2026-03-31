@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""VLM-based frame and label-count referability prefilter.
+"""VLM-based frame and label-status referability prefilter.
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
   1. whether the frame is usable for spatial reasoning;
-  2. for batches of candidate labels, how many visible instances of each
-     label appear in the image.
+  2. for batches of candidate labels, whether each label is absent, unique,
+     multiple, or unsure in the image.
 
 The output is a cache that can be consumed by scripts/run_pipeline.py via
 --referability_cache.
@@ -29,7 +29,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.frame_selector import select_frames
+from src.frame_selector import refine_visible_ids_with_depth, select_frames
 from src.utils.colmap_loader import (
     load_axis_alignment,
     load_scannet_depth_intrinsics,
@@ -46,10 +46,20 @@ logger = logging.getLogger("vlm_referability")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
-LABEL_BATCH_SIZE = 3
-REFERABILITY_CACHE_VERSION = "5.0"
+LABEL_BATCH_SIZE = 1
+REFERABILITY_CACHE_VERSION = "6.0"
 DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO = 0.20
 DEPTH_DISAMBIGUATION_MIN_GAP = 0.15
+LABEL_STATUS_ABSENT = "absent"
+LABEL_STATUS_UNIQUE = "unique"
+LABEL_STATUS_MULTIPLE = "multiple"
+LABEL_STATUS_UNSURE = "unsure"
+VALID_LABEL_STATUSES = {
+    LABEL_STATUS_ABSENT,
+    LABEL_STATUS_UNIQUE,
+    LABEL_STATUS_MULTIPLE,
+    LABEL_STATUS_UNSURE,
+}
 
 
 def _image_to_base64(image: np.ndarray) -> str:
@@ -79,7 +89,7 @@ def _call_vlm_json(
     content: list[dict],
     default: dict[str, Any],
     max_tokens: int = 512,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -90,11 +100,11 @@ def _call_vlm_json(
         text = (resp.choices[0].message.content or "").strip()
         parsed = _extract_json_object(text)
         if parsed is None:
-            return default
-        return parsed
+            return default, text
+        return parsed, text
     except Exception as e:
         logger.warning("VLM call failed: %s", e)
-        return default
+        return default, ""
 
 
 def _frame_prompt() -> str:
@@ -107,45 +117,67 @@ def _frame_prompt() -> str:
     )
 
 
-def _count_prompt(candidate_labels: list[str]) -> str:
+def _label_status_prompt(candidate_labels: list[str]) -> str:
     labels_json = json.dumps(candidate_labels, ensure_ascii=False)
     return (
         "You are given one original scene image and a candidate label list extracted from scene metadata. "
         "Only use the image and this candidate label list. Do not invent new labels. "
-        "For each candidate label, return the exact number of instances that are visually recognizable enough to support stable label-based reference in this image. "
-        "Count an instance if it is visible enough to identify as that label from the image, even if it is partially occluded or partially outside the frame. "
+        "For each candidate label, decide whether it is absent, unique, multiple, or unsure in this image. "
+        "Use unique only when exactly one instance is visually recognizable enough to support stable label-based reference. "
+        "Use multiple when two or more instances are visually recognizable enough to support stable label-based reference. "
+        "Count an instance as recognizable if it is visible enough to identify as that label from the image, even if it is partially occluded or partially outside the frame. "
         "Do not require the whole object to be visible. "
-        "Do not count tiny fragments, extremely blurry objects, or ambiguous cases where the label cannot be identified reliably. "
-        "If a label has no visible instance, return 0. "
+        "Do not treat tiny fragments, extremely blurry objects, or ambiguous guesses as recognizable instances. "
+        "If you cannot decide confidently, return unsure instead of guessing. "
         "Every candidate label must appear exactly once in the output. "
         f"Candidate labels: {labels_json}. "
-        'Answer with strict JSON only using this schema: {"counts": {"chair": 3, "lamp": 1, "book": 0}}'
+        'Answer with strict JSON only using this schema: {"objects": [{"label": "chair", "status": "multiple", "reason": "two recognizable chairs"}]}'
     )
 
 
 def _chunk_labels(labels: list[str], size: int = LABEL_BATCH_SIZE) -> list[list[str]]:
-    return [labels[i:i + size] for i in range(0, len(labels), size)]
+    chunk_size = max(1, int(size))
+    return [labels[i:i + chunk_size] for i in range(0, len(labels), chunk_size)]
 
 
-def _normalize_count_map(value: Any, expected_labels: list[str]) -> dict[str, int]:
-    if not isinstance(value, dict):
-        return {}
+def _normalize_label_status_map(value: Any, expected_labels: list[str]) -> dict[str, str]:
     expected = {label.lower() for label in expected_labels}
-    out: dict[str, int] = {}
-    for key, count in value.items():
-        if not isinstance(key, str):
-            continue
-        label = key.strip().lower()
-        if label not in expected:
-            continue
-        try:
-            count_int = int(count)
-        except (TypeError, ValueError):
-            continue
-        if count_int < 0:
-            continue
-        out[label] = count_int
+    out: dict[str, str] = {}
+    if isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("label")
+            status_value = item.get("status")
+            if not isinstance(key, str):
+                continue
+            label = key.strip().lower()
+            status = str(status_value or "").strip().lower()
+            if label not in expected or status not in VALID_LABEL_STATUSES:
+                continue
+            out[label] = status
+    elif isinstance(value, dict):
+        for key, status_value in value.items():
+            if not isinstance(key, str):
+                continue
+            label = key.strip().lower()
+            status = str(status_value or "").strip().lower()
+            if label not in expected or status not in VALID_LABEL_STATUSES:
+                continue
+            out[label] = status
     return out
+
+
+def _label_statuses_to_counts(label_statuses: dict[str, str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for label, status in sorted(label_statuses.items()):
+        if status == LABEL_STATUS_ABSENT:
+            counts[label] = 0
+        elif status == LABEL_STATUS_UNIQUE:
+            counts[label] = 1
+        elif status == LABEL_STATUS_MULTIPLE:
+            counts[label] = 2
+    return counts
 
 
 def _frame_decision(
@@ -158,7 +190,7 @@ def _frame_decision(
         "frame_usable": True,
         "reason": "vlm_parse_fallback",
     }
-    parsed = _call_vlm_json(
+    parsed, _raw_text = _call_vlm_json(
         client,
         model,
         [
@@ -174,26 +206,29 @@ def _frame_decision(
     }
 
 
-def _label_count_decision(
+def _label_status_decision(
     client,
     model: str,
     image_b64: str,
     candidate_labels: list[str],
-) -> dict[str, int]:
+) -> tuple[dict[str, str], str]:
     if not candidate_labels:
-        return {}
-    default = {"counts": {}}
-    parsed = _call_vlm_json(
+        return {}, ""
+    default = {"objects": []}
+    parsed, raw_text = _call_vlm_json(
         client,
         model,
         [
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            {"type": "text", "text": _count_prompt(candidate_labels)},
+            {"type": "text", "text": _label_status_prompt(candidate_labels)},
         ],
         default=default,
         max_tokens=256,
     )
-    return _normalize_count_map(parsed.get("counts"), candidate_labels)
+    statuses = _normalize_label_status_map(parsed.get("objects"), candidate_labels)
+    for label in candidate_labels:
+        statuses.setdefault(str(label).strip().lower(), LABEL_STATUS_UNSURE)
+    return dict(sorted(statuses.items())), raw_text
 
 
 def _build_frame_label_candidates(
@@ -214,14 +249,38 @@ def _build_frame_label_candidates(
     return candidate_labels, dict(label_to_ids)
 
 
+def _refine_candidate_visible_object_ids(
+    visible_object_ids: list[int],
+    objects: list[dict[str, Any]],
+    camera_pose,
+    depth_image: np.ndarray | None,
+    depth_intrinsics,
+) -> tuple[list[int], str]:
+    selector_ids = sorted({int(obj_id) for obj_id in visible_object_ids})
+    if depth_image is None or depth_intrinsics is None:
+        return selector_ids, "projection_fallback"
+    try:
+        refined = refine_visible_ids_with_depth(
+            visible_object_ids=selector_ids,
+            objects=objects,
+            pose=camera_pose,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+        )
+    except Exception as exc:
+        logger.warning("Depth refine failed: %s", exc)
+        return selector_ids, "projection_fallback"
+    return sorted({int(obj_id) for obj_id in refined}), "depth_refined"
+
+
 def _resolve_referable_object_ids(
-    label_counts: dict[str, int],
+    label_statuses: dict[str, str],
     label_to_ids: dict[str, list[int]],
 ) -> tuple[list[int], dict[str, list[int]]]:
     referable_ids: list[int] = []
     ambiguous_labels_to_ids: dict[str, list[int]] = {}
-    for label, count in label_counts.items():
-        if count != 1:
+    for label, status in label_statuses.items():
+        if status != LABEL_STATUS_UNIQUE:
             continue
         obj_ids = label_to_ids.get(label, [])
         if len(obj_ids) == 1:
@@ -344,12 +403,15 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
     if not isinstance(entry, dict):
         return False
     required_keys = {
+        "candidate_visible_object_ids",
+        "candidate_visibility_source",
         "candidate_labels",
         "label_to_object_ids",
         "selector_visible_object_ids",
         "selector_visible_label_counts",
-        "vlm_count_batches",
-        "vlm_unique_object_ids",
+        "vlm_label_reviews",
+        "label_statuses",
+        "referable_object_ids",
     }
     return required_keys.issubset(entry.keys())
 
@@ -388,6 +450,10 @@ def main():
     parser.add_argument(
         "--resume", action="store_true",
         help="Resume from an existing output cache if present",
+    )
+    parser.add_argument(
+        "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
+        help="How many candidate labels to ask the VLM about per request (default: 1)",
     )
     args = parser.parse_args()
 
@@ -432,6 +498,7 @@ def main():
             "min_winner_ratio": DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO,
             "min_gap": DEPTH_DISAMBIGUATION_MIN_GAP,
         },
+        "label_batch_size": int(max(1, args.label_batch_size)),
         "frames": {},
     }
     if args.resume and output_path.exists():
@@ -450,6 +517,7 @@ def main():
         "min_winner_ratio": DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO,
         "min_gap": DEPTH_DISAMBIGUATION_MIN_GAP,
     }
+    cache["label_batch_size"] = int(max(1, args.label_batch_size))
 
     data_root = Path(args.data_root)
     scene_dirs = sorted(
@@ -522,16 +590,7 @@ def main():
                 logger.warning("Cannot read image %s", image_path)
                 continue
 
-            candidate_labels, label_to_ids = _build_frame_label_candidates(
-                frame["visible_object_ids"],
-                objects_by_id,
-            )
-
-            frame_info = _frame_decision(client, model_name, image)
-            label_counts: dict[str, int] = {}
-            referable_object_ids: list[int] = []
-            depth_disambiguation: dict[str, dict[str, Any]] = {}
-            vlm_count_batches: list[dict[str, Any]] = []
+            camera_pose = poses[image_name]
             selector_visible_object_ids = [
                 int(obj_id)
                 for obj_id in frame["visible_object_ids"]
@@ -541,31 +600,55 @@ def main():
                 selector_visible_object_ids,
                 objects_by_id,
             )
+            depth_image = None
+            frame_id = Path(image_name).stem
+            depth_path = scene_dir / "depth" / f"{frame_id}.png"
+            if depth_intrinsics is not None and depth_path.exists():
+                try:
+                    depth_image = load_depth_image(depth_path)
+                except Exception as e:
+                    logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
+            candidate_visible_object_ids, candidate_visibility_source = _refine_candidate_visible_object_ids(
+                selector_visible_object_ids,
+                scene["objects"],
+                camera_pose,
+                depth_image,
+                depth_intrinsics,
+            )
+            candidate_labels, label_to_ids = _build_frame_label_candidates(
+                candidate_visible_object_ids,
+                objects_by_id,
+            )
+
+            frame_info = _frame_decision(client, model_name, image)
+            label_statuses: dict[str, str] = {}
+            label_counts: dict[str, int] = {}
+            referable_object_ids: list[int] = []
+            depth_disambiguation: dict[str, dict[str, Any]] = {}
+            vlm_label_reviews: list[dict[str, Any]] = []
 
             if frame_info["frame_usable"]:
-                camera_pose = poses[image_name]
                 image_b64 = _image_to_base64(image)
-                for label_batch in _chunk_labels(candidate_labels):
-                    batch_counts = _label_count_decision(client, model_name, image_b64, label_batch)
-                    vlm_count_batches.append({
+                for label_batch in _chunk_labels(candidate_labels, size=args.label_batch_size):
+                    batch_statuses, raw_text = _label_status_decision(
+                        client,
+                        model_name,
+                        image_b64,
+                        label_batch,
+                    )
+                    vlm_label_reviews.append({
                         "labels": list(label_batch),
-                        "raw_counts": dict(sorted(batch_counts.items())),
+                        "label_statuses": dict(sorted(batch_statuses.items())),
+                        "raw_response": raw_text,
                     })
-                    label_counts.update(batch_counts)
+                    label_statuses.update(batch_statuses)
 
+                label_counts = _label_statuses_to_counts(label_statuses)
                 referable_object_ids, ambiguous_labels_to_ids = _resolve_referable_object_ids(
-                    label_counts,
+                    label_statuses,
                     label_to_ids,
                 )
                 if ambiguous_labels_to_ids:
-                    depth_image = None
-                    frame_id = Path(image_name).stem
-                    depth_path = scene_dir / "depth" / f"{frame_id}.png"
-                    if depth_intrinsics is not None and depth_path.exists():
-                        try:
-                            depth_image = load_depth_image(depth_path)
-                        except Exception as e:
-                            logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
                     extra_ids, depth_disambiguation = _augment_with_depth_disambiguation(
                         ambiguous_labels_to_ids=ambiguous_labels_to_ids,
                         objects_by_id=objects_by_id,
@@ -581,13 +664,19 @@ def main():
                 "selector_score": int(frame.get("score", 0)),
                 "selector_visible_object_ids": selector_visible_object_ids,
                 "selector_visible_label_counts": selector_visible_label_counts,
-                "candidate_visible_object_ids": selector_visible_object_ids,
+                "candidate_visible_object_ids": candidate_visible_object_ids,
+                "candidate_visibility_source": candidate_visibility_source,
+                "candidate_visible_label_counts": _count_labels_for_object_ids(
+                    candidate_visible_object_ids,
+                    objects_by_id,
+                ),
                 "candidate_labels": list(candidate_labels),
                 "label_to_object_ids": {
                     str(label): [int(obj_id) for obj_id in obj_ids]
                     for label, obj_ids in sorted(label_to_ids.items())
                 },
-                "vlm_count_batches": vlm_count_batches,
+                "vlm_label_reviews": vlm_label_reviews,
+                "label_statuses": dict(sorted(label_statuses.items())),
                 "label_counts": dict(sorted(label_counts.items())),
                 "referable_object_ids": referable_object_ids,
                 "depth_disambiguation": depth_disambiguation,

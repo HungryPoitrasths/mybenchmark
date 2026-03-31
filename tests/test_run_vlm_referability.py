@@ -39,12 +39,69 @@ def make_object(obj_id: int, label: str) -> dict:
 class RunVlmReferabilityTests(unittest.TestCase):
     def test_resolve_referable_object_ids_separates_ambiguous_labels(self) -> None:
         referable_ids, ambiguous = referability_module._resolve_referable_object_ids(
-            {"lamp": 1, "cup": 1, "chair": 2},
+            {"lamp": "unique", "cup": "unique", "chair": "multiple"},
             {"lamp": [8], "cup": [5, 3], "chair": [1, 2]},
         )
 
         self.assertEqual(referable_ids, [8])
         self.assertEqual(ambiguous, {"cup": [5, 3]})
+
+    def test_label_status_decision_falls_back_to_unsure_for_missing_or_invalid_labels(self) -> None:
+        statuses = referability_module._normalize_label_status_map(
+            [
+                {"label": "chair", "status": "unique"},
+                {"label": "lamp", "status": "bogus"},
+            ],
+            ["chair", "lamp"],
+        )
+
+        self.assertEqual(statuses, {"chair": "unique"})
+        merged = dict(statuses)
+        for label in ["chair", "lamp"]:
+            merged.setdefault(label, "unsure")
+        self.assertEqual(merged, {"chair": "unique", "lamp": "unsure"})
+
+    def test_label_statuses_to_counts_derives_l1_visibility_counts(self) -> None:
+        counts = referability_module._label_statuses_to_counts(
+            {
+                "chair": "multiple",
+                "lamp": "absent",
+                "cup": "unique",
+                "box": "unsure",
+            }
+        )
+
+        self.assertEqual(counts, {"chair": 2, "cup": 1, "lamp": 0})
+
+    def test_refine_candidate_visible_object_ids_uses_depth_when_available(self) -> None:
+        with patch.object(
+            referability_module,
+            "refine_visible_ids_with_depth",
+            return_value=[2],
+        ) as refine_mock:
+            refined_ids, source = referability_module._refine_candidate_visible_object_ids(
+                visible_object_ids=[1, 2],
+                objects=[make_object(1, "cup"), make_object(2, "cup")],
+                camera_pose=make_camera_pose(),
+                depth_image=np.ones((4, 4), dtype=np.float32),
+                depth_intrinsics=make_camera_intrinsics(),
+            )
+
+        self.assertEqual(refined_ids, [2])
+        self.assertEqual(source, "depth_refined")
+        refine_mock.assert_called_once()
+
+    def test_refine_candidate_visible_object_ids_falls_back_without_depth(self) -> None:
+        refined_ids, source = referability_module._refine_candidate_visible_object_ids(
+            visible_object_ids=[2, 1],
+            objects=[make_object(1, "cup"), make_object(2, "cup")],
+            camera_pose=make_camera_pose(),
+            depth_image=None,
+            depth_intrinsics=None,
+        )
+
+        self.assertEqual(refined_ids, [1, 2])
+        self.assertEqual(source, "projection_fallback")
 
     def test_disambiguate_by_depth_selects_clear_winner(self) -> None:
         objects_by_id = {

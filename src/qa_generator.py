@@ -727,6 +727,24 @@ def _normalize_label_counts(label_counts: dict[str, Any] | None) -> dict[str, in
     return normalized
 
 
+def _normalize_label_statuses(label_statuses: dict[str, Any] | None) -> dict[str, str]:
+    if not isinstance(label_statuses, dict):
+        return {}
+
+    normalized: dict[str, str] = {}
+    for label, status in label_statuses.items():
+        if not isinstance(label, str):
+            continue
+        label_text = label.strip().lower()
+        if not label_text or label_text in EXCLUDED_LABELS:
+            continue
+        status_text = str(status or "").strip().lower()
+        if status_text not in {"absent", "unique", "multiple", "unsure"}:
+            continue
+        normalized[label_text] = status_text
+    return normalized
+
+
 def _l1_occlusion_question(
     label: str,
     correct: str,
@@ -1128,12 +1146,22 @@ def generate_l1_occlusion_questions(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
     templates: dict,
+    label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     referable_object_ids: list[int] | None = None,
     frame_image: np.ndarray | None = None,
     occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None = None,
 ) -> list[dict[str, Any]]:
+    normalized_statuses = _normalize_label_statuses(label_statuses)
     normalized_counts = _normalize_label_counts(label_counts)
+    if not normalized_statuses and normalized_counts:
+        for label, count in normalized_counts.items():
+            if count == 0:
+                normalized_statuses[label] = "absent"
+            elif count == 1:
+                normalized_statuses[label] = "unique"
+            elif count > 1:
+                normalized_statuses[label] = "multiple"
     referable_id_set = _normalize_object_id_set(
         referable_object_ids,
         "referable_object_ids_for_l1_occlusion",
@@ -1151,6 +1179,7 @@ def generate_l1_occlusion_questions(
         obj: dict[str, Any],
         label: str,
         source: str,
+        vlm_status: str | None,
         vlm_count: int | None,
     ) -> None:
         obj_id = int(obj["id"])
@@ -1231,6 +1260,7 @@ def generate_l1_occlusion_questions(
                 obj_id=obj_id,
                 extra={
                     "occlusion_decision_source": source_used,
+                    "vlm_label_status": vlm_status,
                     "vlm_label_count": vlm_count,
                     "geometry_projected_area": metrics.projected_area,
                     "geometry_in_frame_ratio": metrics.in_frame_ratio,
@@ -1257,9 +1287,10 @@ def generate_l1_occlusion_questions(
             )
         )
 
-    if normalized_counts:
-        for label, count in sorted(normalized_counts.items()):
-            if count == 0:
+    if normalized_statuses:
+        for label, status in sorted(normalized_statuses.items()):
+            count = normalized_counts.get(label)
+            if status == "absent":
                 questions.append(
                     _l1_occlusion_question(
                         label=label,
@@ -1267,13 +1298,14 @@ def generate_l1_occlusion_questions(
                         templates=templates,
                         obj_id=None,
                         extra={
-                            "occlusion_decision_source": "vlm_count",
-                            "vlm_label_count": 0,
+                            "occlusion_decision_source": "vlm_status_absent",
+                            "vlm_label_status": status,
+                            "vlm_label_count": 0 if count is None else count,
                         },
                     )
                 )
                 continue
-            if count != 1:
+            if status != "unique":
                 continue
 
             candidates = label_to_objects.get(label, [])
@@ -1281,7 +1313,8 @@ def generate_l1_occlusion_questions(
                 _append_geometry_question(
                     obj=candidates[0],
                     label=label,
-                    source="geometry",
+                    source="geometry_from_vlm_unique",
+                    vlm_status=status,
                     vlm_count=count,
                 )
                 continue
@@ -1294,7 +1327,8 @@ def generate_l1_occlusion_questions(
                 _append_geometry_question(
                     obj=referable_candidates[0],
                     label=label,
-                    source="geometry",
+                    source="geometry_from_vlm_unique",
+                    vlm_status=status,
                     vlm_count=count,
                 )
         return questions
@@ -1307,6 +1341,7 @@ def generate_l1_occlusion_questions(
             obj=obj,
             label=label,
             source="geometry_only_fallback",
+            vlm_status=None,
             vlm_count=None,
         )
     return questions
@@ -2477,6 +2512,7 @@ def generate_l2_object_move(
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions_by_object: dict[int, list[dict]] = {}
+    referable_object_ids = {int(o["id"]) for o in objects}
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
@@ -2524,6 +2560,8 @@ def generate_l2_object_move(
         if move_source is None:
             continue
         attachment_remapped = move_source_id != obj["id"]
+        if attachment_remapped and move_source_id not in referable_object_ids:
+            continue
         has_attachment_chain = len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0
         selected_state = _select_object_move_state(
             movement_scene_objects,
@@ -2895,6 +2933,7 @@ def generate_l2_object_rotate_object_centric(
 ) -> list[dict]:
     """L2 object-rotation questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
+    referable_object_ids = {int(o["id"]) for o in objects}
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
@@ -2917,6 +2956,8 @@ def generate_l2_object_rotate_object_centric(
         if obj["id"] not in moved_ids:
             continue
         attachment_remapped = move_source_id != obj["id"]
+        if attachment_remapped and move_source_id not in referable_object_ids:
+            continue
         query_center = np.array(obj["center"], dtype=float)
 
         obj_questions: list[dict] = []
@@ -3081,6 +3122,7 @@ def generate_l2_object_move_allocentric(
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions_by_object: dict[int, list[dict]] = {}
+    referable_object_ids = {int(o["id"]) for o in objects}
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
@@ -3103,6 +3145,8 @@ def generate_l2_object_move_allocentric(
         if obj["id"] not in moved_ids:
             continue
         attachment_remapped = move_source_id != obj["id"]
+        if attachment_remapped and move_source_id not in referable_object_ids:
+            continue
 
         selected_state = _select_object_move_state(
             movement_scene_objects,
@@ -3716,6 +3760,45 @@ def _ensure_question_mentions(
     return question
 
 
+def _enforce_referable_mentions(
+    questions: list[dict[str, Any]],
+    referable_ids: set[int],
+) -> list[dict[str, Any]]:
+    """Drop questions that mention a concrete object outside the referable set."""
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for question in questions:
+        mentions = question.get("mentioned_objects")
+        if not isinstance(mentions, list):
+            kept.append(question)
+            continue
+
+        valid = True
+        for mention in mentions:
+            if not isinstance(mention, dict):
+                continue
+            obj_id = mention.get("obj_id")
+            if obj_id is None:
+                continue
+            try:
+                mention_id = int(obj_id)
+            except (TypeError, ValueError):
+                valid = False
+                break
+            if mention_id not in referable_ids:
+                valid = False
+                break
+
+        if valid:
+            kept.append(question)
+            continue
+        removed += 1
+
+    if removed:
+        logger.info("Referable-mention filter removed %d questions", removed)
+    return kept
+
+
 def _enforce_stable_facing_references(
     questions: list[dict[str, Any]],
     id_to_object: dict[int, dict],
@@ -3849,6 +3932,7 @@ def generate_all_questions(
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
     referable_object_ids: list[int] | None = None,
+    label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     frame_image: np.ndarray | None = None,
     occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None = None,
@@ -3865,9 +3949,9 @@ def generate_all_questions(
     unanswerable from the image and should never be included.
     referable_object_ids: if provided, restrict question generation to the
     object_id subset judged referable by the VLM for this frame.
-    label_counts: if provided, use per-label VLM counts to generate L1
-    occlusion questions where count==0 => not visible and count==1 routes to
-    geometry-based not-occluded / occluded classification.
+    label_statuses: if provided, use per-label VLM absent/unique/multiple/unsure
+    decisions to guide L1 occlusion generation.
+    label_counts: optional compatibility field derived from label_statuses.
     frame_image: optional BGR frame image used for gray-zone local mask VLM
     adjudication in L1 occlusion.
     occlusion_vlm_adjudicator: optional callback that receives a local masked
@@ -4041,7 +4125,7 @@ def generate_all_questions(
         if q:
             l1_dist_qs.append(q)
 
-    l1_occlusion_subjects = l1_occlusion_objects if label_counts else objects_uniq
+    l1_occlusion_subjects = l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq
     l1_occ_qs = generate_l1_occlusion_questions(
         objects=l1_occlusion_subjects,
         camera_pose=camera_pose,
@@ -4052,6 +4136,7 @@ def generate_all_questions(
         ray_caster=ray_caster,
         instance_mesh_data=instance_mesh_data,
         templates=templates,
+        label_statuses=label_statuses,
         label_counts=label_counts,
         referable_object_ids=referable_object_ids,
         frame_image=frame_image,
@@ -4192,6 +4277,10 @@ def generate_all_questions(
             question, id_to_object, label_to_object,
         )
 
+    all_questions = _enforce_referable_mentions(
+        all_questions,
+        referable_question_ids,
+    )
     all_questions = _enforce_stable_facing_references(
         all_questions, id_to_object,
     )

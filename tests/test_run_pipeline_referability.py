@@ -123,7 +123,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 5.0"):
+        with self.assertRaisesRegex(ValueError, "expected 6.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_run_pipeline_requires_referability_cache(self) -> None:
@@ -154,13 +154,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "5.0",
+            "version": "6.0",
             "frames": {
                 scene_id: {
                     image_name: {
                         "frame_usable": True,
                         "candidate_visible_object_ids": [2, 1],
                         "referable_object_ids": [1],
+                        "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},
@@ -187,6 +188,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         def fake_generate_all_questions(**kwargs):
             captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
             captured["label_counts"] = dict(kwargs["label_counts"] or {})
             return [
                 {
@@ -228,6 +230,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(len(questions), 1)
 
@@ -243,13 +246,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "5.0",
+            "version": "6.0",
             "frames": {
                 scene_id: {
                     image_name: {
                         "frame_usable": True,
                         "candidate_visible_object_ids": [2, 1],
                         "referable_object_ids": [1],
+                        "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},

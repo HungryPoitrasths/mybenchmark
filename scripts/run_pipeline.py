@@ -57,7 +57,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
-EXPECTED_REFERABILITY_CACHE_VERSION = "5.0"
+EXPECTED_REFERABILITY_CACHE_VERSION = "6.0"
 QUESTION_ANSWER_REVIEW_TYPES = {
     "direction_agent",
     "occlusion",
@@ -886,6 +886,23 @@ def _normalize_label_counts(value: object) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _normalize_label_statuses(value: object) -> dict[str, str]:
+    statuses: dict[str, str] = {}
+    if not isinstance(value, dict):
+        return statuses
+    for key, status in value.items():
+        if not isinstance(key, str):
+            continue
+        label = key.strip().lower()
+        if not label:
+            continue
+        text = str(status or "").strip().lower()
+        if text not in {"absent", "unique", "multiple", "unsure"}:
+            continue
+        statuses[label] = text
+    return dict(sorted(statuses.items()))
+
+
 def _count_labels_for_object_ids(
     object_ids: list[int],
     objects_by_id: dict[int, dict],
@@ -1055,6 +1072,11 @@ def _build_frame_debug_entry(
         "selector_visible_label_counts": _count_labels_for_object_ids(selector_visible_ids, objects_by_id),
         "pipeline_visible_object_ids_used_for_generation": _normalize_object_ids(pipeline_visible_ids),
         "pipeline_visible_label_counts": _count_labels_for_object_ids(pipeline_visible_ids, objects_by_id),
+        "candidate_visibility_source": (referability_entry or {}).get("candidate_visibility_source"),
+        "candidate_visible_label_counts": _normalize_label_counts(
+            (referability_entry or {}).get("candidate_visible_label_counts")
+        ),
+        "vlm_label_statuses": _normalize_label_statuses((referability_entry or {}).get("label_statuses")),
         "vlm_label_counts": _normalize_label_counts((referability_entry or {}).get("label_counts")),
         "referable_object_ids": _normalize_object_ids((referability_entry or {}).get("referable_object_ids")),
         "candidate_labels": list((referability_entry or {}).get("candidate_labels", [])),
@@ -1062,7 +1084,7 @@ def _build_frame_debug_entry(
             str(label): _normalize_object_ids(obj_ids)
             for label, obj_ids in label_to_object_ids.items()
         },
-        "vlm_count_batches": list((referability_entry or {}).get("vlm_count_batches", [])),
+        "vlm_label_reviews": list((referability_entry or {}).get("vlm_label_reviews", [])),
         "object_rows": _build_object_debug_rows(
             scene_objects,
             selector_visible_ids,
@@ -1268,11 +1290,13 @@ def run_pipeline(
 
             visible_id_set = set(int(obj_id) for obj_id in visible_ids)
             referable_ids = None
+            label_statuses = None
             label_counts = None
             referability_entry = _get_referability_entry(
                 referability_cache, scene_id, image_name,
             )
             if referability_entry is not None:
+                label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
                 label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
                 referable_ids = [
                     int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
@@ -1324,6 +1348,7 @@ def run_pipeline(
                 instance_mesh_data=instance_mesh_data,
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
+                label_statuses=label_statuses,
                 label_counts=label_counts,
                 frame_image=frame_image,
                 occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
