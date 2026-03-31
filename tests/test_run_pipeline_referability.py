@@ -114,6 +114,27 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(combined, "same reason")
 
+    def test_call_question_review_vlm_retries_concurrency_limit_errors(self) -> None:
+        calls: list[int] = []
+
+        def flaky_call():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError(
+                    "Error code: 429 - {'error': {'code': 'concurrent_request_limit_exceeded', 'message': 'Too many concurrent requests.'}}"
+                )
+            return "ok"
+
+        with patch.object(run_pipeline_module.time, "sleep") as sleep_mock:
+            result = run_pipeline_module._call_question_review_vlm(
+                flaky_call,
+                context="presence review",
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(len(calls), 2)
+        sleep_mock.assert_called_once_with(run_pipeline_module.QUESTION_REVIEW_RETRY_DELAY_SECONDS)
+
     def test_load_referability_cache_rejects_old_version(self) -> None:
         case_dir = make_case_dir("cache")
         self.addCleanup(shutil.rmtree, case_dir, True)

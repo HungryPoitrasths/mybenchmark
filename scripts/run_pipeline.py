@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -67,6 +68,8 @@ QUESTION_ANSWER_REVIEW_TYPES = {
     "viewpoint_move",
     "object_remove",
 }
+QUESTION_REVIEW_MAX_RETRIES = 4
+QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -123,6 +126,38 @@ def _image_path_to_base64(path: Path) -> tuple[str, str]:
     mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode(), mime
+
+
+def _is_question_review_retryable_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "concurrent_request_limit_exceeded" in text
+        or "too many concurrent requests" in text
+    )
+
+
+def _call_question_review_vlm(create_fn, *, context: str):
+    last_exc: Exception | None = None
+    for attempt in range(1, QUESTION_REVIEW_MAX_RETRIES + 1):
+        try:
+            return create_fn()
+        except Exception as exc:
+            last_exc = exc
+            if not _is_question_review_retryable_error(exc) or attempt >= QUESTION_REVIEW_MAX_RETRIES:
+                raise
+            delay_seconds = QUESTION_REVIEW_RETRY_DELAY_SECONDS * attempt
+            logger.warning(
+                "%s hit a VLM concurrency limit (%d/%d). Retrying in %.1fs: %s",
+                context,
+                attempt,
+                QUESTION_REVIEW_MAX_RETRIES,
+                delay_seconds,
+                exc,
+            )
+            time.sleep(delay_seconds)
+    if last_exc is None:
+        raise RuntimeError(f"{context} failed without raising a review error")
+    raise last_exc
 
 
 def _normalize_question_presence_status(value: object) -> str | None:
@@ -292,20 +327,23 @@ def _make_question_presence_reviewer(client, model_name: str):
 
     def _review(image_path: Path, question: dict[str, object], labels: list[str]) -> dict[str, object]:
         image_b64, mime = _image_path_to_base64(image_path)
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
-                    {
-                        "type": "text",
-                        "text": _question_presence_prompt(str(question.get("question", "")), labels),
-                    },
-                ],
-            }],
-            max_tokens=256,
-            temperature=0,
+        resp = _call_question_review_vlm(
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                        {
+                            "type": "text",
+                            "text": _question_presence_prompt(str(question.get("question", "")), labels),
+                        },
+                    ],
+                }],
+                max_tokens=256,
+                temperature=0,
+            ),
+            context=f"question presence review for {image_path.name}",
         )
         raw_text = (resp.choices[0].message.content or "").strip()
         parsed = _extract_json_object(raw_text)
@@ -407,17 +445,20 @@ def _make_question_answer_reviewer(client, model_name: str):
             }
 
         image_b64, mime = _image_path_to_base64(image_path)
-        resp = client.chat.completions.create(
-            model=model_name,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-            max_tokens=32,
-            temperature=0,
+        resp = _call_question_review_vlm(
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+                max_tokens=32,
+                temperature=0,
+            ),
+            context=f"question answer review for {image_path.name}",
         )
         raw_text = (resp.choices[0].message.content or "").strip()
         predicted_answer = _parse_mcq_answer(raw_text)
