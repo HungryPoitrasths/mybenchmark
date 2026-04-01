@@ -1,0 +1,249 @@
+import json
+import shutil
+import unittest
+import uuid
+from contextlib import ExitStack
+from pathlib import Path
+from unittest.mock import Mock, patch
+
+import numpy as np
+
+import scripts.run_single_frame_trace as trace_module
+from src.utils.colmap_loader import CameraIntrinsics, CameraPose
+
+TEST_TMP_ROOT = Path(__file__).resolve().parent / "_tmp"
+TEST_TMP_ROOT.mkdir(exist_ok=True)
+
+
+def make_case_dir(prefix: str) -> Path:
+    path = TEST_TMP_ROOT / f"{prefix}_{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    return path
+
+
+def make_camera_pose(image_name: str) -> CameraPose:
+    return CameraPose(
+        image_name=image_name,
+        rotation=np.eye(3, dtype=np.float64),
+        translation=np.zeros(3, dtype=np.float64),
+    )
+
+
+def make_camera_intrinsics() -> CameraIntrinsics:
+    return CameraIntrinsics(
+        width=640,
+        height=480,
+        fx=500.0,
+        fy=500.0,
+        cx=320.0,
+        cy=240.0,
+    )
+
+
+def make_object(obj_id: int, label: str) -> dict:
+    return {
+        "id": obj_id,
+        "label": label,
+        "center": [0.0, 0.0, 1.0],
+        "bbox_min": [-0.1, -0.1, 0.9],
+        "bbox_max": [0.1, 0.1, 1.1],
+    }
+
+
+def make_scene(scene_id: str) -> dict:
+    return {
+        "scene_id": scene_id,
+        "objects": [
+            make_object(1, "cup"),
+            make_object(2, "table"),
+        ],
+        "attachment_edges": [
+            {"parent_id": 2, "child_id": 1, "type": "attachment"},
+        ],
+        "room_bounds": None,
+        "wall_objects": [],
+    }
+
+
+def make_referability_entry() -> dict:
+    return {
+        "frame_usable": True,
+        "frame_reject_reason": None,
+        "selector_visible_object_ids": [1, 2],
+        "selector_visible_label_counts": {"cup": 1, "table": 1},
+        "candidate_visible_object_ids": [1, 2],
+        "candidate_visibility_source": "depth_refined",
+        "candidate_visible_label_counts": {"cup": 1, "table": 1},
+        "candidate_labels": ["cup", "table"],
+        "label_to_object_ids": {"cup": [1], "table": [2]},
+        "vlm_label_reviews": [],
+        "label_statuses": {"cup": "unique", "table": "unique"},
+        "label_counts": {"cup": 1, "table": 1},
+        "referable_object_ids": [1],
+    }
+
+
+def make_fake_questions() -> list[dict]:
+    return [
+        {
+            "question": "Is the cup on the table?",
+            "answer": "A",
+            "options": ["yes", "no"],
+            "correct_value": "yes",
+            "type": "attachment_chain",
+            "level": "L3",
+        }
+    ]
+
+
+class RunSingleFrameTraceTests(unittest.TestCase):
+    def _make_paths(self) -> tuple[Path, Path, str, str]:
+        root = make_case_dir("single_frame_trace")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+        (scene_dir / "color" / image_name).write_bytes(b"fake-jpg")
+        return data_root, output_dir, scene_id, image_name
+
+    def _patch_common(self, scene_id: str, image_name: str):
+        scene = make_scene(scene_id)
+        return (
+            patch.object(trace_module, "parse_scene", return_value=scene),
+            patch.object(trace_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(trace_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(trace_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(trace_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(trace_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(trace_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(trace_module, "_load_scene_geometry", return_value=None),
+            patch.object(trace_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(trace_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(trace_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(trace_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(trace_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(trace_module.RayCaster, "from_ply", return_value=Mock()),
+        )
+
+    def test_run_single_frame_trace_uses_cached_referability_entry(self) -> None:
+        data_root, output_dir, scene_id, image_name = self._make_paths()
+        referability_cache = {
+            "version": "6.0",
+            "frames": {
+                scene_id: {
+                    image_name: make_referability_entry(),
+                }
+            },
+        }
+
+        def fake_generate_all_questions(**_kwargs):
+            return make_fake_questions()
+
+        with ExitStack() as stack:
+            for mocked in self._patch_common(scene_id, image_name):
+                stack.enter_context(mocked)
+            stack.enter_context(
+                patch.object(trace_module, "generate_all_questions", side_effect=fake_generate_all_questions)
+            )
+            stack.enter_context(
+                patch.object(
+                    trace_module,
+                    "_compute_single_frame_referability_entry",
+                    side_effect=AssertionError("should not fallback online"),
+                )
+            )
+            trace_doc = trace_module.run_single_frame_trace(
+                data_root=data_root,
+                scene_id=scene_id,
+                image_name=image_name,
+                output_dir=output_dir,
+                referability_cache=referability_cache,
+                use_occlusion=False,
+            )
+
+        self.assertEqual(trace_doc["status"], "completed")
+        self.assertEqual(trace_doc["input"]["referability_source"], "cache")
+        trace_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "trace.json").read_text(encoding="utf-8"))
+        final_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "final_questions.json").read_text(encoding="utf-8"))
+        html_text = (output_dir / "single_frame" / scene_id / "000123" / "trace.html").read_text(encoding="utf-8")
+
+        self.assertEqual(final_json["question_count"], 1)
+        self.assertIn("trace_question_id", final_json["questions"][0])
+        self.assertEqual(trace_json["question_lifecycle"][0]["status"], "kept")
+        self.assertIn("Is the cup on the table?", html_text)
+
+    def test_run_single_frame_trace_falls_back_to_online_referability(self) -> None:
+        data_root, output_dir, scene_id, image_name = self._make_paths()
+        referability_cache = {"version": "6.0", "frames": {scene_id: {}}}
+
+        def fake_generate_all_questions(**_kwargs):
+            return make_fake_questions()
+
+        with ExitStack() as stack:
+            for mocked in self._patch_common(scene_id, image_name):
+                stack.enter_context(mocked)
+            stack.enter_context(
+                patch.object(trace_module, "generate_all_questions", side_effect=fake_generate_all_questions)
+            )
+            fallback_mock = stack.enter_context(
+                patch.object(
+                    trace_module,
+                    "_compute_single_frame_referability_entry",
+                    return_value=(make_referability_entry(), "online"),
+                )
+            )
+            trace_doc = trace_module.run_single_frame_trace(
+                data_root=data_root,
+                scene_id=scene_id,
+                image_name=image_name,
+                output_dir=output_dir,
+                referability_cache=referability_cache,
+                use_occlusion=False,
+            )
+
+        self.assertEqual(trace_doc["status"], "completed")
+        self.assertEqual(trace_doc["input"]["referability_source"], "online")
+        fallback_mock.assert_called_once()
+
+    def test_run_single_frame_trace_stops_when_pose_missing(self) -> None:
+        data_root, output_dir, scene_id, image_name = self._make_paths()
+        referability_cache = {"version": "6.0", "frames": {}}
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(trace_module, "parse_scene", return_value=make_scene(scene_id)))
+            stack.enter_context(patch.object(trace_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None))
+            stack.enter_context(patch.object(trace_module, "get_scene_attachment_graph", return_value={2: [1]}))
+            stack.enter_context(patch.object(trace_module, "get_scene_attached_by", return_value={1: [2]}))
+            stack.enter_context(patch.object(trace_module, "get_scene_support_chain_graph", return_value={2: [1]}))
+            stack.enter_context(patch.object(trace_module, "get_scene_support_chain_by", return_value={1: [2]}))
+            stack.enter_context(patch.object(trace_module, "has_nontrivial_attachment", return_value=True))
+            stack.enter_context(patch.object(trace_module, "_load_scene_geometry", return_value=None))
+            stack.enter_context(patch.object(trace_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)))
+            stack.enter_context(patch.object(trace_module, "load_scannet_poses", return_value={}))
+            trace_doc = trace_module.run_single_frame_trace(
+                data_root=data_root,
+                scene_id=scene_id,
+                image_name=image_name,
+                output_dir=output_dir,
+                referability_cache=referability_cache,
+                use_occlusion=False,
+            )
+
+        self.assertEqual(trace_doc["status"], "stopped")
+        self.assertEqual(trace_doc["stop_reason"], "missing_pose")
+        self.assertEqual(trace_doc["stop_details"]["requested_image_name"], image_name)
+        self.assertEqual(trace_doc["stop_details"]["available_pose_count"], 0)
+        final_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "final_questions.json").read_text(encoding="utf-8"))
+        html_text = (output_dir / "single_frame" / scene_id / "000123" / "trace.html").read_text(encoding="utf-8")
+        self.assertEqual(final_json["question_count"], 0)
+        self.assertIn("missing_pose", html_text)
+        self.assertIn(image_name, html_text)
+
+
+if __name__ == "__main__":
+    unittest.main()

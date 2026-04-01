@@ -54,6 +54,11 @@ from .utils.depth_occlusion import (
     compute_mesh_depth_occlusion,
     compute_mesh_depth_occlusion_metrics,
 )
+from .utils.ray_casting import (
+    _LOCAL_BOUNDARY_RESAMPLE_COUNT,
+    _classify_hit_path,
+    _local_triangle_resamples,
+)
 from .scene_parser import EXCLUDED_LABELS, InstanceMeshData
 
 logger = logging.getLogger(__name__)
@@ -186,6 +191,73 @@ def _instance_surface_samples(
     if samples is None:
         return np.empty((0, 3), dtype=np.float64)
     return np.asarray(samples, dtype=np.float64)
+
+
+def _get_instance_intersector(
+    instance_mesh_data: InstanceMeshData,
+    obj_id: int,
+) -> Any:
+    """Build (or retrieve from cache) a per-instance RayCaster for *obj_id*.
+
+    The sub-mesh is built from the instance's solid + boundary triangles using
+    the global vertices/faces stored in *instance_mesh_data*.  The intersector
+    operates in the original (un-translated) coordinate frame; callers must
+    shift ray origins by ``-delta`` when querying translated objects.
+
+    Returns ``None`` when the instance has no triangles.
+    """
+    cache: dict[int, Any] = instance_mesh_data.__dict__.setdefault(
+        "_intersector_cache", {}
+    )
+    if obj_id in cache:
+        return cache[obj_id]
+
+    tri_ids_set = _instance_triangle_id_set(instance_mesh_data, obj_id)
+    if not tri_ids_set:
+        cache[obj_id] = None
+        return None
+
+    import trimesh
+    from .utils.ray_casting import RayCaster
+
+    tri_ids = np.array(sorted(tri_ids_set), dtype=np.int64)
+    vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+    faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)
+
+    # Extract compact sub-mesh with remapped local face indices.
+    sub_faces_global = faces[tri_ids]
+    unique_vert_ids, remapped = np.unique(sub_faces_global, return_inverse=True)
+    sub_vertices = vertices[unique_vert_ids]
+    sub_faces_local = remapped.reshape(-1, 3).astype(np.int64)
+
+    sub_mesh = trimesh.Trimesh(
+        vertices=sub_vertices, faces=sub_faces_local, process=False
+    )
+    caster = RayCaster(sub_mesh)
+    cache[obj_id] = caster
+    return caster
+
+
+def _instance_surface_sample_metadata(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    if instance_mesh_data is None:
+        return (
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+    triangle_ids = instance_mesh_data.surface_triangle_ids_by_instance.get(int(obj_id))
+    barycentrics = instance_mesh_data.surface_barycentrics_by_instance.get(int(obj_id))
+    if triangle_ids is None or barycentrics is None:
+        return (
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+    return (
+        np.asarray(triangle_ids, dtype=np.int64),
+        np.asarray(barycentrics, dtype=np.float64),
+    )
 
 
 def _make_l1_occlusion_metrics(
@@ -321,8 +393,18 @@ def _invert_direction(direction: str) -> str:
     return opposites.get(direction, direction)
 
 
-def _direction_with_camera_hint(direction: str) -> str:
-    """Clarify camera-depth motions in rendered question text."""
+def _direction_with_camera_hint(
+    direction: str,
+    moving_subject: str = "object",
+) -> str:
+    """Clarify forward/backward wording for camera-centric question text."""
+    if moving_subject == "camera":
+        if direction == "forward":
+            return "forward (along its viewing direction)"
+        if direction == "backward":
+            return "backward (opposite its viewing direction)"
+        return direction
+
     if direction == "forward":
         return "forward (away from the camera)"
     if direction == "backward":
@@ -816,6 +898,66 @@ def _projected_area_from_records(
     return float(area), float(in_frame_count / len(projected_records))
 
 
+def _in_frame_surface_sample_subset(
+    sample_points: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    sample_triangle_ids: np.ndarray | None = None,
+    sample_barycentrics: np.ndarray | None = None,
+) -> tuple[float, float, np.ndarray, np.ndarray, np.ndarray]:
+    points = np.asarray(sample_points, dtype=np.float64)
+    if len(points) == 0:
+        return (
+            0.0,
+            0.0,
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    projected_records = _project_sample_point_records(
+        points,
+        camera_pose,
+        color_intrinsics,
+    )
+    projected_area, in_frame_ratio = _projected_area_from_records(
+        projected_records,
+        color_intrinsics,
+    )
+    in_frame_records = [rec for rec in projected_records if bool(rec["in_frame"])]
+    if not in_frame_records:
+        return (
+            projected_area,
+            in_frame_ratio,
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    in_frame_indices = np.asarray(
+        [int(rec["index"]) for rec in in_frame_records],
+        dtype=np.int64,
+    )
+    in_frame_points = points[in_frame_indices]
+    in_frame_triangle_ids = (
+        np.asarray(sample_triangle_ids, dtype=np.int64)[in_frame_indices]
+        if sample_triangle_ids is not None and len(sample_triangle_ids) == len(points)
+        else np.empty((0,), dtype=np.int64)
+    )
+    in_frame_barycentrics = (
+        np.asarray(sample_barycentrics, dtype=np.float64)[in_frame_indices]
+        if sample_barycentrics is not None and len(sample_barycentrics) == len(points)
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    return (
+        projected_area,
+        in_frame_ratio,
+        in_frame_points,
+        in_frame_triangle_ids,
+        in_frame_barycentrics,
+    )
+
+
 def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
     if (
         metrics.projected_area < MIN_PROJECTED_AREA_PX
@@ -923,6 +1065,10 @@ def _compute_l1_occlusion_metrics(
 
     obj_id = int(obj["id"])
     sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+    sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+        instance_mesh_data,
+        obj_id,
+    )
     target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
     sampled_point_count = int(len(sample_points))
     if sampled_point_count <= 0 or not target_tri_ids:
@@ -964,6 +1110,16 @@ def _compute_l1_occlusion_metrics(
         dtype=np.int64,
     )
     in_frame_points = sample_points[in_frame_indices]
+    in_frame_triangle_ids = (
+        sample_triangle_ids[in_frame_indices]
+        if len(sample_triangle_ids) == sampled_point_count
+        else np.empty((0,), dtype=np.int64)
+    )
+    in_frame_barycentrics = (
+        sample_barycentrics[in_frame_indices]
+        if len(sample_barycentrics) == sampled_point_count
+        else np.empty((0, 3), dtype=np.float64)
+    )
 
     if backend == "depth":
         if not _depth_backend_inputs_ready(
@@ -1007,6 +1163,16 @@ def _compute_l1_occlusion_metrics(
             camera_pos=camera_pos,
             target_points=in_frame_points,
             target_tri_ids=target_tri_ids,
+            sample_triangle_ids=in_frame_triangle_ids,
+            sample_barycentrics=in_frame_barycentrics,
+            vertices=(
+                np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+                if instance_mesh_data is not None else None
+            ),
+            faces=(
+                np.asarray(instance_mesh_data.faces, dtype=np.int64)
+                if instance_mesh_data is not None else None
+            ),
         )
         occlusion_ratio = 1.0
         if valid_count > 0:
@@ -1545,28 +1711,107 @@ def _projected_area_summary(
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics,
 ) -> tuple[float, float]:
-    projected: list[tuple[float, float]] = []
-    for pt in sample_points:
-        uv, depth = project_to_image(pt, camera_pose, color_intrinsics)
-        if uv is None or depth <= 0:
-            continue
-        projected.append((float(uv[0]), float(uv[1])))
-
-    if not projected:
-        return 0.0, 0.0
-
-    us = [u for u, _ in projected]
-    vs = [v for _, v in projected]
-    u_min = max(0.0, min(us))
-    v_min = max(0.0, min(vs))
-    u_max = min(float(color_intrinsics.width), max(us))
-    v_max = min(float(color_intrinsics.height), max(vs))
-    area = max(0.0, u_max - u_min) * max(0.0, v_max - v_min)
-    in_frame = sum(
-        1 for u, v in projected
-        if 0 <= u < color_intrinsics.width and 0 <= v < color_intrinsics.height
+    projected_records = _project_sample_point_records(
+        sample_points,
+        camera_pose,
+        color_intrinsics,
     )
-    return float(area), float(in_frame / len(projected))
+    return _projected_area_from_records(projected_records, color_intrinsics)
+
+
+_COUNTERFACTUAL_TARGET_TRI_ID = 1
+_COUNTERFACTUAL_OTHER_TRI_ID = 0
+
+
+def _hits_up_to_distance_from_caster(
+    caster,
+    origin: np.ndarray,
+    direction: np.ndarray,
+    max_distance: float,
+    ignored_tri_ids: set[int] | None = None,
+) -> list[tuple[int, float]]:
+    if caster is None or not np.isfinite(max_distance) or max_distance <= 1e-12:
+        return []
+
+    hits_helper = getattr(caster, "_hits_up_to_distance", None)
+    if callable(hits_helper):
+        return hits_helper(
+            origin=origin,
+            direction=direction,
+            max_distance=float(max_distance),
+            ignored_tri_ids=ignored_tri_ids,
+        )
+
+    cast_ray = getattr(caster, "cast_ray", None)
+    if not callable(cast_ray):
+        return []
+
+    filtered: list[tuple[int, float]] = []
+    for _hit_point, tri_id, dist in cast_ray(origin, direction):
+        if dist > float(max_distance):
+            break
+        tri_id_int = int(tri_id)
+        if ignored_tri_ids and tri_id_int in ignored_tri_ids:
+            continue
+        filtered.append((tri_id_int, float(dist)))
+    return filtered
+
+
+def _counterfactual_hit_path(
+    modified_scene: _ModifiedSceneContext,
+    camera_pos: np.ndarray,
+    direction: np.ndarray,
+    max_distance: float,
+    target_triangle_ids: set[int],
+    target_caster,
+    target_delta: np.ndarray,
+    blocker_casters: dict[int, Any],
+    blocker_deltas: dict[int, np.ndarray],
+) -> list[tuple[int, float]]:
+    static_ignored_tri_ids = set(modified_scene.ignored_tri_ids)
+    static_ignored_tri_ids.update(int(tid) for tid in target_triangle_ids)
+
+    merged_hits: list[tuple[int, float]] = []
+    static_hits = _hits_up_to_distance_from_caster(
+        modified_scene.ray_caster,
+        origin=camera_pos,
+        direction=direction,
+        max_distance=max_distance,
+        ignored_tri_ids=static_ignored_tri_ids,
+    )
+    merged_hits.extend(
+        (_COUNTERFACTUAL_OTHER_TRI_ID, float(dist))
+        for _tri_id, dist in static_hits
+    )
+
+    target_hits = _hits_up_to_distance_from_caster(
+        target_caster,
+        origin=camera_pos - target_delta,
+        direction=direction,
+        max_distance=max_distance,
+    )
+    merged_hits.extend(
+        (_COUNTERFACTUAL_TARGET_TRI_ID, float(dist))
+        for _tri_id, dist in target_hits
+    )
+
+    for blocker_id, blocker_caster in blocker_casters.items():
+        blocker_delta = blocker_deltas.get(blocker_id)
+        if blocker_delta is None:
+            continue
+        blocker_hits = _hits_up_to_distance_from_caster(
+            blocker_caster,
+            origin=camera_pos - blocker_delta,
+            direction=direction,
+            max_distance=max_distance,
+        )
+        merged_hits.extend(
+            (_COUNTERFACTUAL_OTHER_TRI_ID, float(dist))
+            for _tri_id, dist in blocker_hits
+        )
+
+    merged_hits.sort(key=lambda item: item[1])
+    return merged_hits
 
 
 def _build_modified_scene(
@@ -1596,6 +1841,10 @@ def _compute_target_visibility(
     target_surface_points: np.ndarray,
     target_triangle_ids: set[int],
     camera_pos: np.ndarray,
+    target_sample_triangle_ids: np.ndarray | None = None,
+    target_sample_barycentrics: np.ndarray | None = None,
+    mesh_vertices: np.ndarray | None = None,
+    mesh_faces: np.ndarray | None = None,
 ) -> tuple[str, float]:
     """Evaluate target visibility against a possibly modified scene."""
     if (
@@ -1611,6 +1860,10 @@ def _compute_target_visibility(
         target_points=target_surface_points,
         target_tri_ids=target_triangle_ids,
         ignored_tri_ids=set(modified_scene.ignored_tri_ids),
+        sample_triangle_ids=target_sample_triangle_ids,
+        sample_barycentrics=target_sample_barycentrics,
+        vertices=mesh_vertices,
+        faces=mesh_faces,
     )
     return _visibility_status_from_ratio(visible_ratio), float(visible_ratio)
 
@@ -1649,67 +1902,165 @@ def _ray_aabb_entry_distance(
 def _compute_counterfactual_target_visibility(
     modified_scene: _ModifiedSceneContext | None,
     target_surface_points: np.ndarray,
+    target_triangle_ids: set[int],
     camera_pos: np.ndarray,
-    extra_blocker_boxes: list[tuple[np.ndarray, np.ndarray]] | None = None,
     hit_epsilon: float = 0.05,
+    instance_mesh_data: InstanceMeshData | None = None,
+    target_obj_id: int | None = None,
+    target_delta: np.ndarray | None = None,
+    moved_blocker_deltas: dict[int, np.ndarray] | None = None,
+    sample_triangle_ids: np.ndarray | None = None,
+    sample_barycentrics: np.ndarray | None = None,
+    vertices: np.ndarray | None = None,
+    faces: np.ndarray | None = None,
+    local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
 ) -> tuple[str, float]:
-    """Estimate visibility for a target that may be moved off the original mesh.
+    """Estimate visibility for a target that may have been translated.
 
-    The base mesh is queried with ignored triangles removed. Moved objects are
-    then reintroduced approximately as axis-aligned blocker boxes at their new
-    positions so object movement can affect visibility without rebuilding the
-    whole scene mesh.
+    The hit path is merged from three sources:
+
+    1. the static scene with all moved objects ignored,
+    2. the target's own per-instance mesh, queried with origin shifted by
+       ``-target_delta``, and
+    3. any other moved blockers, queried the same way.
+
+    The merged path is then classified with the same ordered
+    visible / externally_occluded / self_occluded / mixed_boundary logic used
+    by static ``mesh_ray`` visibility. Mixed boundary samples trigger local
+    same-triangle refinement when sample metadata is available.
     """
-    if modified_scene is None or modified_scene.ray_caster is None or len(target_surface_points) == 0:
+    if (
+        modified_scene is None
+        or modified_scene.ray_caster is None
+        or len(target_surface_points) == 0
+        or not target_triangle_ids
+    ):
         return "not visible", 0.0
 
+    camera_pos = np.asarray(camera_pos, dtype=np.float64)
     sampled_points = np.asarray(target_surface_points, dtype=np.float64)
-    directions = sampled_points - np.asarray(camera_pos, dtype=np.float64)
+    directions = sampled_points - camera_pos
     expected_dists = np.linalg.norm(directions, axis=1)
     valid_mask = np.isfinite(expected_dists) & (expected_dists > 1e-6)
     if not np.any(valid_mask):
         return "not visible", 0.0
 
+    sampled_points = sampled_points[valid_mask]
     directions = directions[valid_mask]
     expected_dists = expected_dists[valid_mask]
-    sampled_points = sampled_points[valid_mask]
+    triangle_meta = None
+    barycentric_meta = None
+    if sample_triangle_ids is not None and len(sample_triangle_ids) == len(target_surface_points):
+        triangle_meta = np.asarray(sample_triangle_ids, dtype=np.int64)[valid_mask]
+    if sample_barycentrics is not None and len(sample_barycentrics) == len(target_surface_points):
+        barycentric_meta = np.asarray(sample_barycentrics, dtype=np.float64)[valid_mask]
+    vertices_arr = np.asarray(vertices, dtype=np.float64) if vertices is not None else None
+    faces_arr = np.asarray(faces, dtype=np.int64) if faces is not None else None
+
+    # Build / retrieve per-instance intersectors.
+    target_caster = None
+    t_delta = np.zeros(3, dtype=np.float64)
+    if instance_mesh_data is not None and target_obj_id is not None:
+        target_caster = _get_instance_intersector(instance_mesh_data, int(target_obj_id))
+        if target_delta is not None:
+            t_delta = np.asarray(target_delta, dtype=np.float64)
+
+    blocker_casters: dict[int, Any] = {}
+    b_deltas: dict[int, np.ndarray] = {}
+    if instance_mesh_data is not None and moved_blocker_deltas:
+        for b_id, b_delta in moved_blocker_deltas.items():
+            b_caster = _get_instance_intersector(instance_mesh_data, int(b_id))
+            if b_caster is not None:
+                blocker_casters[b_id] = b_caster
+                b_deltas[b_id] = np.asarray(b_delta, dtype=np.float64)
 
     visible_count = 0
     valid_count = 0
-    blocker_boxes = extra_blocker_boxes or []
-    ignored_tri_ids = set(modified_scene.ignored_tri_ids)
+    mixed_records: list[int] = []
+    counterfactual_target_tri_ids = {_COUNTERFACTUAL_TARGET_TRI_ID}
 
-    for point, direction, expected_dist in zip(sampled_points, directions, expected_dists):
-        direction_norm = direction / expected_dist
-        blocker_distance = None
-
-        mesh_hit = modified_scene.ray_caster.first_visible_hit(
-            np.asarray(camera_pos, dtype=np.float64),
-            direction_norm,
-            ignored_tri_ids=ignored_tri_ids,
+    for ray_idx, (direction, expected_dist) in enumerate(zip(directions, expected_dists)):
+        hit_path = _counterfactual_hit_path(
+            modified_scene=modified_scene,
+            camera_pos=camera_pos,
+            direction=direction,
+            max_distance=float(expected_dist) + hit_epsilon,
+            target_triangle_ids=target_triangle_ids,
+            target_caster=target_caster,
+            target_delta=t_delta,
+            blocker_casters=blocker_casters,
+            blocker_deltas=b_deltas,
         )
-        if mesh_hit is not None:
-            _hit_point, _tri_id, hit_dist = mesh_hit
-            if hit_dist < float(expected_dist) - hit_epsilon:
-                blocker_distance = float(hit_dist)
-
-        for bbox_min, bbox_max in blocker_boxes:
-            bbox_entry = _ray_aabb_entry_distance(
-                np.asarray(camera_pos, dtype=np.float64),
-                direction_norm,
-                np.asarray(bbox_min, dtype=np.float64),
-                np.asarray(bbox_max, dtype=np.float64),
-            )
-            if bbox_entry is None:
-                continue
-            if bbox_entry >= float(expected_dist) - hit_epsilon:
-                continue
-            if blocker_distance is None or bbox_entry < blocker_distance:
-                blocker_distance = float(bbox_entry)
-
-        valid_count += 1
-        if blocker_distance is None:
+        classification = _classify_hit_path(
+            hit_path,
+            expected_dist=float(expected_dist),
+            target_tri_ids=counterfactual_target_tri_ids,
+            hit_epsilon=hit_epsilon,
+        )
+        if classification == "visible":
             visible_count += 1
+            valid_count += 1
+        elif classification == "externally_occluded":
+            valid_count += 1
+        elif classification == "mixed_boundary":
+            mixed_records.append(ray_idx)
+
+    can_refine_mixed = (
+        triangle_meta is not None
+        and barycentric_meta is not None
+        and vertices_arr is not None
+        and faces_arr is not None
+        and int(local_resample_count) > 0
+    )
+    if can_refine_mixed:
+        for ray_idx in mixed_records:
+            tri_id = int(triangle_meta[ray_idx])
+            if tri_id < 0 or tri_id >= len(faces_arr):
+                continue
+            tri_vertices = vertices_arr[faces_arr[tri_id]]
+            local_points, _local_barys = _local_triangle_resamples(
+                triangle_vertices=tri_vertices,
+                barycentric=barycentric_meta[ray_idx],
+                triangle_id=tri_id,
+                n_samples=int(local_resample_count),
+            )
+            if len(local_points) == 0:
+                continue
+
+            local_points = np.asarray(local_points, dtype=np.float64) + t_delta
+            local_visible = 0
+            local_valid = 0
+            for point in local_points:
+                direction = np.asarray(point, dtype=np.float64) - camera_pos
+                expected_dist = float(np.linalg.norm(direction))
+                if not np.isfinite(expected_dist) or expected_dist <= 1e-6:
+                    continue
+                hit_path = _counterfactual_hit_path(
+                    modified_scene=modified_scene,
+                    camera_pos=camera_pos,
+                    direction=direction,
+                    max_distance=expected_dist + hit_epsilon,
+                    target_triangle_ids=target_triangle_ids,
+                    target_caster=target_caster,
+                    target_delta=t_delta,
+                    blocker_casters=blocker_casters,
+                    blocker_deltas=b_deltas,
+                )
+                classification = _classify_hit_path(
+                    hit_path,
+                    expected_dist=expected_dist,
+                    target_tri_ids=counterfactual_target_tri_ids,
+                    hit_epsilon=hit_epsilon,
+                )
+                if classification == "visible":
+                    local_visible += 1
+                    local_valid += 1
+                elif classification == "externally_occluded":
+                    local_valid += 1
+
+            if local_valid >= 2:
+                visible_count += local_visible
+                valid_count += local_valid
 
     if valid_count <= 0:
         return "not visible", 0.0
@@ -1741,18 +2092,41 @@ def _compute_visibility_status_per_object(
         )
 
     visibility: dict[int, tuple[str, float]] = {}
+    mesh_vertices = (
+        np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+        if instance_mesh_data is not None else None
+    )
+    mesh_faces = (
+        np.asarray(instance_mesh_data.faces, dtype=np.int64)
+        if instance_mesh_data is not None else None
+    )
     for obj in objects:
         obj_id = int(obj["id"])
         sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+        sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+            instance_mesh_data,
+            obj_id,
+        )
         target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
-        projected_area, in_frame_ratio = _projected_area_summary(
-            sample_points, camera_pose, color_intrinsics,
+        (
+            projected_area,
+            in_frame_ratio,
+            in_frame_points,
+            in_frame_triangle_ids,
+            in_frame_barycentrics,
+        ) = _in_frame_surface_sample_subset(
+            sample_points,
+            camera_pose,
+            color_intrinsics,
+            sample_triangle_ids=sample_triangle_ids,
+            sample_barycentrics=sample_barycentrics,
         )
         if (
             len(sample_points) == 0
             or not target_tri_ids
             or projected_area < MIN_PROJECTED_AREA_PX
             or in_frame_ratio < MIN_IN_FRAME_RATIO
+            or len(in_frame_points) == 0
         ):
             visibility[obj_id] = ("not visible", 0.0)
             continue
@@ -1760,9 +2134,13 @@ def _compute_visibility_status_per_object(
         if backend == "mesh_ray":
             status, visible_ratio = _compute_target_visibility(
                 modified_scene=modified_scene,
-                target_surface_points=sample_points,
+                target_surface_points=in_frame_points,
                 target_triangle_ids=target_tri_ids,
                 camera_pos=camera_pos,
+                target_sample_triangle_ids=in_frame_triangle_ids,
+                target_sample_barycentrics=in_frame_barycentrics,
+                mesh_vertices=mesh_vertices,
+                mesh_faces=mesh_faces,
             )
             visibility[obj_id] = (status, float(visible_ratio))
             continue
@@ -1801,57 +2179,87 @@ def _compute_movement_visibility_status_per_object(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
 ) -> dict[int, tuple[str, float]]:
-    """Compute approximate post-move visibility using the original mesh plus moved AABBs."""
+    """Compute post-move visibility using per-instance mesh intersectors."""
     if color_intrinsics is None:
         return {int(obj["id"]): ("not visible", 0.0) for obj in moved_objects}
 
     original_map = {int(obj["id"]): obj for obj in original_objects}
-    moved_map = {int(obj["id"]): obj for obj in moved_objects}
     moved_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set(moved_ids))
     camera_pos = np.array(camera_pose.position, dtype=np.float64)
-    moved_blockers = {
-        int(obj["id"]): (
-            np.asarray(obj["bbox_min"], dtype=np.float64),
-            np.asarray(obj["bbox_max"], dtype=np.float64),
-        )
-        for obj in moved_objects
-        if int(obj["id"]) in moved_ids
-    }
+    mesh_vertices = (
+        np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+        if instance_mesh_data is not None else None
+    )
+    mesh_faces = (
+        np.asarray(instance_mesh_data.faces, dtype=np.int64)
+        if instance_mesh_data is not None else None
+    )
+
+    # Translation delta for every moved object.
+    moved_deltas: dict[int, np.ndarray] = {}
+    for obj in moved_objects:
+        mid = int(obj["id"])
+        if mid not in moved_ids:
+            continue
+        orig = original_map.get(mid)
+        if orig is not None:
+            moved_deltas[mid] = (
+                np.asarray(obj["center"], dtype=np.float64)
+                - np.asarray(orig["center"], dtype=np.float64)
+            )
 
     visibility: dict[int, tuple[str, float]] = {}
     for obj in moved_objects:
         obj_id = int(obj["id"])
         sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
-        if obj_id in moved_ids:
-            original_obj = original_map.get(obj_id)
-            moved_obj = moved_map.get(obj_id)
-            if original_obj is not None and moved_obj is not None:
-                delta = (
-                    np.asarray(moved_obj["center"], dtype=np.float64)
-                    - np.asarray(original_obj["center"], dtype=np.float64)
-                )
-                sample_points = sample_points + delta
+        sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+            instance_mesh_data,
+            obj_id,
+        )
+        target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
+        target_delta = moved_deltas.get(obj_id)
+        if target_delta is not None:
+            sample_points = sample_points + target_delta
 
-        projected_area, in_frame_ratio = _projected_area_summary(
-            sample_points, camera_pose, color_intrinsics,
+        (
+            projected_area,
+            in_frame_ratio,
+            in_frame_points,
+            in_frame_triangle_ids,
+            in_frame_barycentrics,
+        ) = _in_frame_surface_sample_subset(
+            sample_points,
+            camera_pose,
+            color_intrinsics,
+            sample_triangle_ids=sample_triangle_ids,
+            sample_barycentrics=sample_barycentrics,
         )
         if (
             len(sample_points) == 0
+            or not target_tri_ids
             or projected_area < MIN_PROJECTED_AREA_PX
             or in_frame_ratio < MIN_IN_FRAME_RATIO
+            or len(in_frame_points) == 0
         ):
             visibility[obj_id] = ("not visible", 0.0)
             continue
 
-        extra_blocker_boxes = [
-            bbox for blocker_id, bbox in moved_blockers.items()
-            if blocker_id != obj_id
-        ]
+        moved_blocker_deltas = {
+            bid: delta for bid, delta in moved_deltas.items() if bid != obj_id
+        }
         status, visible_ratio = _compute_counterfactual_target_visibility(
             modified_scene=moved_scene_context,
-            target_surface_points=sample_points,
+            target_surface_points=in_frame_points,
+            target_triangle_ids=target_tri_ids,
             camera_pos=camera_pos,
-            extra_blocker_boxes=extra_blocker_boxes,
+            instance_mesh_data=instance_mesh_data,
+            target_obj_id=obj_id,
+            target_delta=target_delta,
+            moved_blocker_deltas=moved_blocker_deltas,
+            sample_triangle_ids=in_frame_triangle_ids,
+            sample_barycentrics=in_frame_barycentrics,
+            vertices=mesh_vertices,
+            faces=mesh_faces,
         )
         visibility[obj_id] = (status, float(visible_ratio))
 
@@ -2620,50 +3028,49 @@ def generate_l2_object_move(
                 if direction_values is not None:
                     old_value, new_value = direction_values
                     relation_unchanged = old_value == new_value
-                    if not attachment_remapped and relation_unchanged:
-                        continue
-                    tpl_list = templates.get(
-                        "L2_object_move_agent",
-                        _default_templates()["L2_object_move_agent"],
-                    )
-                    tpl = random.choice(tpl_list)
-                    question_text = tpl.format(
-                        obj_a=_the(move_source["label"]),
-                        direction=direction_desc,
-                        direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
-                        distance=distance_desc,
-                        obj_b=_the(obj_b_label),
-                        obj_c=_the(obj_c_label),
-                    )
-                    options, answer = generate_options(new_value, ALL_DIRECTIONS)
-                    obj_questions.append({
-                        "level": "L2",
-                        "type": "object_move_agent",
-                        "question": question_text,
-                        "options": options,
-                        "answer": answer,
-                        "correct_value": new_value,
-                        "old_correct_value": old_value,
-                        "new_correct_value": new_value,
-                        "moved_obj_id": move_source_id,
-                        "moved_obj_label": move_source["label"],
-                        "query_obj_id": obj["id"],
-                        "query_obj_label": obj["label"],
-                        "attachment_remapped": attachment_remapped,
-                        "obj_b_id": relation_obj_b_id,
-                        "obj_b_label": obj_b_label,
-                        "obj_c_id": relation_obj_c_id,
-                        "obj_c_label": obj_c_label,
-                        "mentioned_objects": [
-                            _mention("moved_object", move_source["label"], move_source_id),
-                            _mention("query_object", obj["label"], obj["id"]),
-                            _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
-                            _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
-                        ],
-                        "delta": delta.tolist(),
-                        "relation_unchanged": relation_unchanged,
-                        "has_attachment_chain": has_attachment_chain,
-                    })
+                    if attachment_remapped or not relation_unchanged:
+                        tpl_list = templates.get(
+                            "L2_object_move_agent",
+                            _default_templates()["L2_object_move_agent"],
+                        )
+                        tpl = random.choice(tpl_list)
+                        question_text = tpl.format(
+                            obj_a=_the(move_source["label"]),
+                            direction=direction_desc,
+                            direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
+                            distance=distance_desc,
+                            obj_b=_the(obj_b_label),
+                            obj_c=_the(obj_c_label),
+                        )
+                        options, answer = generate_options(new_value, ALL_DIRECTIONS)
+                        obj_questions.append({
+                            "level": "L2",
+                            "type": "object_move_agent",
+                            "question": question_text,
+                            "options": options,
+                            "answer": answer,
+                            "correct_value": new_value,
+                            "old_correct_value": old_value,
+                            "new_correct_value": new_value,
+                            "moved_obj_id": move_source_id,
+                            "moved_obj_label": move_source["label"],
+                            "query_obj_id": obj["id"],
+                            "query_obj_label": obj["label"],
+                            "attachment_remapped": attachment_remapped,
+                            "obj_b_id": relation_obj_b_id,
+                            "obj_b_label": obj_b_label,
+                            "obj_c_id": relation_obj_c_id,
+                            "obj_c_label": obj_c_label,
+                            "mentioned_objects": [
+                                _mention("moved_object", move_source["label"], move_source_id),
+                                _mention("query_object", obj["label"], obj["id"]),
+                                _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
+                                _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
+                            ],
+                            "delta": delta.tolist(),
+                            "relation_unchanged": relation_unchanged,
+                            "has_attachment_chain": has_attachment_chain,
+                        })
 
                 if not occlusion_enabled or compare_backend is None:
                     continue
@@ -2801,7 +3208,10 @@ def generate_l2_viewpoint_move(
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
                     direction=prompt_direction,
-                    direction_with_camera_hint=_direction_with_camera_hint(prompt_direction),
+                    direction_with_camera_hint=_direction_with_camera_hint(
+                        prompt_direction,
+                        moving_subject="camera",
+                    ),
                     distance=f"{dist:.0f}m",
                     obj_a=_the(obj["label"]),
                 )
@@ -3760,9 +4170,18 @@ def _ensure_question_mentions(
     return question
 
 
+def _emit_generation_trace(
+    trace_recorder: Callable[[dict[str, Any]], None] | None,
+    payload: dict[str, Any],
+) -> None:
+    if trace_recorder is not None:
+        trace_recorder(payload)
+
+
 def _enforce_referable_mentions(
     questions: list[dict[str, Any]],
     referable_ids: set[int],
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Drop questions that mention a concrete object outside the referable set."""
     kept: list[dict[str, Any]] = []
@@ -3793,6 +4212,17 @@ def _enforce_referable_mentions(
             kept.append(question)
             continue
         removed += 1
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "question_removed",
+                "stage": "qa_generation",
+                "filter": "referable_mentions",
+                "reason": "mentions_non_referable_object",
+                "trace_question_id": question.get("trace_question_id"),
+                "question": question,
+            },
+        )
 
     if removed:
         logger.info("Referable-mention filter removed %d questions", removed)
@@ -3802,6 +4232,7 @@ def _enforce_referable_mentions(
 def _enforce_stable_facing_references(
     questions: list[dict[str, Any]],
     id_to_object: dict[int, dict],
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Drop any question whose "stand at A, face B" reference frame is unstable.
 
@@ -3837,6 +4268,17 @@ def _enforce_stable_facing_references(
             continue
 
         removed += 1
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "question_removed",
+                "stage": "qa_generation",
+                "filter": "stable_facing",
+                "reason": "unstable_object_centric_facing",
+                "trace_question_id": question.get("trace_question_id"),
+                "question": question,
+            },
+        )
 
     if removed:
         logger.info("Stable-facing filter removed %d questions", removed)
@@ -3939,6 +4381,8 @@ def generate_all_questions(
     room_bounds: dict | None = None,
     wall_objects: list[dict] | None = None,
     attachment_edges: list[dict] | None = None,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_id_prefix: str = "q",
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -3972,6 +4416,83 @@ def generate_all_questions(
     if support_chain_by is None:
         support_chain_by = attached_by
     attachment_edge_input = len(attachment_edges)
+    trace_counter = 0
+
+    def _snapshot_question(question: dict[str, Any]) -> dict[str, Any]:
+        return json.loads(json.dumps(question, ensure_ascii=False))
+
+    def _register_generated_questions(
+        generator_name: str,
+        questions: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        nonlocal trace_counter
+        if not questions:
+            _emit_generation_trace(
+                trace_recorder,
+                {
+                    "event": "generator_output",
+                    "stage": "qa_generation",
+                    "generator": generator_name,
+                    "count": 0,
+                    "question_ids": [],
+                    "questions": [],
+                },
+            )
+            return questions
+
+        question_ids: list[str] = []
+        snapshots: list[dict[str, Any]] = []
+        for question in questions:
+            trace_id = question.get("trace_question_id")
+            if not trace_id:
+                trace_counter += 1
+                trace_id = f"{trace_id_prefix}_{trace_counter:04d}"
+                question["trace_question_id"] = trace_id
+            question["_trace_source"] = generator_name
+            question_ids.append(str(trace_id))
+            snapshots.append(_snapshot_question(question))
+
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "generator_output",
+                "stage": "qa_generation",
+                "generator": generator_name,
+                "count": len(questions),
+                "question_ids": question_ids,
+                "questions": snapshots,
+            },
+        )
+        return questions
+
+    def _apply_question_cap(
+        generator_name: str,
+        questions: list[dict[str, Any]],
+        cap: int,
+    ) -> list[dict[str, Any]]:
+        if len(questions) <= cap:
+            return questions
+
+        kept_questions = random.sample(questions, cap)
+        kept_ids = {str(question.get("trace_question_id")) for question in kept_questions}
+        removed_ids = [
+            str(question.get("trace_question_id"))
+            for question in questions
+            if str(question.get("trace_question_id")) not in kept_ids
+        ]
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "generator_cap_applied",
+                "stage": "qa_generation",
+                "generator": generator_name,
+                "cap": int(cap),
+                "input_count": len(questions),
+                "output_count": len(kept_questions),
+                "removed_question_ids": removed_ids,
+            },
+        )
+        return kept_questions
 
     # Restrict to objects visible in this frame so every question can be
     # answered by looking at the image.
@@ -4124,6 +4645,8 @@ def generate_all_questions(
         q = generate_l1_distance(rel, templates)
         if q:
             l1_dist_qs.append(q)
+    l1_dir_qs = _register_generated_questions("generate_l1_direction", l1_dir_qs)
+    l1_dist_qs = _register_generated_questions("generate_l1_distance", l1_dist_qs)
 
     l1_occlusion_subjects = l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq
     l1_occ_qs = generate_l1_occlusion_questions(
@@ -4142,6 +4665,7 @@ def generate_all_questions(
         frame_image=frame_image,
         occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
     )
+    l1_occ_qs = _register_generated_questions("generate_l1_occlusion_questions", l1_occ_qs)
 
     # L1 new reference frames
     l1_dir_oc_qs = generate_l1_direction_object_centric(
@@ -4150,13 +4674,12 @@ def generate_all_questions(
     l1_dir_allo_qs = generate_l1_direction_allocentric(
         objects_uniq, camera_pose, templates, max_questions=MAX_L1_DIRECTION_ALLO,
     )
+    l1_dir_oc_qs = _register_generated_questions("generate_l1_direction_object_centric", l1_dir_oc_qs)
+    l1_dir_allo_qs = _register_generated_questions("generate_l1_direction_allocentric", l1_dir_allo_qs)
 
-    if len(l1_dir_qs) > MAX_L1_DIRECTION:
-        l1_dir_qs = random.sample(l1_dir_qs, MAX_L1_DIRECTION)
-    if len(l1_dist_qs) > MAX_L1_DISTANCE:
-        l1_dist_qs = random.sample(l1_dist_qs, MAX_L1_DISTANCE)
-    if len(l1_occ_qs) > MAX_L1_OCCLUSION:
-        l1_occ_qs = random.sample(l1_occ_qs, MAX_L1_OCCLUSION)
+    l1_dir_qs = _apply_question_cap("generate_l1_direction", l1_dir_qs, MAX_L1_DIRECTION)
+    l1_dist_qs = _apply_question_cap("generate_l1_distance", l1_dist_qs, MAX_L1_DISTANCE)
+    l1_occ_qs = _apply_question_cap("generate_l1_occlusion_questions", l1_occ_qs, MAX_L1_OCCLUSION)
     all_questions.extend(l1_dir_qs)
     all_questions.extend(l1_dist_qs)
     all_questions.extend(l1_occ_qs)
@@ -4185,89 +4708,116 @@ def generate_all_questions(
         if k in referable_question_ids and v in referable_question_ids
     }
 
-    # L2 — ego-centric (existing)
+    # L2 - ego-centric (existing)
     all_questions.extend(
-        generate_l2_object_move(
-            objects_uniq,
-            attachment_graph_uniq,
-            attached_by_uniq,
-            camera_pose,
-            templates,
-            room_bounds=room_bounds,
-            collision_objects=l2_collision_objects,
-            movement_objects=movement_objects,
-            object_map=movement_object_map,
-            color_intrinsics=color_intrinsics,
-            occlusion_backend=occlusion_backend,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
+        _register_generated_questions(
+            "generate_l2_object_move",
+            generate_l2_object_move(
+                objects_uniq,
+                attachment_graph_uniq,
+                attached_by_uniq,
+                camera_pose,
+                templates,
+                room_bounds=room_bounds,
+                collision_objects=l2_collision_objects,
+                movement_objects=movement_objects,
+                object_map=movement_object_map,
+                color_intrinsics=color_intrinsics,
+                occlusion_backend=occlusion_backend,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            ),
         )
     )
     all_questions.extend(
-        generate_l2_viewpoint_move(
-            objects_uniq,
-            camera_pose,
-            color_intrinsics,
-            depth_image,
-            depth_intrinsics,
-            occlusion_backend,
-            ray_caster,
-            instance_mesh_data,
-            templates,
+        _register_generated_questions(
+            "generate_l2_viewpoint_move",
+            generate_l2_viewpoint_move(
+                objects_uniq,
+                camera_pose,
+                color_intrinsics,
+                depth_image,
+                depth_intrinsics,
+                occlusion_backend,
+                ray_caster,
+                instance_mesh_data,
+                templates,
+            ),
         )
     )
     all_questions.extend(
-        generate_l2_object_remove(
-            objects_uniq,
-            attachment_graph_uniq,
-            camera_pose,
-            color_intrinsics,
-            depth_image,
-            depth_intrinsics,
-            occlusion_backend,
-            ray_caster,
-            instance_mesh_data,
-            templates,
+        _register_generated_questions(
+            "generate_l2_object_remove",
+            generate_l2_object_remove(
+                objects_uniq,
+                attachment_graph_uniq,
+                camera_pose,
+                color_intrinsics,
+                depth_image,
+                depth_intrinsics,
+                occlusion_backend,
+                ray_caster,
+                instance_mesh_data,
+                templates,
+            ),
         )
     )
     # L2 - new reference frames
     all_questions.extend(
-        generate_l2_object_rotate_object_centric(
-            objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
-            room_bounds=room_bounds,
-            collision_objects=l2_collision_objects,
-            movement_objects=movement_objects,
-            object_map=movement_object_map,
+        _register_generated_questions(
+            "generate_l2_object_rotate_object_centric",
+            generate_l2_object_rotate_object_centric(
+                objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
+                room_bounds=room_bounds,
+                collision_objects=l2_collision_objects,
+                movement_objects=movement_objects,
+                object_map=movement_object_map,
+            ),
         )
     )
     all_questions.extend(
-        generate_l2_object_move_allocentric(
-            objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
-            room_bounds=room_bounds,
-            collision_objects=l2_collision_objects,
-            movement_objects=movement_objects,
-            object_map=movement_object_map,
+        _register_generated_questions(
+            "generate_l2_object_move_allocentric",
+            generate_l2_object_move_allocentric(
+                objects_uniq, attachment_graph_uniq, attached_by_uniq, camera_pose, templates,
+                room_bounds=room_bounds,
+                collision_objects=l2_collision_objects,
+                movement_objects=movement_objects,
+                object_map=movement_object_map,
+            ),
         )
     )
     # L3
     all_questions.extend(
-        generate_l3_attachment_chain(
-            objects_uniq,
-            support_chain_graph_uniq,
-            support_chain_by_uniq,
-            camera_pose,
-            templates,
+        _register_generated_questions(
+            "generate_l3_attachment_chain",
+            generate_l3_attachment_chain(
+                objects_uniq,
+                support_chain_graph_uniq,
+                support_chain_by_uniq,
+                camera_pose,
+                templates,
+            ),
         )
     )
-    # L3 coordinate rotation — all three reference frames
+    # L3 coordinate rotation - all three reference frames
     all_questions.extend(
-        generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates)
+        _register_generated_questions(
+            "generate_l3_coordinate_rotation",
+            generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
+        )
     )
     all_questions.extend(
-        generate_l3_coordinate_rotation_object_centric(objects_uniq, camera_pose, templates)
+        _register_generated_questions(
+            "generate_l3_coordinate_rotation_object_centric",
+            generate_l3_coordinate_rotation_object_centric(objects_uniq, camera_pose, templates),
+        )
     )
     all_questions.extend(
-        generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates)
+        _register_generated_questions(
+            "generate_l3_coordinate_rotation_allocentric",
+            generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates),
+        )
     )
 
     id_to_object = {int(o["id"]): o for o in objects_uniq}
@@ -4277,13 +4827,39 @@ def generate_all_questions(
             question, id_to_object, label_to_object,
         )
 
-    all_questions = _enforce_referable_mentions(
-        all_questions,
-        referable_question_ids,
-    )
-    all_questions = _enforce_stable_facing_references(
-        all_questions, id_to_object,
-    )
+    if trace_recorder is not None:
+        all_questions = _enforce_referable_mentions(
+            all_questions,
+            referable_question_ids,
+            trace_recorder=trace_recorder,
+        )
+        all_questions = _enforce_stable_facing_references(
+            all_questions,
+            id_to_object,
+            trace_recorder=trace_recorder,
+        )
+    else:
+        all_questions = _enforce_referable_mentions(
+            all_questions,
+            referable_question_ids,
+        )
+        all_questions = _enforce_stable_facing_references(
+            all_questions,
+            id_to_object,
+        )
 
+    _emit_generation_trace(
+        trace_recorder,
+        {
+            "event": "generation_complete",
+            "stage": "qa_generation",
+            "count": len(all_questions),
+            "question_ids": [
+                str(question.get("trace_question_id"))
+                for question in all_questions
+                if question.get("trace_question_id")
+            ],
+        },
+    )
     logger.info("Generated %d questions total", len(all_questions))
     return all_questions

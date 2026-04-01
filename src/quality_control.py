@@ -10,7 +10,7 @@ import itertools
 import logging
 import random
 from collections import Counter
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,18 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
     return base + (primary_label, *secondary_labels)
 
 
-def quality_filter(questions: list[dict]) -> list[dict]:
+def _emit_trace_event(
+    trace_recorder: Callable[[dict[str, Any]], None] | None,
+    payload: dict[str, Any],
+) -> None:
+    if trace_recorder is not None:
+        trace_recorder(payload)
+
+
+def quality_filter(
+    questions: list[dict],
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict]:
     """Apply automatic quality filters to remove problematic questions.
 
     Filters:
@@ -101,6 +112,16 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         # Filter 1: directional ambiguity
         if q.get("type") == "direction" and q.get("ambiguity_score", 0) > 0.7:
             removed_counts["ambiguous_direction"] += 1
+            _emit_trace_event(
+                trace_recorder,
+                {
+                    "event": "question_removed",
+                    "stage": "quality_filter",
+                    "reason": "ambiguous_direction",
+                    "trace_question_id": q.get("trace_question_id"),
+                    "question": q,
+                },
+            )
             continue
 
         filtered.append(q)
@@ -113,6 +134,16 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         key = _near_duplicate_key(q)
         if key in seen_keys:
             removed_counts["near_duplicate"] += 1
+            _emit_trace_event(
+                trace_recorder,
+                {
+                    "event": "question_removed",
+                    "stage": "quality_filter",
+                    "reason": "near_duplicate",
+                    "trace_question_id": q.get("trace_question_id"),
+                    "question": q,
+                },
+            )
             continue
         seen_keys.add(key)
         deduped.append(q)
@@ -125,6 +156,16 @@ def quality_filter(questions: list[dict]) -> list[dict]:
         text_key = (q.get("scene_id"), q.get("question"))
         if text_key in seen_text:
             removed_counts["cross_frame_duplicate"] += 1
+            _emit_trace_event(
+                trace_recorder,
+                {
+                    "event": "question_removed",
+                    "stage": "quality_filter",
+                    "reason": "cross_frame_duplicate",
+                    "trace_question_id": q.get("trace_question_id"),
+                    "question": q,
+                },
+            )
             continue
         seen_text.add(text_key)
         final.append(q)
@@ -134,6 +175,17 @@ def quality_filter(questions: list[dict]) -> list[dict]:
     logger.info(
         "Quality filter: %d → %d questions (removed %d)",
         len(questions), len(final), len(questions) - len(final),
+    )
+    _emit_trace_event(
+        trace_recorder,
+        {
+            "event": "quality_filter_summary",
+            "stage": "quality_filter",
+            "input_count": len(questions),
+            "output_count": len(final),
+            "removed_count": len(questions) - len(final),
+            "removed_counts": dict(removed_counts),
+        },
     )
     return final
 
