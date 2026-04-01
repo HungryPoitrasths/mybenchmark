@@ -253,10 +253,16 @@ def _instance_triangle_id_set(
     if instance_mesh_data is None:
         return set()
 
+    triangle_ids_by_instance = getattr(instance_mesh_data, "triangle_ids_by_instance", {}) or {}
+    boundary_triangle_ids_by_instance = getattr(
+        instance_mesh_data,
+        "boundary_triangle_ids_by_instance",
+        {},
+    ) or {}
     tri_parts = [
         arr for arr in (
-            instance_mesh_data.triangle_ids_by_instance.get(int(obj_id)),
-            instance_mesh_data.boundary_triangle_ids_by_instance.get(int(obj_id)),
+            triangle_ids_by_instance.get(int(obj_id)),
+            boundary_triangle_ids_by_instance.get(int(obj_id)),
         )
         if arr is not None and len(arr) > 0
     ]
@@ -272,7 +278,8 @@ def _instance_surface_samples(
 ) -> np.ndarray:
     if instance_mesh_data is None:
         return np.empty((0, 3), dtype=np.float64)
-    samples = instance_mesh_data.surface_points_by_instance.get(int(obj_id))
+    surface_points_by_instance = getattr(instance_mesh_data, "surface_points_by_instance", {}) or {}
+    samples = surface_points_by_instance.get(int(obj_id))
     if samples is None:
         return np.empty((0, 3), dtype=np.float64)
     return np.asarray(samples, dtype=np.float64)
@@ -332,8 +339,18 @@ def _instance_surface_sample_metadata(
             np.empty((0,), dtype=np.int64),
             np.empty((0, 3), dtype=np.float64),
         )
-    triangle_ids = instance_mesh_data.surface_triangle_ids_by_instance.get(int(obj_id))
-    barycentrics = instance_mesh_data.surface_barycentrics_by_instance.get(int(obj_id))
+    surface_triangle_ids_by_instance = getattr(
+        instance_mesh_data,
+        "surface_triangle_ids_by_instance",
+        {},
+    ) or {}
+    surface_barycentrics_by_instance = getattr(
+        instance_mesh_data,
+        "surface_barycentrics_by_instance",
+        {},
+    ) or {}
+    triangle_ids = surface_triangle_ids_by_instance.get(int(obj_id))
+    barycentrics = surface_barycentrics_by_instance.get(int(obj_id))
     if triangle_ids is None or barycentrics is None:
         return (
             np.empty((0,), dtype=np.int64),
