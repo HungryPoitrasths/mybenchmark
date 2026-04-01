@@ -14,6 +14,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 MAX_RELIABLE_RETRY_RAYS = 10
 MIN_NUMPY2_TRIMESH_VERSION = (4, 6, 13)
+_HIT_PATH_MERGE_EPS = 1e-3
+_LOCAL_BOUNDARY_RESAMPLE_COUNT = 12
+_LOCAL_BOUNDARY_BLEND = 0.2
 
 
 def _parse_version_tuple(version: str) -> tuple[int, ...]:
@@ -47,6 +50,98 @@ def _ensure_trimesh_numpy_compat(trimesh_module) -> None:
         f"Detected numpy {np.__version__} and trimesh {version_str}. "
         f"Upgrade trimesh to >= {required} or downgrade numpy to < 2.0."
     )
+
+
+def _compress_hit_path(
+    hits: list[tuple[int, float]],
+    target_tri_ids: set[int],
+) -> list[tuple[bool, float]]:
+    """Collapse numerically duplicated hits into a target/non-target path."""
+    compressed: list[tuple[bool, float]] = []
+    for tri_id, dist in hits:
+        is_target = tri_id in target_tri_ids
+        if (
+            compressed
+            and compressed[-1][0] == is_target
+            and abs(compressed[-1][1] - float(dist)) <= _HIT_PATH_MERGE_EPS
+        ):
+            continue
+        compressed.append((is_target, float(dist)))
+    return compressed
+
+
+def _classify_hit_path(
+    hits: list[tuple[int, float]],
+    expected_dist: float,
+    target_tri_ids: set[int],
+    hit_epsilon: float,
+) -> str:
+    """Classify one sample ray from ordered hit categories."""
+    path = _compress_hit_path(hits, target_tri_ids)
+    sample_hit_idx = next(
+        (
+            idx for idx, (is_target, dist) in enumerate(path)
+            if is_target and abs(dist - float(expected_dist)) <= hit_epsilon
+        ),
+        None,
+    )
+    if sample_hit_idx is None:
+        return "invalid"
+
+    prior_hits = path[:sample_hit_idx]
+    if not prior_hits:
+        return "visible"
+    if not prior_hits[0][0]:
+        return "externally_occluded"
+    if all(is_target for is_target, _ in prior_hits):
+        return "self_occluded"
+    return "mixed_boundary"
+
+
+def _local_triangle_resamples(
+    triangle_vertices: np.ndarray,
+    barycentric: np.ndarray,
+    triangle_id: int,
+    n_samples: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate deterministic local surface samples near one source barycentric."""
+    tri_vertices = np.asarray(triangle_vertices, dtype=np.float64)
+    bary = np.asarray(barycentric, dtype=np.float64)
+    if tri_vertices.shape != (3, 3) or bary.shape != (3,) or n_samples <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+    edge_a = tri_vertices[1] - tri_vertices[0]
+    edge_b = tri_vertices[2] - tri_vertices[0]
+    if float(np.linalg.norm(np.cross(edge_a, edge_b))) <= 1e-12:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    bary_sum = float(np.sum(bary))
+    if not np.isfinite(bary_sum) or bary_sum <= 1e-12:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+    bary = np.clip(bary / bary_sum, 0.0, 1.0)
+    bary = bary / max(float(np.sum(bary)), 1e-12)
+
+    bary_seed = np.round(bary * 1_000_000.0).astype(np.int64)
+    seed = zlib.crc32(
+        np.asarray([int(triangle_id), *bary_seed.tolist()], dtype=np.int64).tobytes(),
+    ) & 0xFFFFFFFF
+    rng = np.random.RandomState(seed)
+    random_barys = rng.dirichlet(np.ones(3, dtype=np.float64), size=n_samples)
+    local_barys = (
+        (1.0 - _LOCAL_BOUNDARY_BLEND) * bary[None, :]
+        + _LOCAL_BOUNDARY_BLEND * random_barys
+    )
+    local_barys = local_barys / np.maximum(local_barys.sum(axis=1, keepdims=True), 1e-12)
+    local_points = local_barys @ tri_vertices
+    return np.asarray(local_points, dtype=np.float64), np.asarray(local_barys, dtype=np.float64)
 
 
 class RayCaster:
@@ -342,6 +437,25 @@ class RayCaster:
 
         return first_hits, has_any_hit, forced_blocked
 
+    def _hits_up_to_distance(
+        self,
+        origin: np.ndarray,
+        direction: np.ndarray,
+        max_distance: float,
+        ignored_tri_ids: Optional[set[int]] = None,
+    ) -> list[tuple[int, float]]:
+        """Return ordered non-ignored hits up to *max_distance* along one ray."""
+        if not np.isfinite(max_distance) or max_distance <= 1e-12:
+            return []
+        filtered: list[tuple[int, float]] = []
+        for _hit_point, tri_id, dist in self.cast_ray(origin, direction):
+            if dist > float(max_distance):
+                break
+            if ignored_tri_ids and tri_id in ignored_tri_ids:
+                continue
+            filtered.append((int(tri_id), float(dist)))
+        return filtered
+
     def mesh_visibility_stats(
         self,
         camera_pos: np.ndarray,
@@ -349,18 +463,34 @@ class RayCaster:
         target_tri_ids: set[int],
         ignored_tri_ids: Optional[set[int]] = None,
         hit_epsilon: float = 0.05,
+        sample_triangle_ids: np.ndarray | None = None,
+        sample_barycentrics: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
+        faces: np.ndarray | None = None,
+        local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
     ) -> tuple[int, int]:
         """Return visible and valid counts for sampled target surface points.
 
-        Visibility is inferred from point hits within ``hit_epsilon`` of the
-        sampled point distance. Very thin objects whose back-facing samples sit
-        within that epsilon can still be slightly over-counted as visible.
-        ``ignored_tri_ids`` is a general ignore-mask for triangles that should
-        not block visibility, such as removed objects or the target itself.
+        Back-facing samples — where the target's own front surface sits between
+        the camera and the sample — are excluded from the denominator. Mixed
+        rays that first pass through the target and then another object before
+        reaching the sampled point are refined with local same-triangle
+        resampling when sample metadata is available.
+
+        For each ray the method queries:
+
+        1. The first intersection with a *target* triangle (via
+           ``first_hits_for_triangles``) and the first intersection with *any*
+           triangle (via ``_first_non_ignored_hits``). These handle the common
+           visible/external-occlusion cases cheaply.
+        2. If the nearest target surface lies in front of the sample, the full
+           hit path up to the sample distance is inspected to distinguish
+           self-occlusion from mixed target/other-object boundary paths.
         """
         if len(target_points) == 0 or not target_tri_ids:
             return 0, 0
 
+        camera_pos = np.asarray(camera_pos, dtype=np.float64)
         sampled_points = np.asarray(target_points, dtype=np.float64)
         if not self.has_embree and len(sampled_points) > 128:
             if not self._warned_slow_mesh_visibility:
@@ -370,34 +500,138 @@ class RayCaster:
                 )
                 self._warned_slow_mesh_visibility = True
 
-        directions = sampled_points - np.asarray(camera_pos, dtype=np.float64)
+        directions = sampled_points - camera_pos
         expected_dists = np.linalg.norm(directions, axis=1)
         valid_mask = np.isfinite(expected_dists) & (expected_dists > 1e-6)
         if not np.any(valid_mask):
             return 0, 0
 
+        sampled_points = sampled_points[valid_mask]
         directions = directions[valid_mask]
         expected_dists = expected_dists[valid_mask]
-        origins = np.broadcast_to(np.asarray(camera_pos, dtype=np.float64), directions.shape).copy()
+        origins = np.broadcast_to(camera_pos, directions.shape).copy()
+        triangle_meta = None
+        barycentric_meta = None
+        if sample_triangle_ids is not None and len(sample_triangle_ids) == len(target_points):
+            triangle_meta = np.asarray(sample_triangle_ids, dtype=np.int64)[valid_mask]
+        if sample_barycentrics is not None and len(sample_barycentrics) == len(target_points):
+            barycentric_meta = np.asarray(sample_barycentrics, dtype=np.float64)[valid_mask]
+        vertices_arr = np.asarray(vertices, dtype=np.float64) if vertices is not None else None
+        faces_arr = np.asarray(faces, dtype=np.int64) if faces is not None else None
 
-        first_hits, _has_any_hit, forced_blocked = self._first_non_ignored_hits(
+        # Absolute first non-ignored hit per ray (any triangle).
+        first_any, _has_any_hit, forced_blocked = self._first_non_ignored_hits(
             origins=origins,
             directions=directions,
             ignored_tri_ids=ignored_tri_ids,
         )
 
+        # First hit on the target's own triangles per ray.
+        first_target = self.first_hits_for_triangles(
+            origins=origins,
+            directions=directions,
+            target_tri_ids=target_tri_ids,
+            ignored_tri_ids=ignored_tri_ids,
+        )
+
         visible = 0
         valid = 0
+        mixed_records: list[tuple[int, float]] = []
         for ray_idx, expected_dist in enumerate(expected_dists):
             if forced_blocked[ray_idx]:
                 continue
-            hit = first_hits.get(ray_idx)
-            if hit is None:
+
+            t_hit = first_target.get(ray_idx)
+            if t_hit is None:
+                continue  # ray never reached a target triangle
+            _t_point, _t_tri, t_dist = t_hit
+            any_hit = first_any.get(ray_idx)
+
+            # Fast path: sampled point itself sits on the front-most target surface.
+            if abs(t_dist - float(expected_dist)) <= hit_epsilon:
+                valid += 1
+                if any_hit is None:
+                    visible += 1
+                    continue
+                any_tri, any_dist = any_hit
+                if any_tri in target_tri_ids and abs(any_dist - t_dist) <= hit_epsilon:
+                    visible += 1
                 continue
-            valid += 1
-            tri_id, hit_dist = hit
-            if tri_id in target_tri_ids and abs(hit_dist - float(expected_dist)) <= hit_epsilon:
+
+            # Full-path inspection is only needed once the target's front surface
+            # lies before the sampled point.
+            full_hits = self._hits_up_to_distance(
+                origin=origins[ray_idx],
+                direction=directions[ray_idx],
+                max_distance=float(expected_dist) + hit_epsilon,
+                ignored_tri_ids=ignored_tri_ids,
+            )
+            classification = _classify_hit_path(
+                full_hits,
+                expected_dist=float(expected_dist),
+                target_tri_ids=target_tri_ids,
+                hit_epsilon=hit_epsilon,
+            )
+            if classification == "visible":
+                valid += 1
                 visible += 1
+            elif classification == "externally_occluded":
+                valid += 1
+            elif classification == "mixed_boundary":
+                mixed_records.append((ray_idx, float(expected_dist)))
+
+        can_refine_mixed = (
+            triangle_meta is not None
+            and barycentric_meta is not None
+            and vertices_arr is not None
+            and faces_arr is not None
+            and int(local_resample_count) > 0
+        )
+        if not can_refine_mixed:
+            return visible, valid
+
+        for ray_idx, _expected_dist in mixed_records:
+            tri_id = int(triangle_meta[ray_idx])
+            if tri_id < 0 or tri_id >= len(faces_arr):
+                continue
+            tri_vertices = vertices_arr[faces_arr[tri_id]]
+            local_points, _local_barys = _local_triangle_resamples(
+                triangle_vertices=tri_vertices,
+                barycentric=barycentric_meta[ray_idx],
+                triangle_id=tri_id,
+                n_samples=int(local_resample_count),
+            )
+            if len(local_points) == 0:
+                continue
+
+            local_visible = 0
+            local_valid = 0
+            for point in local_points:
+                direction = np.asarray(point, dtype=np.float64) - camera_pos
+                expected_dist = float(np.linalg.norm(direction))
+                if not np.isfinite(expected_dist) or expected_dist <= 1e-6:
+                    continue
+                local_hits = self._hits_up_to_distance(
+                    origin=camera_pos,
+                    direction=direction,
+                    max_distance=expected_dist + hit_epsilon,
+                    ignored_tri_ids=ignored_tri_ids,
+                )
+                classification = _classify_hit_path(
+                    local_hits,
+                    expected_dist=expected_dist,
+                    target_tri_ids=target_tri_ids,
+                    hit_epsilon=hit_epsilon,
+                )
+                if classification == "visible":
+                    local_visible += 1
+                    local_valid += 1
+                elif classification == "externally_occluded":
+                    local_valid += 1
+
+            if local_valid >= 2:
+                visible += local_visible
+                valid += local_valid
 
         return visible, valid
 
@@ -408,6 +642,11 @@ class RayCaster:
         target_tri_ids: set[int],
         ignored_tri_ids: Optional[set[int]] = None,
         hit_epsilon: float = 0.05,
+        sample_triangle_ids: np.ndarray | None = None,
+        sample_barycentrics: np.ndarray | None = None,
+        vertices: np.ndarray | None = None,
+        faces: np.ndarray | None = None,
+        local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
     ) -> float:
         """Return the visible fraction of valid sampled target surface points."""
         visible, valid = self.mesh_visibility_stats(
@@ -416,6 +655,11 @@ class RayCaster:
             target_tri_ids=target_tri_ids,
             ignored_tri_ids=ignored_tri_ids,
             hit_epsilon=hit_epsilon,
+            sample_triangle_ids=sample_triangle_ids,
+            sample_barycentrics=sample_barycentrics,
+            vertices=vertices,
+            faces=faces,
+            local_resample_count=local_resample_count,
         )
         if valid <= 0:
             return 0.0

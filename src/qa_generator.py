@@ -175,9 +175,8 @@ MIN_WALL_MAJOR_AXIS = 1.5
 MAX_WALL_MINOR_AXIS = 1.0
 MIN_WALL_AXIS_RATIO = 2.0
 L1_OCCLUSION_MIN_IN_FRAME_RATIO = 0.05
-L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.05
-L1_OCCLUSION_OCCLUDED_MIN = 0.20
-L1_OCCLUSION_GRAYZONE_FALLBACK = 0.10
+L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.02
+L1_OCCLUSION_OCCLUDED_MIN = 0.10
 L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
@@ -1195,9 +1194,9 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
         or not metrics.sufficient_evidence
     ):
         return "skip"
-    if metrics.occlusion_ratio_in_frame <= L1_OCCLUSION_NOT_OCCLUDED_MAX:
+    if metrics.occlusion_ratio_in_frame < L1_OCCLUSION_NOT_OCCLUDED_MAX:
         return "not occluded"
-    if metrics.occlusion_ratio_in_frame >= L1_OCCLUSION_OCCLUDED_MIN:
+    if metrics.occlusion_ratio_in_frame > L1_OCCLUSION_OCCLUDED_MIN:
         return "occluded"
     return "grayzone"
 
@@ -1236,32 +1235,8 @@ def _resolve_l1_occlusion_decision(
     if decision == "skip":
         return None, source_used, overlay_available
 
-    if (
-        decision == "grayzone"
-        and frame_image is not None
-        and color_intrinsics is not None
-        and occlusion_vlm_adjudicator is not None
-    ):
-        mask = _render_instance_projection_mask(
-            obj_id,
-            camera_pose,
-            color_intrinsics,
-            instance_mesh_data,
-        )
-        overlay = _local_mask_overlay_image(frame_image, mask) if mask is not None else None
-        overlay_available = overlay is not None
-        if overlay is not None:
-            adjudicated = occlusion_vlm_adjudicator(overlay, label)
-            if adjudicated in {"not occluded", "occluded"}:
-                return adjudicated, "vlm_mask_adjudication", overlay_available
-
     if decision == "grayzone":
-        fallback_decision = (
-            "occluded"
-            if metrics.occlusion_ratio_in_frame >= L1_OCCLUSION_GRAYZONE_FALLBACK
-            else "not occluded"
-        )
-        return fallback_decision, grayzone_fallback_source, overlay_available
+        return None, grayzone_fallback_source, overlay_available
 
     return decision, source_used, overlay_available
 
@@ -2016,7 +1991,9 @@ def _counterfactual_hit_path(
     blocker_deltas: dict[int, np.ndarray],
 ) -> list[tuple[int, float]]:
     static_ignored_tri_ids = set(modified_scene.ignored_tri_ids)
-    static_ignored_tri_ids.update(int(tid) for tid in target_triangle_ids)
+    use_static_target_fallback = target_caster is None
+    if not use_static_target_fallback:
+        static_ignored_tri_ids.update(int(tid) for tid in target_triangle_ids)
 
     merged_hits: list[tuple[int, float]] = []
     static_hits = _hits_up_to_distance_from_caster(
@@ -2026,10 +2003,11 @@ def _counterfactual_hit_path(
         max_distance=max_distance,
         ignored_tri_ids=static_ignored_tri_ids,
     )
-    merged_hits.extend(
-        (_COUNTERFACTUAL_OTHER_TRI_ID, float(dist))
-        for _tri_id, dist in static_hits
-    )
+    for tri_id, dist in static_hits:
+        if use_static_target_fallback and int(tri_id) in target_triangle_ids:
+            merged_hits.append((_COUNTERFACTUAL_TARGET_TRI_ID, float(dist)))
+        else:
+            merged_hits.append((_COUNTERFACTUAL_OTHER_TRI_ID, float(dist)))
 
     target_hits = _hits_up_to_distance_from_caster(
         target_caster,
@@ -2114,37 +2092,6 @@ def _compute_target_visibility(
         faces=mesh_faces,
     )
     return _visibility_status_from_ratio(visible_ratio), float(visible_ratio)
-
-
-def _ray_aabb_entry_distance(
-    ray_origin: np.ndarray,
-    ray_direction: np.ndarray,
-    bbox_min: np.ndarray,
-    bbox_max: np.ndarray,
-) -> float | None:
-    """Return the entry distance if a ray intersects an axis-aligned box."""
-    t_near = -np.inf
-    t_far = np.inf
-    for axis in range(3):
-        direction_component = float(ray_direction[axis])
-        if abs(direction_component) < 1e-12:
-            if ray_origin[axis] < bbox_min[axis] or ray_origin[axis] > bbox_max[axis]:
-                return None
-            continue
-
-        inv_direction = 1.0 / direction_component
-        t0 = (bbox_min[axis] - ray_origin[axis]) * inv_direction
-        t1 = (bbox_max[axis] - ray_origin[axis]) * inv_direction
-        t_axis_near = min(t0, t1)
-        t_axis_far = max(t0, t1)
-        t_near = max(t_near, t_axis_near)
-        t_far = min(t_far, t_axis_far)
-        if t_near > t_far:
-            return None
-
-    if t_far < 0.0:
-        return None
-    return float(max(t_near, 0.0))
 
 
 def _compute_counterfactual_target_visibility(
