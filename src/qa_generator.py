@@ -11,6 +11,7 @@ import json
 import math
 import random
 import logging
+import zlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -54,11 +55,95 @@ from .utils.depth_occlusion import (
     compute_mesh_depth_occlusion,
     compute_mesh_depth_occlusion_metrics,
 )
-from .utils.ray_casting import (
-    _LOCAL_BOUNDARY_RESAMPLE_COUNT,
-    _classify_hit_path,
-    _local_triangle_resamples,
-)
+try:
+    from .utils.ray_casting import (
+        _LOCAL_BOUNDARY_RESAMPLE_COUNT,
+        _classify_hit_path,
+        _local_triangle_resamples,
+    )
+except ImportError:
+    _HIT_PATH_MERGE_EPS = 1e-3
+    _LOCAL_BOUNDARY_RESAMPLE_COUNT = 12
+    _LOCAL_BOUNDARY_BLEND = 0.2
+
+    def _compress_hit_path(
+        hits: list[tuple[int, float]],
+        target_tri_ids: set[int],
+    ) -> list[tuple[bool, float]]:
+        compressed: list[tuple[bool, float]] = []
+        for tri_id, dist in hits:
+            is_target = tri_id in target_tri_ids
+            if (
+                compressed
+                and compressed[-1][0] == is_target
+                and abs(compressed[-1][1] - float(dist)) <= _HIT_PATH_MERGE_EPS
+            ):
+                continue
+            compressed.append((is_target, float(dist)))
+        return compressed
+
+    def _classify_hit_path(
+        hits: list[tuple[int, float]],
+        expected_dist: float,
+        target_tri_ids: set[int],
+        hit_epsilon: float,
+    ) -> str:
+        path = _compress_hit_path(hits, target_tri_ids)
+        sample_hit_idx = next(
+            (
+                idx for idx, (is_target, dist) in enumerate(path)
+                if is_target and abs(dist - float(expected_dist)) <= hit_epsilon
+            ),
+            None,
+        )
+        if sample_hit_idx is None:
+            return "invalid"
+
+        prior_hits = path[:sample_hit_idx]
+        if not prior_hits:
+            return "visible"
+        if not prior_hits[0][0]:
+            return "externally_occluded"
+        if all(is_target for is_target, _ in prior_hits):
+            return "self_occluded"
+        return "mixed_boundary"
+
+    def _local_triangle_resamples(
+        triangle_vertices: np.ndarray,
+        barycentric: np.ndarray,
+        triangle_id: int,
+        n_samples: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        tri_vertices = np.asarray(triangle_vertices, dtype=np.float64)
+        bary = np.asarray(barycentric, dtype=np.float64)
+        if tri_vertices.shape != (3, 3) or bary.shape != (3,) or n_samples <= 0:
+            return (
+                np.empty((0, 3), dtype=np.float64),
+                np.empty((0, 3), dtype=np.float64),
+            )
+
+        bary_sum = float(np.sum(bary))
+        if not np.isfinite(bary_sum) or bary_sum <= 1e-12:
+            return (
+                np.empty((0, 3), dtype=np.float64),
+                np.empty((0, 3), dtype=np.float64),
+            )
+        bary = np.clip(bary / bary_sum, 0.0, 1.0)
+        bary = bary / max(float(np.sum(bary)), 1e-12)
+
+        bary_seed = np.round(bary * 1_000_000.0).astype(np.int64)
+        seed = zlib.crc32(
+            np.asarray([int(triangle_id), *bary_seed.tolist()], dtype=np.int64).tobytes(),
+        ) & 0xFFFFFFFF
+        rng = np.random.RandomState(seed)
+        random_barys = rng.dirichlet(np.ones(3, dtype=np.float64), size=n_samples)
+        local_barys = (
+            (1.0 - _LOCAL_BOUNDARY_BLEND) * bary[None, :]
+            + _LOCAL_BOUNDARY_BLEND * random_barys
+        )
+        local_barys = local_barys / np.maximum(local_barys.sum(axis=1, keepdims=True), 1e-12)
+        local_points = local_barys @ tri_vertices
+        return np.asarray(local_points, dtype=np.float64), np.asarray(local_barys, dtype=np.float64)
 from .scene_parser import EXCLUDED_LABELS, InstanceMeshData
 
 logger = logging.getLogger(__name__)
@@ -701,6 +786,77 @@ def generate_options(
     return options, correct_letter
 
 
+def _adjacent_directions(direction: str, ordered_directions: list[str]) -> set[str]:
+    if direction not in ordered_directions:
+        return set()
+
+    idx = ordered_directions.index(direction)
+    return {
+        ordered_directions[(idx - 1) % len(ordered_directions)],
+        ordered_directions[(idx + 1) % len(ordered_directions)],
+    }
+
+
+def _direction_distractor_exclusions(
+    correct_answer: str,
+    answer_pool: list[str],
+    *,
+    horizontal_context: str | None = None,
+) -> set[str]:
+    horizontal_ring: list[str] = []
+    pool_set = set(answer_pool)
+
+    if correct_answer in HORIZONTAL_DIRECTIONS or horizontal_context in HORIZONTAL_DIRECTIONS:
+        horizontal_ring = list(HORIZONTAL_DIRECTIONS)
+    elif correct_answer in CARDINAL_DIRECTIONS_8 or horizontal_context in CARDINAL_DIRECTIONS_8:
+        horizontal_ring = list(CARDINAL_DIRECTIONS_8)
+    elif pool_set & set(HORIZONTAL_DIRECTIONS):
+        horizontal_ring = list(HORIZONTAL_DIRECTIONS)
+    elif pool_set & set(CARDINAL_DIRECTIONS_8):
+        horizontal_ring = list(CARDINAL_DIRECTIONS_8)
+
+    if correct_answer in horizontal_ring:
+        return _adjacent_directions(correct_answer, horizontal_ring)
+
+    if correct_answer in {"above", "below"} and horizontal_context in horizontal_ring:
+        return {horizontal_context} | _adjacent_directions(horizontal_context, horizontal_ring)
+
+    return set()
+
+
+def generate_direction_options(
+    correct_answer: str,
+    answer_pool: list[str],
+    *,
+    horizontal_context: str | None = None,
+    n_options: int = 4,
+) -> tuple[list[str], str]:
+    """Generate direction options while excluding adjacent/confusable directions."""
+    exclude = _direction_distractor_exclusions(
+        correct_answer,
+        answer_pool,
+        horizontal_context=horizontal_context,
+    )
+    options = [correct_answer]
+    distractors = [a for a in answer_pool if a != correct_answer and a not in exclude]
+    random.shuffle(distractors)
+    options.extend(distractors[: n_options - 1])
+
+    if len(options) < n_options and "None of the above" not in options:
+        options.append("None of the above")
+
+    has_none_of_above = "None of the above" in options
+    shuffled = [opt for opt in options if opt != "None of the above"]
+    random.shuffle(shuffled)
+    if has_none_of_above:
+        shuffled.append("None of the above")
+
+    options = shuffled
+    correct_idx = options.index(correct_answer)
+    correct_letter = chr(65 + correct_idx)  # A, B, C, D
+    return options, correct_letter
+
+
 # ---------------------------------------------------------------------------
 #  L1 generators
 # ---------------------------------------------------------------------------
@@ -727,7 +883,11 @@ def generate_l1_direction(
         obj_a=_the(relation["obj_b_label"]),  # "where is B relative to A?"
         obj_b=_the(relation["obj_a_label"]),
     )
-    options, answer = generate_options(correct, ALL_DIRECTIONS)
+    options, answer = generate_direction_options(
+        correct,
+        ALL_DIRECTIONS,
+        horizontal_context=relation.get("horizontal_direction_b_rel_a"),
+    )
 
     return {
         "level": "L1",
@@ -1584,7 +1744,25 @@ def generate_l1_direction_object_centric(
                     obj_face=_the(face["label"]),
                     obj_target=_the(target["label"]),
                 )
-                options, answer = generate_options(direction, ALL_DIRECTIONS)
+                horizontal_context = None
+                if direction in {"above", "below"}:
+                    horizontal_context, _ = primary_direction_object_centric(
+                        ref_c,
+                        face_c,
+                        target_c,
+                        horizontal_only=True,
+                        anchor_hull_xy=_object_bottom_hull_xy(ref),
+                        target_hull_xy=_object_bottom_hull_xy(target),
+                        anchor_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(target["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(target["bbox_max"], dtype=float),
+                    )
+                options, answer = generate_direction_options(
+                    direction,
+                    ALL_DIRECTIONS,
+                    horizontal_context=horizontal_context,
+                )
                 candidates.append({
                     "level": "L1",
                     "type": "direction_object_centric",
@@ -1667,7 +1845,10 @@ def generate_l1_direction_allocentric(
                 obj_a=_the(a["label"]),
                 obj_b=_the(b["label"]),
             )
-            options, answer = generate_options(direction, ALL_DIRECTIONS_ALLOCENTRIC)
+            options, answer = generate_direction_options(
+                direction,
+                ALL_DIRECTIONS_ALLOCENTRIC,
+            )
             candidates.append({
                 "level": "L1",
                 "type": "direction_allocentric",
