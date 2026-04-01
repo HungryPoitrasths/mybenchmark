@@ -160,6 +160,180 @@ def _summarize_generators(trace_events: list[dict[str, Any]]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _sanitize_vlm_label_reviews(
+    reviews: Any,
+    *,
+    payload_mode: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(reviews, list):
+        return []
+    mode = str(payload_mode).strip().lower()
+    sanitized: list[dict[str, Any]] = []
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        item = _json_clone(review)
+        if mode == "none":
+            continue
+        if mode == "summary":
+            item.pop("raw_response", None)
+        sanitized.append(item)
+    return sanitized
+
+
+def _build_referability_audit(
+    referability_entry: dict[str, Any] | None,
+    *,
+    referability_source: str | None,
+    payload_mode: str,
+) -> dict[str, Any]:
+    entry = _json_clone(referability_entry or {})
+    entry["referability_source"] = referability_source
+    entry["vlm_label_reviews"] = _sanitize_vlm_label_reviews(
+        entry.get("vlm_label_reviews"),
+        payload_mode=payload_mode,
+    )
+    if str(payload_mode).strip().lower() == "none":
+        entry.pop("vlm_label_reviews", None)
+    return entry
+
+
+def _safe_audit_name(name: str) -> str:
+    chars = []
+    for ch in str(name):
+        if ch.isalnum():
+            chars.append(ch.lower())
+        else:
+            chars.append("_")
+    safe = "".join(chars).strip("_")
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe or "unknown"
+
+
+def _build_generator_audits(trace_events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    generator_docs: dict[str, dict[str, Any]] = {}
+    for event in trace_events:
+        generator = str(event.get("generator", "")).strip()
+        if not generator:
+            continue
+        doc = generator_docs.setdefault(
+            generator,
+            {
+                "generator": generator,
+                "context_events": [],
+                "candidate_events": [],
+                "summary_events": [],
+                "output_events": [],
+                "cap_events": [],
+                "other_events": [],
+            },
+        )
+        event_name = str(event.get("event", "")).strip()
+        if event_name == "generator_context":
+            doc["context_events"].append(event)
+        elif event_name == "generator_candidate":
+            doc["candidate_events"].append(event)
+        elif event_name == "generator_summary":
+            doc["summary_events"].append(event)
+        elif event_name == "generator_output":
+            doc["output_events"].append(event)
+        elif event_name == "generator_cap_applied":
+            doc["cap_events"].append(event)
+        else:
+            doc["other_events"].append(event)
+
+    for generator, doc in generator_docs.items():
+        output_events = doc.get("output_events", [])
+        summary_events = doc.get("summary_events", [])
+        candidate_events = doc.get("candidate_events", [])
+        generated_question_ids: list[str] = []
+        output_count = 0
+        for event in output_events:
+            output_count += int(event.get("count", 0))
+            generated_question_ids.extend(
+                str(question_id)
+                for question_id in event.get("question_ids", [])
+                if str(question_id).strip()
+            )
+        latest_summary = summary_events[-1] if summary_events else {}
+        doc["generated_question_ids"] = generated_question_ids
+        doc["output_count"] = int(output_count)
+        doc["candidate_count"] = int(
+            latest_summary.get("candidate_count", len(candidate_events))
+        )
+        doc["generated_count"] = int(
+            latest_summary.get("generated_count", output_count)
+        )
+        doc["reason_counts"] = latest_summary.get("reason_counts", {})
+        doc["summary"] = latest_summary
+        doc["has_candidate_audit"] = bool(candidate_events)
+        doc["audit_mode"] = (
+            ((latest_summary.get("details") or {}).get("audit_mode"))
+            if isinstance(latest_summary.get("details"), dict)
+            else None
+        ) or ("full" if candidate_events else "summary_only")
+        doc["audit_file_name"] = f"generator_{_safe_audit_name(generator)}.json"
+    return dict(sorted(generator_docs.items()))
+
+
+def _build_reason_index(
+    *,
+    trace_doc: dict[str, Any],
+    trace_events: list[dict[str, Any]],
+    question_lifecycle: list[dict[str, Any]],
+    generator_audits: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    by_generator: dict[str, dict[str, int]] = {}
+    global_blockers: Counter[str] = Counter()
+    for generator, audit in generator_audits.items():
+        reason_counts = Counter()
+        for event in audit.get("candidate_events", []):
+            reason_code = str(event.get("reason_code", "")).strip()
+            if not reason_code:
+                continue
+            reason_counts[reason_code] += 1
+            if reason_code != "generated":
+                global_blockers[f"{generator}:{reason_code}"] += 1
+        if reason_counts:
+            by_generator[generator] = dict(sorted(reason_counts.items()))
+
+    lifecycle_removals = Counter(
+        str(row.get("removal_reason", "")).strip()
+        for row in question_lifecycle
+        if str(row.get("status")) == "removed" and str(row.get("removal_reason", "")).strip()
+    )
+    quality_filter_removals = Counter(
+        str(event.get("reason", "")).strip()
+        for event in trace_events
+        if event.get("event") == "question_removed" and str(event.get("stage")) == "quality_filter"
+    )
+    stage_stops = [
+        {
+            "stage": entry.get("stage"),
+            "reason": (entry.get("details") or {}).get("reason"),
+            "status": entry.get("status"),
+        }
+        for entry in trace_doc.get("stage_summaries", [])
+        if str(entry.get("status")) == "stopped"
+    ]
+    top_blockers = [
+        {"reason": reason, "count": count}
+        for reason, count in global_blockers.most_common(10)
+    ]
+    return {
+        "status": trace_doc.get("status"),
+        "stop_reason": trace_doc.get("stop_reason"),
+        "question_count": len(trace_doc.get("final_questions", [])),
+        "raw_question_count": len(trace_doc.get("raw_questions", [])),
+        "stage_stops": stage_stops,
+        "generator_reason_counts": dict(sorted(by_generator.items())),
+        "quality_filter_removals": dict(sorted(quality_filter_removals.items())),
+        "lifecycle_removals": dict(sorted(lifecycle_removals.items())),
+        "top_blockers": top_blockers,
+    }
+
+
 def _build_trace_recorder(
     trace_events: list[dict[str, Any]],
     question_snapshots: dict[str, dict[str, Any]],
@@ -443,6 +617,8 @@ def run_single_frame_trace(
     vlm_url: str | None = None,
     vlm_model: str | None = None,
     label_batch_size: int = LABEL_BATCH_SIZE,
+    trace_detail: str = "full",
+    trace_vlm_payload: str = "summary",
 ) -> dict[str, Any]:
     frame_stem = Path(image_name).stem
     scene_dir = _resolve_scene_dir(data_root, scene_id)
@@ -451,6 +627,8 @@ def run_single_frame_trace(
     trace_json_path = output_root / "trace.json"
     trace_html_path = output_root / "trace.html"
     final_questions_path = output_root / "final_questions.json"
+    audits_dir = output_root / "audits"
+    audits_dir.mkdir(parents=True, exist_ok=True)
     image_path = scene_dir / "color" / image_name
     trace_doc: dict[str, Any] = {
         "name": "CausalSpatial-Bench single-frame trace",
@@ -470,11 +648,15 @@ def run_single_frame_trace(
             "use_occlusion_vlm": bool(use_occlusion_vlm),
             "vlm_url": vlm_url,
             "vlm_model": vlm_model,
+            "trace_detail": trace_detail,
+            "trace_vlm_payload": trace_vlm_payload,
         },
         "artifacts": {
             "trace_json_path": str(trace_json_path),
             "trace_html_path": str(trace_html_path),
             "final_questions_path": str(final_questions_path),
+            "audits_dir": str(audits_dir),
+            "audits": {},
         },
         "stage_summaries": [],
         "frame_context": {},
@@ -490,6 +672,8 @@ def run_single_frame_trace(
     trace_recorder = _build_trace_recorder(trace_events, question_snapshots, question_events)
     raw_questions: list[dict[str, Any]] = []
     final_questions: list[dict[str, Any]] = []
+    referability_entry: dict[str, Any] | None = None
+    referability_source: str | None = None
 
     try:
         stage_started = time.perf_counter()
@@ -786,6 +970,7 @@ def run_single_frame_trace(
             attachment_edges=scene.get("attachment_edges", []),
             trace_recorder=trace_recorder,
             trace_id_prefix=f"{scene_id}_{frame_stem}",
+            trace_detail=trace_detail,
         )
         for question in raw_questions:
             question["scene_id"] = scene_id
@@ -858,6 +1043,67 @@ def run_single_frame_trace(
             raw_questions=raw_questions,
             final_questions=final_questions,
         )
+        generator_audits = _build_generator_audits(trace_events)
+        object_pool_event = next(
+            (
+                event for event in trace_events
+                if str(event.get("event")) == "object_pool_snapshot"
+            ),
+            {},
+        )
+        quality_filter_events = [
+            event for event in trace_events
+            if str(event.get("event")) == "question_removed"
+            and str(event.get("stage")) == "quality_filter"
+        ]
+        referability_audit = _build_referability_audit(
+            referability_entry,
+            referability_source=referability_source,
+            payload_mode=trace_vlm_payload,
+        )
+        reason_index = _build_reason_index(
+            trace_doc=trace_doc,
+            trace_events=trace_events,
+            question_lifecycle=trace_doc["question_lifecycle"],
+            generator_audits=generator_audits,
+        )
+        audit_docs: dict[str, Any] = {
+            "frame_gate": {
+                "status": trace_doc.get("status"),
+                "stop_reason": trace_doc.get("stop_reason"),
+                "stop_details": trace_doc.get("stop_details", {}),
+                "stage_summaries": trace_doc.get("stage_summaries", []),
+                "input": trace_doc.get("input", {}),
+                "frame_context": trace_doc.get("frame_context", {}),
+            },
+            "object_pool": object_pool_event,
+            "referability": referability_audit,
+            "question_lifecycle": trace_doc["question_lifecycle"],
+            "quality_filter": {
+                "quality_control": trace_doc.get("quality_control", {}),
+                "removed_questions": quality_filter_events,
+            },
+            "reason_index": reason_index,
+        }
+        for generator, audit in generator_audits.items():
+            audit_docs[f"generator_{generator}"] = audit
+
+        audit_paths: dict[str, str] = {}
+        for audit_name, payload in audit_docs.items():
+            if audit_name.startswith("generator_"):
+                generator_name = audit_name[len("generator_"):]
+                file_name = f"generator_{_safe_audit_name(generator_name)}.json"
+                artifact_key = f"generator:{generator_name}"
+            else:
+                file_name = f"{audit_name}.json"
+                artifact_key = audit_name
+            audit_path = audits_dir / file_name
+            audit_path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            audit_paths[artifact_key] = str(audit_path)
+        trace_doc["artifacts"]["audits"] = dict(sorted(audit_paths.items()))
         final_payload = {
             "scene_id": scene_id,
             "image_name": image_name,
@@ -874,7 +1120,7 @@ def run_single_frame_trace(
             encoding="utf-8",
         )
         trace_html_path.write_text(
-            build_single_frame_trace_html(trace_doc),
+            build_single_frame_trace_html(trace_doc, audit_docs=audit_docs),
             encoding="utf-8",
         )
 
@@ -910,6 +1156,18 @@ def main() -> None:
     parser.add_argument("--vlm_url", type=str, default=DEFAULT_VLM_URL)
     parser.add_argument("--vlm_model", type=str, default=None)
     parser.add_argument("--label_batch_size", type=int, default=LABEL_BATCH_SIZE)
+    parser.add_argument(
+        "--trace_detail",
+        type=str,
+        choices=("light", "medium", "full"),
+        default="full",
+    )
+    parser.add_argument(
+        "--trace_vlm_payload",
+        type=str,
+        choices=("none", "summary", "full"),
+        default="summary",
+    )
     args = parser.parse_args()
 
     if args.label_map:
@@ -933,6 +1191,8 @@ def main() -> None:
         vlm_url=args.vlm_url,
         vlm_model=args.vlm_model,
         label_batch_size=args.label_batch_size,
+        trace_detail=args.trace_detail,
+        trace_vlm_payload=args.trace_vlm_payload,
     )
     artifacts = trace_doc.get("artifacts", {})
     print(

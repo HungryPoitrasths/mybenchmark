@@ -6,6 +6,7 @@ virtual operation results.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import inspect
 import json
@@ -1399,6 +1400,256 @@ def _compute_l1_occlusion_metrics(
     )
 
 
+def _l1_occlusion_metrics_payload(metrics: _L1OcclusionMetrics) -> dict[str, Any]:
+    return {
+        "projected_area": float(metrics.projected_area),
+        "in_frame_ratio": float(metrics.in_frame_ratio),
+        "occlusion_ratio_in_frame": float(metrics.occlusion_ratio_in_frame),
+        "valid_in_frame_count": int(metrics.valid_in_frame_count),
+        "sampled_point_count": int(metrics.sampled_point_count),
+        "in_frame_sample_count": int(metrics.in_frame_sample_count),
+        "effective_ratio": float(metrics.effective_ratio),
+        "sufficient_evidence": bool(metrics.sufficient_evidence),
+        "decision": str(metrics.decision),
+        "backend": str(metrics.backend),
+    }
+
+
+def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
+    *,
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+    modified_scene: _ModifiedSceneContext | None = None,
+) -> _L1OcclusionMetrics:
+    backend = "mesh_ray"
+    if (
+        color_intrinsics is None
+        or ray_caster is None
+        or instance_mesh_data is None
+    ):
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=0,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
+    obj_id = int(obj["id"])
+    sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+    sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+        instance_mesh_data,
+        obj_id,
+    )
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
+    sampled_point_count = int(len(sample_points))
+    if sampled_point_count <= 0 or not target_tri_ids:
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
+    (
+        projected_area,
+        in_frame_ratio,
+        in_frame_points,
+        in_frame_triangle_ids,
+        in_frame_barycentrics,
+    ) = _in_frame_surface_sample_subset(
+        sample_points,
+        camera_pose,
+        color_intrinsics,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+    )
+    in_frame_sample_count = int(len(in_frame_points))
+    if (
+        projected_area < MIN_PROJECTED_AREA_PX
+        or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
+        or in_frame_sample_count <= 0
+    ):
+        return _make_l1_occlusion_metrics(
+            projected_area=projected_area,
+            in_frame_ratio=in_frame_ratio,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=in_frame_sample_count,
+            backend=backend,
+        )
+
+    if modified_scene is None:
+        modified_scene = _build_modified_scene(
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+            removed_ids=set(),
+        )
+    if modified_scene is None or modified_scene.ray_caster is None:
+        return _make_l1_occlusion_metrics(
+            projected_area=projected_area,
+            in_frame_ratio=in_frame_ratio,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=in_frame_sample_count,
+            backend=backend,
+        )
+
+    visible_count, valid_count = _mesh_visibility_stats_compat(
+        modified_scene.ray_caster,
+        camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
+        target_points=in_frame_points,
+        target_tri_ids=target_tri_ids,
+        ignored_tri_ids=set(modified_scene.ignored_tri_ids),
+        sample_triangle_ids=in_frame_triangle_ids,
+        sample_barycentrics=in_frame_barycentrics,
+        vertices=np.asarray(instance_mesh_data.vertices, dtype=np.float64),
+        faces=np.asarray(instance_mesh_data.faces, dtype=np.int64),
+    )
+    occlusion_ratio = 1.0
+    if valid_count > 0:
+        occlusion_ratio = float(1.0 - (visible_count / valid_count))
+    return _make_l1_occlusion_metrics(
+        projected_area=projected_area,
+        in_frame_ratio=in_frame_ratio,
+        occlusion_ratio_in_frame=occlusion_ratio,
+        valid_in_frame_count=int(valid_count),
+        sampled_point_count=sampled_point_count,
+        in_frame_sample_count=in_frame_sample_count,
+        backend=backend,
+    )
+
+
+def _compute_l1_style_visibility_metrics_for_static_target(
+    *,
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    depth_image,
+    depth_intrinsics,
+    occlusion_backend: str,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+    modified_scene: _ModifiedSceneContext | None = None,
+) -> tuple[_L1OcclusionMetrics, str]:
+    backend = str(occlusion_backend)
+    if backend == "cascade" and modified_scene is None:
+        cascade_depth_metrics = _compute_l1_occlusion_metrics(
+            obj=obj,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            occlusion_backend="depth",
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        if _should_retry_l1_with_mesh_ray(cascade_depth_metrics):
+            mesh_metrics = _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
+                obj=obj,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+            if mesh_metrics.decision in {"not occluded", "occluded", "grayzone"}:
+                return mesh_metrics, "cascade_mesh_ray"
+        return cascade_depth_metrics, "cascade_depth"
+
+    if backend == "depth" and modified_scene is None:
+        return (
+            _compute_l1_occlusion_metrics(
+                obj=obj,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                occlusion_backend="depth",
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            ),
+            "depth",
+        )
+
+    return (
+        _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
+            obj=obj,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+            modified_scene=modified_scene,
+        ),
+        "mesh_ray" if backend == "mesh_ray" else backend,
+    )
+
+
+def _resolve_counterfactual_l1_visibility_status(
+    metrics: _L1OcclusionMetrics,
+) -> tuple[str | None, str, str]:
+    if (
+        metrics.projected_area <= 0.0
+        or metrics.in_frame_sample_count <= 0
+        or metrics.in_frame_ratio <= 0.0
+    ):
+        return (
+            "not visible",
+            "not_visible_out_of_frame",
+            "object falls outside the image after applying L1 occlusion framing",
+        )
+    if metrics.projected_area < MIN_PROJECTED_AREA_PX:
+        return (
+            None,
+            "projected_area_too_small",
+            "projected footprint is too small for reliable L1-style occlusion judgement",
+        )
+    if metrics.in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO:
+        return (
+            None,
+            "in_frame_ratio_too_small",
+            "too little of the sampled surface remains in-frame for L1-style occlusion judgement",
+        )
+    if metrics.valid_in_frame_count <= 0:
+        return (
+            None,
+            "no_valid_visibility_samples",
+            "no valid in-frame mesh samples survived occlusion evaluation",
+        )
+    if not metrics.sufficient_evidence:
+        return (
+            None,
+            "insufficient_visibility_evidence",
+            "effective in-frame evidence is below the L1 occlusion threshold",
+        )
+    if metrics.decision == "grayzone":
+        return (
+            None,
+            "grayzone_visibility",
+            "occlusion ratio falls into the L1 grayzone and is intentionally not trusted",
+        )
+    if metrics.decision in {"not occluded", "occluded"}:
+        return (
+            metrics.decision,
+            "resolved_visibility",
+            "visibility state is resolved under L1 occlusion thresholds",
+        )
+    return (
+        None,
+        "unresolved_visibility_decision",
+        f"unexpected L1-style visibility decision: {metrics.decision}",
+    )
+
+
 def _render_instance_projection_mask(
     obj_id: int,
     camera_pose: CameraPose,
@@ -1722,16 +1973,27 @@ def generate_l1_direction_object_centric(
     objects: list[dict],
     templates: dict,
     max_questions: int = 20,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """Generate L1 object-centric direction questions.
 
     Uses triples (ref, face, target) to define a reference frame at *ref*
     facing *face*, then asks for the direction of *target*.
     """
-    questions: list[dict] = []
     n = len(objects)
     if n < 3:
-        return questions
+        _emit_generator_summary(
+            trace_recorder,
+            "generate_l1_direction_object_centric",
+            generated_count=0,
+            candidate_count=0,
+            generated_candidate_count=0,
+            skipped_candidate_count=0,
+            reason_counts={"insufficient_objects": 1},
+            details={"object_count": n, "max_questions": int(max_questions)},
+        )
+        return []
 
     tpl_list = templates.get(
         "L1_direction_object_centric",
@@ -1739,6 +2001,8 @@ def generate_l1_direction_object_centric(
     )
 
     candidates: list[dict] = []
+    reason_counts: Counter[str] = Counter()
+    generated_candidate_count = 0
     for i in range(n):
         for j in range(n):
             if i == j:
@@ -1749,8 +2013,22 @@ def generate_l1_direction_object_centric(
                 ref = objects[i]
                 face = objects[j]
                 target = objects[k]
+                candidate_id = _candidate_key(ref["id"], face["id"], target["id"])
+                object_ids = [int(ref["id"]), int(face["id"]), int(target["id"])]
                 # All three labels must be distinct for unambiguous reference
                 if len({ref["label"], face["label"], target["label"]}) < 3:
+                    reason_counts["duplicate_labels"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l1_direction_object_centric",
+                        candidate_kind="object_triplet",
+                        candidate_key=candidate_id,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="duplicate_labels",
+                        reason_detail="reference, facing, and target labels are not all distinct",
+                    )
                     continue
 
                 ref_c = np.array(ref["center"])
@@ -1759,10 +2037,48 @@ def generate_l1_direction_object_centric(
 
                 # Require minimum distances to avoid annotation-error-dominated results
                 if np.linalg.norm(face_c - ref_c) < MIN_DIRECTION_DISTANCE:
+                    reason_counts["face_too_close"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l1_direction_object_centric",
+                        candidate_kind="object_triplet",
+                        candidate_key=candidate_id,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="face_too_close",
+                        reason_detail="facing anchor is too close to the reference object",
+                        evidence={"min_distance": MIN_DIRECTION_DISTANCE},
+                    )
                     continue
                 if np.linalg.norm(target_c - ref_c) < MIN_DIRECTION_DISTANCE:
+                    reason_counts["target_too_close"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l1_direction_object_centric",
+                        candidate_kind="object_triplet",
+                        candidate_key=candidate_id,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="target_too_close",
+                        reason_detail="target object is too close to the reference object",
+                        evidence={"min_distance": MIN_DIRECTION_DISTANCE},
+                    )
                     continue
                 if not _has_stable_object_centric_facing(ref_c, face_c):
+                    reason_counts["unstable_facing"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l1_direction_object_centric",
+                        candidate_kind="object_triplet",
+                        candidate_key=candidate_id,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="unstable_facing",
+                        reason_detail="reference-to-facing-object geometry does not define a stable object-centric frame",
+                    )
                     continue
 
                 direction, ambiguity = primary_direction_object_centric(
@@ -1777,6 +2093,19 @@ def generate_l1_direction_object_centric(
                     target_bbox_max=np.array(target["bbox_max"], dtype=float),
                 )
                 if ambiguity > 0.7:
+                    reason_counts["ambiguous_direction"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l1_direction_object_centric",
+                        candidate_kind="object_triplet",
+                        candidate_key=candidate_id,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="ambiguous_direction",
+                        reason_detail="object-centric direction falls too close to an ambiguity boundary",
+                        evidence={"ambiguity_score": float(ambiguity), "threshold": 0.7},
+                    )
                     continue
 
                 tpl = random.choice(tpl_list)
@@ -1828,9 +2157,36 @@ def generate_l1_direction_object_centric(
                     "ambiguity_score": ambiguity,
                     "relation_unchanged": False,
                 })
+                generated_candidate_count += 1
+                reason_counts["generated"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction_object_centric",
+                    candidate_kind="object_triplet",
+                    candidate_key=candidate_id,
+                    object_ids=object_ids,
+                    status="generated",
+                    reason_code="generated",
+                    reason_detail="triplet defines a stable object-centric frame and yields an unambiguous direction",
+                    evidence={"ambiguity_score": float(ambiguity)},
+                    question_preview=_question_preview_payload(candidates[-1]),
+                )
 
     if len(candidates) > max_questions:
         candidates = random.sample(candidates, max_questions)
+        reason_counts["sampled_out_by_max_questions"] += max(0, generated_candidate_count - len(candidates))
+    total_candidate_count = n * (n - 1) * (n - 2)
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l1_direction_object_centric",
+        generated_count=len(candidates),
+        candidate_count=total_candidate_count,
+        generated_candidate_count=generated_candidate_count,
+        skipped_candidate_count=max(total_candidate_count - generated_candidate_count, 0),
+        reason_counts=dict(reason_counts),
+        details={"object_count": n, "max_questions": int(max_questions)},
+    )
     return candidates
 
 
@@ -1839,13 +2195,14 @@ def generate_l1_direction_allocentric(
     camera_pose: CameraPose,
     templates: dict,
     max_questions: int = 20,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """Generate L1 allocentric (cardinal) direction questions.
 
     Provides the camera's cardinal facing direction so the model can anchor
     absolute directions from the image.
     """
-    questions: list[dict] = []
     cam_cardinal = camera_cardinal_direction(camera_pose)
     n = len(objects)
 
@@ -1855,15 +2212,44 @@ def generate_l1_direction_allocentric(
     )
 
     candidates: list[dict] = []
+    reason_counts: Counter[str] = Counter()
+    generated_candidate_count = 0
     for i in range(n):
         for j in range(i + 1, n):
             a, b = objects[i], objects[j]
+            candidate_id = _candidate_key(a["id"], b["id"])
+            object_ids = [int(a["id"]), int(b["id"])]
             if a["label"] == b["label"]:
+                reason_counts["duplicate_labels"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction_allocentric",
+                    candidate_kind="object_pair",
+                    candidate_key=candidate_id,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="duplicate_labels",
+                    reason_detail="allocentric direction questions require distinct object labels",
+                )
                 continue
 
             a_c = np.array(a["center"])
             b_c = np.array(b["center"])
             if np.linalg.norm(b_c - a_c) < MIN_DIRECTION_DISTANCE:
+                reason_counts["pair_too_close"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction_allocentric",
+                    candidate_kind="object_pair",
+                    candidate_key=candidate_id,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="pair_too_close",
+                    reason_detail="object centers are too close for a reliable allocentric direction question",
+                    evidence={"min_distance": MIN_DIRECTION_DISTANCE},
+                )
                 continue
             direction, ambiguity = primary_direction_allocentric(
                 a_c,
@@ -1876,8 +2262,34 @@ def generate_l1_direction_allocentric(
                 obj_b_bbox_max=np.array(b["bbox_max"], dtype=float),
             )
             if ambiguity > 0.7:
+                reason_counts["ambiguous_direction"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction_allocentric",
+                    candidate_kind="object_pair",
+                    candidate_key=candidate_id,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="ambiguous_direction",
+                    reason_detail="allocentric direction falls too close to an ambiguity boundary",
+                    evidence={"ambiguity_score": float(ambiguity), "threshold": 0.7},
+                )
                 continue
             if direction not in CARDINAL_DIRECTIONS_8:
+                reason_counts["non_cardinal_direction"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction_allocentric",
+                    candidate_kind="object_pair",
+                    candidate_key=candidate_id,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="non_cardinal_direction",
+                    reason_detail="computed allocentric direction is not one of the supported cardinal answers",
+                    evidence={"direction": direction},
+                )
                 continue
 
             tpl = random.choice(tpl_list)
@@ -1910,9 +2322,36 @@ def generate_l1_direction_allocentric(
                 "ambiguity_score": ambiguity,
                 "relation_unchanged": False,
             })
+            generated_candidate_count += 1
+            reason_counts["generated"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction_allocentric",
+                candidate_kind="object_pair",
+                candidate_key=candidate_id,
+                object_ids=object_ids,
+                status="generated",
+                reason_code="generated",
+                reason_detail="pair yields a valid allocentric cardinal-direction relation",
+                evidence={"ambiguity_score": float(ambiguity), "direction": direction},
+                question_preview=_question_preview_payload(candidates[-1]),
+            )
 
     if len(candidates) > max_questions:
         candidates = random.sample(candidates, max_questions)
+        reason_counts["sampled_out_by_max_questions"] += max(0, generated_candidate_count - len(candidates))
+    total_candidate_count = int((n * max(n - 1, 0)) / 2)
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l1_direction_allocentric",
+        generated_count=len(candidates),
+        candidate_count=total_candidate_count,
+        generated_candidate_count=generated_candidate_count,
+        skipped_candidate_count=max(total_candidate_count - generated_candidate_count, 0),
+        reason_counts=dict(reason_counts),
+        details={"object_count": n, "max_questions": int(max_questions)},
+    )
     return candidates
 
 
@@ -3352,6 +3791,8 @@ def generate_l2_viewpoint_move(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
     templates: dict,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """Generate L2.2 viewpoint-movement questions.
 
@@ -3359,22 +3800,40 @@ def generate_l2_viewpoint_move(
     """
     questions: list[dict] = []
     if color_intrinsics is None:
+        _emit_generator_summary(
+            trace_recorder,
+            "generate_l2_viewpoint_move",
+            generated_count=0,
+            candidate_count=0,
+            generated_candidate_count=0,
+            skipped_candidate_count=0,
+            reason_counts={"missing_color_intrinsics": 1},
+            details={"occlusion_mode": "l1_style"},
+        )
         return questions
     tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
     compare_backend = _counterfactual_occlusion_backend(
         occlusion_backend, ray_caster, instance_mesh_data,
     )
     scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
-
-    original_visibility = _compute_visibility_status_per_object(
-        objects, camera_pose, color_intrinsics,
-        depth_image=None,
-        depth_intrinsics=None,
-        occlusion_backend=compare_backend,
-        ray_caster=ray_caster,
-        instance_mesh_data=instance_mesh_data,
-        modified_scene=scene_context,
-    )
+    reason_counts: Counter[str] = Counter()
+    candidate_count = int(len(objects) * 4 * 3)
+    generated_candidate_count = 0
+    original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
+    for obj in objects:
+        metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
+            obj=obj,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            occlusion_backend=compare_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+            modified_scene=scene_context,
+        )
+        status, reason_code, reason_detail = _resolve_counterfactual_l1_visibility_status(metrics)
+        original_visibility[int(obj["id"])] = (status, source_used, reason_code, metrics)
 
     for direction, prompt_direction in (
         ("right", "right"),
@@ -3384,20 +3843,95 @@ def generate_l2_viewpoint_move(
     ):
         for dist in (1.0, 2.0, 3.0):
             new_pose = apply_viewpoint_change(camera_pose, direction, dist)
-            new_visibility = _compute_visibility_status_per_object(
-                objects, new_pose, color_intrinsics,
-                depth_image=None,
-                depth_intrinsics=None,
-                occlusion_backend=compare_backend,
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
-                modified_scene=scene_context,
-            )
-
             for obj in objects:
-                old_status, _old_ratio = original_visibility.get(obj["id"], ("not visible", 0.0))
-                new_status, _new_ratio = new_visibility.get(obj["id"], ("not visible", 0.0))
+                candidate_key = _candidate_key(direction, f"{dist:.1f}", obj["id"])
+                object_ids = [int(obj["id"])]
+                old_status, old_source, old_reason_code, old_metrics = original_visibility.get(
+                    int(obj["id"]),
+                    (None, "mesh_ray", "missing_original_visibility", _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")),
+                )
+                if old_status is None:
+                    reason_counts["original_visibility_unresolved"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l2_viewpoint_move",
+                        candidate_kind="viewpoint_target",
+                        candidate_key=candidate_key,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="original_visibility_unresolved",
+                        reason_detail=f"original visibility could not be resolved: {old_reason_code}",
+                        evidence={
+                            "camera_translation": prompt_direction,
+                            "distance_m": float(dist),
+                            "original_source": old_source,
+                            "original_resolution": old_reason_code,
+                            "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                        },
+                    )
+                    continue
+
+                new_metrics, new_source = _compute_l1_style_visibility_metrics_for_static_target(
+                    obj=obj,
+                    camera_pose=new_pose,
+                    color_intrinsics=color_intrinsics,
+                    depth_image=None,
+                    depth_intrinsics=None,
+                    occlusion_backend=compare_backend,
+                    ray_caster=ray_caster,
+                    instance_mesh_data=instance_mesh_data,
+                    modified_scene=scene_context,
+                )
+                new_status, new_reason_code, new_reason_detail = _resolve_counterfactual_l1_visibility_status(new_metrics)
+                if new_status is None:
+                    reason_counts["counterfactual_visibility_unresolved"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l2_viewpoint_move",
+                        candidate_kind="viewpoint_target",
+                        candidate_key=candidate_key,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="counterfactual_visibility_unresolved",
+                        reason_detail=f"counterfactual visibility could not be resolved: {new_reason_detail}",
+                        evidence={
+                            "camera_translation": prompt_direction,
+                            "distance_m": float(dist),
+                            "original_status": old_status,
+                            "original_source": old_source,
+                            "new_source": new_source,
+                            "new_resolution": new_reason_code,
+                            "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                            "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                        },
+                    )
+                    continue
+
                 if old_status == new_status:
+                    reason_counts["visibility_unchanged"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l2_viewpoint_move",
+                        candidate_kind="viewpoint_target",
+                        candidate_key=candidate_key,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="visibility_unchanged",
+                        reason_detail="camera motion does not change the L1-style occlusion state of the target",
+                        evidence={
+                            "camera_translation": prompt_direction,
+                            "distance_m": float(dist),
+                            "original_status": old_status,
+                            "new_status": new_status,
+                            "original_source": old_source,
+                            "new_source": new_source,
+                            "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                            "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                        },
+                    )
                     continue
 
                 tpl = random.choice(tpl_list)
@@ -3410,7 +3944,7 @@ def generate_l2_viewpoint_move(
                     distance=f"{dist:.0f}m",
                     obj_a=_the(obj["label"]),
                 )
-                options, answer = generate_options(new_status, ALL_OCCLUSION)
+                options, answer = generate_options(new_status, L1_OCCLUSION_STATES)
                 questions.append({
                     "level": "L2",
                     "type": "viewpoint_move",
@@ -3422,6 +3956,10 @@ def generate_l2_viewpoint_move(
                     "obj_a_label": obj["label"],
                     "old_visibility": old_status,
                     "new_visibility": new_status,
+                    "old_visibility_source": old_source,
+                    "new_visibility_source": new_source,
+                    "old_visibility_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                    "new_visibility_metrics": _l1_occlusion_metrics_payload(new_metrics),
                     "camera_motion_model": "translate_only",
                     "camera_intrinsics_unchanged": True,
                     "camera_orientation_unchanged": True,
@@ -3430,7 +3968,44 @@ def generate_l2_viewpoint_move(
                     ],
                     "relation_unchanged": False,
                 })
+                generated_candidate_count += 1
+                reason_counts["generated"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l2_viewpoint_move",
+                    candidate_kind="viewpoint_target",
+                    candidate_key=candidate_key,
+                    object_ids=object_ids,
+                    status="generated",
+                    reason_code="generated",
+                    reason_detail="camera motion changes the target's L1-style occlusion state",
+                    evidence={
+                        "camera_translation": prompt_direction,
+                        "distance_m": float(dist),
+                        "original_status": old_status,
+                        "new_status": new_status,
+                        "original_source": old_source,
+                        "new_source": new_source,
+                        "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                        "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                    },
+                    question_preview=_question_preview_payload(questions[-1]),
+                )
 
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l2_viewpoint_move",
+        generated_count=len(questions),
+        candidate_count=candidate_count,
+        generated_candidate_count=generated_candidate_count,
+        skipped_candidate_count=max(candidate_count - generated_candidate_count, 0),
+        reason_counts=dict(reason_counts),
+        details={
+            "compare_backend": compare_backend,
+            "occlusion_mode": "l1_style",
+        },
+    )
     return questions
 
 
@@ -3445,50 +4020,160 @@ def generate_l2_object_remove(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
     templates: dict,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """Generate L2.3 object-removal questions from visibility changes."""
     questions: list[dict] = []
     if color_intrinsics is None:
+        _emit_generator_summary(
+            trace_recorder,
+            "generate_l2_object_remove",
+            generated_count=0,
+            candidate_count=0,
+            generated_candidate_count=0,
+            skipped_candidate_count=0,
+            reason_counts={"missing_color_intrinsics": 1},
+            details={"occlusion_mode": "l1_style"},
+        )
         return questions
     tpl_list = templates.get("L2_object_remove", _default_templates()["L2_object_remove"])
     compare_backend = _counterfactual_occlusion_backend(
         occlusion_backend, ray_caster, instance_mesh_data,
     )
     original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
-    original_visibility = _compute_visibility_status_per_object(
-        objects, camera_pose, color_intrinsics,
-        depth_image=None,
-        depth_intrinsics=None,
-        occlusion_backend=compare_backend,
-        ray_caster=ray_caster,
-        instance_mesh_data=instance_mesh_data,
-        modified_scene=original_scene_context,
-    )
+    original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
+    for obj in objects:
+        metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
+            obj=obj,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            occlusion_backend=compare_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+            modified_scene=original_scene_context,
+        )
+        status, reason_code, _reason_detail = _resolve_counterfactual_l1_visibility_status(metrics)
+        original_visibility[int(obj["id"])] = (status, source_used, reason_code, metrics)
 
     original_ids = {int(obj["id"]) for obj in objects}
+    candidate_count = 0
+    generated_candidate_count = 0
+    reason_counts: Counter[str] = Counter()
     for obj in objects:
         remaining = apply_removal(objects, attachment_graph, obj["id"], cascade=False)
         if len(remaining) < 2:
+            reason_counts["removal_leaves_too_few_objects"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l2_object_remove",
+                candidate_kind="removed_object",
+                candidate_key=_candidate_key(obj["id"]),
+                object_ids=[int(obj["id"])],
+                status="skipped",
+                reason_code="removal_leaves_too_few_objects",
+                reason_detail="removing this object leaves fewer than two remaining objects to compare",
+                evidence={
+                    "remaining_object_count": int(len(remaining)),
+                },
+            )
             continue
         remaining_ids = {int(other["id"]) for other in remaining}
         removed_ids = original_ids - remaining_ids
         removal_scene_context = _build_modified_scene(
             ray_caster, instance_mesh_data, removed_ids,
         )
-        new_visibility = _compute_visibility_status_per_object(
-            remaining, camera_pose, color_intrinsics,
-            depth_image=None,
-            depth_intrinsics=None,
-            occlusion_backend=compare_backend,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
-            modified_scene=removal_scene_context,
-        )
 
         for other in remaining:
-            old_status, _old_ratio = original_visibility.get(other["id"], ("not visible", 0.0))
-            new_status, _new_ratio = new_visibility.get(other["id"], ("not visible", 0.0))
+            candidate_count += 1
+            candidate_key = _candidate_key(obj["id"], other["id"])
+            object_ids = [int(obj["id"]), int(other["id"])]
+            old_status, old_source, old_reason_code, old_metrics = original_visibility.get(
+                int(other["id"]),
+                (None, "mesh_ray", "missing_original_visibility", _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")),
+            )
+            if old_status is None:
+                reason_counts["original_visibility_unresolved"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l2_object_remove",
+                    candidate_kind="removal_pair",
+                    candidate_key=candidate_key,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="original_visibility_unresolved",
+                    reason_detail=f"original visibility of the remaining object could not be resolved: {old_reason_code}",
+                    evidence={
+                        "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
+                        "original_source": old_source,
+                        "original_resolution": old_reason_code,
+                        "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                    },
+                )
+                continue
+
+            new_metrics, new_source = _compute_l1_style_visibility_metrics_for_static_target(
+                obj=other,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend=compare_backend,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+                modified_scene=removal_scene_context,
+            )
+            new_status, new_reason_code, new_reason_detail = _resolve_counterfactual_l1_visibility_status(new_metrics)
+            if new_status is None:
+                reason_counts["counterfactual_visibility_unresolved"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l2_object_remove",
+                    candidate_kind="removal_pair",
+                    candidate_key=candidate_key,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="counterfactual_visibility_unresolved",
+                    reason_detail=f"post-removal visibility could not be resolved: {new_reason_detail}",
+                    evidence={
+                        "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
+                        "original_status": old_status,
+                        "original_source": old_source,
+                        "new_source": new_source,
+                        "new_resolution": new_reason_code,
+                        "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                        "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                    },
+                )
+                continue
+
             if old_status == new_status:
+                reason_counts["visibility_unchanged"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l2_object_remove",
+                    candidate_kind="removal_pair",
+                    candidate_key=candidate_key,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="visibility_unchanged",
+                    reason_detail="removing this object does not change the remaining object's L1-style occlusion state",
+                    evidence={
+                        "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
+                        "original_status": old_status,
+                        "new_status": new_status,
+                        "original_source": old_source,
+                        "new_source": new_source,
+                        "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                        "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                    },
+                )
                 continue
 
             tpl = random.choice(tpl_list)
@@ -3496,7 +4181,7 @@ def generate_l2_object_remove(
                 obj_a=_the(obj["label"]),
                 obj_b=_the(other["label"]),
             )
-            options, answer = generate_options(new_status, ALL_OCCLUSION)
+            options, answer = generate_options(new_status, L1_OCCLUSION_STATES)
             questions.append({
                 "level": "L2",
                 "type": "object_remove",
@@ -3510,13 +4195,54 @@ def generate_l2_object_remove(
                 "obj_b_label": other["label"],
                 "old_visibility": old_status,
                 "new_visibility": new_status,
+                "old_visibility_source": old_source,
+                "new_visibility_source": new_source,
+                "old_visibility_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                "new_visibility_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
                 "mentioned_objects": [
                     _mention("removed_object", obj["label"], obj["id"]),
                     _mention("remaining_object", other["label"], other["id"]),
                 ],
                 "relation_unchanged": False,
             })
+            generated_candidate_count += 1
+            reason_counts["generated"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l2_object_remove",
+                candidate_kind="removal_pair",
+                candidate_key=candidate_key,
+                object_ids=object_ids,
+                status="generated",
+                reason_code="generated",
+                reason_detail="removing the object changes the remaining object's L1-style occlusion state",
+                evidence={
+                    "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
+                    "original_status": old_status,
+                    "new_status": new_status,
+                    "original_source": old_source,
+                    "new_source": new_source,
+                    "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                    "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                },
+                question_preview=_question_preview_payload(questions[-1]),
+            )
 
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l2_object_remove",
+        generated_count=len(questions),
+        candidate_count=candidate_count,
+        generated_candidate_count=generated_candidate_count,
+        skipped_candidate_count=max(candidate_count - generated_candidate_count, 0),
+        reason_counts=dict(reason_counts),
+        details={
+            "compare_backend": compare_backend,
+            "occlusion_mode": "l1_style",
+        },
+    )
     return questions
 
 
@@ -4373,6 +5099,130 @@ def _emit_generation_trace(
         trace_recorder(payload)
 
 
+_TRACE_DETAIL_LEVELS = {
+    "light": 1,
+    "medium": 2,
+    "full": 3,
+}
+
+
+def _trace_detail_at_least(trace_detail: str, required: str) -> bool:
+    return _TRACE_DETAIL_LEVELS.get(str(trace_detail).strip().lower(), 1) >= _TRACE_DETAIL_LEVELS[required]
+
+
+def _candidate_key(*parts: Any) -> str:
+    return ":".join(str(part) for part in parts)
+
+
+def _question_preview_payload(question: dict[str, Any]) -> dict[str, Any]:
+    preview = {
+        "level": question.get("level"),
+        "type": question.get("type"),
+        "question": question.get("question"),
+        "correct_value": question.get("correct_value"),
+    }
+    object_fields = (
+        "obj_a_id",
+        "obj_b_id",
+        "obj_c_id",
+        "obj_ref_id",
+        "obj_face_id",
+        "obj_target_id",
+        "query_obj_id",
+        "moved_obj_id",
+        "removed_obj_id",
+        "parent_id",
+        "child_id",
+        "grandparent_id",
+        "grandchild_id",
+        "neighbor_id",
+    )
+    for field in object_fields:
+        if field in question:
+            preview[field] = question.get(field)
+    return preview
+
+
+def _emit_generator_context(
+    trace_recorder: Callable[[dict[str, Any]], None] | None,
+    generator: str,
+    details: dict[str, Any],
+) -> None:
+    _emit_generation_trace(
+        trace_recorder,
+        {
+            "event": "generator_context",
+            "stage": "qa_generation",
+            "generator": generator,
+            "details": details,
+        },
+    )
+
+
+def _emit_generator_summary(
+    trace_recorder: Callable[[dict[str, Any]], None] | None,
+    generator: str,
+    *,
+    generated_count: int,
+    candidate_count: int | None = None,
+    generated_candidate_count: int | None = None,
+    skipped_candidate_count: int | None = None,
+    reason_counts: dict[str, int] | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "event": "generator_summary",
+        "stage": "qa_generation",
+        "generator": generator,
+        "generated_count": int(generated_count),
+    }
+    if candidate_count is not None:
+        payload["candidate_count"] = int(candidate_count)
+    if generated_candidate_count is not None:
+        payload["generated_candidate_count"] = int(generated_candidate_count)
+    if skipped_candidate_count is not None:
+        payload["skipped_candidate_count"] = int(skipped_candidate_count)
+    if reason_counts:
+        payload["reason_counts"] = dict(sorted(reason_counts.items()))
+    if details:
+        payload["details"] = details
+    _emit_generation_trace(trace_recorder, payload)
+
+
+def _emit_generator_candidate(
+    trace_recorder: Callable[[dict[str, Any]], None] | None,
+    *,
+    trace_detail: str,
+    generator: str,
+    candidate_kind: str,
+    candidate_key: str,
+    object_ids: list[int] | None,
+    status: str,
+    reason_code: str,
+    reason_detail: str,
+    evidence: dict[str, Any] | None = None,
+    question_preview: dict[str, Any] | None = None,
+) -> None:
+    if not _trace_detail_at_least(trace_detail, "full"):
+        return
+    payload: dict[str, Any] = {
+        "event": "generator_candidate",
+        "stage": "qa_generation",
+        "generator": generator,
+        "candidate_kind": candidate_kind,
+        "candidate_key": candidate_key,
+        "object_ids": list(object_ids or []),
+        "status": status,
+        "reason_code": reason_code,
+        "reason_detail": reason_detail,
+    }
+    if evidence:
+        payload["evidence"] = evidence
+    if question_preview:
+        payload["question_preview"] = question_preview
+    _emit_generation_trace(trace_recorder, payload)
+
+
 def _enforce_referable_mentions(
     questions: list[dict[str, Any]],
     referable_ids: set[int],
@@ -4578,6 +5428,7 @@ def generate_all_questions(
     attachment_edges: list[dict] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_id_prefix: str = "q",
+    trace_detail: str = "light",
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -4612,6 +5463,7 @@ def generate_all_questions(
         support_chain_by = attached_by
     attachment_edge_input = len(attachment_edges)
     trace_counter = 0
+    original_objects = list(objects)
 
     def _snapshot_question(question: dict[str, Any]) -> dict[str, Any]:
         return json.loads(json.dumps(question, ensure_ascii=False))
@@ -4688,6 +5540,71 @@ def generate_all_questions(
             },
         )
         return kept_questions
+
+    def _emit_object_pool_snapshot(
+        *,
+        l1_occlusion_subject_ids: set[int],
+    ) -> None:
+        visible_set = (
+            _normalize_object_id_set(visible_object_ids, "visible_object_ids")
+            if visible_object_ids is not None else {int(obj["id"]) for obj in original_objects}
+        )
+        excluded_ids = {
+            int(obj["id"])
+            for obj in original_objects
+            if str(obj.get("label", "")).strip().lower() in EXCLUDED_LABELS
+        }
+        graph_object_ids = {int(obj["id"]) for obj in all_objects_for_graph}
+        question_object_ids = {int(obj["id"]) for obj in objects_uniq}
+        movement_object_ids = {int(obj["id"]) for obj in movement_objects}
+        pool_rows: list[dict[str, Any]] = []
+        for obj in original_objects:
+            obj_id = int(obj["id"])
+            row_reasons: list[str] = []
+            if obj_id not in visible_set:
+                row_reasons.append("not_visible_in_forced_frame")
+            if obj_id in excluded_ids:
+                row_reasons.append("excluded_label")
+            if obj_id not in referable_set and obj_id not in attachment_context_ids:
+                row_reasons.append("not_referable")
+            if obj_id in attachment_context_ids and obj_id not in referable_set:
+                row_reasons.append("attachment_context_only")
+            if obj_id in referable_set and obj_id not in question_object_ids:
+                row_reasons.append("filtered_from_question_pool")
+            pool_rows.append(
+                {
+                    "id": obj_id,
+                    "label": obj.get("label"),
+                    "visible_in_forced_frame": obj_id in visible_set,
+                    "excluded_label": obj_id in excluded_ids,
+                    "referable": obj_id in referable_set,
+                    "attachment_context": obj_id in attachment_context_ids,
+                    "graph_pool": obj_id in graph_object_ids,
+                    "question_pool": obj_id in question_object_ids,
+                    "movement_pool": obj_id in movement_object_ids,
+                    "l1_occlusion_pool": obj_id in l1_occlusion_subject_ids,
+                    "reasons": row_reasons,
+                }
+            )
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "object_pool_snapshot",
+                "stage": "qa_generation",
+                "summary": {
+                    "original_object_count": len(original_objects),
+                    "visible_object_count": len(visible_set),
+                    "excluded_object_count": len(excluded_ids),
+                    "referable_object_count": len(referable_set),
+                    "attachment_context_count": len(attachment_context_ids),
+                    "graph_pool_count": len(graph_object_ids),
+                    "question_pool_count": len(question_object_ids),
+                    "movement_pool_count": len(movement_object_ids),
+                    "l1_occlusion_pool_count": len(l1_occlusion_subject_ids),
+                },
+                "rows": pool_rows,
+            },
+        )
 
     # Restrict to objects visible in this frame so every question can be
     # answered by looking at the image.
@@ -4804,6 +5721,13 @@ def generate_all_questions(
         if int(o["id"]) in graph_eligible_ids
     ]
     movement_object_map = {int(o["id"]): o for o in movement_objects}
+    l1_occlusion_subject_ids = {
+        int(obj["id"])
+        for obj in (l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq)
+    }
+    _emit_object_pool_snapshot(
+        l1_occlusion_subject_ids=l1_occlusion_subject_ids,
+    )
 
     logger.info(
         "Attachment filter stats: edges input=%d visible=%d nonexcluded=%d final=%d, graph_objects=%d, question_objects=%d, referable_question_objects=%d",
@@ -4826,24 +5750,197 @@ def generate_all_questions(
 
     # Ordinary L1 relations ignore depth in normal generation.
     relations = compute_all_relations(objects_uniq, camera_pose, None, None)
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l1_direction",
+        {
+            "relation_count": len(relations),
+            "question_object_count": len(objects_uniq),
+        },
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l1_distance",
+        {
+            "relation_count": len(relations),
+            "question_object_count": len(objects_uniq),
+        },
+    )
 
-    # L1 – collect separately so we can sample before adding
+    # L1 — collect separately so we can sample before adding
     MAX_L1_OCCLUSION = 15
     l1_dir_qs:  list[dict] = []
     l1_dist_qs: list[dict] = []
     l1_occ_qs:  list[dict] = []
+    l1_dir_reason_counts: Counter[str] = Counter()
+    l1_dist_reason_counts: Counter[str] = Counter()
+    l1_dir_generated_candidate_count = 0
+    l1_dist_generated_candidate_count = 0
 
     for rel in relations:
-        q = generate_l1_direction(rel, templates)
+        relation_key = _candidate_key(rel["obj_a_id"], rel["obj_b_id"])
+        relation_object_ids = [int(rel["obj_a_id"]), int(rel["obj_b_id"])]
+        if rel["ambiguity_score"] > 0.7:
+            l1_dir_reason_counts["ambiguous_direction"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="skipped",
+                reason_code="ambiguous_direction",
+                reason_detail="pairwise ego-centric direction is too close to an ambiguity boundary",
+                evidence={
+                    "ambiguity_score": float(rel["ambiguity_score"]),
+                    "threshold": 0.7,
+                },
+            )
+            q = None
+        elif rel["distance_m"] < MIN_DIRECTION_DISTANCE:
+            l1_dir_reason_counts["pair_too_close"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="skipped",
+                reason_code="pair_too_close",
+                reason_detail="pairwise direction questions require objects to be farther apart",
+                evidence={
+                    "distance_m": float(rel["distance_m"]),
+                    "min_distance": MIN_DIRECTION_DISTANCE,
+                },
+            )
+            q = None
+        elif rel["obj_a_label"] == rel["obj_b_label"]:
+            l1_dir_reason_counts["duplicate_labels"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="skipped",
+                reason_code="duplicate_labels",
+                reason_detail="ego-centric direction questions require distinct object labels",
+            )
+            q = None
+        else:
+            q = generate_l1_direction(rel, templates)
         if q:
             l1_dir_qs.append(q)
-        q = generate_l1_distance(rel, templates)
+            l1_dir_generated_candidate_count += 1
+            l1_dir_reason_counts["generated"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="generated",
+                reason_code="generated",
+                reason_detail="pair yields an unambiguous ego-centric direction question",
+                evidence={
+                    "direction": rel.get("direction_b_rel_a"),
+                    "ambiguity_score": float(rel.get("ambiguity_score", 0.0)),
+                    "distance_m": float(rel.get("distance_m", 0.0)),
+                },
+                question_preview=_question_preview_payload(q),
+            )
+
+        if rel["near_boundary"]:
+            l1_dist_reason_counts["near_boundary"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_distance",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="skipped",
+                reason_code="near_distance_boundary",
+                reason_detail="distance falls too close to a bin boundary",
+                evidence={
+                    "distance_bin": rel.get("distance_bin"),
+                    "distance_m": float(rel.get("distance_m", 0.0)),
+                },
+            )
+            q = None
+        elif rel["obj_a_label"] == rel["obj_b_label"]:
+            l1_dist_reason_counts["duplicate_labels"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_distance",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="skipped",
+                reason_code="duplicate_labels",
+                reason_detail="distance questions require distinct object labels",
+            )
+            q = None
+        else:
+            q = generate_l1_distance(rel, templates)
         if q:
             l1_dist_qs.append(q)
+            l1_dist_generated_candidate_count += 1
+            l1_dist_reason_counts["generated"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_distance",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="generated",
+                reason_code="generated",
+                reason_detail="pair yields a stable distance-bin question",
+                evidence={
+                    "distance_bin": rel.get("distance_bin"),
+                    "distance_m": float(rel.get("distance_m", 0.0)),
+                },
+                question_preview=_question_preview_payload(q),
+            )
     l1_dir_qs = _register_generated_questions("generate_l1_direction", l1_dir_qs)
     l1_dist_qs = _register_generated_questions("generate_l1_distance", l1_dist_qs)
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l1_direction",
+        generated_count=len(l1_dir_qs),
+        candidate_count=len(relations),
+        generated_candidate_count=l1_dir_generated_candidate_count,
+        skipped_candidate_count=max(len(relations) - l1_dir_generated_candidate_count, 0),
+        reason_counts=dict(l1_dir_reason_counts),
+    )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l1_distance",
+        generated_count=len(l1_dist_qs),
+        candidate_count=len(relations),
+        generated_candidate_count=l1_dist_generated_candidate_count,
+        skipped_candidate_count=max(len(relations) - l1_dist_generated_candidate_count, 0),
+        reason_counts=dict(l1_dist_reason_counts),
+    )
 
     l1_occlusion_subjects = l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l1_occlusion_questions",
+        {
+            "subject_object_count": len(l1_occlusion_subjects),
+            "question_object_count": len(objects_uniq),
+            "label_status_count": len(label_statuses or {}),
+            "label_count_count": len(label_counts or {}),
+            "referable_object_count": len(referable_set),
+        },
+    )
     l1_occ_qs = generate_l1_occlusion_questions(
         objects=l1_occlusion_subjects,
         camera_pose=camera_pose,
@@ -4863,11 +5960,33 @@ def generate_all_questions(
     l1_occ_qs = _register_generated_questions("generate_l1_occlusion_questions", l1_occ_qs)
 
     # L1 new reference frames
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l1_direction_object_centric",
+        {
+            "question_object_count": len(objects_uniq),
+            "potential_triplet_count": len(objects_uniq) * max(len(objects_uniq) - 1, 0) * max(len(objects_uniq) - 2, 0),
+            "max_questions": MAX_L1_DIRECTION_OC,
+        },
+    )
     l1_dir_oc_qs = generate_l1_direction_object_centric(
         objects_uniq, templates, max_questions=MAX_L1_DIRECTION_OC,
+        trace_recorder=trace_recorder,
+        trace_detail=trace_detail,
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l1_direction_allocentric",
+        {
+            "question_object_count": len(objects_uniq),
+            "potential_pair_count": int((len(objects_uniq) * max(len(objects_uniq) - 1, 0)) / 2),
+            "max_questions": MAX_L1_DIRECTION_ALLO,
+        },
     )
     l1_dir_allo_qs = generate_l1_direction_allocentric(
         objects_uniq, camera_pose, templates, max_questions=MAX_L1_DIRECTION_ALLO,
+        trace_recorder=trace_recorder,
+        trace_detail=trace_detail,
     )
     l1_dir_oc_qs = _register_generated_questions("generate_l1_direction_object_centric", l1_dir_oc_qs)
     l1_dir_allo_qs = _register_generated_questions("generate_l1_direction_allocentric", l1_dir_allo_qs)
@@ -4904,6 +6023,16 @@ def generate_all_questions(
     }
 
     # L2 - ego-centric (existing)
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l2_object_move",
+        {
+            "question_object_count": len(objects_uniq),
+            "movement_object_count": len(movement_objects),
+            "attachment_graph_node_count": len(attachment_graph_uniq),
+            "occlusion_backend": occlusion_backend,
+        },
+    )
     all_questions.extend(
         _register_generated_questions(
             "generate_l2_object_move",
@@ -4924,6 +6053,25 @@ def generate_all_questions(
             ),
         )
     )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l2_object_move",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l2_object_move"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l2_viewpoint_move",
+        {
+            "question_object_count": len(objects_uniq),
+            "candidate_motion_count": 12,
+            "occlusion_backend": occlusion_backend,
+            "occlusion_mode": "l1_style",
+        },
+    )
     all_questions.extend(
         _register_generated_questions(
             "generate_l2_viewpoint_move",
@@ -4937,8 +6085,20 @@ def generate_all_questions(
                 ray_caster,
                 instance_mesh_data,
                 templates,
+                trace_recorder=trace_recorder,
+                trace_detail=trace_detail,
             ),
         )
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l2_object_remove",
+        {
+            "question_object_count": len(objects_uniq),
+            "attachment_graph_node_count": len(attachment_graph_uniq),
+            "occlusion_backend": occlusion_backend,
+            "occlusion_mode": "l1_style",
+        },
     )
     all_questions.extend(
         _register_generated_questions(
@@ -4954,10 +6114,21 @@ def generate_all_questions(
                 ray_caster,
                 instance_mesh_data,
                 templates,
+                trace_recorder=trace_recorder,
+                trace_detail=trace_detail,
             ),
         )
     )
     # L2 - new reference frames
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l2_object_rotate_object_centric",
+        {
+            "question_object_count": len(objects_uniq),
+            "movement_object_count": len(movement_objects),
+            "attachment_graph_node_count": len(attachment_graph_uniq),
+        },
+    )
     all_questions.extend(
         _register_generated_questions(
             "generate_l2_object_rotate_object_centric",
@@ -4969,6 +6140,24 @@ def generate_all_questions(
                 object_map=movement_object_map,
             ),
         )
+    )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l2_object_rotate_object_centric",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l2_object_rotate_object_centric"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l2_object_move_allocentric",
+        {
+            "question_object_count": len(objects_uniq),
+            "movement_object_count": len(movement_objects),
+            "attachment_graph_node_count": len(attachment_graph_uniq),
+        },
     )
     all_questions.extend(
         _register_generated_questions(
@@ -4982,7 +6171,24 @@ def generate_all_questions(
             ),
         )
     )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l2_object_move_allocentric",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l2_object_move_allocentric"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
     # L3
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l3_attachment_chain",
+        {
+            "question_object_count": len(objects_uniq),
+            "support_chain_node_count": len(support_chain_graph_uniq),
+        },
+    )
     all_questions.extend(
         _register_generated_questions(
             "generate_l3_attachment_chain",
@@ -4995,12 +6201,46 @@ def generate_all_questions(
             ),
         )
     )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l3_attachment_chain",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l3_attachment_chain"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
     # L3 coordinate rotation - all three reference frames
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l3_coordinate_rotation",
+        {
+            "question_object_count": len(objects_uniq),
+            "rotation_angles": [90, 180, 270],
+        },
+    )
     all_questions.extend(
         _register_generated_questions(
             "generate_l3_coordinate_rotation",
             generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
         )
+    )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l3_coordinate_rotation",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l3_coordinate_rotation"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l3_coordinate_rotation_object_centric",
+        {
+            "question_object_count": len(objects_uniq),
+            "rotation_angles": [90, 180, 270],
+        },
     )
     all_questions.extend(
         _register_generated_questions(
@@ -5008,11 +6248,37 @@ def generate_all_questions(
             generate_l3_coordinate_rotation_object_centric(objects_uniq, camera_pose, templates),
         )
     )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l3_coordinate_rotation_object_centric",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l3_coordinate_rotation_object_centric"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l3_coordinate_rotation_allocentric",
+        {
+            "question_object_count": len(objects_uniq),
+            "rotation_angles": [90, 180, 270],
+        },
+    )
     all_questions.extend(
         _register_generated_questions(
             "generate_l3_coordinate_rotation_allocentric",
             generate_l3_coordinate_rotation_allocentric(objects_uniq, camera_pose, templates),
         )
+    )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l3_coordinate_rotation_allocentric",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l3_coordinate_rotation_allocentric"
+        ),
+        details={"audit_mode": "summary_only"},
     )
 
     id_to_object = {int(o["id"]): o for o in objects_uniq}

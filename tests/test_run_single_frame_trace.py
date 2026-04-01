@@ -76,7 +76,13 @@ def make_referability_entry() -> dict:
         "candidate_visible_label_counts": {"cup": 1, "table": 1},
         "candidate_labels": ["cup", "table"],
         "label_to_object_ids": {"cup": [1], "table": [2]},
-        "vlm_label_reviews": [],
+        "vlm_label_reviews": [
+            {
+                "labels": ["cup", "table"],
+                "label_statuses": {"cup": "unique", "table": "unique"},
+                "raw_response": "cup=unique; table=unique",
+            }
+        ],
         "label_statuses": {"cup": "unique", "table": "unique"},
         "label_counts": {"cup": 1, "table": 1},
         "referable_object_ids": [1],
@@ -171,6 +177,30 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         }
 
         def fake_generate_all_questions(**_kwargs):
+            trace_recorder = _kwargs.get("trace_recorder")
+            if trace_recorder is not None:
+                trace_recorder(
+                    {
+                        "event": "object_pool_snapshot",
+                        "stage": "qa_generation",
+                        "details": {
+                            "summary": {"original_object_count": 2, "question_object_count": 1},
+                            "rows": [
+                                {"id": 1, "label": "cup", "reasons": ["referable"], "tags": ["question_pool"]},
+                                {"id": 2, "label": "table", "reasons": ["attachment_context"], "tags": ["graph_only"]},
+                            ],
+                        },
+                    }
+                )
+                trace_recorder(
+                    {
+                        "event": "generator_summary",
+                        "stage": "qa_generation",
+                        "generator": "fake_generator",
+                        "generated_count": 1,
+                        "reason_counts": {"generated": 1},
+                    }
+                )
             return make_fake_questions()
 
         with ExitStack() as stack:
@@ -200,12 +230,23 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         trace_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "trace.json").read_text(encoding="utf-8"))
         final_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "final_questions.json").read_text(encoding="utf-8"))
         html_text = (output_dir / "single_frame" / scene_id / "000123" / "trace.html").read_text(encoding="utf-8")
+        referability_audit = json.loads(Path(trace_json["artifacts"]["audits"]["referability"]).read_text(encoding="utf-8"))
+        reason_index = json.loads(Path(trace_json["artifacts"]["audits"]["reason_index"]).read_text(encoding="utf-8"))
 
         self.assertEqual(final_json["question_count"], 1)
         self.assertIn("trace_question_id", final_json["questions"][0])
         self.assertEqual(trace_json["question_lifecycle"][0]["status"], "kept")
+        self.assertEqual(trace_json["input"]["trace_detail"], "full")
+        self.assertEqual(trace_json["input"]["trace_vlm_payload"], "summary")
+        self.assertIn("object_pool", trace_json["artifacts"]["audits"])
+        self.assertIn("reason_index", trace_json["artifacts"]["audits"])
+        self.assertIn("generator:fake_generator", trace_json["artifacts"]["audits"])
+        self.assertNotIn("raw_response", json.dumps(referability_audit, ensure_ascii=False))
+        self.assertIn("question_count", reason_index)
         self.assertIn("Is the cup on the table?", html_text)
         self.assertIn("data:image/jpeg;base64,", html_text)
+        self.assertIn("Root Cause Summary", html_text)
+        self.assertIn("Object Pool Audit", html_text)
 
     def test_run_single_frame_trace_falls_back_to_online_referability(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
@@ -240,6 +281,41 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertEqual(trace_doc["input"]["referability_source"], "online")
         fallback_mock.assert_called_once()
 
+    def test_run_single_frame_trace_keeps_full_vlm_payload_when_requested(self) -> None:
+        data_root, output_dir, scene_id, image_name = self._make_paths()
+        referability_cache = {
+            "version": "6.0",
+            "frames": {
+                scene_id: {
+                    image_name: make_referability_entry(),
+                }
+            },
+        }
+
+        def fake_generate_all_questions(**_kwargs):
+            return make_fake_questions()
+
+        with ExitStack() as stack:
+            for mocked in self._patch_common(scene_id, image_name):
+                stack.enter_context(mocked)
+            stack.enter_context(
+                patch.object(trace_module, "generate_all_questions", side_effect=fake_generate_all_questions)
+            )
+            trace_doc = trace_module.run_single_frame_trace(
+                data_root=data_root,
+                scene_id=scene_id,
+                image_name=image_name,
+                output_dir=output_dir,
+                referability_cache=referability_cache,
+                use_occlusion=False,
+                trace_vlm_payload="full",
+            )
+
+        trace_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "trace.json").read_text(encoding="utf-8"))
+        referability_audit = json.loads(Path(trace_json["artifacts"]["audits"]["referability"]).read_text(encoding="utf-8"))
+        self.assertEqual(trace_doc["status"], "completed")
+        self.assertIn("raw_response", json.dumps(referability_audit, ensure_ascii=False))
+
     def test_run_single_frame_trace_stops_when_pose_missing(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
         referability_cache = {"version": "6.0", "frames": {}}
@@ -273,6 +349,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertEqual(final_json["question_count"], 0)
         self.assertIn("missing_pose", html_text)
         self.assertIn(image_name, html_text)
+        self.assertIn("Root Cause Summary", html_text)
 
     def test_run_single_frame_trace_records_detailed_near_duplicate_reason(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
@@ -320,8 +397,12 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertIn("attachment-id signature", removed[0]["removal_detail"])
 
         html_text = (output_dir / "single_frame" / scene_id / "000123" / "trace.html").read_text(encoding="utf-8")
+        trace_json = json.loads((output_dir / "single_frame" / scene_id / "000123" / "trace.json").read_text(encoding="utf-8"))
+        quality_filter_audit = json.loads(Path(trace_json["artifacts"]["audits"]["quality_filter"]).read_text(encoding="utf-8"))
         self.assertIn("Removal Detail", html_text)
         self.assertIn("attachment-id signature", html_text)
+        self.assertIn("Question-Centric Audit", html_text)
+        self.assertEqual(len(quality_filter_audit["removed_questions"]), 1)
 
 
 if __name__ == "__main__":
