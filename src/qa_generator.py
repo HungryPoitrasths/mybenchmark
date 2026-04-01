@@ -7,6 +7,7 @@ virtual operation results.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 import json
 import math
 import random
@@ -359,6 +360,53 @@ def _instance_surface_sample_metadata(
     return (
         np.asarray(triangle_ids, dtype=np.int64),
         np.asarray(barycentrics, dtype=np.float64),
+    )
+
+
+def _invoke_method_with_supported_kwargs(
+    method: Callable[..., Any],
+    **kwargs: Any,
+) -> Any:
+    """Call *method* after dropping keyword args unsupported by older backends."""
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return method(**kwargs)
+
+    parameters = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return method(**kwargs)
+
+    supported = {
+        name
+        for name, param in parameters.items()
+        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items() if key in supported
+    }
+    return method(**filtered_kwargs)
+
+
+def _mesh_visibility_stats_compat(
+    ray_caster: Any,
+    **kwargs: Any,
+) -> tuple[int, int]:
+    return _invoke_method_with_supported_kwargs(
+        ray_caster.mesh_visibility_stats,
+        **kwargs,
+    )
+
+
+def _mesh_visibility_ratio_compat(
+    ray_caster: Any,
+    **kwargs: Any,
+) -> float:
+    return float(
+        _invoke_method_with_supported_kwargs(
+            ray_caster.mesh_visibility_ratio,
+            **kwargs,
+        )
     )
 
 
@@ -1336,7 +1384,8 @@ def _compute_l1_occlusion_metrics(
 
     if backend == "mesh_ray" and ray_caster is not None:
         camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
-        visible_count, valid_count = ray_caster.mesh_visibility_stats(
+        visible_count, valid_count = _mesh_visibility_stats_compat(
+            ray_caster,
             camera_pos=camera_pos,
             target_points=in_frame_points,
             target_tri_ids=target_tri_ids,
@@ -2053,7 +2102,8 @@ def _compute_target_visibility(
     ):
         return "not visible", 0.0
 
-    visible_ratio = modified_scene.ray_caster.mesh_visibility_ratio(
+    visible_ratio = _mesh_visibility_ratio_compat(
+        modified_scene.ray_caster,
         camera_pos=camera_pos,
         target_points=target_surface_points,
         target_tri_ids=target_triangle_ids,
