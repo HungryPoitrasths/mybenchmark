@@ -96,6 +96,35 @@ def make_fake_questions() -> list[dict]:
     ]
 
 
+def make_near_duplicate_questions() -> list[dict]:
+    return [
+        {
+            "question": "If the cup moves, will it still be attached to the table?",
+            "answer": "A",
+            "options": ["yes", "no"],
+            "correct_value": "yes",
+            "type": "attachment_chain",
+            "level": "L3",
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "parent_id": 2,
+            "child_id": 1,
+        },
+        {
+            "question": "After moving the cup, does the cup remain attached to the table?",
+            "answer": "B",
+            "options": ["yes", "no"],
+            "correct_value": "no",
+            "type": "attachment_chain",
+            "level": "L3",
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "parent_id": 2,
+            "child_id": 1,
+        },
+    ]
+
+
 class RunSingleFrameTraceTests(unittest.TestCase):
     def _make_paths(self) -> tuple[Path, Path, str, str]:
         root = make_case_dir("single_frame_trace")
@@ -176,6 +205,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertIn("trace_question_id", final_json["questions"][0])
         self.assertEqual(trace_json["question_lifecycle"][0]["status"], "kept")
         self.assertIn("Is the cup on the table?", html_text)
+        self.assertIn("data:image/jpeg;base64,", html_text)
 
     def test_run_single_frame_trace_falls_back_to_online_referability(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
@@ -243,6 +273,55 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertEqual(final_json["question_count"], 0)
         self.assertIn("missing_pose", html_text)
         self.assertIn(image_name, html_text)
+
+    def test_run_single_frame_trace_records_detailed_near_duplicate_reason(self) -> None:
+        data_root, output_dir, scene_id, image_name = self._make_paths()
+        referability_cache = {
+            "version": "6.0",
+            "frames": {
+                scene_id: {
+                    image_name: make_referability_entry(),
+                }
+            },
+        }
+
+        def fake_generate_all_questions(**_kwargs):
+            return make_near_duplicate_questions()
+
+        with ExitStack() as stack:
+            for mocked in self._patch_common(scene_id, image_name):
+                stack.enter_context(mocked)
+            stack.enter_context(
+                patch.object(trace_module, "generate_all_questions", side_effect=fake_generate_all_questions)
+            )
+            stack.enter_context(
+                patch.object(
+                    trace_module,
+                    "_compute_single_frame_referability_entry",
+                    side_effect=AssertionError("should not fallback online"),
+                )
+            )
+            trace_doc = trace_module.run_single_frame_trace(
+                data_root=data_root,
+                scene_id=scene_id,
+                image_name=image_name,
+                output_dir=output_dir,
+                referability_cache=referability_cache,
+                use_occlusion=False,
+            )
+
+        self.assertEqual(trace_doc["status"], "completed")
+        lifecycle = trace_doc["question_lifecycle"]
+        removed = [row for row in lifecycle if row["status"] == "removed"]
+        self.assertEqual(len(removed), 1)
+        self.assertEqual(removed[0]["removal_reason"], "near_duplicate")
+        self.assertIn("same scene/frame/type", removed[0]["removal_detail"])
+        self.assertTrue(removed[0]["duplicate_of_trace_question_id"])
+        self.assertIn("attachment-id signature", removed[0]["removal_detail"])
+
+        html_text = (output_dir / "single_frame" / scene_id / "000123" / "trace.html").read_text(encoding="utf-8")
+        self.assertIn("Removal Detail", html_text)
+        self.assertIn("attachment-id signature", html_text)
 
 
 if __name__ == "__main__":

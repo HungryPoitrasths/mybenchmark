@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
+import mimetypes
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -101,6 +103,22 @@ def _render_lifecycle(rows: list[dict[str, Any]]) -> str:
     body = []
     for row in rows:
         removal = row.get("removal_reason") or "-"
+        detail = row.get("removal_detail")
+        duplicate_of = row.get("duplicate_of_trace_question_id")
+        duplicate_of_question = row.get("duplicate_of_question")
+        removal_details = row.get("removal_details")
+        detail_parts: list[str] = []
+        if detail:
+            detail_parts.append(f"<div>{_h(detail)}</div>")
+        if duplicate_of:
+            detail_parts.append(f'<div class="muted">Kept ID: {_h(duplicate_of)}</div>')
+        if duplicate_of_question:
+            detail_parts.append(f'<div class="muted">Kept Question: {_h(duplicate_of_question)}</div>')
+        if isinstance(removal_details, dict) and removal_details:
+            detail_parts.append(
+                f'<pre class="compact">{_h(json.dumps(removal_details, ensure_ascii=False, indent=2, sort_keys=True))}</pre>'
+            )
+        detail_html = "".join(detail_parts) or "-"
         body.append(
             "<tr>"
             f"<td>{_h(row.get('trace_question_id', '-'))}</td>"
@@ -109,17 +127,32 @@ def _render_lifecycle(rows: list[dict[str, Any]]) -> str:
             f"<td>{_h(row.get('level', '-'))}</td>"
             f"<td>{_h(row.get('type', '-'))}</td>"
             f"<td>{_h(removal)}</td>"
+            f"<td>{detail_html}</td>"
             f"<td>{_h(row.get('question', ''))}</td>"
             "</tr>"
         )
     return (
-        "<table><thead><tr><th>ID</th><th>Status</th><th>Source</th><th>Level</th><th>Type</th><th>Removal Reason</th><th>Question</th></tr></thead>"
+        "<table><thead><tr><th>ID</th><th>Status</th><th>Source</th><th>Level</th><th>Type</th><th>Removal Reason</th><th>Removal Detail</th><th>Question</th></tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table>"
     )
 
 
 def _render_json_panel(payload: Any) -> str:
     return f"<pre>{_h(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))}</pre>"
+
+
+def _image_path_to_data_uri(image_path: Any) -> str | None:
+    if not image_path:
+        return None
+    path = Path(str(image_path))
+    if not path.exists() or not path.is_file():
+        return None
+    mime_type = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+    try:
+        payload = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError:
+        return None
+    return f"data:{mime_type};base64,{payload}"
 
 
 def build_single_frame_trace_html(trace_doc: dict[str, Any]) -> str:
@@ -130,7 +163,11 @@ def build_single_frame_trace_html(trace_doc: dict[str, Any]) -> str:
     lifecycle = trace_doc.get("question_lifecycle", []) if isinstance(trace_doc.get("question_lifecycle"), list) else []
     stage_summaries = trace_doc.get("stage_summaries", []) if isinstance(trace_doc.get("stage_summaries"), list) else []
     qc = trace_doc.get("quality_control", {}) if isinstance(trace_doc.get("quality_control"), dict) else {}
-    image_uri = frame_context.get("image_uri")
+    image_src = (
+        frame_context.get("image_src")
+        or _image_path_to_data_uri(frame_context.get("image_path"))
+        or frame_context.get("image_uri")
+    )
     status = trace_doc.get("status", "unknown")
     stop_reason = trace_doc.get("stop_reason") or "completed"
     stop_details = trace_doc.get("stop_details", {}) if isinstance(trace_doc.get("stop_details"), dict) else {}
@@ -139,8 +176,8 @@ def build_single_frame_trace_html(trace_doc: dict[str, Any]) -> str:
     count_summary = ", ".join(f"{label}={count}" for label, count in sorted(raw_type_counts.items())) or "-"
     final_summary = ", ".join(f"{label}={count}" for label, count in sorted(final_type_counts.items())) or "-"
     image_html = (
-        f'<img src="{_h(image_uri)}" alt="{_h(input_doc.get("image_name", ""))}">'
-        if image_uri else '<div class="muted">No image URI available.</div>'
+        f'<img src="{_h(image_src)}" alt="{_h(input_doc.get("image_name", ""))}">'
+        if image_src else f'<div class="muted">Cannot load image preview. Expected image path: {_h(frame_context.get("image_path", "-"))}</div>'
     )
     final_cards = "".join(_question_card(question) for question in final_questions) or '<div class="muted">No final questions.</div>'
     skipped_steps = qc.get("skipped_steps", []) if isinstance(qc.get("skipped_steps"), list) else []
@@ -181,6 +218,7 @@ def build_single_frame_trace_html(trace_doc: dict[str, Any]) -> str:
     pre {{ background: #101722; color: #dce6ef; padding: 14px; border-radius: 14px; overflow: auto; }}
     ul {{ margin: 8px 0 0 18px; }}
     .warning {{ margin: 12px 0 0; padding: 12px 14px; border-radius: 12px; background: #fff4dd; color: #7a5511; border: 1px solid rgba(196,145,33,.28); }}
+    .compact {{ margin: 8px 0 0; font-size: 12px; }}
     @media (max-width: 1180px) {{ .metrics, .twocol {{ grid-template-columns: 1fr; }} }}
   </style>
 </head>

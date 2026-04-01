@@ -224,6 +224,10 @@ def _build_trace_recorder(
                     "stage": str(event_copy.get("stage", "")),
                     "filter": str(event_copy.get("filter", "")),
                     "reason": str(event_copy.get("reason", "")),
+                    "detail": event_copy.get("detail"),
+                    "details": event_copy.get("details"),
+                    "duplicate_of_trace_question_id": event_copy.get("duplicate_of_trace_question_id"),
+                    "duplicate_of_question": event_copy.get("duplicate_of_question"),
                 }
             )
 
@@ -279,7 +283,12 @@ def _build_question_lifecycle(
                 "type": snapshot.get("type"),
                 "question": snapshot.get("question"),
                 "answer": snapshot.get("answer"),
+                "removal_filter": None if removal_event is None else removal_event.get("filter"),
                 "removal_reason": None if removal_event is None else removal_event.get("reason"),
+                "removal_detail": None if removal_event is None else removal_event.get("detail"),
+                "removal_details": None if removal_event is None else removal_event.get("details"),
+                "duplicate_of_trace_question_id": None if removal_event is None else removal_event.get("duplicate_of_trace_question_id"),
+                "duplicate_of_question": None if removal_event is None else removal_event.get("duplicate_of_question"),
                 "events": events,
             }
         )

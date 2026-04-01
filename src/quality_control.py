@@ -87,6 +87,78 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
     return base + (primary_label, *secondary_labels)
 
 
+def _question_preview(question_text: Any, limit: int = 160) -> str:
+    text = " ".join(str(question_text or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(limit - 3, 0)] + "..."
+
+
+def _near_duplicate_signature(q: dict[str, Any]) -> dict[str, Any]:
+    qtype = QUESTION_TYPE_ALIASES.get(q.get("type"), q.get("type"))
+    signature: dict[str, Any] = {
+        "scene_id": q.get("scene_id"),
+        "image_name": q.get("image_name"),
+        "type": qtype,
+    }
+    if qtype in ATTACHMENT_NEAR_DUP_TYPES:
+        signature["mode"] = "attachment_ids"
+        signature["object_ids"] = {
+            field: value
+            for field in ATTACHMENT_ID_FIELDS
+            if (value := _id_key(q.get(field))) != ""
+        }
+        return signature
+
+    signature["mode"] = "labels"
+    signature["labels"] = {
+        "obj_a_label": _label_key(
+            q.get("obj_a_label")
+            or q.get("moved_obj_label")
+            or q.get("obj_target_label")
+        ),
+        "query_obj_label": _label_key(q.get("query_obj_label")),
+        "obj_b_label": _label_key(q.get("obj_b_label")),
+        "obj_c_label": _label_key(q.get("obj_c_label")),
+        "obj_ref_label": _label_key(q.get("obj_ref_label")),
+    }
+    return signature
+
+
+def _near_duplicate_detail(
+    question: dict[str, Any],
+    kept_question: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    signature = _near_duplicate_signature(question)
+    duplicate_of_id = kept_question.get("trace_question_id")
+    duplicate_of_question = _question_preview(kept_question.get("question"))
+    if signature.get("mode") == "attachment_ids":
+        object_ids = signature.get("object_ids", {})
+        signature_text = ", ".join(f"{field}={value}" for field, value in object_ids.items())
+        if not signature_text:
+            signature_text = "no distinguishing attachment ids"
+        detail = (
+            f"same scene/frame/type and attachment-id signature as "
+            f"{duplicate_of_id or 'earlier kept question'} ({signature_text})"
+        )
+    else:
+        labels = signature.get("labels", {})
+        signature_text = ", ".join(
+            f"{field}={value}"
+            for field, value in labels.items()
+            if str(value).strip()
+        )
+        if not signature_text:
+            signature_text = "all distinguishing labels empty"
+        detail = (
+            f"same scene/frame/type and label signature as "
+            f"{duplicate_of_id or 'earlier kept question'} ({signature_text})"
+        )
+    if duplicate_of_question:
+        detail += f'; kept question: "{duplicate_of_question}"'
+    return detail, signature
+
+
 def _emit_trace_event(
     trace_recorder: Callable[[dict[str, Any]], None] | None,
     payload: dict[str, Any],
@@ -117,7 +189,13 @@ def quality_filter(
                 {
                     "event": "question_removed",
                     "stage": "quality_filter",
+                    "filter": "ambiguous_direction",
                     "reason": "ambiguous_direction",
+                    "detail": "direction ambiguity score exceeded threshold 0.7",
+                    "details": {
+                        "ambiguity_score": q.get("ambiguity_score"),
+                        "threshold": 0.7,
+                    },
                     "trace_question_id": q.get("trace_question_id"),
                     "question": q,
                 },
@@ -128,46 +206,70 @@ def quality_filter(
 
     # Filter 2: deduplicate near-identical questions.
     # Same (scene, frame, type, primary_object) → keep only one.
-    seen_keys: set[tuple] = set()
+    seen_keys: dict[tuple, dict] = {}
     deduped: list[dict] = []
     for q in filtered:
         key = _near_duplicate_key(q)
-        if key in seen_keys:
+        kept_question = seen_keys.get(key)
+        if kept_question is not None:
             removed_counts["near_duplicate"] += 1
+            detail, signature = _near_duplicate_detail(q, kept_question)
             _emit_trace_event(
                 trace_recorder,
                 {
                     "event": "question_removed",
                     "stage": "quality_filter",
+                    "filter": "near_duplicate",
                     "reason": "near_duplicate",
+                    "detail": detail,
+                    "details": {
+                        "signature": signature,
+                        "duplicate_of_trace_question_id": kept_question.get("trace_question_id"),
+                        "duplicate_of_question": kept_question.get("question"),
+                    },
+                    "duplicate_of_trace_question_id": kept_question.get("trace_question_id"),
+                    "duplicate_of_question": kept_question.get("question"),
                     "trace_question_id": q.get("trace_question_id"),
                     "question": q,
                 },
             )
             continue
-        seen_keys.add(key)
+        seen_keys[key] = q
         deduped.append(q)
 
     # Filter 5: cross-frame dedup within same scene.
     # Same (scene_id, question_text) on different frames → keep only first.
-    seen_text: set[tuple] = set()
+    seen_text: dict[tuple, dict] = {}
     final: list[dict] = []
     for q in deduped:
         text_key = (q.get("scene_id"), q.get("question"))
-        if text_key in seen_text:
+        kept_question = seen_text.get(text_key)
+        if kept_question is not None:
             removed_counts["cross_frame_duplicate"] += 1
             _emit_trace_event(
                 trace_recorder,
                 {
                     "event": "question_removed",
                     "stage": "quality_filter",
+                    "filter": "cross_frame_duplicate",
                     "reason": "cross_frame_duplicate",
+                    "detail": (
+                        f'same scene + identical question text as '
+                        f'{kept_question.get("trace_question_id") or "earlier kept question"}'
+                    ),
+                    "details": {
+                        "duplicate_of_trace_question_id": kept_question.get("trace_question_id"),
+                        "duplicate_of_question": kept_question.get("question"),
+                        "duplicate_of_image_name": kept_question.get("image_name"),
+                    },
+                    "duplicate_of_trace_question_id": kept_question.get("trace_question_id"),
+                    "duplicate_of_question": kept_question.get("question"),
                     "trace_question_id": q.get("trace_question_id"),
                     "question": q,
                 },
             )
             continue
-        seen_text.add(text_key)
+        seen_text[text_key] = q
         final.append(q)
 
     for reason, count in removed_counts.items():
