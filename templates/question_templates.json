@@ -28,8 +28,8 @@
     "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how far apart are {obj_b} and {obj_c}?"
   ],
   "L2_object_move_occlusion": [
-    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the visibility status of {obj_b} relative to {obj_c}?",
-    "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how visible would {obj_b} be with respect to {obj_c}?"
+    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the occlusion status of {obj_b}?",
+    "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, which best describes {obj_b}: not occluded, occluded, or not visible?"
   ],
   "L2_object_rotate_object_centric": [
     "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face}, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?"
@@ -38,14 +38,14 @@
     "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face}, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?"
   ],
   "_comments": {
-    "L2_object_move_object_centric": [
+    "L2_object_move": [
       "{obj_move_source}={obj_a} now refers to the actual moved object and may be the support root.",
       "{obj_query}={obj_b} is the obj_query, namely the entity whose final relative position is asked about.",
       "{obj_ref}={obj_c} is another reference object.",
       "If {obj_query} is supported by another object, {obj_move_source} should be the bottom-most support object.",
       "If {obj_query} is not supported by any object, {obj_move_source} should be {obj_query} itself.",
       "{obj_ref} will not be the same object as {obj_query} or {obj_move_source}.",
-      "forward/backward should be automatically expanded to forward (away from the camera) / backward (toward the camera)."
+      "For object-motion prompts, forward/backward should be expanded to forward (away from the camera) / backward (toward the camera). Camera-motion prompts use camera-specific wording in code."
     ]
   },
   "L2_object_move_allocentric": [
@@ -53,14 +53,14 @@
     "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}?"
   ],
   "L2_viewpoint_move": [
-    "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, would {obj_a} become visible or occluded?",
-    "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, what is the visibility status of {obj_a}?",
-    "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, can you still see {obj_a}?"
+    "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {obj_a}?",
+    "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, which best describes {obj_a}: not occluded, occluded, or not visible?",
+    "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, is {obj_a} not occluded, occluded, or not visible?"
   ],
   "L2_object_remove": [
-    "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
-    "Suppose {obj_a} is taken away. What is the visibility of {obj_b} from the current camera angle?",
-    "After removing {obj_a}, how visible would {obj_b} be from this viewpoint?"
+    "If {obj_a} were removed from the scene, what would be the occlusion status of {obj_b} from the current viewpoint?",
+    "Suppose {obj_a} is taken away. Which best describes {obj_b}: not occluded, occluded, or not visible?",
+    "After removing {obj_a}, what is the occlusion status of {obj_b} from this viewpoint?"
   ],
   "L3_attachment_chain": [
     "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",

@@ -156,7 +156,6 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = [label for _, label in DISTANCE_BINS]
-ALL_OCCLUSION = ["fully visible", "partially occluded", "not visible"]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.1
@@ -741,16 +740,17 @@ def _default_templates() -> dict:
             "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
         "L2_object_move_occlusion": [
-            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the visibility status of {obj_b} relative to {obj_c}?",
-            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how visible would {obj_b} be with respect to {obj_c}?",
+            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the occlusion status of {obj_b}?",
+            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, which best describes {obj_b}: not occluded, occluded, or not visible?",
         ],
         "L2_viewpoint_move": [
-            "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, would {obj_a} become visible or occluded?",
-            "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, what is the visibility status of {obj_a}?",
-            "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, can you still see {obj_a}?",
+            "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {obj_a}?",
+            "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, which best describes {obj_a}: not occluded, occluded, or not visible?",
+            "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, is {obj_a} not occluded, occluded, or not visible?",
         ],
         "L2_object_remove": [
-            "If {obj_a} were removed from the scene, what would be the visibility status of {obj_b} from the current viewpoint?",
+            "If {obj_a} were removed from the scene, what would be the occlusion status of {obj_b} from the current viewpoint?",
+            "After removing {obj_a}, which best describes {obj_b}: not occluded, occluded, or not visible?",
         ],
 
         # --- Object-centric ---
@@ -1530,6 +1530,161 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
     )
 
 
+def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
+    *,
+    target_obj_id: int,
+    original_objects: list[dict[str, Any]],
+    moved_objects: list[dict[str, Any]],
+    moved_ids: set[int],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+) -> _L1OcclusionMetrics:
+    backend = "mesh_ray"
+    if (
+        color_intrinsics is None
+        or ray_caster is None
+        or instance_mesh_data is None
+    ):
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=0,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
+    target_obj_id = int(target_obj_id)
+    original_map = {int(obj["id"]): obj for obj in original_objects}
+    moved_map = {int(obj["id"]): obj for obj in moved_objects}
+    moved_target = moved_map.get(target_obj_id)
+    if moved_target is None:
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=0,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
+    sample_points = _instance_surface_samples(instance_mesh_data, target_obj_id)
+    sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+        instance_mesh_data,
+        target_obj_id,
+    )
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, target_obj_id)
+    sampled_point_count = int(len(sample_points))
+    if sampled_point_count <= 0 or not target_tri_ids:
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
+    moved_scene_context = _build_modified_scene(
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+        removed_ids=set(moved_ids),
+    )
+    if moved_scene_context is None or moved_scene_context.ray_caster is None:
+        return _make_l1_occlusion_metrics(
+            projected_area=0.0,
+            in_frame_ratio=0.0,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=0,
+            backend=backend,
+        )
+
+    moved_deltas: dict[int, np.ndarray] = {}
+    for moved_obj in moved_objects:
+        moved_id = int(moved_obj["id"])
+        if moved_id not in moved_ids:
+            continue
+        original_obj = original_map.get(moved_id)
+        if original_obj is None:
+            continue
+        moved_deltas[moved_id] = (
+            np.asarray(moved_obj["center"], dtype=np.float64)
+            - np.asarray(original_obj["center"], dtype=np.float64)
+        )
+
+    target_delta = moved_deltas.get(target_obj_id)
+    adjusted_sample_points = np.asarray(sample_points, dtype=np.float64)
+    if target_delta is not None:
+        adjusted_sample_points = adjusted_sample_points + target_delta
+
+    (
+        projected_area,
+        in_frame_ratio,
+        in_frame_points,
+        in_frame_triangle_ids,
+        in_frame_barycentrics,
+    ) = _in_frame_surface_sample_subset(
+        adjusted_sample_points,
+        camera_pose,
+        color_intrinsics,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+    )
+    in_frame_sample_count = int(len(in_frame_points))
+    if (
+        projected_area < MIN_PROJECTED_AREA_PX
+        or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
+        or in_frame_sample_count <= 0
+    ):
+        return _make_l1_occlusion_metrics(
+            projected_area=projected_area,
+            in_frame_ratio=in_frame_ratio,
+            occlusion_ratio_in_frame=1.0,
+            valid_in_frame_count=0,
+            sampled_point_count=sampled_point_count,
+            in_frame_sample_count=in_frame_sample_count,
+            backend=backend,
+        )
+
+    visible_count, valid_count = _compute_counterfactual_target_visibility_stats(
+        modified_scene=moved_scene_context,
+        target_surface_points=in_frame_points,
+        target_triangle_ids=target_tri_ids,
+        camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
+        instance_mesh_data=instance_mesh_data,
+        target_obj_id=target_obj_id,
+        target_delta=target_delta,
+        moved_blocker_deltas={
+            moved_id: delta
+            for moved_id, delta in moved_deltas.items()
+            if moved_id != target_obj_id
+        },
+        sample_triangle_ids=in_frame_triangle_ids,
+        sample_barycentrics=in_frame_barycentrics,
+        vertices=np.asarray(instance_mesh_data.vertices, dtype=np.float64),
+        faces=np.asarray(instance_mesh_data.faces, dtype=np.int64),
+    )
+    occlusion_ratio = 1.0
+    if valid_count > 0:
+        occlusion_ratio = float(1.0 - (visible_count / valid_count))
+    return _make_l1_occlusion_metrics(
+        projected_area=projected_area,
+        in_frame_ratio=in_frame_ratio,
+        occlusion_ratio_in_frame=occlusion_ratio,
+        valid_in_frame_count=int(valid_count),
+        sampled_point_count=sampled_point_count,
+        in_frame_sample_count=in_frame_sample_count,
+        backend=backend,
+    )
+
+
 def _compute_l1_style_visibility_metrics_for_static_target(
     *,
     obj: dict[str, Any],
@@ -1591,6 +1746,34 @@ def _compute_l1_style_visibility_metrics_for_static_target(
             modified_scene=modified_scene,
         ),
         "mesh_ray" if backend == "mesh_ray" else backend,
+    )
+
+
+def _compute_l1_style_visibility_metrics_for_moved_target(
+    *,
+    target_obj_id: int,
+    original_objects: list[dict[str, Any]],
+    moved_objects: list[dict[str, Any]],
+    moved_ids: set[int],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    occlusion_backend: str,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+) -> tuple[_L1OcclusionMetrics, str]:
+    _ = str(occlusion_backend)
+    return (
+        _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
+            target_obj_id=target_obj_id,
+            original_objects=original_objects,
+            moved_objects=moved_objects,
+            moved_ids=moved_ids,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        ),
+        "mesh_ray",
     )
 
 
@@ -2533,7 +2716,7 @@ def _compute_target_visibility(
     return _visibility_status_from_ratio(visible_ratio), float(visible_ratio)
 
 
-def _compute_counterfactual_target_visibility(
+def _compute_counterfactual_target_visibility_stats(
     modified_scene: _ModifiedSceneContext | None,
     target_surface_points: np.ndarray,
     target_triangle_ids: set[int],
@@ -2548,8 +2731,8 @@ def _compute_counterfactual_target_visibility(
     vertices: np.ndarray | None = None,
     faces: np.ndarray | None = None,
     local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
-) -> tuple[str, float]:
-    """Estimate visibility for a target that may have been translated.
+) -> tuple[int, int]:
+    """Return visible/valid sample counts for a translated target.
 
     The hit path is merged from three sources:
 
@@ -2569,7 +2752,7 @@ def _compute_counterfactual_target_visibility(
         or len(target_surface_points) == 0
         or not target_triangle_ids
     ):
-        return "not visible", 0.0
+        return 0, 0
 
     camera_pos = np.asarray(camera_pos, dtype=np.float64)
     sampled_points = np.asarray(target_surface_points, dtype=np.float64)
@@ -2577,7 +2760,7 @@ def _compute_counterfactual_target_visibility(
     expected_dists = np.linalg.norm(directions, axis=1)
     valid_mask = np.isfinite(expected_dists) & (expected_dists > 1e-6)
     if not np.any(valid_mask):
-        return "not visible", 0.0
+        return 0, 0
 
     sampled_points = sampled_points[valid_mask]
     directions = directions[valid_mask]
@@ -2696,6 +2879,42 @@ def _compute_counterfactual_target_visibility(
                 visible_count += local_visible
                 valid_count += local_valid
 
+    return int(visible_count), int(valid_count)
+
+
+def _compute_counterfactual_target_visibility(
+    modified_scene: _ModifiedSceneContext | None,
+    target_surface_points: np.ndarray,
+    target_triangle_ids: set[int],
+    camera_pos: np.ndarray,
+    hit_epsilon: float = 0.05,
+    instance_mesh_data: InstanceMeshData | None = None,
+    target_obj_id: int | None = None,
+    target_delta: np.ndarray | None = None,
+    moved_blocker_deltas: dict[int, np.ndarray] | None = None,
+    sample_triangle_ids: np.ndarray | None = None,
+    sample_barycentrics: np.ndarray | None = None,
+    vertices: np.ndarray | None = None,
+    faces: np.ndarray | None = None,
+    local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
+) -> tuple[str, float]:
+    """Estimate visibility for a target that may have been translated."""
+    visible_count, valid_count = _compute_counterfactual_target_visibility_stats(
+        modified_scene=modified_scene,
+        target_surface_points=target_surface_points,
+        target_triangle_ids=target_triangle_ids,
+        camera_pos=camera_pos,
+        hit_epsilon=hit_epsilon,
+        instance_mesh_data=instance_mesh_data,
+        target_obj_id=target_obj_id,
+        target_delta=target_delta,
+        moved_blocker_deltas=moved_blocker_deltas,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+        vertices=vertices,
+        faces=faces,
+        local_resample_count=local_resample_count,
+    )
     if valid_count <= 0:
         return "not visible", 0.0
     visible_ratio = float(visible_count / valid_count)
@@ -3094,7 +3313,7 @@ def _find_object_move_occlusion_changes(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
 ) -> list[dict]:
-    """Return relation diffs caused by post-move visibility changes."""
+    """Return L1-style visibility changes for moved targets."""
     if color_intrinsics is None:
         return []
 
@@ -3102,56 +3321,67 @@ def _find_object_move_occlusion_changes(
         occlusion_backend, ray_caster, instance_mesh_data,
     )
     original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
-    original_visibility = _compute_visibility_status_per_object(
-        original_objects, camera_pose, color_intrinsics,
-        depth_image=None,
-        depth_intrinsics=None,
-        occlusion_backend=compare_backend,
-        ray_caster=ray_caster,
-        instance_mesh_data=instance_mesh_data,
-        modified_scene=original_scene_context,
-    )
-    new_visibility = _compute_movement_visibility_status_per_object(
-        original_objects=original_objects,
-        moved_objects=moved_objects,
-        moved_ids=moved_ids,
-        camera_pose=camera_pose,
-        color_intrinsics=color_intrinsics,
-        ray_caster=ray_caster,
-        instance_mesh_data=instance_mesh_data,
-    )
-
-    relations = compute_all_relations(original_objects, camera_pose, None, None)
+    original_map = {int(obj["id"]): obj for obj in original_objects}
     occlusion_changes: list[dict] = []
-    for relation in relations:
-        obj_a_id = int(relation["obj_a_id"])
-        obj_b_id = int(relation["obj_b_id"])
-        changes: dict[str, dict[str, str]] = {}
-
-        old_a, _old_ratio_a = original_visibility.get(obj_a_id, ("not visible", 0.0))
-        new_a, _new_ratio_a = new_visibility.get(obj_a_id, ("not visible", 0.0))
-        if old_a != new_a:
-            changes["occlusion_a"] = {"old": old_a, "new": new_a}
-
-        old_b, _old_ratio_b = original_visibility.get(obj_b_id, ("not visible", 0.0))
-        new_b, _new_ratio_b = new_visibility.get(obj_b_id, ("not visible", 0.0))
-        if old_b != new_b:
-            changes["occlusion_b"] = {"old": old_b, "new": new_b}
-
-        if not changes:
+    for target_obj_id in sorted(int(obj_id) for obj_id in moved_ids):
+        target_obj = original_map.get(target_obj_id)
+        if target_obj is None:
             continue
-        old_relation = dict(relation)
-        old_relation["occlusion_a"] = old_a
-        old_relation["occlusion_b"] = old_b
-        new_relation = dict(relation)
-        new_relation["occlusion_a"] = new_a
-        new_relation["occlusion_b"] = new_b
+
+        old_metrics, old_source = _compute_l1_style_visibility_metrics_for_static_target(
+            obj=target_obj,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend=compare_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+            modified_scene=original_scene_context,
+        )
+        old_status, old_reason_code, _old_reason_detail = _resolve_counterfactual_l1_visibility_status(
+            old_metrics
+        )
+        if old_status is None:
+            continue
+
+        new_metrics, new_source = _compute_l1_style_visibility_metrics_for_moved_target(
+            target_obj_id=target_obj_id,
+            original_objects=original_objects,
+            moved_objects=moved_objects,
+            moved_ids=moved_ids,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            occlusion_backend=compare_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        new_status, new_reason_code, _new_reason_detail = _resolve_counterfactual_l1_visibility_status(
+            new_metrics
+        )
+        if new_status is None or old_status == new_status:
+            continue
+
         occlusion_changes.append({
-            "obj_a_id": obj_a_id,
-            "obj_b_id": obj_b_id,
-            "changes": changes,
-            "old": old_relation,
-            "new": new_relation,
+            "obj_a_id": target_obj_id,
+            "obj_b_id": target_obj_id,
+            "target_obj_id": target_obj_id,
+            "target_obj_label": target_obj.get("label", "object"),
+            "changes": {
+                "visibility_status": {"old": old_status, "new": new_status},
+            },
+            "old": {
+                "visibility_status": old_status,
+                "visibility_source": old_source,
+                "visibility_resolution": old_reason_code,
+                "visibility_metrics": _l1_occlusion_metrics_payload(old_metrics),
+            },
+            "new": {
+                "visibility_status": new_status,
+                "visibility_source": new_source,
+                "visibility_resolution": new_reason_code,
+                "visibility_metrics": _l1_occlusion_metrics_payload(new_metrics),
+            },
         })
 
     return occlusion_changes
@@ -3567,7 +3797,7 @@ def generate_l2_object_move(
         and instance_mesh_data is not None
     )
     compare_backend = None
-    original_visibility: dict[int, tuple[str, float]] = {}
+    original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
     if occlusion_enabled:
         compare_backend = _counterfactual_occlusion_backend(
             occlusion_backend,
@@ -3579,17 +3809,27 @@ def generate_l2_object_move(
             instance_mesh_data,
             set(),
         )
-        original_visibility = _compute_visibility_status_per_object(
-            movement_scene_objects,
-            camera_pose,
-            color_intrinsics,
-            depth_image=None,
-            depth_intrinsics=None,
-            occlusion_backend=compare_backend,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
-            modified_scene=original_scene_context,
-        )
+        for visibility_obj in movement_scene_objects:
+            metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
+                obj=visibility_obj,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend=compare_backend,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+                modified_scene=original_scene_context,
+            )
+            status, reason_code, _reason_detail = _resolve_counterfactual_l1_visibility_status(
+                metrics
+            )
+            original_visibility[int(visibility_obj["id"])] = (
+                status,
+                source_used,
+                reason_code,
+                metrics,
+            )
 
     for obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
@@ -3626,19 +3866,45 @@ def generate_l2_object_move(
             moved_relation_map = _relation_map_by_pair(
                 compute_all_relations(selected_state.moved_objects, camera_pose, None, None)
             )
-            new_visibility = (
-                _compute_movement_visibility_status_per_object(
+            query_old_status: str | None = None
+            query_old_source = "mesh_ray"
+            query_old_reason_code = "missing_original_visibility"
+            query_old_metrics = _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")
+            query_new_status: str | None = None
+            query_new_source = "mesh_ray"
+            query_new_reason_code = "counterfactual_visibility_unresolved"
+            query_new_metrics = _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")
+            if occlusion_enabled and compare_backend is not None:
+                (
+                    query_old_status,
+                    query_old_source,
+                    query_old_reason_code,
+                    query_old_metrics,
+                ) = original_visibility.get(
+                    int(obj["id"]),
+                    (
+                        None,
+                        "mesh_ray",
+                        "missing_original_visibility",
+                        _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray"),
+                    ),
+                )
+                query_new_metrics, query_new_source = _compute_l1_style_visibility_metrics_for_moved_target(
+                    target_obj_id=int(obj["id"]),
                     original_objects=movement_scene_objects,
                     moved_objects=selected_state.moved_objects,
                     moved_ids=selected_state.moved_ids,
                     camera_pose=camera_pose,
                     color_intrinsics=color_intrinsics,
+                    occlusion_backend=compare_backend,
                     ray_caster=ray_caster,
                     instance_mesh_data=instance_mesh_data,
                 )
-                if occlusion_enabled
-                else {}
-            )
+                (
+                    query_new_status,
+                    query_new_reason_code,
+                    _query_new_reason_detail,
+                ) = _resolve_counterfactual_l1_visibility_status(query_new_metrics)
 
             for key, old_relation in base_relation_map.items():
                 if obj["id"] not in key:
@@ -3706,13 +3972,13 @@ def generate_l2_object_move(
                             "has_attachment_chain": has_attachment_chain,
                         })
 
-                if not occlusion_enabled or compare_backend is None:
-                    continue
-                old_value = original_visibility.get(int(obj["id"]), ("not visible", 0.0))[0]
-                new_value = new_visibility.get(int(obj["id"]), ("not visible", 0.0))[0]
-                relation_unchanged = old_value == new_value
-                if not attachment_remapped and relation_unchanged:
-                    continue
+            if (
+                occlusion_enabled
+                and compare_backend is not None
+                and query_old_status is not None
+                and query_new_status is not None
+                and query_old_status != query_new_status
+            ):
                 tpl_list = templates.get(
                     "L2_object_move_occlusion",
                     _default_templates()["L2_object_move_occlusion"],
@@ -3723,36 +3989,46 @@ def generate_l2_object_move(
                     direction=direction_desc,
                     direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
                     distance=distance_desc,
-                    obj_b=_the(obj_b_label),
-                    obj_c=_the(obj_c_label),
+                    obj_b=_the(obj["label"]),
+                    obj_target=_the(obj["label"]),
                 )
-                options, answer = generate_options(new_value, ALL_OCCLUSION)
+                options, answer = generate_options(
+                    query_new_status,
+                    L1_OCCLUSION_STATES,
+                    n_options=3,
+                )
                 obj_questions.append({
                     "level": "L2",
                     "type": "object_move_occlusion",
                     "question": question_text,
                     "options": options,
                     "answer": answer,
-                    "correct_value": new_value,
-                    "old_correct_value": old_value,
-                    "new_correct_value": new_value,
+                    "correct_value": query_new_status,
+                    "old_correct_value": query_old_status,
+                    "new_correct_value": query_new_status,
+                    "old_visibility": query_old_status,
+                    "new_visibility": query_new_status,
+                    "old_visibility_source": query_old_source,
+                    "new_visibility_source": query_new_source,
+                    "old_visibility_resolution": query_old_reason_code,
+                    "new_visibility_resolution": query_new_reason_code,
+                    "old_visibility_metrics": _l1_occlusion_metrics_payload(query_old_metrics),
+                    "new_visibility_metrics": _l1_occlusion_metrics_payload(query_new_metrics),
                     "moved_obj_id": move_source_id,
                     "moved_obj_label": move_source["label"],
+                    "target_obj_id": obj["id"],
+                    "target_obj_label": obj["label"],
                     "query_obj_id": obj["id"],
                     "query_obj_label": obj["label"],
                     "attachment_remapped": attachment_remapped,
-                    "obj_b_id": relation_obj_b_id,
-                    "obj_b_label": obj_b_label,
-                    "obj_c_id": relation_obj_c_id,
-                    "obj_c_label": obj_c_label,
+                    "obj_b_id": obj["id"],
+                    "obj_b_label": obj["label"],
                     "mentioned_objects": [
                         _mention("moved_object", move_source["label"], move_source_id),
-                        _mention("query_object", obj["label"], obj["id"]),
-                        _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
-                        _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
+                        _mention("target_object", obj["label"], obj["id"]),
                     ],
                     "delta": delta.tolist(),
-                    "relation_unchanged": relation_unchanged,
+                    "relation_unchanged": False,
                     "has_attachment_chain": has_attachment_chain,
                 })
 
@@ -3944,7 +4220,11 @@ def generate_l2_viewpoint_move(
                     distance=f"{dist:.0f}m",
                     obj_a=_the(obj["label"]),
                 )
-                options, answer = generate_options(new_status, L1_OCCLUSION_STATES)
+                options, answer = generate_options(
+                    new_status,
+                    L1_OCCLUSION_STATES,
+                    n_options=3,
+                )
                 questions.append({
                     "level": "L2",
                     "type": "viewpoint_move",
@@ -4181,7 +4461,11 @@ def generate_l2_object_remove(
                 obj_a=_the(obj["label"]),
                 obj_b=_the(other["label"]),
             )
-            options, answer = generate_options(new_status, L1_OCCLUSION_STATES)
+            options, answer = generate_options(
+                new_status,
+                L1_OCCLUSION_STATES,
+                n_options=3,
+            )
             questions.append({
                 "level": "L2",
                 "type": "object_remove",
