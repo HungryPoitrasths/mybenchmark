@@ -432,6 +432,15 @@ def compute_pairwise_direction(
     if vertical_label is not None:
         return vertical_label, vertical_ambiguity
 
+    return compute_pairwise_horizontal_direction(obj_a, obj_b, camera_pose)
+
+
+def compute_pairwise_horizontal_direction(
+    obj_a: dict,
+    obj_b: dict,
+    camera_pose: CameraPose,
+) -> tuple[str, float]:
+    """Horizontal direction of B relative to A using footprint geometry."""
     a_ref_xy, b_ref_xy = _pairwise_horizontal_reference_points(obj_a, obj_b)
     a_ref = np.array([a_ref_xy[0], a_ref_xy[1], 0.0], dtype=float)
     b_ref = np.array([b_ref_xy[0], b_ref_xy[1], 0.0], dtype=float)
@@ -478,6 +487,7 @@ def primary_direction_object_centric(
     facing_center: np.ndarray,
     target_center: np.ndarray,
     *,
+    horizontal_only: bool = False,
     anchor_hull_xy: np.ndarray | list[list[float]] | None = None,
     target_hull_xy: np.ndarray | list[list[float]] | None = None,
     anchor_bbox_min: np.ndarray | list[float] | None = None,
@@ -497,14 +507,15 @@ def primary_direction_object_centric(
         return "front", 1.0
     fwd_horiz /= horiz_len
 
-    vertical_label, vertical_ambiguity = _vertical_interval_direction(
-        np.asarray(anchor_bbox_min, dtype=float) if anchor_bbox_min is not None else None,
-        np.asarray(anchor_bbox_max, dtype=float) if anchor_bbox_max is not None else None,
-        np.asarray(target_bbox_min, dtype=float) if target_bbox_min is not None else None,
-        np.asarray(target_bbox_max, dtype=float) if target_bbox_max is not None else None,
-    )
-    if vertical_label is not None:
-        return vertical_label, vertical_ambiguity
+    if not horizontal_only:
+        vertical_label, vertical_ambiguity = _vertical_interval_direction(
+            np.asarray(anchor_bbox_min, dtype=float) if anchor_bbox_min is not None else None,
+            np.asarray(anchor_bbox_max, dtype=float) if anchor_bbox_max is not None else None,
+            np.asarray(target_bbox_min, dtype=float) if target_bbox_min is not None else None,
+            np.asarray(target_bbox_max, dtype=float) if target_bbox_max is not None else None,
+        )
+        if vertical_label is not None:
+            return vertical_label, vertical_ambiguity
 
     right_horiz = np.array([fwd_horiz[1], -fwd_horiz[0], 0.0], dtype=float)
 
@@ -536,6 +547,7 @@ def primary_direction_allocentric(
     obj_a_center: np.ndarray,
     obj_b_center: np.ndarray,
     *,
+    horizontal_only: bool = False,
     obj_a_hull_xy: np.ndarray | list[list[float]] | None = None,
     obj_b_hull_xy: np.ndarray | list[list[float]] | None = None,
     obj_a_bbox_min: np.ndarray | list[float] | None = None,
@@ -547,14 +559,15 @@ def primary_direction_allocentric(
     obj_a_center = np.asarray(obj_a_center, dtype=float)
     obj_b_center = np.asarray(obj_b_center, dtype=float)
 
-    vertical_label, vertical_ambiguity = _vertical_interval_direction(
-        np.asarray(obj_b_bbox_min, dtype=float) if obj_b_bbox_min is not None else None,
-        np.asarray(obj_b_bbox_max, dtype=float) if obj_b_bbox_max is not None else None,
-        np.asarray(obj_a_bbox_min, dtype=float) if obj_a_bbox_min is not None else None,
-        np.asarray(obj_a_bbox_max, dtype=float) if obj_a_bbox_max is not None else None,
-    )
-    if vertical_label is not None:
-        return vertical_label, vertical_ambiguity
+    if not horizontal_only:
+        vertical_label, vertical_ambiguity = _vertical_interval_direction(
+            np.asarray(obj_b_bbox_min, dtype=float) if obj_b_bbox_min is not None else None,
+            np.asarray(obj_b_bbox_max, dtype=float) if obj_b_bbox_max is not None else None,
+            np.asarray(obj_a_bbox_min, dtype=float) if obj_a_bbox_min is not None else None,
+            np.asarray(obj_a_bbox_max, dtype=float) if obj_a_bbox_max is not None else None,
+        )
+        if vertical_label is not None:
+            return vertical_label, vertical_ambiguity
 
     if obj_a_hull_xy is not None and obj_b_hull_xy is not None:
         a_ref_xy, b_ref_xy = _horizontal_reference_points_with_spine_override(
@@ -671,6 +684,7 @@ def compute_all_relations(
             b_center = np.array(b["center"])
 
             dir_label, ambiguity = compute_pairwise_direction(a, b, camera_pose)
+            horizontal_dir, _ = compute_pairwise_horizontal_direction(a, b, camera_pose)
             dist_bin, dist_m, near_bound = compute_distance(a_center, b_center)
 
             relations.append(
@@ -680,6 +694,7 @@ def compute_all_relations(
                     "obj_b_id": b["id"],
                     "obj_b_label": b["label"],
                     "direction_b_rel_a": dir_label,
+                    "horizontal_direction_b_rel_a": horizontal_dir,
                     "ambiguity_score": ambiguity,
                     "distance_bin": dist_bin,
                     "distance_m": round(dist_m, 2),

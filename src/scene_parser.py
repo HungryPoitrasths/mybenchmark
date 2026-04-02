@@ -13,7 +13,7 @@ ScanNet file layout (inside each scene directory)::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import logging
 from pathlib import Path
@@ -151,6 +151,8 @@ class InstanceMeshData:
     triangle_ids_by_instance: dict[int, np.ndarray]
     boundary_triangle_ids_by_instance: dict[int, np.ndarray]
     surface_points_by_instance: dict[int, np.ndarray]
+    surface_triangle_ids_by_instance: dict[int, np.ndarray] = field(default_factory=dict)
+    surface_barycentrics_by_instance: dict[int, np.ndarray] = field(default_factory=dict)
 
 
 def _apply_axis_alignment(vertices: np.ndarray, M: np.ndarray) -> np.ndarray:
@@ -231,10 +233,18 @@ def _sample_surface_points_from_triangles(
     triangle_ids: np.ndarray,
     n_samples: int,
     rng: np.random.RandomState,
-) -> np.ndarray:
+    return_metadata: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sample surface points with area-weighting plus FPS-based rebalancing."""
     if len(triangle_ids) == 0 or n_samples <= 0:
-        return np.empty((0, 3), dtype=np.float64)
+        empty_points = np.empty((0, 3), dtype=np.float64)
+        if not return_metadata:
+            return empty_points
+        return (
+            empty_points,
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
 
     tri_vertices = vertices[faces[triangle_ids]]
     cross = np.cross(
@@ -245,17 +255,32 @@ def _sample_surface_points_from_triangles(
     positive_mask = areas > 1e-10
     if not np.any(positive_mask):
         centroids = tri_vertices.mean(axis=1).astype(np.float64)
+        barycentrics = np.full((len(centroids), 3), 1.0 / 3.0, dtype=np.float64)
+        repeated_tri_ids = np.asarray(triangle_ids, dtype=np.int64)
         if len(centroids) >= n_samples:
-            return centroids[:n_samples]
+            if not return_metadata:
+                return centroids[:n_samples]
+            return (
+                centroids[:n_samples],
+                repeated_tri_ids[:n_samples],
+                barycentrics[:n_samples],
+            )
         reps = int(np.ceil(n_samples / max(len(centroids), 1)))
-        return np.tile(centroids, (reps, 1))[:n_samples]
+        tiled_points = np.tile(centroids, (reps, 1))[:n_samples]
+        if not return_metadata:
+            return tiled_points
+        tiled_tri_ids = np.tile(repeated_tri_ids, reps)[:n_samples]
+        tiled_barycentrics = np.tile(barycentrics, (reps, 1))[:n_samples]
+        return tiled_points, tiled_tri_ids, tiled_barycentrics
 
     tri_vertices = tri_vertices[positive_mask]
+    triangle_ids = np.asarray(triangle_ids, dtype=np.int64)[positive_mask]
     areas = areas[positive_mask]
     probs = areas / areas.sum()
     n_candidates = n_samples * 4
     chosen = rng.choice(len(tri_vertices), size=n_candidates, replace=True, p=probs)
     chosen_triangles = tri_vertices[chosen]
+    chosen_triangle_ids = triangle_ids[chosen]
 
     u = rng.rand(n_candidates, 1)
     v = rng.rand(n_candidates, 1)
@@ -263,6 +288,7 @@ def _sample_surface_points_from_triangles(
     bary_a = 1.0 - sqrt_u
     bary_b = sqrt_u * (1.0 - v)
     bary_c = sqrt_u * v
+    candidate_barycentrics = np.concatenate([bary_a, bary_b, bary_c], axis=1).astype(np.float64)
     candidates = (
         bary_a * chosen_triangles[:, 0]
         + bary_b * chosen_triangles[:, 1]
@@ -270,7 +296,13 @@ def _sample_surface_points_from_triangles(
     ).astype(np.float64)
 
     if len(candidates) <= n_samples:
-        return candidates[:n_samples]
+        if not return_metadata:
+            return candidates[:n_samples]
+        return (
+            candidates[:n_samples],
+            chosen_triangle_ids[:n_samples],
+            candidate_barycentrics[:n_samples],
+        )
 
     selected_indices = np.empty(n_samples, dtype=np.int64)
     selected_indices[0] = int(rng.randint(len(candidates)))
@@ -283,7 +315,67 @@ def _sample_surface_points_from_triangles(
         selected_indices[out_idx] = next_idx
         dist_sq = np.sum((candidates - candidates[next_idx]) ** 2, axis=1)
         min_dist_sq = np.minimum(min_dist_sq, dist_sq)
-    return candidates[selected_indices]
+    if not return_metadata:
+        return candidates[selected_indices]
+    return (
+        candidates[selected_indices],
+        chosen_triangle_ids[selected_indices],
+        candidate_barycentrics[selected_indices],
+    )
+
+
+def _triangle_area_sum(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    triangle_ids: np.ndarray,
+) -> float:
+    if len(triangle_ids) == 0:
+        return 0.0
+    tri_vertices = np.asarray(vertices, dtype=np.float64)[
+        np.asarray(faces, dtype=np.int64)[np.asarray(triangle_ids, dtype=np.int64)]
+    ]
+    cross = np.cross(
+        tri_vertices[:, 1] - tri_vertices[:, 0],
+        tri_vertices[:, 2] - tri_vertices[:, 0],
+    )
+    return float(0.5 * np.linalg.norm(cross, axis=1).sum())
+
+
+def _adaptive_instance_surface_sample_counts(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    triangle_ids_by_instance: dict[int, np.ndarray],
+    base_n_samples: int,
+) -> dict[int, int]:
+    """Assign more samples to larger instances while keeping 512 as the floor."""
+    base_count = int(base_n_samples)
+    if base_count <= 0:
+        return {int(inst_id): 0 for inst_id in triangle_ids_by_instance}
+
+    areas: dict[int, float] = {}
+    for inst_id, triangle_ids in triangle_ids_by_instance.items():
+        area = _triangle_area_sum(vertices, faces, np.asarray(triangle_ids, dtype=np.int64))
+        if area > 1e-10:
+            areas[int(inst_id)] = float(area)
+
+    if not areas:
+        return {int(inst_id): base_count for inst_id in triangle_ids_by_instance}
+
+    min_area = min(areas.values())
+    counts: dict[int, int] = {}
+    for inst_id in triangle_ids_by_instance:
+        area = areas.get(int(inst_id))
+        if area is None:
+            counts[int(inst_id)] = base_count
+            continue
+        # Use sqrt(area ratio) to improve coverage on larger objects without
+        # blowing up runtime on very large instances.
+        scale = float(np.sqrt(max(area / min_area, 1.0)))
+        counts[int(inst_id)] = max(
+            base_count,
+            int(np.ceil(base_count * scale)),
+        )
+    return counts
 
 
 def load_instance_mesh_data(
@@ -352,7 +444,7 @@ def load_instance_mesh_data(
         if inst_id in kept_instances and tri_ids
     }
 
-    surface_points_by_instance: dict[int, np.ndarray] = {}
+    instance_surface_triangle_ids: dict[int, np.ndarray] = {}
     for inst_id in kept_instances:
         tri_parts = [
             arr for arr in (
@@ -364,14 +456,35 @@ def load_instance_mesh_data(
         if not tri_parts:
             continue
         tri_ids = np.unique(np.concatenate(tri_parts).astype(np.int64))
+        instance_surface_triangle_ids[int(inst_id)] = tri_ids
+
+    adaptive_sample_counts = _adaptive_instance_surface_sample_counts(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        triangle_ids_by_instance=instance_surface_triangle_ids,
+        base_n_samples=n_surface_samples,
+    )
+
+    surface_points_by_instance: dict[int, np.ndarray] = {}
+    surface_triangle_ids_by_instance: dict[int, np.ndarray] = {}
+    surface_barycentrics_by_instance: dict[int, np.ndarray] = {}
+    for inst_id, tri_ids in instance_surface_triangle_ids.items():
         rng = np.random.RandomState(inst_id % (2 ** 32))
-        surface_points_by_instance[inst_id] = _sample_surface_points_from_triangles(
+        (
+            surface_points,
+            sample_triangle_ids,
+            sample_barycentrics,
+        ) = _sample_surface_points_from_triangles(
             vertices=vertices,
             faces=faces,
             triangle_ids=tri_ids,
-            n_samples=n_surface_samples,
+            n_samples=int(adaptive_sample_counts.get(int(inst_id), int(n_surface_samples))),
             rng=rng,
+            return_metadata=True,
         )
+        surface_points_by_instance[inst_id] = surface_points
+        surface_triangle_ids_by_instance[inst_id] = sample_triangle_ids
+        surface_barycentrics_by_instance[inst_id] = sample_barycentrics
 
     return InstanceMeshData(
         vertices=np.asarray(vertices, dtype=np.float64),
@@ -379,6 +492,8 @@ def load_instance_mesh_data(
         triangle_ids_by_instance=triangle_arrays,
         boundary_triangle_ids_by_instance=boundary_arrays,
         surface_points_by_instance=surface_points_by_instance,
+        surface_triangle_ids_by_instance=surface_triangle_ids_by_instance,
+        surface_barycentrics_by_instance=surface_barycentrics_by_instance,
     )
 
 
