@@ -37,6 +37,34 @@ def make_object(obj_id: int, label: str) -> dict:
 
 
 class RunVlmReferabilityTests(unittest.TestCase):
+    def test_frame_prompt_focuses_on_focus_quality_only(self) -> None:
+        prompt = referability_module._frame_prompt().lower()
+
+        self.assertIn("focus", prompt)
+        self.assertIn("out of focus", prompt)
+        self.assertIn("only about image focus quality", prompt)
+        self.assertNotIn("spatial-reasoning", prompt)
+
+    def test_frame_decision_propagates_focus_result(self) -> None:
+        with patch.object(
+            referability_module,
+            "_call_vlm_json",
+            return_value=({"frame_usable": False, "reason": "out_of_focus"}, ""),
+        ):
+            decision = referability_module._frame_decision(
+                client=object(),
+                model="fake-model",
+                image=np.zeros((2, 2, 3), dtype=np.uint8),
+            )
+
+        self.assertEqual(
+            decision,
+            {
+                "frame_usable": False,
+                "reason": "out_of_focus",
+            },
+        )
+
     def test_resolve_referable_object_ids_separates_ambiguous_labels(self) -> None:
         referable_ids, ambiguous = referability_module._resolve_referable_object_ids(
             {"lamp": "unique", "cup": "unique", "chair": "multiple"},

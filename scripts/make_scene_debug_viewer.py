@@ -651,7 +651,7 @@ def render_frame_section(frame: dict[str, Any], index: int) -> str:
     image_block = f'<div class="imgwrap"><img src="{h(frame["image_uri"])}" alt="{h(frame["image_name"])}"></div>' if frame["image_uri"] else '<div class="imgwrap img-missing">这一帧缺少图像文件。</div>'
     return (
         f'<section class="card frame" id="frame-{index}"><h2>{h(frame["image_name"])}</h2>'
-        f'<div class="metrics"><div class="metric"><div class="k">VLM</div><div class="v">通过</div><div class="s">{h(frame["frame_reject_reason"] or "该帧已通过 referability")}</div></div>'
+        f'<div class="metrics"><div class="metric"><div class="k">VLM</div><div class="v">通过</div><div class="s">{h(frame["frame_reject_reason"] or "该帧已通过焦点检查")}</div></div>'
         f'<div class="metric"><div class="k">Pipeline</div><div class="v">{len(frame["pipeline_visible_ids"])}</div><div class="s">{h(zh_skip_reason(frame["pipeline_skip_reason"]))}</div></div>'
         f'<div class="metric"><div class="k">VLM 唯一对象</div><div class="v">{len(frame["referable_object_ids"])}</div><div class="s">几何候选={len(frame["selector_visible_object_ids"])}</div></div>'
         f'<div class="metric"><div class="k">题目数</div><div class="v">{len(frame["questions"])}</div><div class="s">错题={frame["question_wrong"]}</div></div></div>'

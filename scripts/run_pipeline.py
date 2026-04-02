@@ -58,7 +58,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
-EXPECTED_REFERABILITY_CACHE_VERSION = "6.0"
+EXPECTED_REFERABILITY_CACHE_VERSION = "7.0"
 QUESTION_ANSWER_REVIEW_TYPES = {
     "direction_agent",
     "occlusion",

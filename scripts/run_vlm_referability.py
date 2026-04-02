@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""VLM-based frame and label-status referability prefilter.
+"""VLM-based frame-focus and label-status referability prefilter.
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
-  1. whether the frame is usable for spatial reasoning;
+  1. whether the frame passes an image-focus check;
   2. for batches of candidate labels, whether each label is absent, unique,
      multiple, or unsure in the image.
 
@@ -47,7 +47,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "6.0"
+REFERABILITY_CACHE_VERSION = "7.0"
 DEPTH_DISAMBIGUATION_MIN_WINNER_RATIO = 0.20
 DEPTH_DISAMBIGUATION_MIN_GAP = 0.15
 LABEL_STATUS_ABSENT = "absent"
@@ -110,10 +110,12 @@ def _call_vlm_json(
 def _frame_prompt() -> str:
     return (
         "You are given one original scene image. "
-        "Decide whether this frame is usable for object-level visual spatial-reasoning questions. "
-        "A usable frame should allow several scene objects to be recognized and referred to reliably from the image alone. "
-        "Reject frames that are too blurry, too dark, too unclear, or where most candidate objects are hard to identify or distinguish. "
-        'Answer with strict JSON only: {"frame_usable": true, "reason": "clear_scene"}'
+        "Decide whether the camera appears properly focused in this frame. "
+        "This check is only about image focus quality. "
+        "Mark frame_usable=true only when the image looks in focus and there is no obvious autofocus failure, defocus blur, or globally soft focus. "
+        "Mark frame_usable=false when the image looks unfocused, out of focus, or the camera clearly failed to lock focus. "
+        "Do not judge whether the frame is good for question generation, object coverage, or scene semantics. "
+        'Answer with strict JSON only: {"frame_usable": true, "reason": "in_focus"}'
     )
 
 
@@ -188,7 +190,7 @@ def _frame_decision(
     full_b64 = _image_to_base64(image)
     default = {
         "frame_usable": True,
-        "reason": "vlm_parse_fallback",
+        "reason": "focus_check_parse_fallback",
     }
     parsed, _raw_text = _call_vlm_json(
         client,
