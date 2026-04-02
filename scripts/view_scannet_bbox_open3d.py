@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.scene_parser import parse_scene
+from src.scene_parser import load_scannet_label_map, parse_scene
 from src.utils.colmap_loader import load_axis_alignment
 
 
@@ -34,6 +34,15 @@ def parse_args() -> argparse.Namespace:
         "--scene_dir",
         type=Path,
         help="Path to a raw ScanNet scene directory such as scans/scene0000_00.",
+    )
+    parser.add_argument(
+        "--label_map",
+        type=Path,
+        default=None,
+        help=(
+            "Optional path to scannetv2-labels.combined.tsv so raw-scene label "
+            "normalization matches the main pipeline."
+        ),
     )
 
     parser.add_argument(
@@ -302,6 +311,9 @@ def resolve_scene_from_raw_dir(
 
 def main() -> None:
     args = parse_args()
+
+    if args.label_map is not None:
+        load_scannet_label_map(args.label_map)
 
     if args.scene_metadata is not None:
         scene_id, objects, mesh_path, axis_alignment = resolve_scene_from_metadata(

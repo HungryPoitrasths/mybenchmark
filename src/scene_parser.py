@@ -93,6 +93,7 @@ def load_scannet_label_map(tsv_path: str | Path) -> None:
             if raw and nyu:
                 mapping[raw] = nyu
     _SCANNET_LABEL_MAP = mapping
+    _refresh_excluded_labels()
     logger.info("Loaded %d label mappings from %s", len(mapping), tsv_path.name)
 
 
@@ -113,7 +114,10 @@ def normalize_label(label: str) -> str:
 
 
 # Hard blacklist shared across parsing, question generation, and filtering.
-EXCLUDED_LABELS = {
+# Keep the effective blacklist closed under both built-in normalization and
+# the optional ScanNet TSV mapping so raw-scene visualization and label-mapped
+# pipeline runs cannot disagree on whether a category is excluded.
+_BASE_EXCLUDED_LABELS = {
     # Structural / architectural
     "floor", "wall", "ceiling", "room", "ground",
     "door", "window", "stairs", "pillar", "column",
@@ -124,17 +128,48 @@ EXCLUDED_LABELS = {
     "", "object", "otherfurniture", "otherprop", "otherstructure",
     "unknown", "misc", "stuff",
     # Reflective / transparent — depth sensor unreliable
-    "mirror", "glass", "monitor", "tv",
+    "mirror", "glass", "monitor", "tv", "television",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
     "person", "people", "human", "man", "woman", "boy", "girl", "child", "children",
     # Boundary-unclear / large amorphous / historically noisy labels
     "blanket", "cloth", "clothes", "clothing", "refridgerator", "rug",
+    "lamp",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
     "can", "water bottle", "paper cutter",
 }
+
+def _excluded_label_closure() -> set[str]:
+    closure: set[str] = set()
+    pending = [str(label).strip().lower() for label in _BASE_EXCLUDED_LABELS]
+    while pending:
+        label = pending.pop()
+        if label in closure:
+            continue
+        closure.add(label)
+
+        builtin = LABEL_NORMALIZE.get(label, label)
+        if builtin not in closure:
+            pending.append(builtin)
+
+        if _SCANNET_LABEL_MAP:
+            mapped = _SCANNET_LABEL_MAP.get(label)
+            if mapped and mapped not in closure:
+                pending.append(mapped)
+    return closure
+
+
+EXCLUDED_LABELS: set[str] = set()
+
+
+def _refresh_excluded_labels() -> None:
+    EXCLUDED_LABELS.clear()
+    EXCLUDED_LABELS.update(_excluded_label_closure())
+
+
+_refresh_excluded_labels()
 
 # Backward-compatible alias for older imports; prefer EXCLUDED_LABELS.
 ALWAYS_EXCLUDED = EXCLUDED_LABELS

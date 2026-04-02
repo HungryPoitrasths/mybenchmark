@@ -470,6 +470,7 @@ def main():
 
     if args.label_map:
         load_scannet_label_map(args.label_map)
+        EXCLUDED_LABELS = set(SCENE_EXCLUDED_LABELS)
 
     from openai import OpenAI
 
