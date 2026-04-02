@@ -80,6 +80,106 @@ class SupportGraphHeuristicTests(unittest.TestCase):
         self.assertIsNotNone(_supported_by_metrics(child_small_penetration, parent))
         self.assertIsNone(_supported_by_metrics(child_far_below, parent))
 
+    def test_supported_by_enclosed_bbox_fallback_detects_boxed_in_book_on_table(self) -> None:
+        parent = make_object(
+            10,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 0.2, 0.2),
+                "area": 0.04,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.55, 0.55, 1.0),
+            (0.95, 0.95, 1.08),
+            bottom_hull_xy=_rect(0.55, 0.55, 0.95, 0.95),
+        )
+
+        metrics = _supported_by_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["type"], "supported_by")
+        self.assertEqual(metrics["evidence"]["geometry_contact"]["mode"], "enclosed_bbox_fallback")
+        self.assertAlmostEqual(metrics["evidence"]["geometry_contact"]["bottom_lift"], 1.0)
+        self.assertAlmostEqual(metrics["evidence"]["geometry_contact"]["bbox_top_gap"], 0.0)
+        self.assertAlmostEqual(metrics["evidence"]["geometry_contact"]["z_tolerance"], 0.05)
+        self.assertAlmostEqual(metrics["evidence"]["geometry_contact"]["under_tolerance"], 0.03)
+
+    def test_supported_by_enclosed_bbox_fallback_rejects_container_parent(self) -> None:
+        parent = make_object(
+            10,
+            "bin",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 0.2, 0.2),
+                "area": 0.04,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.55, 0.55, 1.0),
+            (0.95, 0.95, 1.08),
+            bottom_hull_xy=_rect(0.55, 0.55, 0.95, 0.95),
+        )
+
+        self.assertIsNone(_supported_by_metrics(child, parent))
+
+    def test_supported_by_enclosed_bbox_fallback_requires_minimum_bottom_lift(self) -> None:
+        parent = make_object(
+            10,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.55),
+            top_surface_candidates=[{
+                "z": 0.55,
+                "hull_xy": _rect(0.0, 0.0, 0.2, 0.2),
+                "area": 0.04,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.45, 0.45, 0.49),
+            (0.85, 0.85, 0.57),
+            bottom_hull_xy=_rect(0.45, 0.45, 0.85, 0.85),
+        )
+
+        self.assertIsNone(_supported_by_metrics(child, parent))
+
+    def test_supported_by_enclosed_bbox_fallback_rejects_objects_too_deep_inside_parent(self) -> None:
+        parent = make_object(
+            10,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.3),
+            top_surface_candidates=[{
+                "z": 1.3,
+                "hull_xy": _rect(0.0, 0.0, 0.2, 0.2),
+                "area": 0.04,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.45, 0.45, 0.95),
+            (0.85, 0.85, 1.03),
+            bottom_hull_xy=_rect(0.45, 0.45, 0.85, 0.85),
+        )
+
+        self.assertIsNone(_supported_by_metrics(child, parent))
+
     def test_contained_in_uses_parent_opening_polygon_instead_of_bbox(self) -> None:
         parent = make_object(
             10,

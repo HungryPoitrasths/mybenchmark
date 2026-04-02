@@ -21,6 +21,11 @@ HULL_CHILD_COVERAGE_MIN = 0.20
 SOFT_HULL_CHILD_COVERAGE_MIN = 0.12
 SOFT_FALLBACK_CHILD_COVERAGE_MIN = 0.18
 GEOM_EPS = 1e-8
+ENCLOSED_SUPPORT_CHILD_COVERAGE_MIN = 0.85
+ENCLOSED_SUPPORT_BOTTOM_LIFT_MIN = 0.50
+ENCLOSED_SUPPORT_PARENT_TOP_GAP_MAX = 0.20
+ENCLOSED_SUPPORT_TOP_OVERSHOOT_MAX = 0.05
+ENCLOSED_SUPPORT_CONFIDENCE_MAX = 0.74
 
 SUPPORT_LIKE_TYPES = {
     "supported_by",
@@ -227,6 +232,13 @@ def _bbox_xy_polygon(obj: dict) -> np.ndarray:
     ], dtype=float)
 
 
+def _bottom_support_polygon(obj: dict) -> tuple[np.ndarray, str]:
+    hull = _support_face_polygon(obj, "bottom_hull_xy")
+    if len(hull) >= 3:
+        return hull, "bottom_hull_xy"
+    return _bbox_xy_polygon(obj), "bbox"
+
+
 def _point_in_convex_polygon(point: np.ndarray, poly: np.ndarray) -> bool:
     if len(poly) < 3:
         return False
@@ -417,6 +429,78 @@ def _containment_prior(parent_label: str, child_label: str) -> float:
     return 0.0
 
 
+def _enclosed_support_fallback_metrics(
+    obj_a: dict,
+    obj_b: dict,
+    z_threshold: float | None = None,
+) -> dict[str, Any] | None:
+    child_label = _label(obj_a)
+    parent_label = _label(obj_b)
+    if parent_label in CONTAINER_PARENT_LABELS or parent_label in SOFT_PARENT_LABELS:
+        return None
+    if _containment_prior(parent_label, child_label) > 0.0:
+        return None
+
+    child_hull, child_source = _bottom_support_polygon(obj_a)
+    child_area = _polygon_area(child_hull)
+    if child_area <= GEOM_EPS:
+        return None
+
+    parent_bbox_poly = _bbox_xy_polygon(obj_b)
+    overlap_area = _convex_intersection_area(child_hull, parent_bbox_poly)
+    xy_coverage = overlap_area / max(child_area, GEOM_EPS)
+    if xy_coverage < ENCLOSED_SUPPORT_CHILD_COVERAGE_MIN:
+        return None
+
+    child_center = np.asarray(obj_a["center"], dtype=float)
+    if not _point_in_convex_polygon(child_center[:2], parent_bbox_poly):
+        return None
+
+    child_min = np.asarray(obj_a["bbox_min"], dtype=float)
+    parent_min = np.asarray(obj_b["bbox_min"], dtype=float)
+    parent_max = np.asarray(obj_b["bbox_max"], dtype=float)
+
+    bottom_lift = float(child_min[2] - parent_min[2])
+    if bottom_lift < ENCLOSED_SUPPORT_BOTTOM_LIFT_MIN:
+        return None
+
+    signed_gap = float(child_min[2] - parent_max[2])
+    if signed_gap > ENCLOSED_SUPPORT_TOP_OVERSHOOT_MAX:
+        return None
+
+    upper_band_gap_max = float(min(
+        ENCLOSED_SUPPORT_PARENT_TOP_GAP_MAX,
+        _vertical_tolerance(obj_a, obj_b, z_threshold),
+    ))
+    bbox_top_gap = float(max(parent_max[2] - child_min[2], 0.0))
+    if bbox_top_gap > upper_band_gap_max:
+        return None
+
+    gap = abs(signed_gap)
+    parent_area = _polygon_area(parent_bbox_poly)
+    return {
+        "gap": float(gap),
+        "signed_gap": float(signed_gap),
+        "z_tol": float(ENCLOSED_SUPPORT_TOP_OVERSHOOT_MAX),
+        "under_tol": float(upper_band_gap_max),
+        "contact_z_parent": float(parent_max[2]),
+        "contact_z_child": float(child_min[2]),
+        "aabb_overlap_area": float(overlap_area),
+        "aabb_child_coverage": float(xy_coverage),
+        "hull_overlap_area": float(overlap_area),
+        "hull_child_coverage": float(xy_coverage),
+        "coverage_score": float(xy_coverage),
+        "overlap_score": float(overlap_area),
+        "used_hull": bool(child_source == "bottom_hull_xy"),
+        "surface_area": float(parent_area),
+        "surface_score": 0.0,
+        "mode": "enclosed_bbox_fallback",
+        "bottom_lift": float(bottom_lift),
+        "bbox_top_gap": float(bbox_top_gap),
+        "uses_parent_bbox_xy": True,
+    }
+
+
 def _affixed_prior(parent_label: str, child_label: str) -> float:
     if (child_label, parent_label) in AFFIXED_PRIORS:
         return 1.0
@@ -428,19 +512,29 @@ def _affixed_prior(parent_label: str, child_label: str) -> float:
 def _surface_evidence(
     obj_a: dict,
     obj_b: dict,
-    metrics: dict[str, float | bool],
+    metrics: dict[str, Any],
     *,
     semantic_score: float = 0.0,
 ) -> dict[str, Any]:
+    geometry_contact = {
+        "z_gap": float(metrics["gap"]),
+        "signed_z_gap": float(metrics["signed_gap"]),
+        "contact_z_parent": float(metrics["contact_z_parent"]),
+        "contact_z_child": float(metrics["contact_z_child"]),
+        "z_tolerance": float(metrics["z_tol"]),
+        "under_tolerance": float(metrics["under_tol"]),
+    }
+    if "mode" in metrics:
+        geometry_contact["mode"] = str(metrics["mode"])
+    if "bottom_lift" in metrics:
+        geometry_contact["bottom_lift"] = float(metrics["bottom_lift"])
+    if "bbox_top_gap" in metrics:
+        geometry_contact["bbox_top_gap"] = float(metrics["bbox_top_gap"])
+    if "uses_parent_bbox_xy" in metrics:
+        geometry_contact["uses_parent_bbox_xy"] = bool(metrics["uses_parent_bbox_xy"])
+
     return {
-        "geometry_contact": {
-            "z_gap": float(metrics["gap"]),
-            "signed_z_gap": float(metrics["signed_gap"]),
-            "contact_z_parent": float(metrics["contact_z_parent"]),
-            "contact_z_child": float(metrics["contact_z_child"]),
-            "z_tolerance": float(metrics["z_tol"]),
-            "under_tolerance": float(metrics["under_tol"]),
-        },
+        "geometry_contact": geometry_contact,
         "xy_overlap": {
             "child_coverage": float(metrics["coverage_score"]),
             "aabb_child_coverage": float(metrics["aabb_child_coverage"]),
@@ -463,15 +557,39 @@ def _supported_by_metrics(
 ) -> dict[str, Any] | None:
     metrics = _support_metrics(obj_a, obj_b, z_threshold)
     if metrics is None:
+        metrics = _enclosed_support_fallback_metrics(obj_a, obj_b, z_threshold)
+    if metrics is None:
         return None
-    gap_score = float(np.clip(1.0 - float(metrics["gap"]) / max(float(metrics["z_tol"]), GEOM_EPS), 0.0, 1.0))
-    confidence = float(np.clip(
-        0.60 * float(metrics["coverage_score"]) +
-        0.25 * gap_score +
-        0.15 * float(metrics["aabb_child_coverage"]),
-        0.0,
-        1.0,
-    ))
+
+    if str(metrics.get("mode", "")) == "enclosed_bbox_fallback":
+        gap_tolerance = float(metrics["z_tol"])
+        if float(metrics["signed_gap"]) < 0.0:
+            gap_tolerance = float(metrics["under_tol"])
+        gap_score = float(np.clip(
+            1.0 - float(metrics["gap"]) / max(gap_tolerance, GEOM_EPS),
+            0.0,
+            1.0,
+        ))
+        # The bottom-lift threshold is already a hard gate for this fallback,
+        # so passing pairs receive the full lift contribution.
+        lift_score = 1.0
+        confidence = float(min(np.clip(
+            0.55 * float(metrics["coverage_score"]) +
+            0.35 * gap_score +
+            0.10 * lift_score,
+            0.0,
+            1.0,
+        ), ENCLOSED_SUPPORT_CONFIDENCE_MAX))
+    else:
+        gap_score = float(np.clip(1.0 - float(metrics["gap"]) / max(float(metrics["z_tol"]), GEOM_EPS), 0.0, 1.0))
+        confidence = float(np.clip(
+            0.60 * float(metrics["coverage_score"]) +
+            0.25 * gap_score +
+            0.15 * float(metrics["aabb_child_coverage"]),
+            0.0,
+            1.0,
+        ))
+
     return {
         "type": "supported_by",
         "confidence": confidence,
@@ -523,11 +641,7 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     if prior <= 0.0:
         return None
 
-    child_hull = _support_face_polygon(obj_a, "bottom_hull_xy")
-    child_source = "bottom_hull_xy"
-    if len(child_hull) < 3:
-        child_hull = _bbox_xy_polygon(obj_a)
-        child_source = "bbox"
+    child_hull, child_source = _bottom_support_polygon(obj_a)
     parent_hull, parent_source = _largest_top_surface_polygon(obj_b)
 
     child_area = _polygon_area(child_hull)
