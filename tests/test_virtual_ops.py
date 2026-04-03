@@ -4,6 +4,7 @@ import numpy as np
 
 from src.utils.colmap_loader import CameraPose
 from src.virtual_ops import (
+    apply_removal,
     find_meaningful_movement,
     find_meaningful_orbit_rotation,
     has_terminal_bbox_collision,
@@ -98,6 +99,16 @@ class VirtualOpsRoomAndCollisionTests(unittest.TestCase):
 
 
 class VirtualOpsIntegrationTests(unittest.TestCase):
+    def test_apply_removal_only_removes_target_object(self) -> None:
+        objects = [
+            make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1)),
+            make_object(2, (1.0, 0.0, 0.0), (0.9, -0.1, -0.1), (1.1, 0.1, 0.1)),
+        ]
+
+        remaining = apply_removal(objects, 1)
+
+        self.assertEqual([obj["id"] for obj in remaining], [2])
+        self.assertIsNot(remaining[0], objects[1])
     def test_find_meaningful_movement_skips_bbox_out_of_room_candidate(self) -> None:
         objects = [
             make_object(1, (0.75, 0.0, 0.0), (0.5, -0.1, -0.1), (1.0, 0.1, 0.1), label="mover"),

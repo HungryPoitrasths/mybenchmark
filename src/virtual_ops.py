@@ -412,22 +412,13 @@ def apply_viewpoint_change(
 
 def apply_removal(
     objects: list[dict],
-    attachment_graph: dict[int, list[int]],
     target_id: int,
-    cascade: bool = False,
 ) -> list[dict]:
     """Remove an object from the scene.
 
-    If *cascade* is True, objects transitively attached to the removed object
-    are also removed. Otherwise only the target is removed.
-
     Returns a new (deep-copied) object list.
     """
-    to_remove = {target_id}
-    if cascade:
-        to_remove.update(get_attachment_chain(target_id, attachment_graph))
-
-    return [copy.deepcopy(o) for o in objects if o["id"] not in to_remove]
+    return [copy.deepcopy(o) for o in objects if o["id"] != target_id]
 
 
 # ---------------------------------------------------------------------------

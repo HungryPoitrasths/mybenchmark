@@ -23,11 +23,6 @@ Usage:
         --output output/pilot_meshray/attachment_viewer.html \
         --attachment_only
 
-    python scripts/make_viewer.py \
-        --questions output/pilot_cascade/benchmark.json \
-        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
-        --output output/pilot_cascade/attachment_viewer.html \
-        --attachment_only
 """
 
 from __future__ import annotations

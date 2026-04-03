@@ -612,7 +612,7 @@ def run_single_frame_trace(
     referability_cache: dict | None = None,
     referability_cache_path: Path | None = None,
     use_occlusion: bool = True,
-    occlusion_backend: str = "cascade",
+    occlusion_backend: str = "mesh_ray",
     use_occlusion_vlm: bool = False,
     vlm_url: str | None = None,
     vlm_model: str | None = None,
@@ -694,7 +694,7 @@ def run_single_frame_trace(
             if use_occlusion_vlm else None
         )
         needs_mesh_resources = (
-            occlusion_backend in ("depth", "mesh_ray", "cascade")
+            occlusion_backend in ("depth", "mesh_ray")
             or occlusion_vlm_adjudicator is not None
         )
         preloaded_geometry = None
@@ -1149,8 +1149,8 @@ def main() -> None:
     parser.add_argument(
         "--occlusion_backend",
         type=str,
-        choices=("depth", "mesh_ray", "cascade"),
-        default="cascade",
+        choices=("depth", "mesh_ray"),
+        default="mesh_ray",
     )
     parser.add_argument("--use_occlusion_vlm", action="store_true")
     parser.add_argument("--vlm_url", type=str, default=DEFAULT_VLM_URL)

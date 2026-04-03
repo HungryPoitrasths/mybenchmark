@@ -61,7 +61,7 @@ For v1:
 For v1:
 
 - removal does **not** propagate through the attachment graph
-- `object_remove` should not use attachment edges for cascade deletion
+- `object_remove` should not use attachment edges for transitive deletion
 
 Rationale:
 
@@ -437,7 +437,7 @@ Options:
 
 ### 10.3 `object_remove`
 
-Should not use `attachment_graph` for cascade removal in v1.
+Should not use `attachment_graph` for transitive removal in v1.
 
 Behavior:
 
@@ -532,4 +532,3 @@ The following should not be attempted in the first migration:
    - `contained_in`
    - `affixed_to`
 7. The first implementation step is to replace the `bbox_max[2]` top-slice assumption with candidate contact plateaus.
-

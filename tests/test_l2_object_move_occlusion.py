@@ -5,6 +5,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.qa_generator import (
+    _counterfactual_occlusion_backend,
     _find_object_move_occlusion_changes,
     _make_l1_occlusion_metrics,
     generate_l2_object_move,
@@ -81,6 +82,14 @@ def make_l1_metrics(status: str):
 
 
 class L2ObjectMoveOcclusionTests(unittest.TestCase):
+    def test_counterfactual_occlusion_backend_rejects_unsupported_backend(self) -> None:
+        with self.assertRaisesRegex(ValueError, "legacy_backend"):
+            _counterfactual_occlusion_backend(
+                "legacy_backend",
+                ray_caster=object(),
+                instance_mesh_data=SimpleNamespace(),
+            )
+
     def test_find_object_move_occlusion_changes_tracks_l1_style_changes_for_moved_targets_only(self) -> None:
         objects = [
             make_object(1, "sofa", (0.0, 0.0, 2.0)),

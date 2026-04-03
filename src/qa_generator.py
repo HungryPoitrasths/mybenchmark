@@ -1698,28 +1698,8 @@ def _compute_l1_style_visibility_metrics_for_static_target(
     modified_scene: _ModifiedSceneContext | None = None,
 ) -> tuple[_L1OcclusionMetrics, str]:
     backend = str(occlusion_backend)
-    if backend == "cascade" and modified_scene is None:
-        cascade_depth_metrics = _compute_l1_occlusion_metrics(
-            obj=obj,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-            occlusion_backend="depth",
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
-        )
-        if _should_retry_l1_with_mesh_ray(cascade_depth_metrics):
-            mesh_metrics = _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
-                obj=obj,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
-            )
-            if mesh_metrics.decision in {"not occluded", "occluded", "grayzone"}:
-                return mesh_metrics, "cascade_mesh_ray"
-        return cascade_depth_metrics, "cascade_depth"
+    if backend not in {"depth", "mesh_ray"}:
+        raise ValueError(f"Unsupported occlusion backend: {backend}")
 
     if backend == "depth" and modified_scene is None:
         return (
@@ -1984,59 +1964,18 @@ def generate_l1_occlusion_questions(
         vlm_count: int | None,
     ) -> None:
         obj_id = int(obj["id"])
-        cascade_used_mesh_ray = False
-        cascade_depth_metrics: _L1OcclusionMetrics | None = None
-
-        if str(occlusion_backend) == "cascade":
-            cascade_depth_metrics = _compute_l1_occlusion_metrics(
-                obj=obj,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-                occlusion_backend="depth",
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
-            )
-            metrics = cascade_depth_metrics
-            source_used = "cascade_depth"
-            grayzone_fallback_source = "cascade_depth_grayzone_fallback"
-
-            if _should_retry_l1_with_mesh_ray(cascade_depth_metrics):
-                cascade_used_mesh_ray = True
-                mesh_metrics = _compute_l1_occlusion_metrics(
-                    obj=obj,
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                    depth_image=depth_image,
-                    depth_intrinsics=depth_intrinsics,
-                    occlusion_backend="mesh_ray",
-                    ray_caster=ray_caster,
-                    instance_mesh_data=instance_mesh_data,
-                )
-                if mesh_metrics.decision in {"not occluded", "occluded"}:
-                    metrics = mesh_metrics
-                    source_used = "cascade_mesh_ray"
-                    grayzone_fallback_source = "cascade_mesh_ray_grayzone_fallback"
-                elif mesh_metrics.decision == "grayzone":
-                    metrics = mesh_metrics
-                    source_used = "cascade_mesh_ray"
-                    grayzone_fallback_source = "cascade_mesh_ray_grayzone_fallback"
-                else:
-                    return
-        else:
-            metrics = _compute_l1_occlusion_metrics(
-                obj=obj,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-                occlusion_backend=occlusion_backend,
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
-            )
-            source_used = source
-            grayzone_fallback_source = "geometry_grayzone_fallback"
+        metrics = _compute_l1_occlusion_metrics(
+            obj=obj,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            occlusion_backend=occlusion_backend,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        source_used = source
+        grayzone_fallback_source = "geometry_grayzone_fallback"
 
         decision, source_used, overlay_available = _resolve_l1_occlusion_decision(
             obj_id=obj_id,
@@ -2073,17 +2012,6 @@ def generate_l1_occlusion_questions(
                     "geometry_sufficient_evidence": metrics.sufficient_evidence,
                     "geometry_backend": metrics.backend,
                     "mask_overlay_available": overlay_available,
-                    "cascade_used_mesh_ray": cascade_used_mesh_ray,
-                    "cascade_depth_decision": (
-                        cascade_depth_metrics.decision
-                        if cascade_depth_metrics is not None
-                        else None
-                    ),
-                    "cascade_depth_occlusion_ratio": (
-                        cascade_depth_metrics.occlusion_ratio_in_frame
-                        if cascade_depth_metrics is not None
-                        else None
-                    ),
                 },
             )
         )
@@ -3131,13 +3059,13 @@ def _counterfactual_occlusion_backend(
     with a newly rendered depth map.
     """
     requested_backend = str(occlusion_backend)
-    if requested_backend not in {"depth", "mesh_ray", "cascade"}:
+    if requested_backend not in {"depth", "mesh_ray"}:
         raise ValueError(f"Unsupported occlusion backend: {requested_backend}")
     if ray_caster is None or instance_mesh_data is None:
         raise RuntimeError(
-            "Counterfactual visibility requires mesh geometry for depth, cascade, and mesh_ray backends",
+            "Counterfactual visibility requires mesh geometry for depth and mesh_ray backends",
         )
-    if requested_backend in {"depth", "cascade"}:
+    if requested_backend == "depth":
         logger.debug(
             "Counterfactual visibility requested with %s backend; falling back to mesh_ray because no counterfactual depth map exists.",
             requested_backend,
@@ -4343,7 +4271,7 @@ def generate_l2_object_remove(
     generated_candidate_count = 0
     reason_counts: Counter[str] = Counter()
     for obj in objects:
-        remaining = apply_removal(objects, attachment_graph, obj["id"], cascade=False)
+        remaining = apply_removal(objects, obj["id"])
         if len(remaining) < 2:
             reason_counts["removal_leaves_too_few_objects"] += 1
             _emit_generator_candidate(
@@ -5697,7 +5625,7 @@ def generate_all_questions(
     color_intrinsics: CameraIntrinsics | None = None,
     depth_image=None,
     depth_intrinsics=None,
-    occlusion_backend: str = "cascade",
+    occlusion_backend: str = "mesh_ray",
     ray_caster=None,
     instance_mesh_data: InstanceMeshData | None = None,
     templates: dict | None = None,
