@@ -271,7 +271,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 "image_b64": "ZnVsbA==",
                 "mime": "image/jpeg",
             },
-            {"question": "Where is the cup relative to the table?"},
+            {"question": "Where is the cup relative to the table?", "type": "direction_agent"},
             [
                 {
                     "label": "cup",
@@ -305,7 +305,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         content = create_kwargs["messages"][0]["content"]
         self.assertEqual(sum(1 for item in content if item["type"] == "image_url"), 4)
         self.assertIn('"obj_id": 1', content[-1]["text"])
-        self.assertIn("component/substructure", content[-1]["text"])
+        self.assertNotIn("component/substructure", content[-1]["text"])
+        self.assertIn("clearly shows the annotated object", content[-1]["text"])
+        self.assertIn("local part of a larger furniture assembly", content[-1]["text"])
         self.assertEqual(review["object_reviews"][0]["obj_id"], 1)
         self.assertEqual(review["object_reviews"][1]["status"], "absent")
         self.assertEqual(review["object_reviews"][2]["status"], "unsure")

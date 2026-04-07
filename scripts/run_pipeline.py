@@ -775,9 +775,9 @@ def _question_presence_prompt(
         "You will receive the full scene image first, followed by one crop for each target instance.\n"
         "Use the crop as the primary evidence and the full image only as context.\n"
         "Judge each obj_id independently.\n"
-        "Return present only when the crop and the full image clearly show that exact instance as a standalone instance of the given label.\n"
-        "Do not treat a desk surface, drawer pedestal, cabinet door, shelf section, or other component/substructure of one composite furniture item as a separate standalone object for another label.\n"
-        "If a crop might show only a component of a larger furniture item, return unsure instead of present.\n"
+        "Return present only when the crop clearly shows the annotated object and it matches the target label.\n"
+        "Do not reject solely because the visible object is a local part of a larger furniture assembly.\n"
+        "If the annotation defines that visible local object as the target label and it is clearly visible, present is allowed.\n"
         "If the instance does not appear, return absent. If you cannot decide confidently, return unsure.\n"
         "Return strict JSON only with this schema:\n"
         '{"objects":[{"obj_id":42,"status":"present","reason":"short reason"}]}\n'
