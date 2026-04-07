@@ -157,6 +157,10 @@ ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = [label for _, label in DISTANCE_BINS]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
+OCCLUSION_DEFINITION_NOTE = (
+    "Here, 'occluded' means blocked by another object; being partly outside "
+    "the image frame does not count as occlusion."
+)
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.1
 DISTANCE_MOVE_SEARCH_MAX_M = 3.0
@@ -711,9 +715,9 @@ def _default_templates() -> dict:
             "What is the approximate distance between {obj_a} and {obj_b}?",
         ],
         "L1_occlusion": [
-            "What is the occlusion status of {obj_a} in the current view?",
-            "From the current viewpoint, which best describes {obj_a}: not occluded, occluded, or not visible?",
-            "In the current image, is {obj_a} unoccluded, occluded by another object, or not visible?",
+            f"What is the occlusion status of {{obj_a}} in the current view? {OCCLUSION_DEFINITION_NOTE}",
+            f"From the current viewpoint, which best describes {{obj_a}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
+            f"In the current image, is {{obj_a}} unoccluded, occluded by another object, or not visible? {OCCLUSION_DEFINITION_NOTE}",
         ],
 
         # --- Object-centric ---
@@ -740,17 +744,17 @@ def _default_templates() -> dict:
             "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
         ],
         "L2_object_move_occlusion": [
-            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the occlusion status of {obj_b}?",
-            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, which best describes {obj_b}: not occluded, occluded, or not visible?",
+            f"From the camera's perspective, imagine moving {{obj_a}} {{direction_with_camera_hint}} by {{distance}}. After this change, what is the occlusion status of {{obj_b}}? {OCCLUSION_DEFINITION_NOTE}",
+            f"From the camera's perspective, if {{obj_a}} is moved {{direction_with_camera_hint}} by {{distance}}, which best describes {{obj_b}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
         ],
         "L2_viewpoint_move": [
-            "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {obj_a}?",
-            "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, which best describes {obj_a}: not occluded, occluded, or not visible?",
-            "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, is {obj_a} not occluded, occluded, or not visible?",
+            f"If the camera translates {{direction_with_camera_hint}} by {{distance}} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {{obj_a}}? {OCCLUSION_DEFINITION_NOTE}",
+            f"After the camera moves {{direction_with_camera_hint}} by {{distance}} without changing its viewing direction, which best describes {{obj_a}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
+            f"If the camera shifts {{direction_with_camera_hint}} by {{distance}} with no change in intrinsics or orientation, is {{obj_a}} not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
         ],
         "L2_object_remove": [
-            "If {obj_a} were removed from the scene, what would be the occlusion status of {obj_b} from the current viewpoint?",
-            "After removing {obj_a}, which best describes {obj_b}: not occluded, occluded, or not visible?",
+            f"If {{obj_a}} were removed from the scene, what would be the occlusion status of {{obj_b}} from the current viewpoint? {OCCLUSION_DEFINITION_NOTE}",
+            f"After removing {{obj_a}}, which best describes {{obj_b}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
         ],
 
         # --- Object-centric ---
@@ -1060,7 +1064,7 @@ def _l1_occlusion_question(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tpl = random.choice(templates.get("L1_occlusion", _default_templates()["L1_occlusion"]))
-    question_text = tpl.format(obj_a=_the(label))
+    question_text = _with_occlusion_definition(tpl.format(obj_a=_the(label)))
     options, answer = generate_options(correct, L1_OCCLUSION_STATES, n_options=3)
     question = {
         "level": "L1",
@@ -1078,6 +1082,12 @@ def _l1_occlusion_question(
     if extra:
         question.update(extra)
     return question
+
+
+def _with_occlusion_definition(question_text: str) -> str:
+    if "does not count as occlusion" in question_text.lower():
+        return question_text
+    return f"{question_text} {OCCLUSION_DEFINITION_NOTE}"
 
 
 def _project_sample_point_records(
@@ -3920,6 +3930,7 @@ def generate_l2_object_move(
                     obj_b=_the(obj["label"]),
                     obj_target=_the(obj["label"]),
                 )
+                question_text = _with_occlusion_definition(question_text)
                 options, answer = generate_options(
                     query_new_status,
                     L1_OCCLUSION_STATES,
@@ -4148,6 +4159,7 @@ def generate_l2_viewpoint_move(
                     distance=f"{dist:.0f}m",
                     obj_a=_the(obj["label"]),
                 )
+                question_text = _with_occlusion_definition(question_text)
                 options, answer = generate_options(
                     new_status,
                     L1_OCCLUSION_STATES,
@@ -4389,6 +4401,7 @@ def generate_l2_object_remove(
                 obj_a=_the(obj["label"]),
                 obj_b=_the(other["label"]),
             )
+            question_text = _with_occlusion_definition(question_text)
             options, answer = generate_options(
                 new_status,
                 L1_OCCLUSION_STATES,

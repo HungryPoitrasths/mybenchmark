@@ -207,6 +207,8 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertNotIn("obj_c_id", question)
         self.assertNotIn("relative to", question["question"])
         self.assertNotIn("attachment", question["question"].lower())
+        self.assertIn("blocked by another object", question["question"])
+        self.assertIn("does not count as occlusion", question["question"])
 
     def test_generate_l2_object_move_skips_unchanged_attachment_occlusion_state(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))

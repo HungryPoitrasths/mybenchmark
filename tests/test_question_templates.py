@@ -6,6 +6,7 @@ import numpy as np
 from src.qa_generator import (
     _default_templates,
     _direction_with_camera_hint,
+    _l1_occlusion_question,
     _make_l1_occlusion_metrics,
     _normalize_template_aliases,
     generate_l2_object_remove,
@@ -146,6 +147,16 @@ class QuestionTemplateTests(unittest.TestCase):
             "backward (opposite its viewing direction)",
         )
 
+    def test_l1_occlusion_question_appends_definition_for_custom_templates(self) -> None:
+        question = _l1_occlusion_question(
+            label="lamp",
+            correct="occluded",
+            templates={"L1_occlusion": ["Is {obj_a} occluded?"]},
+        )
+
+        self.assertIn("blocked by another object", question["question"])
+        self.assertIn("does not count as occlusion", question["question"])
+
     def test_viewpoint_move_questions_use_camera_specific_backward_wording(self) -> None:
         camera_pose = make_camera_pose()
         intrinsics = make_camera_intrinsics()
@@ -192,6 +203,8 @@ class QuestionTemplateTests(unittest.TestCase):
             {"not occluded", "occluded", "not visible"},
         )
         self.assertEqual(len(questions[0]["options"]), 3)
+        self.assertIn("blocked by another object", questions[0]["question"])
+        self.assertIn("does not count as occlusion", questions[0]["question"])
 
     def test_object_remove_questions_use_l1_style_occlusion_options(self) -> None:
         camera_pose = make_camera_pose()
@@ -246,6 +259,8 @@ class QuestionTemplateTests(unittest.TestCase):
             {"not occluded", "occluded", "not visible"},
         )
         self.assertEqual(len(questions[0]["options"]), 3)
+        self.assertIn("blocked by another object", questions[0]["question"])
+        self.assertIn("does not count as occlusion", questions[0]["question"])
 
     def test_viewpoint_move_skips_grayzone_counterfactual_state(self) -> None:
         camera_pose = make_camera_pose()
