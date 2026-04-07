@@ -22,9 +22,12 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import cv2
+import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.frame_selector import compute_frame_object_visibility
 from src.scene_parser import (
     EXCLUDED_LABELS,
     _load_scene_geometry,
@@ -57,7 +60,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
-DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXPECTED_REFERABILITY_CACHE_VERSION = "7.0"
 QUESTION_ANSWER_REVIEW_TYPES = {
     "direction_agent",
@@ -70,6 +72,31 @@ QUESTION_ANSWER_REVIEW_TYPES = {
 }
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
+VLM_API_KEY_ENV_NAMES = ("DASHSCOPE_API_KEY", "OPENAI_API_KEY")
+PLACEHOLDER_VLM_API_KEY = "EMPTY"
+QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
+QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
+QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
+QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
+QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
+QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
+QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
+QUESTION_REVIEW_MAX_TOKENS_CAP = 1024
+QUESTION_MENTION_FALLBACK_FIELDS = (
+    ("obj_a_id", "obj_a_label", "obj_a"),
+    ("obj_b_id", "obj_b_label", "obj_b"),
+    ("obj_ref_id", "obj_ref_label", "obj_ref"),
+    ("obj_face_id", "obj_face_label", "obj_face"),
+    ("obj_target_id", "obj_target_label", "obj_target"),
+    ("moved_obj_id", "moved_obj_label", "moved_obj"),
+    ("query_obj_id", "query_obj_label", "query_obj"),
+    ("obj_c_id", "obj_c_label", "obj_c"),
+    ("removed_obj_id", "removed_obj_label", "removed_obj"),
+    ("grandparent_id", "grandparent_label", "grandparent"),
+    ("parent_id", "parent_label", "parent"),
+    ("grandchild_id", "grandchild_label", "grandchild"),
+    ("neighbor_id", "neighbor_label", "neighbor"),
+)
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -96,15 +123,6 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
     if isinstance(scene_frames, dict):
         return scene_frames.get(image_name)
     return frames.get(f"{scene_id}/{image_name}")
-
-
-def _image_to_base64(image) -> str:
-    import cv2
-
-    ok, buf = cv2.imencode(".jpg", image)
-    if not ok:
-        raise ValueError("Failed to encode image")
-    return base64.b64encode(buf.tobytes()).decode()
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -136,6 +154,34 @@ def _is_question_review_retryable_error(exc: Exception) -> bool:
     )
 
 
+def _is_authentication_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "401" in text
+        or "unauthorized" in text
+        or "authentication" in text
+        or "invalid api key" in text
+    )
+
+
+def _resolve_vlm_api_key(*, purpose: str, missing_key_hint: str | None = None) -> str:
+    for env_name in VLM_API_KEY_ENV_NAMES:
+        api_key = os.getenv(env_name)
+        if api_key:
+            return api_key
+
+    hint = f" {missing_key_hint}" if missing_key_hint else ""
+    logger.warning(
+        "%s is using placeholder API key %r because neither %s nor %s is set.%s",
+        purpose,
+        PLACEHOLDER_VLM_API_KEY,
+        VLM_API_KEY_ENV_NAMES[0],
+        VLM_API_KEY_ENV_NAMES[1],
+        hint,
+    )
+    return PLACEHOLDER_VLM_API_KEY
+
+
 def _call_question_review_vlm(create_fn, *, context: str):
     last_exc: Exception | None = None
     for attempt in range(1, QUESTION_REVIEW_MAX_RETRIES + 1):
@@ -143,6 +189,12 @@ def _call_question_review_vlm(create_fn, *, context: str):
             return create_fn()
         except Exception as exc:
             last_exc = exc
+            if _is_authentication_error(exc):
+                raise RuntimeError(
+                    f"{context} failed with an authentication error: {exc}. "
+                    "Set DASHSCOPE_API_KEY or OPENAI_API_KEY for the configured VLM endpoint, "
+                    "or disable this step with --no-question_presence_review."
+                ) from exc
             if not _is_question_review_retryable_error(exc) or attempt >= QUESTION_REVIEW_MAX_RETRIES:
                 raise
             delay_seconds = QUESTION_REVIEW_RETRY_DELAY_SECONDS * attempt
@@ -171,57 +223,627 @@ def _normalize_question_presence_status(value: object) -> str | None:
     return None
 
 
-def _collect_question_presence_labels(question: dict[str, object]) -> list[str]:
-    labels: list[str] = []
-    seen: set[str] = set()
+def _encode_review_image_to_base64(image: np.ndarray) -> str:
+    ok, buf = cv2.imencode(".jpg", image)
+    if not ok:
+        raise ValueError("Failed to encode review image")
+    return base64.b64encode(buf.tobytes()).decode()
 
-    def _add(label_value: object) -> None:
-        label = str(label_value or "").strip()
+
+def _collect_question_presence_targets(
+    question: dict[str, object],
+    objects_by_id: dict[int, dict[str, object]],
+) -> list[dict[str, object]]:
+    targets: list[dict[str, object]] = []
+    targets_by_obj_id: dict[int, dict[str, object]] = {}
+    unresolved_targets: dict[str, dict[str, object]] = {}
+
+    for idx, mention in enumerate(_iter_question_referability_mentions(question, objects_by_id)):
+        label = str(mention.get("label", "")).strip()
         label_key = label.lower()
-        if not label or label_key in EXCLUDED_LABELS or label_key in seen:
+        if label_key in EXCLUDED_LABELS:
+            continue
+        role = str(mention.get("role", "mentioned")).strip() or "mentioned"
+        obj_id = _coerce_object_id(mention.get("obj_id"))
+
+        if obj_id is not None:
+            target = targets_by_obj_id.get(obj_id)
+            if target is None:
+                target = {
+                    "sort_index": idx,
+                    "label": label,
+                    "obj_id": obj_id,
+                    "roles": [role],
+                }
+                targets_by_obj_id[obj_id] = target
+                targets.append(target)
+            else:
+                if not str(target.get("label", "")).strip() and label:
+                    target["label"] = label
+                if role not in target["roles"]:
+                    target["roles"].append(role)
+            continue
+
+        unresolved_key = label_key or f"unresolved:{idx}"
+        target = unresolved_targets.get(unresolved_key)
+        if target is None:
+            target = {
+                "sort_index": idx,
+                "label": label,
+                "obj_id": None,
+                "roles": [role],
+            }
+            unresolved_targets[unresolved_key] = target
+            targets.append(target)
+        elif role not in target["roles"]:
+            target["roles"].append(role)
+
+    normalized_targets: list[dict[str, object]] = []
+    for target in sorted(targets, key=lambda item: int(item.get("sort_index", 0))):
+        normalized_targets.append(
+            {
+                "label": str(target.get("label", "")).strip(),
+                "obj_id": _coerce_object_id(target.get("obj_id")),
+                "roles": sorted(
+                    {
+                        str(role).strip()
+                        for role in target.get("roles", [])
+                        if str(role).strip()
+                    }
+                ),
+            }
+        )
+    return normalized_targets
+
+
+def _normalize_label_to_object_ids(value: object) -> dict[str, list[int]]:
+    label_to_object_ids: dict[str, list[int]] = {}
+    if not isinstance(value, dict):
+        return label_to_object_ids
+    for key, obj_ids in value.items():
+        if not isinstance(key, str):
+            continue
+        label = key.strip().lower()
+        if not label:
+            continue
+        label_to_object_ids[label] = _normalize_object_ids(obj_ids)
+    return dict(sorted(label_to_object_ids.items()))
+
+
+def _coerce_object_id(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_question_referability_mentions(
+    question: dict[str, object],
+    objects_by_id: dict[int, dict[str, object]],
+) -> list[dict[str, object]]:
+    mentions: list[dict[str, object]] = []
+    seen: set[tuple[object, str, str]] = set()
+    raw_mentions = question.get("mentioned_objects")
+
+    def _append_mention(
+        *,
+        role: object,
+        label_value: object,
+        obj_id_value: object,
+    ) -> None:
+        obj_id = _coerce_object_id(obj_id_value)
+        label = str(label_value or "").strip()
+        if not label and obj_id is not None:
+            label = str(objects_by_id.get(obj_id, {}).get("label", "")).strip()
+        if not label and obj_id is None:
             return
-        seen.add(label_key)
-        labels.append(label)
+        role_text = str(role or "mentioned").strip() or "mentioned"
+        key = (obj_id if obj_id is not None else "", label.lower(), role_text)
+        if key in seen:
+            return
+        seen.add(key)
+        mentions.append(
+            {
+                "role": role_text,
+                "label": label,
+                "obj_id": obj_id,
+                "obj_id_parse_failed": (
+                    obj_id is None and obj_id_value not in (None, "")
+                ),
+            }
+        )
 
-    for mention in question.get("mentioned_objects", []):
-        if isinstance(mention, dict):
-            _add(mention.get("label"))
+    if isinstance(raw_mentions, list) and raw_mentions:
+        for mention in raw_mentions:
+            if not isinstance(mention, dict):
+                continue
+            _append_mention(
+                role=mention.get("role"),
+                label_value=mention.get("label"),
+                obj_id_value=mention.get("obj_id"),
+            )
+        return mentions
 
-    if labels:
-        return labels
+    for id_key, label_key, role in QUESTION_MENTION_FALLBACK_FIELDS:
+        _append_mention(
+            role=role,
+            label_value=question.get(label_key),
+            obj_id_value=question.get(id_key),
+        )
+    return mentions
 
-    for key in (
-        "obj_a_label",
-        "obj_b_label",
-        "obj_ref_label",
-        "obj_face_label",
-        "obj_target_label",
-        "moved_obj_label",
-        "query_obj_label",
-        "obj_c_label",
-        "removed_obj_label",
-        "grandparent_label",
-        "parent_label",
-        "grandchild_label",
-        "neighbor_label",
+
+def _build_question_referability_audit(
+    question: dict[str, object],
+    *,
+    objects_by_id: dict[int, dict[str, object]],
+    referability_entry: dict[str, object] | None,
+    frame_referable_ids: list[int],
+) -> dict[str, object]:
+    referable_set = set(int(obj_id) for obj_id in frame_referable_ids)
+    label_statuses = _normalize_label_statuses((referability_entry or {}).get("label_statuses"))
+    label_to_object_ids = _normalize_label_to_object_ids((referability_entry or {}).get("label_to_object_ids"))
+    audited_mentions: list[dict[str, object]] = []
+    reason_codes: list[str] = []
+    seen_reasons: set[str] = set()
+
+    def _add_reason(code: str, mention_reasons: list[str]) -> None:
+        if code not in mention_reasons:
+            mention_reasons.append(code)
+        if code not in seen_reasons:
+            seen_reasons.add(code)
+            reason_codes.append(code)
+
+    for mention in _iter_question_referability_mentions(question, objects_by_id):
+        label = str(mention.get("label", "")).strip()
+        label_key = label.lower()
+        mention_obj_id = _coerce_object_id(mention.get("obj_id"))
+        label_status = label_statuses.get(label_key)
+        candidate_ids = label_to_object_ids.get(label_key, [])
+        referable_label_ids = [
+            obj_id for obj_id in candidate_ids
+            if int(obj_id) in referable_set
+        ]
+        mention_reasons: list[str] = []
+
+        if mention_obj_id is not None and mention_obj_id not in referable_set:
+            _add_reason("mentioned_nonreferable_object", mention_reasons)
+
+        if label_key:
+            if label_status == "multiple":
+                _add_reason("mentioned_label_not_unique", mention_reasons)
+            elif label_status != "unique":
+                _add_reason("mentioned_label_not_resolved", mention_reasons)
+
+            if len(referable_label_ids) != 1:
+                _add_reason("mentioned_label_not_resolved", mention_reasons)
+            elif mention_obj_id is not None and mention_obj_id not in set(referable_label_ids):
+                _add_reason("mentioned_nonreferable_object", mention_reasons)
+        elif mention_obj_id is None:
+            _add_reason("mentioned_label_not_resolved", mention_reasons)
+
+        audited_mentions.append(
+            {
+                "role": str(mention.get("role", "mentioned")),
+                "label": label,
+                "obj_id": mention_obj_id,
+                "obj_id_parse_failed": bool(mention.get("obj_id_parse_failed", False)),
+                "label_status": label_status,
+                "candidate_object_ids": candidate_ids,
+                "referable_object_ids": referable_label_ids,
+                "passes_referability_check": not mention_reasons,
+                "reason_codes": mention_reasons,
+            }
+        )
+
+    return {
+        "decision": "drop" if reason_codes else "pass",
+        "reason_codes": reason_codes,
+        "mentioned_objects": audited_mentions,
+        "frame_referable_object_ids": sorted(referable_set),
+    }
+
+
+def _apply_question_referability_filter(
+    questions: list[dict[str, object]],
+    *,
+    objects_by_id: dict[int, dict[str, object]],
+    referability_entry: dict[str, object] | None,
+    frame_referable_ids: list[int],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    kept_questions: list[dict[str, object]] = []
+    audited_questions: list[dict[str, object]] = []
+    dropped = 0
+
+    for question in questions:
+        audited_question = dict(question)
+        audit = _build_question_referability_audit(
+            audited_question,
+            objects_by_id=objects_by_id,
+            referability_entry=referability_entry,
+            frame_referable_ids=frame_referable_ids,
+        )
+        audited_question["question_referability_audit"] = audit
+        audited_questions.append(audited_question)
+        if audit.get("decision") == "pass":
+            kept_questions.append(audited_question)
+            continue
+        dropped += 1
+
+    if dropped:
+        logger.info(
+            "Referability backstop removed %d questions for frame %s/%s",
+            dropped,
+            str(questions[0].get("scene_id", "<unknown>")) if questions else "<unknown>",
+            str(questions[0].get("image_name", "<unknown>")) if questions else "<unknown>",
+        )
+    return kept_questions, audited_questions
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def _question_review_scene_metadata_path(output_dir: Path, scene_id: str) -> Path:
+    return output_dir / "scene_metadata" / f"{scene_id}.json"
+
+
+def _build_question_review_crop(
+    image: np.ndarray,
+    visibility_meta: dict[str, object],
+) -> dict[str, object]:
+    roi_bounds = visibility_meta.get("roi_bounds_px")
+    projected_area_px = float(visibility_meta.get("projected_area_px", 0.0) or 0.0)
+    bbox_in_frame_ratio = float(visibility_meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
+    edge_margin_px = float(visibility_meta.get("edge_margin_px", 0.0) or 0.0)
+    result = {
+        "valid": False,
+        "reason": "missing_projection",
+        "roi_bounds_px": None,
+        "crop_bounds_px": None,
+        "projected_area_px": projected_area_px,
+        "bbox_in_frame_ratio": bbox_in_frame_ratio,
+        "edge_margin_px": edge_margin_px,
+        "image_b64": None,
+        "mime": "image/jpeg",
+    }
+    if not isinstance(roi_bounds, (list, tuple)) or len(roi_bounds) != 4:
+        return result
+
+    try:
+        u_min, u_max, v_min, v_max = [int(value) for value in roi_bounds]
+    except (TypeError, ValueError):
+        return result
+
+    width = max(0, u_max - u_min)
+    height = max(0, v_max - v_min)
+    if width <= 0 or height <= 0:
+        return result
+
+    pad = int(round(
+        max(
+            QUESTION_REVIEW_CROP_MIN_PADDING_PX,
+            min(
+                QUESTION_REVIEW_CROP_PADDING_RATIO * max(width, height),
+                QUESTION_REVIEW_CROP_MAX_PADDING_PX,
+            ),
+        )
+    ))
+    crop_u_min = max(0, u_min - pad)
+    crop_u_max = min(int(image.shape[1]), u_max + pad)
+    crop_v_min = max(0, v_min - pad)
+    crop_v_max = min(int(image.shape[0]), v_max + pad)
+
+    crop_width = max(0, crop_u_max - crop_u_min)
+    crop_height = max(0, crop_v_max - crop_v_min)
+    result["roi_bounds_px"] = [u_min, u_max, v_min, v_max]
+    result["crop_bounds_px"] = [crop_u_min, crop_u_max, crop_v_min, crop_v_max]
+
+    # Presence review uses looser thresholds than strict referability filtering:
+    # the goal is to crop likely-visible instances, not to enforce benchmark quality.
+    if (
+        crop_width < QUESTION_REVIEW_CROP_MIN_DIM_PX
+        or crop_height < QUESTION_REVIEW_CROP_MIN_DIM_PX
+        or projected_area_px < QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+        or bbox_in_frame_ratio < QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO
     ):
-        _add(question.get(key))
-    return labels
+        result["reason"] = "invalid_crop"
+        return result
+
+    crop_image = image[crop_v_min:crop_v_max, crop_u_min:crop_u_max]
+    if crop_image.size == 0:
+        return result
+
+    result["valid"] = True
+    result["reason"] = ""
+    result["image_b64"] = _encode_review_image_to_base64(crop_image)
+    return result
 
 
-def _question_presence_prompt(question_text: str, labels: list[str]) -> str:
-    labels_json = json.dumps(labels, ensure_ascii=False)
-    return (
-        "You are auditing whether the objects mentioned in a visual question are actually visible in the image.\n"
-        "For each mentioned object label, decide whether at least one matching instance is visible anywhere in the image.\n"
-        "Use these labels exactly as given. If an object is clearly visible, return present.\n"
-        "If the object does not appear in the image, return absent.\n"
-        "If the image is too ambiguous to decide confidently, return unsure.\n"
-        "Return strict JSON only with this schema:\n"
-        '{"objects":[{"label":"chair","status":"present","reason":"short reason"}]}\n'
-        f"Question: {question_text}\n"
-        f"Mentioned labels: {labels_json}"
+def _build_question_review_scene_context(
+    *,
+    scene_id: str,
+    data_root: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    scene_dir = data_root / scene_id
+    scene = None
+    errors: list[str] = []
+    metadata_path = _question_review_scene_metadata_path(output_dir, scene_id)
+
+    if metadata_path.exists():
+        try:
+            scene = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Failed to load scene metadata for question review %s: %s", scene_id, e)
+            errors.append("invalid_scene_metadata")
+    elif scene_dir.exists():
+        try:
+            scene = parse_scene(scene_dir)
+        except Exception as e:
+            logger.warning("Question review parse fallback failed for %s: %s", scene_id, e)
+            errors.append("parse_scene_failed")
+    else:
+        errors.append("scene_dir_missing")
+
+    objects = scene.get("objects", []) if isinstance(scene, dict) else []
+    objects_by_id: dict[int, dict[str, object]] = {}
+    if isinstance(objects, list):
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            obj_id = _coerce_object_id(obj.get("id"))
+            if obj_id is None:
+                continue
+            objects_by_id[obj_id] = obj
+    if not objects_by_id:
+        errors.append("missing_scene_objects")
+
+    poses: dict[str, object] = {}
+    color_intrinsics = None
+    if scene_dir.exists():
+        try:
+            axis_align = load_axis_alignment(scene_dir)
+            poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        except Exception as e:
+            logger.warning("Question review pose load failed for %s: %s", scene_id, e)
+            errors.append("missing_pose_data")
+        try:
+            color_intrinsics = load_scannet_intrinsics(scene_dir)
+        except Exception as e:
+            logger.warning("Question review color intrinsics load failed for %s: %s", scene_id, e)
+            errors.append("missing_color_intrinsics")
+
+    return {
+        "scene_id": scene_id,
+        "scene_dir": scene_dir if scene_dir.exists() else None,
+        "objects": objects,
+        "objects_by_id": objects_by_id,
+        "poses": poses,
+        "color_intrinsics": color_intrinsics,
+        "errors": _dedupe_strings(errors),
+    }
+
+
+def _build_question_review_frame_context(
+    *,
+    scene_id: str,
+    image_name: str,
+    data_root: Path,
+    scene_context: dict[str, object],
+) -> dict[str, object]:
+    image_path = data_root / scene_id / "color" / image_name
+    image_exists = image_path.exists()
+    image_b64 = None
+    mime = "image/jpeg"
+    image = None
+    errors = list(scene_context.get("errors", []))
+
+    if image_exists:
+        try:
+            image_b64, mime = _image_path_to_base64(image_path)
+        except Exception as e:
+            logger.warning("Question review image encode failed for %s/%s: %s", scene_id, image_name, e)
+            errors.append("image_encode_failed")
+        image = cv2.imread(str(image_path))
+        if image is None:
+            errors.append("image_unreadable")
+    else:
+        errors.append("image_not_found")
+
+    objects = scene_context.get("objects", [])
+    objects_by_id = dict(scene_context.get("objects_by_id", {}))
+    poses = scene_context.get("poses", {})
+    pose = poses.get(image_name) if isinstance(poses, dict) else None
+    color_intrinsics = scene_context.get("color_intrinsics")
+    if pose is None:
+        errors.append("missing_pose")
+    if color_intrinsics is None:
+        errors.append("missing_color_intrinsics")
+    if not objects_by_id:
+        errors.append("missing_scene_objects")
+
+    has_projection_context = (
+        image is not None
+        and pose is not None
+        and color_intrinsics is not None
+        and isinstance(objects, list)
+        and bool(objects)
     )
+    visibility_by_obj_id: dict[int, dict[str, object]] = {}
+    crop_by_obj_id: dict[int, dict[str, object]] = {}
+    if has_projection_context:
+        try:
+            raw_visibility = compute_frame_object_visibility(
+                objects=objects,
+                pose=pose,
+                color_intrinsics=color_intrinsics,
+                image_path=image_path,
+                depth_image=None,
+                depth_intrinsics=None,
+                strict_mode=False,
+            )
+            visibility_by_obj_id = {
+                int(obj_id): meta
+                for obj_id, meta in raw_visibility.items()
+            }
+            for obj_id, meta in visibility_by_obj_id.items():
+                crop_by_obj_id[int(obj_id)] = _build_question_review_crop(image, meta)
+        except Exception as e:
+            logger.warning("Question review visibility build failed for %s/%s: %s", scene_id, image_name, e)
+            errors.append("visibility_compute_failed")
+            has_projection_context = False
+
+    return {
+        "scene_id": scene_id,
+        "image_name": image_name,
+        "image_path": image_path,
+        "image_exists": image_exists,
+        "image_b64": image_b64,
+        "mime": mime,
+        "objects_by_id": objects_by_id,
+        "visibility_by_obj_id": visibility_by_obj_id,
+        "crop_by_obj_id": crop_by_obj_id,
+        "has_projection_context": has_projection_context,
+        "context_errors": _dedupe_strings(errors),
+    }
+
+
+def _prebuild_question_review_frame_contexts(
+    *,
+    questions: list[dict[str, object]],
+    data_root: Path,
+    output_dir: Path,
+) -> dict[tuple[str, str], dict[str, object]]:
+    frame_keys: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for question in questions:
+        scene_id = str(question.get("scene_id", "")).strip()
+        image_name = str(question.get("image_name", "")).strip()
+        key = (scene_id, image_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        frame_keys.append(key)
+
+    scene_contexts: dict[str, dict[str, object]] = {}
+    frame_contexts: dict[tuple[str, str], dict[str, object]] = {}
+    for scene_id, image_name in frame_keys:
+        if scene_id not in scene_contexts:
+            scene_contexts[scene_id] = _build_question_review_scene_context(
+                scene_id=scene_id,
+                data_root=data_root,
+                output_dir=output_dir,
+            )
+        frame_contexts[(scene_id, image_name)] = _build_question_review_frame_context(
+            scene_id=scene_id,
+            image_name=image_name,
+            data_root=data_root,
+            scene_context=scene_contexts[scene_id],
+        )
+    return frame_contexts
+
+
+def _question_presence_prompt(
+    question_text: str,
+    targets: list[dict[str, object]],
+) -> str:
+    targets_json = json.dumps(
+        [
+            {
+                "crop_index": idx + 1,
+                "obj_id": int(target["obj_id"]),
+                "label": str(target.get("label", "")).strip(),
+                "roles": list(target.get("roles", [])),
+            }
+            for idx, target in enumerate(targets)
+        ],
+        ensure_ascii=False,
+    )
+    return (
+        "You are auditing whether specific mentioned object instances from a visual question are actually visible.\n"
+        "You will receive the full scene image first, followed by one crop for each target instance.\n"
+        "Use the crop as the primary evidence and the full image only as context.\n"
+        "Judge each obj_id independently.\n"
+        "Return present only when the crop and the full image clearly show that exact instance as a standalone instance of the given label.\n"
+        "Do not treat a desk surface, drawer pedestal, cabinet door, shelf section, or other component/substructure of one composite furniture item as a separate standalone object for another label.\n"
+        "If a crop might show only a component of a larger furniture item, return unsure instead of present.\n"
+        "If the instance does not appear, return absent. If you cannot decide confidently, return unsure.\n"
+        "Return strict JSON only with this schema:\n"
+        '{"objects":[{"obj_id":42,"status":"present","reason":"short reason"}]}\n'
+        f"Question: {question_text}\n"
+        f"Targets: {targets_json}"
+    )
+
+
+def _build_presence_review_entry(
+    target: dict[str, object],
+    *,
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    roi_bounds = target.get("roi_bounds_px")
+    normalized_roi = None
+    if isinstance(roi_bounds, (list, tuple)) and len(roi_bounds) == 4:
+        try:
+            normalized_roi = [int(value) for value in roi_bounds]
+        except (TypeError, ValueError):
+            normalized_roi = None
+    return {
+        "label": str(target.get("label", "")).strip(),
+        "obj_id": _coerce_object_id(target.get("obj_id")),
+        "roles": _dedupe_strings(
+            [str(role).strip() for role in target.get("roles", []) if str(role).strip()]
+        ),
+        "status": status,
+        "reason": reason,
+        "roi_bounds_px": normalized_roi,
+    }
+
+
+def _finalize_presence_review(
+    object_reviews: list[dict[str, object]],
+    *,
+    raw_response: str,
+) -> dict[str, object]:
+    flagged_labels: list[str] = []
+    flagged_object_ids: list[int] = []
+    seen_labels: set[str] = set()
+    seen_obj_ids: set[int] = set()
+    flagged = False
+    for item in object_reviews:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip()
+        if status not in {"absent", "unsure"}:
+            continue
+        flagged = True
+        label = str(item.get("label", "")).strip()
+        if label and label not in seen_labels:
+            seen_labels.add(label)
+            flagged_labels.append(label)
+        obj_id = _coerce_object_id(item.get("obj_id"))
+        if obj_id is not None and obj_id not in seen_obj_ids:
+            seen_obj_ids.add(obj_id)
+            flagged_object_ids.append(obj_id)
+    return {
+        "review_mode": "instance",
+        "decision": "manual_review" if flagged else "pass",
+        "flagged_labels": flagged_labels,
+        "flagged_object_ids": flagged_object_ids,
+        "object_reviews": object_reviews,
+        "raw_response": raw_response,
+    }
 
 
 def _question_answer_prompt(question: dict[str, object]) -> str | None:
@@ -302,10 +924,12 @@ def _resolve_question_review_vlm(
 
     from openai import OpenAI
 
-    api_key = (
-        os.getenv("DASHSCOPE_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or "EMPTY"
+    api_key = _resolve_vlm_api_key(
+        purpose=purpose,
+        missing_key_hint=(
+            "If this endpoint requires authentication, set one of those environment "
+            "variables before enabling question post-review."
+        ),
     )
     client = OpenAI(api_key=api_key, base_url=vlm_url)
     model_name = vlm_model
@@ -325,67 +949,88 @@ def _resolve_question_review_vlm(
 def _make_question_presence_reviewer(client, model_name: str):
     logger.info("Using question presence review VLM model: %s", model_name)
 
-    def _review(image_path: Path, question: dict[str, object], labels: list[str]) -> dict[str, object]:
-        image_b64, mime = _image_path_to_base64(image_path)
+    def _review(
+        frame_context: dict[str, object],
+        question: dict[str, object],
+        targets: list[dict[str, object]],
+    ) -> dict[str, object]:
+        image_b64 = str(frame_context.get("image_b64", "") or "")
+        mime = str(frame_context.get("mime", "") or "image/jpeg")
+        content: list[dict[str, object]] = [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}}
+        ]
+        for target in targets:
+            crop_b64 = str(target.get("crop_image_b64", "") or "")
+            crop_mime = str(target.get("crop_mime", "") or "image/jpeg")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{crop_mime};base64,{crop_b64}"},
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": _question_presence_prompt(str(question.get("question", "")), targets),
+            }
+        )
         resp = _call_question_review_vlm(
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=[{
                     "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
-                        {
-                            "type": "text",
-                            "text": _question_presence_prompt(str(question.get("question", "")), labels),
-                        },
-                    ],
+                    "content": content,
                 }],
-                max_tokens=256,
+                max_tokens=min(
+                    QUESTION_REVIEW_MAX_TOKENS_CAP,
+                    max(256, QUESTION_REVIEW_MAX_TOKENS_PER_TARGET * max(1, len(targets))),
+                ),
                 temperature=0,
             ),
-            context=f"question presence review for {image_path.name}",
+            context=f"question presence review for {frame_context.get('image_name', '<unknown>')}",
         )
         raw_text = (resp.choices[0].message.content or "").strip()
         parsed = _extract_json_object(raw_text)
 
-        mapped_reviews: dict[str, dict[str, str]] = {}
+        target_by_obj_id = {
+            int(target["obj_id"]): target
+            for target in targets
+            if _coerce_object_id(target.get("obj_id")) is not None
+        }
+        mapped_reviews: dict[int, dict[str, object]] = {}
         objects = parsed.get("objects") if isinstance(parsed, dict) else None
         if isinstance(objects, list):
-            original_by_lower = {label.lower(): label for label in labels}
             for item in objects:
                 if not isinstance(item, dict):
                     continue
-                raw_label = str(item.get("label", "")).strip()
-                if not raw_label:
-                    continue
-                label_key = raw_label.lower()
-                if label_key not in original_by_lower:
+                obj_id = _coerce_object_id(item.get("obj_id"))
+                if obj_id is None or obj_id not in target_by_obj_id:
                     continue
                 status = _normalize_question_presence_status(item.get("status")) or "unsure"
-                mapped_reviews[label_key] = {
-                    "label": original_by_lower[label_key],
+                target = target_by_obj_id[obj_id]
+                mapped_reviews[obj_id] = {
+                    "label": str(target.get("label", "")).strip(),
+                    "obj_id": obj_id,
+                    "roles": list(target.get("roles", [])),
                     "status": status,
                     "reason": str(item.get("reason", "")).strip(),
+                    "roi_bounds_px": target.get("roi_bounds_px"),
                 }
 
-        object_reviews: list[dict[str, str]] = []
-        flagged_labels: list[str] = []
-        for label in labels:
-            review_entry = mapped_reviews.get(
-                label.lower(),
-                {
-                    "label": label,
-                    "status": "unsure",
-                    "reason": "missing label in VLM response",
-                },
+        object_reviews: list[dict[str, object]] = []
+        for target in targets:
+            obj_id = int(target["obj_id"])
+            object_reviews.append(
+                mapped_reviews.get(
+                    obj_id,
+                    _build_presence_review_entry(
+                        target,
+                        status="unsure",
+                        reason="missing_obj_id_in_vlm_response",
+                    ),
+                )
             )
-            object_reviews.append(review_entry)
-            if review_entry["status"] in {"absent", "unsure"}:
-                flagged_labels.append(label)
-
         return {
-            "decision": "manual_review" if flagged_labels else "pass",
-            "flagged_labels": flagged_labels,
             "object_reviews": object_reviews,
             "raw_response": raw_text,
         }
@@ -500,7 +1145,11 @@ def _manual_review_reason_from_presence_review(review: dict[str, object]) -> str
         if status not in {"absent", "unsure"}:
             continue
         label = str(item.get("label", "")).strip() or "object"
-        parts.append(f"{label}={status}")
+        obj_id = _coerce_object_id(item.get("obj_id"))
+        if obj_id is not None:
+            parts.append(f"{label}#{obj_id}={status}")
+        else:
+            parts.append(f"{label}={status}")
     if parts:
         return "VLM flagged mentioned objects: " + ", ".join(parts)
     return "VLM marked this question for manual review."
@@ -762,77 +1411,6 @@ def _run_question_presence_review(
         "flagged_json_path": flagged_json_path,
         "flagged_html_path": flagged_html_path,
     }
-
-
-def _occlusion_prompt(label: str) -> str:
-    return (
-        "You are given a local scene crop. "
-        f"The target object is the highlighted {label}. "
-        "The highlighted target is shown with a colored mask overlay and outline. "
-        "Decide whether the target is occluded by another object. "
-        "Being partially outside the image does not count as occluded. "
-        "Only count blockage by another object as occluded. "
-        'Answer with strict JSON only using this schema: {"occlusion": "not occluded"} '
-        'or {"occlusion": "occluded"}.'
-    )
-
-
-def _build_occlusion_vlm_adjudicator(
-    vlm_url: str | None,
-    vlm_model: str | None,
-):
-    if not vlm_url:
-        return None
-
-    from openai import OpenAI
-
-    api_key = (
-        os.getenv("DASHSCOPE_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or "EMPTY"
-    )
-    client = OpenAI(api_key=api_key, base_url=vlm_url)
-    model_name = vlm_model
-    if not model_name:
-        try:
-            models = client.models.list()
-            available = [m.id for m in models.data]
-            if not available:
-                raise RuntimeError("No VLM models available")
-            model_name = available[0]
-        except Exception as e:
-            raise RuntimeError(f"Cannot reach occlusion VLM at {vlm_url}: {e}") from e
-
-    logger.info("Using occlusion VLM model: %s", model_name)
-
-    def _adjudicate(local_overlay_image, label: str) -> str | None:
-        try:
-            image_b64 = _image_to_base64(local_overlay_image)
-            resp = client.chat.completions.create(
-                model=model_name,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                        {"type": "text", "text": _occlusion_prompt(label)},
-                    ],
-                }],
-                max_tokens=128,
-                temperature=0,
-            )
-            text = (resp.choices[0].message.content or "").strip()
-            parsed = _extract_json_object(text)
-            if not isinstance(parsed, dict):
-                return None
-            decision = str(parsed.get("occlusion", "")).strip().lower()
-            if decision in {"not occluded", "occluded"}:
-                return decision
-            return None
-        except Exception as e:
-            logger.warning("Occlusion VLM adjudication failed for %s: %s", label, e)
-            return None
-
-    return _adjudicate
 
 
 def _get_referability_scene_frames(cache: dict | None, scene_id: str) -> dict[str, dict]:
@@ -1146,9 +1724,8 @@ def run_pipeline(
     use_occlusion: bool = True,
     referability_cache: dict | None = None,
     occlusion_backend: str = "mesh_ray",
-    use_occlusion_vlm: bool = False,
-    occlusion_vlm_url: str | None = None,
-    occlusion_vlm_model: str | None = None,
+    vlm_url: str | None = None,
+    vlm_model: str | None = None,
     question_review_vlm_url: str | None = None,
     question_review_vlm_model: str | None = None,
     write_frame_debug: bool = True,
@@ -1185,11 +1762,6 @@ def run_pipeline(
     scene_debug_records: dict[str, dict[str, object]] = {}
     processed = 0
     total_scenes = len(scene_dirs)
-    occlusion_vlm_adjudicator = (
-        _build_occlusion_vlm_adjudicator(occlusion_vlm_url, occlusion_vlm_model)
-        if use_occlusion_vlm
-        else None
-    )
 
     for scene_dir in scene_dirs:
         scene_id = scene_dir.name
@@ -1200,10 +1772,7 @@ def run_pipeline(
 
         # ---- Stage 1: Parse ----
         preloaded_geometry = None
-        needs_mesh_resources = (
-            occlusion_backend in ("depth", "mesh_ray")
-            or occlusion_vlm_adjudicator is not None
-        )
+        needs_mesh_resources = occlusion_backend in ("depth", "mesh_ray")
         if needs_mesh_resources:
             try:
                 preloaded_geometry = _load_scene_geometry(scene_dir)
@@ -1312,8 +1881,6 @@ def run_pipeline(
                     ))
                 continue
             camera_pose = poses[image_name]
-            frame_image = None
-            image_path = scene_dir / "color" / image_name
 
             # Load depth map for this frame
             depth_image = None
@@ -1365,15 +1932,6 @@ def run_pipeline(
                     )
                     continue
 
-            if occlusion_vlm_adjudicator is not None:
-                image_path = scene_dir / "color" / image_name
-                if image_path.exists():
-                    import cv2
-
-                    frame_image = cv2.imread(str(image_path))
-                    if frame_image is None:
-                        logger.warning("Cannot read frame image for occlusion VLM: %s", image_path)
-
             questions = generate_all_questions(
                 objects=scene["objects"],
                 attachment_graph=attachment_graph,
@@ -1391,8 +1949,6 @@ def run_pipeline(
                 referable_object_ids=referable_ids,
                 label_statuses=label_statuses,
                 label_counts=label_counts,
-                frame_image=frame_image,
-                occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),
@@ -1402,7 +1958,14 @@ def run_pipeline(
                 q["scene_id"]   = scene_id
                 q["image_name"] = image_name
 
-            all_questions.extend(questions)
+            kept_questions, audited_questions = _apply_question_referability_filter(
+                questions,
+                objects_by_id=objects_by_id,
+                referability_entry=referability_entry,
+                frame_referable_ids=referable_ids or [],
+            )
+
+            all_questions.extend(kept_questions)
             frame_attachment_rows = _filter_frame_attachment_rows(
                 scene_attachment_rows,
                 set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
@@ -1416,7 +1979,7 @@ def run_pipeline(
                     pipeline_visible_ids=list(visible_ids),
                     referability_entry=referability_entry,
                     frame_attachment_rows=frame_attachment_rows,
-                    generated_questions=questions,
+                    generated_questions=audited_questions,
                 ))
 
         processed += 1
@@ -1484,8 +2047,8 @@ def run_pipeline(
         json.dump(benchmark, f, indent=2, ensure_ascii=False)
 
     if run_question_presence_review:
-        review_vlm_url = question_review_vlm_url or occlusion_vlm_url
-        review_vlm_model = question_review_vlm_model or occlusion_vlm_model
+        review_vlm_url = question_review_vlm_url or vlm_url
+        review_vlm_model = question_review_vlm_model or vlm_model
         _run_question_presence_review(
             questions=final_questions,
             data_root=data_root,
@@ -1543,16 +2106,12 @@ def main():
         help="Path to scannetv2-labels.combined.tsv for raw_category→nyu40class normalization",
     )
     parser.add_argument(
-        "--use_occlusion_vlm", action="store_true",
-        help="Use a VLM to adjudicate gray-zone L1 occlusion cases from local mask overlays",
-    )
-    parser.add_argument(
         "--vlm_url", type=str, default=DEFAULT_VLM_URL,
-        help="OpenAI-compatible VLM API base URL for gray-zone occlusion adjudication",
+        help="Default OpenAI-compatible VLM API base URL used by post-generation review when --question_review_vlm_url is omitted",
     )
     parser.add_argument(
         "--vlm_model", type=str, default=None,
-        help="Model name for gray-zone occlusion adjudication; auto-detect if omitted",
+        help="Default model name used by post-generation review when --question_review_vlm_model is omitted",
     )
     parser.add_argument(
         "--write_frame_debug",
@@ -1563,7 +2122,7 @@ def main():
     parser.add_argument(
         "--question_presence_review",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="After benchmark generation, ask the VLM whether question-mentioned objects are present in the image, then answer selected question types and export any flagged samples for manual review",
     )
     parser.add_argument(
@@ -1599,9 +2158,8 @@ def main():
         use_occlusion=not args.no_occlusion,
         referability_cache=referability_cache,
         occlusion_backend=args.occlusion_backend,
-        use_occlusion_vlm=args.use_occlusion_vlm,
-        occlusion_vlm_url=args.vlm_url,
-        occlusion_vlm_model=args.vlm_model,
+        vlm_url=args.vlm_url,
+        vlm_model=args.vlm_model,
         question_review_vlm_url=args.question_review_vlm_url,
         question_review_vlm_model=args.question_review_vlm_model,
         write_frame_debug=args.write_frame_debug,

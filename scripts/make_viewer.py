@@ -377,7 +377,7 @@ def is_attachment_viewer_question(question: dict) -> bool:
 def filter_viewer_questions(
     source_questions: list[dict],
     *,
-    include_attachment_unchanged: bool = False,
+    include_attachment_unchanged: bool = True,
 ) -> list[dict]:
     filtered = list(source_questions)
     if not include_attachment_unchanged:
@@ -398,6 +398,71 @@ def question_badges(question: dict) -> str:
     if bool(question.get("manual_review_reason")):
         badges.append('<span class="badge extra review">manual-review</span>')
     return "".join(badges)
+
+
+def _referability_audit_lines(question: dict) -> list[str]:
+    audit = question.get("question_referability_audit")
+    if not isinstance(audit, dict):
+        return []
+
+    lines: list[str] = []
+    decision = str(audit.get("decision", "")).strip()
+    if decision:
+        lines.append(f"decision: {decision}")
+
+    reason_codes = audit.get("reason_codes", [])
+    if isinstance(reason_codes, list):
+        reason_text = ", ".join(
+            str(code) for code in reason_codes if str(code).strip()
+        ) or "-"
+        lines.append(f"reason codes: {reason_text}")
+
+    frame_referable_ids = audit.get("frame_referable_object_ids", [])
+    if isinstance(frame_referable_ids, list):
+        frame_text = ", ".join(
+            str(obj_id) for obj_id in frame_referable_ids if str(obj_id).strip()
+        ) or "-"
+        lines.append(f"frame referable ids: {frame_text}")
+
+    mentioned_objects = audit.get("mentioned_objects", [])
+    if isinstance(mentioned_objects, list):
+        for mention in mentioned_objects:
+            if not isinstance(mention, dict):
+                continue
+            role = str(mention.get("role", "mentioned")).strip() or "mentioned"
+            label = str(mention.get("label", "")).strip() or "?"
+            obj_id = mention.get("obj_id")
+            obj_id_text = "-" if obj_id in (None, "") else str(obj_id)
+            label_status = str(mention.get("label_status", "")).strip() or "-"
+            candidate_ids = mention.get("candidate_object_ids", [])
+            referable_ids = mention.get("referable_object_ids", [])
+            candidate_text = ", ".join(
+                str(candidate_id)
+                for candidate_id in candidate_ids
+                if str(candidate_id).strip()
+            ) or "-"
+            referable_text = ", ".join(
+                str(referable_id)
+                for referable_id in referable_ids
+                if str(referable_id).strip()
+            ) or "-"
+            mention_reason_codes = mention.get("reason_codes", [])
+            mention_reason_text = ", ".join(
+                str(code) for code in mention_reason_codes if str(code).strip()
+            ) or "-"
+            mention_result = (
+                "pass"
+                if bool(mention.get("passes_referability_check", False))
+                else "drop"
+            )
+            lines.append(
+                f"{role}: label={label}, obj_id={obj_id_text}, "
+                f"label_status={label_status}, candidates={candidate_text}, "
+                f"referable={referable_text}, result={mention_result}, "
+                f"reasons={mention_reason_text}"
+            )
+
+    return lines
 
 
 def question_review_notes(question: dict) -> str:
@@ -451,6 +516,18 @@ def question_review_notes(question: dict) -> str:
                 f"{review_lines}"
                 "</div>"
             )
+
+    referability_lines = _referability_audit_lines(question)
+    if referability_lines:
+        parts.append(
+            '<div class="review-block">'
+            '<div class="review-title">Referability Audit</div>'
+            + "".join(
+                f'<div class="review-line">{html.escape(line)}</div>'
+                for line in referability_lines
+            )
+            + "</div>"
+        )
 
     if not parts:
         return ""
@@ -547,7 +624,7 @@ def build_viewer_html(
     title: str = "predictive spatial reasoning benchmark",
     requested_qtypes: set[str] | None = None,
     attachment_only: bool = False,
-    include_attachment_unchanged: bool = False,
+    include_attachment_unchanged: bool = True,
     apply_filters: bool = True,
 ) -> str:
     displayed_questions = list(questions)
@@ -623,6 +700,7 @@ def build_viewer_html(
 
 def main():
     parser = argparse.ArgumentParser(description="Build HTML QA viewer")
+    parser.set_defaults(include_attachment_unchanged=True)
     parser.add_argument(
         "--questions",
         required=True,
@@ -646,8 +724,15 @@ def main():
     )
     parser.add_argument(
         "--include_attachment_unchanged",
+        dest="include_attachment_unchanged",
         action="store_true",
-        help="Include attachment-mediated object_move_* questions whose answer is unchanged after the move",
+        help="Show attachment-mediated object_move_* questions whose answer is unchanged after the move (default)",
+    )
+    parser.add_argument(
+        "--hide_attachment_unchanged",
+        dest="include_attachment_unchanged",
+        action="store_false",
+        help="Hide attachment-mediated object_move_* questions whose answer is unchanged after the move",
     )
     parser.add_argument(
         "--max_width",

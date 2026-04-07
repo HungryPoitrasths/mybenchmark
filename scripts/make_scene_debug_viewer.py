@@ -104,6 +104,31 @@ def normalize_label_to_object_ids(value: Any) -> dict[str, list[int]]:
     return dict(sorted(out.items()))
 
 
+def normalize_question_referability_audit(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    mentioned_objects: list[dict[str, Any]] = []
+    for mention in value.get("mentioned_objects", []):
+        if not isinstance(mention, dict):
+            continue
+        mentioned_objects.append({
+            "role": str(mention.get("role", "mentioned")),
+            "label": str(mention.get("label", "")),
+            "obj_id": mention.get("obj_id"),
+            "label_status": str(mention.get("label_status", "")),
+            "candidate_object_ids": normalize_object_ids(mention.get("candidate_object_ids")),
+            "referable_object_ids": normalize_object_ids(mention.get("referable_object_ids")),
+            "passes_referability_check": bool(mention.get("passes_referability_check", False)),
+            "reason_codes": [str(code) for code in mention.get("reason_codes", []) if str(code).strip()] if isinstance(mention.get("reason_codes"), list) else [],
+        })
+    return {
+        "decision": str(value.get("decision", "")),
+        "reason_codes": [str(code) for code in value.get("reason_codes", []) if str(code).strip()] if isinstance(value.get("reason_codes"), list) else [],
+        "mentioned_objects": mentioned_objects,
+        "frame_referable_object_ids": normalize_object_ids(value.get("frame_referable_object_ids")),
+    }
+
+
 def zh_visibility_value(value: Any) -> str:
     mapping = {
         "unknown": "未知",
@@ -250,7 +275,7 @@ def load_scene_questions(scene_id: str, questions_path: Path | None, scene_metad
         match = match_list.pop(0) if match_list else None
         pred = match.get("prediction") if match else None
         pred_ok = None if pred is None else str(pred).upper() == str(q.get("answer", "")).upper()
-        item = {"level": q.get("level"), "type": q.get("type"), "question": q.get("question"), "options": list(q.get("options", [])), "answer": q.get("answer"), "prediction": pred, "prediction_correct": pred_ok}
+        item = {"level": q.get("level"), "type": q.get("type"), "question": q.get("question"), "options": list(q.get("options", [])), "answer": q.get("answer"), "prediction": pred, "prediction_correct": pred_ok, "question_referability_audit": normalize_question_referability_audit(q.get("question_referability_audit"))}
         by_frame[str(q.get("image_name", ""))].append(item)
         type_counter[str(item.get("type") or "unknown")] += 1
         level_counter[str(item.get("level") or "unknown")] += 1
@@ -421,7 +446,16 @@ def normalize_question_items(items: list[dict[str, Any]], question_limit_per_fra
         pred_ok = item.get("prediction_correct")
         if pred_ok is None and pred is not None and answer is not None:
             pred_ok = str(pred).upper() == str(answer).upper()
-        normalized.append({"level": item.get("level"), "type": item.get("type"), "question": item.get("question"), "options": list(item.get("options", [])), "answer": item.get("answer"), "prediction": pred, "prediction_correct": pred_ok})
+        normalized.append({
+            "level": item.get("level"),
+            "type": item.get("type"),
+            "question": item.get("question"),
+            "options": list(item.get("options", [])),
+            "answer": item.get("answer"),
+            "prediction": pred,
+            "prediction_correct": pred_ok,
+            "question_referability_audit": normalize_question_referability_audit(item.get("question_referability_audit")),
+        })
     sort_questions(normalized)
     return normalized[:question_limit_per_frame] if question_limit_per_frame > 0 else normalized
 
@@ -478,7 +512,12 @@ def build_frames_from_debug_doc(frame_debug_doc: dict[str, Any], scene_dir: Path
         if not isinstance(entry, dict):
             continue
         image_name = str(entry.get("image_name", ""))
-        questions = list(scene_questions.get(image_name, [])) or normalize_question_items(list(entry.get("final_questions") or entry.get("generated_questions") or []), question_limit_per_frame)
+        frame_questions = list(scene_questions.get(image_name, []))
+        if frame_questions:
+            questions = frame_questions
+        else:
+            debug_questions = list(entry.get("generated_questions") or entry.get("final_questions") or [])
+            questions = normalize_question_items(debug_questions, question_limit_per_frame)
         wrong = sum(1 for item in questions if item.get("prediction_correct") is False)
         image_path = scene_dir / "color" / image_name if scene_dir is not None else None
         frames.append({
@@ -610,6 +649,47 @@ def render_attachment_table(rows: list[dict[str, Any]], empty_text: str) -> str:
     return "<table><thead><tr><th>父 ID</th><th>父类别</th><th>子 ID</th><th>子类别</th><th>类型</th><th>confidence</th></tr></thead><tbody>" + body + "</tbody></table>"
 
 
+def render_question_referability_audit(audit: Any) -> str:
+    if not isinstance(audit, dict):
+        return ""
+    decision = str(audit.get("decision", "")).strip() or "unknown"
+    decision_class = "ok" if decision == "pass" else "bad" if decision == "drop" else "warn"
+    reason_codes = audit.get("reason_codes", [])
+    reason_text = ", ".join(str(code) for code in reason_codes if str(code).strip()) or "-"
+    frame_referable_ids = audit.get("frame_referable_object_ids", [])
+    frame_text = ", ".join(str(obj_id) for obj_id in frame_referable_ids if str(obj_id).strip()) or "-"
+    lines = [
+        f'<div class="muted">reason codes: {h(reason_text)}</div>',
+        f'<div class="muted">frame referable ids: {h(frame_text)}</div>',
+    ]
+    for mention in audit.get("mentioned_objects", []):
+        if not isinstance(mention, dict):
+            continue
+        role = str(mention.get("role", "mentioned")).strip() or "mentioned"
+        label = str(mention.get("label", "")).strip() or "?"
+        obj_id = mention.get("obj_id")
+        obj_id_text = "-" if obj_id in (None, "") else str(obj_id)
+        label_status = str(mention.get("label_status", "")).strip() or "-"
+        candidate_text = ", ".join(str(candidate_id) for candidate_id in mention.get("candidate_object_ids", []) if str(candidate_id).strip()) or "-"
+        referable_text = ", ".join(str(referable_id) for referable_id in mention.get("referable_object_ids", []) if str(referable_id).strip()) or "-"
+        mention_result = "pass" if bool(mention.get("passes_referability_check", False)) else "drop"
+        mention_reasons = ", ".join(str(code) for code in mention.get("reason_codes", []) if str(code).strip()) or "-"
+        lines.append(
+            "<div class=\"muted\">"
+            f"{h(role)}: label={h(label)}, obj_id={h(obj_id_text)}, label_status={h(label_status)}, "
+            f"candidates={h(candidate_text)}, referable={h(referable_text)}, result={h(mention_result)}, "
+            f"reasons={h(mention_reasons)}"
+            "</div>"
+        )
+    return (
+        '<div style="margin-top:8px;padding:8px 10px;border-radius:10px;'
+        'background:#f8fafc;border:1px solid rgba(19,32,48,.08)">'
+        f'<div class="qmeta"><span class="pill {decision_class}">referability {h(decision)}</span></div>'
+        + "".join(lines)
+        + "</div>"
+    )
+
+
 def render_questions(frame: dict[str, Any]) -> str:
     if not frame["questions"]:
         return '<div class="muted">这一帧没有题目。</div>'
@@ -623,7 +703,8 @@ def render_questions(frame: dict[str, Any]) -> str:
         else:
             status = f'<span class="pill warn">答案 {h(question["answer"])}</span>'
         options = "<br>".join(f"{chr(65 + idx)}) {h(option)}" for idx, option in enumerate(question["options"]))
-        cards.append(f'<div class="qcard {klass}"><div class="qmeta"><span class="pill">{h(question["level"])}</span><span class="pill">{h(question["type"])}</span>{status}</div><div class="qtext">{h(question["question"])}</div><div class="qopts">{options}</div></div>')
+        audit_html = render_question_referability_audit(question.get("question_referability_audit"))
+        cards.append(f'<div class="qcard {klass}"><div class="qmeta"><span class="pill">{h(question["level"])}</span><span class="pill">{h(question["type"])}</span>{status}</div><div class="qtext">{h(question["question"])}</div><div class="qopts">{options}</div>{audit_html}</div>')
     return "".join(cards)
 
 

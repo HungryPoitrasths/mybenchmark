@@ -3,6 +3,7 @@ import unittest
 from scripts.make_viewer import (
     build_task_summary_v2,
     filter_viewer_questions,
+    question_review_notes,
     select_viewer_source_questions,
 )
 
@@ -13,6 +14,7 @@ def make_object_move_question(
     scene_id: str = "scene0000_00",
     image_name: str = "000.jpg",
     attached: bool,
+    unchanged: bool = False,
     text: str,
 ) -> dict:
     return {
@@ -20,6 +22,7 @@ def make_object_move_question(
         "scene_id": scene_id,
         "image_name": image_name,
         "attachment_remapped": attached,
+        "relation_unchanged": unchanged,
         "question": text,
     }
 
@@ -135,6 +138,37 @@ class MakeViewerTests(unittest.TestCase):
             ["attached", "free 1", "free 2"],
         )
 
+    def test_viewer_shows_attachment_unchanged_questions_by_default(self) -> None:
+        questions = [
+            make_object_move_question(
+                qtype="object_rotate_object_centric",
+                attached=True,
+                unchanged=True,
+                text="attached unchanged",
+            ),
+        ]
+
+        filtered = filter_viewer_questions(questions)
+
+        self.assertEqual([q["question"] for q in filtered], ["attached unchanged"])
+
+    def test_viewer_can_still_hide_attachment_unchanged_questions(self) -> None:
+        questions = [
+            make_object_move_question(
+                qtype="object_rotate_object_centric",
+                attached=True,
+                unchanged=True,
+                text="attached unchanged",
+            ),
+        ]
+
+        filtered = filter_viewer_questions(
+            questions,
+            include_attachment_unchanged=False,
+        )
+
+        self.assertEqual(filtered, [])
+
     def test_task_summary_v2_canonicalizes_legacy_object_centric_type(self) -> None:
         questions = [
             {"type": "object_move_object_centric", "attachment_remapped": True},
@@ -174,6 +208,68 @@ class MakeViewerTests(unittest.TestCase):
         )
         self.assertIn("Other Types:</strong> custom_unknown=2", summary)
         self.assertNotIn("Other Types:</strong> object_rotate_object_centric=1", summary)
+
+    def test_task_summary_v2_counts_attachment_unchanged_in_with_attachment_bucket(self) -> None:
+        questions = [
+            {
+                "type": "object_rotate_object_centric",
+                "attachment_remapped": True,
+                "relation_unchanged": True,
+            },
+            {
+                "type": "object_rotate_object_centric",
+                "attachment_remapped": False,
+                "relation_unchanged": False,
+            },
+        ]
+
+        summary = build_task_summary_v2(questions)
+
+        self.assertIn(
+            "L2_object_rotate_object_centric: with_attachment=1, without_attachment=1",
+            summary,
+        )
+
+    def test_question_review_notes_renders_referability_audit(self) -> None:
+        notes = question_review_notes(
+            {
+                "question_referability_audit": {
+                    "decision": "drop",
+                    "reason_codes": [
+                        "mentioned_label_not_unique",
+                        "mentioned_label_not_resolved",
+                    ],
+                    "frame_referable_object_ids": [5],
+                    "mentioned_objects": [
+                        {
+                            "role": "reference",
+                            "label": "curtain",
+                            "obj_id": None,
+                            "label_status": "multiple",
+                            "candidate_object_ids": [2, 3],
+                            "referable_object_ids": [],
+                            "passes_referability_check": False,
+                            "reason_codes": [
+                                "mentioned_label_not_unique",
+                                "mentioned_label_not_resolved",
+                            ],
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertIn("Referability Audit", notes)
+        self.assertIn("decision: drop", notes)
+        self.assertIn(
+            "reason codes: mentioned_label_not_unique, mentioned_label_not_resolved",
+            notes,
+        )
+        self.assertIn("frame referable ids: 5", notes)
+        self.assertIn(
+            "reference: label=curtain, obj_id=-, label_status=multiple, candidates=2, 3, referable=-, result=drop, reasons=mentioned_label_not_unique, mentioned_label_not_resolved",
+            notes,
+        )
 
 
 if __name__ == "__main__":
