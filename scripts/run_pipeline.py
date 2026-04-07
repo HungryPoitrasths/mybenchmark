@@ -1911,19 +1911,24 @@ def run_pipeline(
                 )
 
         instance_mesh_data = None
-        if needs_mesh_resources:
-            try:
-                instance_mesh_data = load_instance_mesh_data(
-                    scene_dir,
-                    instance_ids=[int(o["id"]) for o in scene["objects"]],
-                    n_surface_samples=512,
-                    preloaded_geometry=preloaded_geometry,
-                )
-            except Exception as e:
+        try:
+            instance_mesh_data = load_instance_mesh_data(
+                scene_dir,
+                instance_ids=[int(o["id"]) for o in scene["objects"]],
+                n_surface_samples=512,
+                preloaded_geometry=preloaded_geometry,
+            )
+        except Exception as e:
+            if needs_mesh_resources:
                 raise RuntimeError(
                     f"{occlusion_backend} backend requested for {scene_id}, "
                     f"but instance mesh data could not be loaded: {e}"
                 ) from e
+            logger.warning(
+                "Instance mesh data load failed for %s; distance GT will fall back to AABB closest points: %s",
+                scene_id,
+                e,
+            )
 
         # Load depth intrinsics once per scene (shared across all frames)
         depth_intrinsics = None

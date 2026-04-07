@@ -23,7 +23,12 @@ from .utils.coordinate_transform import (
     get_camera_up,
     rotation_matrix_z,
 )
-from .relation_engine import compute_all_relations, find_changed_relations
+from .relation_engine import (
+    DISTANCE_SURFACE_POINTS_KEY,
+    DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
+    compute_all_relations,
+    find_changed_relations,
+)
 from .support_graph import get_attachment_chain
 
 logger = logging.getLogger(__name__)
@@ -99,12 +104,27 @@ def _translate_support_geom_in_place(obj: dict, delta_position: np.ndarray) -> N
             candidate["hull_xy"] = (hull_xy + delta_xy).tolist()
 
 
+def _translate_distance_surface_geometry_in_place(obj: dict, delta_position: np.ndarray) -> None:
+    delta = np.asarray(delta_position, dtype=float)
+    points = np.asarray(obj.get(DISTANCE_SURFACE_POINTS_KEY, []), dtype=float)
+    if points.ndim == 2 and points.shape[1] == 3 and len(points) > 0:
+        obj[DISTANCE_SURFACE_POINTS_KEY] = np.asarray(points + delta, dtype=np.float64)
+
+    triangle_vertices = np.asarray(obj.get(DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY, []), dtype=float)
+    if triangle_vertices.ndim == 3 and triangle_vertices.shape[1:] == (3, 3) and len(triangle_vertices) > 0:
+        obj[DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY] = np.asarray(
+            triangle_vertices + delta[None, None, :],
+            dtype=np.float64,
+        )
+
+
 def _translate_object_in_place(obj: dict, delta_position: np.ndarray) -> None:
     delta = np.asarray(delta_position, dtype=float)
     obj["center"] = (np.asarray(obj["center"], dtype=float) + delta).tolist()
     obj["bbox_min"] = (np.asarray(obj["bbox_min"], dtype=float) + delta).tolist()
     obj["bbox_max"] = (np.asarray(obj["bbox_max"], dtype=float) + delta).tolist()
     _translate_support_geom_in_place(obj, delta)
+    _translate_distance_surface_geometry_in_place(obj, delta)
 
 
 def _rotate_points(points: np.ndarray, rotation: np.ndarray, pivot: np.ndarray) -> np.ndarray:
@@ -144,6 +164,21 @@ def _rotate_support_geom_in_place(obj: dict, rotation: np.ndarray, pivot: np.nda
         hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
         if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
             candidate["hull_xy"] = _rotate_points_xy(hull_xy, rotation, pivot_xy).tolist()
+
+
+def _rotate_distance_surface_geometry_in_place(obj: dict, rotation: np.ndarray, pivot: np.ndarray) -> None:
+    points = np.asarray(obj.get(DISTANCE_SURFACE_POINTS_KEY, []), dtype=float)
+    if points.ndim == 2 and points.shape[1] == 3 and len(points) > 0:
+        obj[DISTANCE_SURFACE_POINTS_KEY] = np.asarray(
+            _rotate_points(points, rotation, pivot),
+            dtype=np.float64,
+        )
+
+    triangle_vertices = np.asarray(obj.get(DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY, []), dtype=float)
+    if triangle_vertices.ndim == 3 and triangle_vertices.shape[1:] == (3, 3) and len(triangle_vertices) > 0:
+        flat_vertices = triangle_vertices.reshape(-1, 3)
+        rotated = _rotate_points(flat_vertices, rotation, pivot).reshape(triangle_vertices.shape)
+        obj[DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY] = np.asarray(rotated, dtype=np.float64)
 
 
 def _rotate_aabb(
@@ -456,6 +491,9 @@ def apply_coordinate_rotation(
 
     Returns a new (deep-copied) object list.
     """
+    if not objects:
+        return []
+
     room_center = np.mean([np.array(o["center"]) for o in objects], axis=0)
     R = rotation_matrix_z(rotation_angle_deg)
 
@@ -475,6 +513,7 @@ def apply_coordinate_rotation(
         obj["bbox_min"] = bbox_min.tolist()
         obj["bbox_max"] = bbox_max.tolist()
         _rotate_support_geom_in_place(obj, R, room_center)
+        _rotate_distance_surface_geometry_in_place(obj, R, room_center)
 
     return rotated
 

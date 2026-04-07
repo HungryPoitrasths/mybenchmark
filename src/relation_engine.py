@@ -2,20 +2,23 @@
 
 Computes three types of spatial relations between object pairs:
   - Direction (egocentric, relative to camera viewpoint, 10 directions)
-  - Distance (Euclidean, with categorical binning)
+  - Distance (closest-point, with categorical binning)
   - Occlusion (depth-map based per-object visibility)
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from .utils.colmap_loader import CameraPose
 from .utils.coordinate_transform import world_to_camera
+from .utils.ray_casting import _local_triangle_resamples
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,84 @@ _GEOM_EPS = 1e-8
 _VERTICAL_CLEARANCE_TOL = 0.02  # metres
 _SPINE_ELONGATION_RATIO_MIN = 1.8
 _SPINE_ELONGATION_DELTA_MIN = 0.35  # metres
+_DISTANCE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "templates" / "distance_bins.json"
+DISTANCE_SURFACE_POINTS_KEY = "_distance_surface_points"
+DISTANCE_SURFACE_TRIANGLE_IDS_KEY = "_distance_surface_triangle_ids"
+DISTANCE_SURFACE_BARYCENTRICS_KEY = "_distance_surface_barycentrics"
+DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY = "_distance_surface_triangle_vertices"
+_DISTANCE_BLOCK_SIZE = 256
+_DISTANCE_TOPK_SAMPLE_PAIRS = 8
+_DISTANCE_LOCAL_TRIANGLES_PER_OBJECT = 4
+_DISTANCE_LOCAL_RESAMPLES_PER_TRIANGLE = 64
+
+
+def _default_distance_bin_config() -> dict[str, Any]:
+    return {
+        "boundary_margin_m": 0.1,
+        "distance_definition_default": "surface_sample_min_euclidean",
+        "bins": [
+            {
+                "bin_id": "very_close",
+                "upper_bound_m": 1.0,
+                "display_label": "very close (<1.0m)",
+            },
+            {
+                "bin_id": "close",
+                "upper_bound_m": 2.0,
+                "display_label": "close (1.0-2.0m)",
+            },
+            {
+                "bin_id": "moderate",
+                "upper_bound_m": 3.3,
+                "display_label": "moderate (2.0-3.3m)",
+            },
+            {
+                "bin_id": "far",
+                "upper_bound_m": None,
+                "display_label": "far (>3.3m)",
+            },
+        ],
+    }
+
+
+def _load_distance_bin_config() -> dict[str, Any]:
+    if _DISTANCE_CONFIG_PATH.exists():
+        with open(_DISTANCE_CONFIG_PATH, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict) and isinstance(loaded.get("bins"), list):
+            return loaded
+    return _default_distance_bin_config()
+
+
+_DISTANCE_BIN_CONFIG = _load_distance_bin_config()
+_RAW_DISTANCE_BIN_SPECS = _DISTANCE_BIN_CONFIG.get("bins", _default_distance_bin_config()["bins"])
+DISTANCE_BIN_SPECS: list[dict[str, Any]] = []
+for _raw_spec in _RAW_DISTANCE_BIN_SPECS:
+    _upper_raw = _raw_spec.get("upper_bound_m")
+    DISTANCE_BIN_SPECS.append(
+        {
+            "bin_id": str(_raw_spec.get("bin_id", "")).strip(),
+            "upper_bound_m": float("inf") if _upper_raw is None else float(_upper_raw),
+            "display_label": str(_raw_spec.get("display_label", "")).strip(),
+        }
+    )
+DISTANCE_BINS = [
+    (float(spec["upper_bound_m"]), str(spec["display_label"]))
+    for spec in DISTANCE_BIN_SPECS
+]
+DISTANCE_BIN_IDS = [str(spec["bin_id"]) for spec in DISTANCE_BIN_SPECS]
+DISTANCE_LABEL_TO_ID = {
+    str(spec["display_label"]): str(spec["bin_id"])
+    for spec in DISTANCE_BIN_SPECS
+}
+DISTANCE_ID_TO_LABEL = {
+    str(spec["bin_id"]): str(spec["display_label"])
+    for spec in DISTANCE_BIN_SPECS
+}
+DISTANCE_BOUNDARY_MARGIN = float(_DISTANCE_BIN_CONFIG.get("boundary_margin_m", 0.1))
+DEFAULT_DISTANCE_DEFINITION = str(
+    _DISTANCE_BIN_CONFIG.get("distance_definition_default", "surface_sample_min_euclidean")
+).strip() or "surface_sample_min_euclidean"
 
 
 def _rectangle_from_bbox_xy(bbox_min: np.ndarray, bbox_max: np.ndarray) -> np.ndarray:
@@ -601,35 +682,283 @@ def camera_cardinal_direction(camera_pose: CameraPose) -> str:
 
 # ---- Distance relation ----
 
-DISTANCE_BINS = [
-    (1.0, "very close (<1.0m)"),
-    (2.0, "close (1.0-2.0m)"),
-    (3.3, "moderate (2.0-3.3m)"),
-    (float("inf"), "far (>3.3m)"),
-]
-
 # Minimum centre-to-centre distance for direction questions.
 # Below this threshold, bbox annotation errors (~0.1-0.2 m) make direction
 # judgements unreliable.
 MIN_DIRECTION_DISTANCE = 0.5  # metres
 
-DISTANCE_BIN_BOUNDARIES = [b[0] for b in DISTANCE_BINS[:-1]]  # [1.0, 2.0, 3.3]
-DISTANCE_BOUNDARY_MARGIN = 0.1
+DISTANCE_BIN_BOUNDARIES = [
+    float(spec["upper_bound_m"])
+    for spec in DISTANCE_BIN_SPECS
+    if np.isfinite(float(spec["upper_bound_m"]))
+]
+
+
+def _point_distance_fallback(point_a: np.ndarray, point_b: np.ndarray) -> float:
+    return float(
+        np.linalg.norm(
+            np.asarray(point_a, dtype=float) - np.asarray(point_b, dtype=float)
+        )
+    )
+
+
+def _distance_runtime_surface_points(obj: dict) -> np.ndarray:
+    points = np.asarray(obj.get(DISTANCE_SURFACE_POINTS_KEY, []), dtype=float)
+    if points.ndim == 2 and points.shape[1] == 3 and len(points) > 0:
+        return points
+    return np.empty((0, 3), dtype=float)
+
+
+def _distance_runtime_surface_metadata(
+    obj: dict,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    triangle_ids = np.asarray(obj.get(DISTANCE_SURFACE_TRIANGLE_IDS_KEY, []), dtype=np.int64)
+    barycentrics = np.asarray(obj.get(DISTANCE_SURFACE_BARYCENTRICS_KEY, []), dtype=float)
+    triangle_vertices = np.asarray(
+        obj.get(DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY, []),
+        dtype=float,
+    )
+    if triangle_ids.ndim != 1:
+        triangle_ids = np.empty((0,), dtype=np.int64)
+    if barycentrics.ndim != 2 or barycentrics.shape[1] != 3:
+        barycentrics = np.empty((0, 3), dtype=float)
+    if triangle_vertices.ndim != 3 or triangle_vertices.shape[1:] != (3, 3):
+        triangle_vertices = np.empty((0, 3, 3), dtype=float)
+    return triangle_ids, barycentrics, triangle_vertices
+
+
+def _topk_surface_sample_pairs(
+    points_a: np.ndarray,
+    points_b: np.ndarray,
+    *,
+    top_k: int = _DISTANCE_TOPK_SAMPLE_PAIRS,
+    block_size: int = _DISTANCE_BLOCK_SIZE,
+) -> list[tuple[float, int, int]]:
+    if len(points_a) == 0 or len(points_b) == 0:
+        return []
+
+    candidates: list[tuple[float, int, int]] = []
+    for a_start in range(0, len(points_a), block_size):
+        a_block = np.asarray(points_a[a_start:a_start + block_size], dtype=float)
+        for b_start in range(0, len(points_b), block_size):
+            b_block = np.asarray(points_b[b_start:b_start + block_size], dtype=float)
+            diffs = a_block[:, None, :] - b_block[None, :, :]
+            d2 = np.einsum("ijk,ijk->ij", diffs, diffs, dtype=float)
+            flat = d2.reshape(-1)
+            if flat.size == 0:
+                continue
+            block_k = min(int(top_k), int(flat.size))
+            if block_k <= 0:
+                continue
+            if flat.size == block_k:
+                candidate_flat_idxs = np.arange(flat.size, dtype=np.int64)
+            else:
+                candidate_flat_idxs = np.argpartition(flat, block_k - 1)[:block_k]
+            b_width = int(len(b_block))
+            for flat_idx in np.asarray(candidate_flat_idxs, dtype=np.int64):
+                local_a = int(flat_idx // max(b_width, 1))
+                local_b = int(flat_idx % max(b_width, 1))
+                candidates.append(
+                    (
+                        float(flat[int(flat_idx)]),
+                        int(a_start + local_a),
+                        int(b_start + local_b),
+                    )
+                )
+
+    candidates.sort(key=lambda item: item[0])
+    deduped: list[tuple[float, int, int]] = []
+    seen_pairs: set[tuple[int, int]] = set()
+    for candidate in candidates:
+        pair_key = (candidate[1], candidate[2])
+        if pair_key in seen_pairs:
+            continue
+        deduped.append(candidate)
+        seen_pairs.add(pair_key)
+        if len(deduped) >= top_k:
+            break
+    return deduped
+
+
+def _ordered_unique_indices(indices: list[int], limit: int) -> list[int]:
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for index in indices:
+        if index in seen:
+            continue
+        seen.add(index)
+        ordered.append(int(index))
+        if len(ordered) >= limit:
+            break
+    return ordered
+
+
+def _expand_surface_points_for_refinement(
+    points: np.ndarray,
+    triangle_ids: np.ndarray,
+    barycentrics: np.ndarray,
+    triangle_vertices: np.ndarray,
+    sample_indices: list[int],
+) -> np.ndarray:
+    if len(points) == 0:
+        return np.empty((0, 3), dtype=float)
+
+    expanded_parts: list[np.ndarray] = []
+    valid_indices = [idx for idx in sample_indices if 0 <= idx < len(points)]
+    if valid_indices:
+        expanded_parts.append(np.asarray(points[valid_indices], dtype=float))
+
+    if (
+        len(triangle_ids) != len(points)
+        or len(barycentrics) != len(points)
+        or len(triangle_vertices) != len(points)
+    ):
+        return np.concatenate(expanded_parts, axis=0) if expanded_parts else np.empty((0, 3), dtype=float)
+
+    for sample_idx in _ordered_unique_indices(valid_indices, _DISTANCE_LOCAL_TRIANGLES_PER_OBJECT):
+        local_points, _ = _local_triangle_resamples(
+            triangle_vertices=np.asarray(triangle_vertices[sample_idx], dtype=float),
+            barycentric=np.asarray(barycentrics[sample_idx], dtype=float),
+            triangle_id=int(triangle_ids[sample_idx]),
+            n_samples=int(_DISTANCE_LOCAL_RESAMPLES_PER_TRIANGLE),
+        )
+        if len(local_points) > 0:
+            expanded_parts.append(np.asarray(local_points, dtype=float))
+
+    if not expanded_parts:
+        return np.empty((0, 3), dtype=float)
+    return np.concatenate(expanded_parts, axis=0)
+
+
+def _min_pairwise_distance(
+    points_a: np.ndarray,
+    points_b: np.ndarray,
+    *,
+    block_size: int = _DISTANCE_BLOCK_SIZE,
+) -> float | None:
+    top_pairs = _topk_surface_sample_pairs(
+        np.asarray(points_a, dtype=float),
+        np.asarray(points_b, dtype=float),
+        top_k=1,
+        block_size=block_size,
+    )
+    if not top_pairs:
+        return None
+    return float(math.sqrt(max(top_pairs[0][0], 0.0)))
+
+
+def _surface_sample_closest_point_distance(obj_a: dict, obj_b: dict) -> float | None:
+    points_a = _distance_runtime_surface_points(obj_a)
+    points_b = _distance_runtime_surface_points(obj_b)
+    if len(points_a) == 0 or len(points_b) == 0:
+        return None
+
+    top_pairs = _topk_surface_sample_pairs(points_a, points_b)
+    if not top_pairs:
+        return None
+
+    best_dist = float(math.sqrt(max(top_pairs[0][0], 0.0)))
+    triangle_ids_a, barycentrics_a, triangle_vertices_a = _distance_runtime_surface_metadata(obj_a)
+    triangle_ids_b, barycentrics_b, triangle_vertices_b = _distance_runtime_surface_metadata(obj_b)
+    expanded_a = _expand_surface_points_for_refinement(
+        points_a,
+        triangle_ids_a,
+        barycentrics_a,
+        triangle_vertices_a,
+        [pair[1] for pair in top_pairs],
+    )
+    expanded_b = _expand_surface_points_for_refinement(
+        points_b,
+        triangle_ids_b,
+        barycentrics_b,
+        triangle_vertices_b,
+        [pair[2] for pair in top_pairs],
+    )
+    refined_dist = _min_pairwise_distance(expanded_a, expanded_b)
+    if refined_dist is None:
+        return best_dist
+    return float(min(best_dist, refined_dist))
+
+
+def compute_aabb_closest_point_distance(obj_a: dict, obj_b: dict) -> float:
+    a_bbox_min = np.asarray(obj_a.get("bbox_min", []), dtype=float)
+    a_bbox_max = np.asarray(obj_a.get("bbox_max", []), dtype=float)
+    b_bbox_min = np.asarray(obj_b.get("bbox_min", []), dtype=float)
+    b_bbox_max = np.asarray(obj_b.get("bbox_max", []), dtype=float)
+    if (
+        a_bbox_min.shape == (3,)
+        and a_bbox_max.shape == (3,)
+        and b_bbox_min.shape == (3,)
+        and b_bbox_max.shape == (3,)
+    ):
+        gap_components = np.maximum(
+            np.maximum(a_bbox_min - b_bbox_max, b_bbox_min - a_bbox_max),
+            0.0,
+        )
+        return float(np.linalg.norm(gap_components))
+
+    a_center = np.asarray(obj_a.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    b_center = np.asarray(obj_b.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    return _point_distance_fallback(a_center, b_center)
+
+
+def bin_distance(dist_m: float) -> tuple[str, str, bool]:
+    dist = float(max(dist_m, 0.0))
+    near_boundary = any(
+        abs(dist - boundary) < DISTANCE_BOUNDARY_MARGIN
+        for boundary in DISTANCE_BIN_BOUNDARIES
+    )
+    for spec in DISTANCE_BIN_SPECS:
+        threshold = float(spec["upper_bound_m"])
+        if dist < threshold:
+            return str(spec["bin_id"]), str(spec["display_label"]), bool(near_boundary)
+    last_spec = DISTANCE_BIN_SPECS[-1]
+    return str(last_spec["bin_id"]), str(last_spec["display_label"]), bool(near_boundary)
+
+
+def compute_distance_details(
+    obj_a: dict | np.ndarray | list[float],
+    obj_b: dict | np.ndarray | list[float],
+    *,
+    force_aabb: bool = False,
+) -> dict[str, Any]:
+    """Compute closest-point distance details for two objects or point fallbacks."""
+    if isinstance(obj_a, dict) and isinstance(obj_b, dict):
+        if force_aabb:
+            dist = compute_aabb_closest_point_distance(obj_a, obj_b)
+            distance_definition = "aabb_closest_point_approx"
+        else:
+            dist = _surface_sample_closest_point_distance(obj_a, obj_b)
+            if dist is None:
+                dist = compute_aabb_closest_point_distance(obj_a, obj_b)
+                distance_definition = "aabb_closest_point_approx"
+            else:
+                distance_definition = DEFAULT_DISTANCE_DEFINITION
+    else:
+        dist = _point_distance_fallback(np.asarray(obj_a, dtype=float), np.asarray(obj_b, dtype=float))
+        distance_definition = "point_euclidean_fallback"
+
+    distance_bin_id, distance_bin, near_boundary = bin_distance(dist)
+    return {
+        "distance_m": float(dist),
+        "distance_bin_id": distance_bin_id,
+        "distance_bin": distance_bin,
+        "near_boundary": bool(near_boundary),
+        "distance_definition": distance_definition,
+    }
 
 
 def compute_distance(
-    obj_a_center: np.ndarray,
-    obj_b_center: np.ndarray,
+    obj_a: dict | np.ndarray | list[float],
+    obj_b: dict | np.ndarray | list[float],
 ) -> tuple[str, float, bool]:
-    """Compute Euclidean distance and categorical bin."""
-    dist = float(np.linalg.norm(np.asarray(obj_a_center, dtype=float) - np.asarray(obj_b_center, dtype=float)))
-    near_boundary = any(abs(dist - b) < DISTANCE_BOUNDARY_MARGIN for b in DISTANCE_BIN_BOUNDARIES)
-
-    for threshold, label in DISTANCE_BINS:
-        if dist < threshold:
-            return label, dist, near_boundary
-
-    return DISTANCE_BINS[-1][1], dist, near_boundary
+    """Compute closest-point distance label, value, and boundary flag."""
+    details = compute_distance_details(obj_a, obj_b)
+    return (
+        str(details["distance_bin"]),
+        float(details["distance_m"]),
+        bool(details["near_boundary"]),
+    )
 
 
 # ---- Occlusion relation (per-object, depth-map based) ----
@@ -680,12 +1009,9 @@ def compute_all_relations(
         for j, b in enumerate(objects):
             if i >= j:
                 continue
-            a_center = np.array(a["center"])
-            b_center = np.array(b["center"])
-
             dir_label, ambiguity = compute_pairwise_direction(a, b, camera_pose)
             horizontal_dir, _ = compute_pairwise_horizontal_direction(a, b, camera_pose)
-            dist_bin, dist_m, near_bound = compute_distance(a_center, b_center)
+            distance = compute_distance_details(a, b)
 
             relations.append(
                 {
@@ -696,9 +1022,12 @@ def compute_all_relations(
                     "direction_b_rel_a": dir_label,
                     "horizontal_direction_b_rel_a": horizontal_dir,
                     "ambiguity_score": ambiguity,
-                    "distance_bin": dist_bin,
-                    "distance_m": round(dist_m, 2),
-                    "near_boundary": near_bound,
+                    "distance_bin": distance["distance_bin"],
+                    "distance_bin_id": distance["distance_bin_id"],
+                    "distance_m_raw": float(distance["distance_m"]),
+                    "distance_m": round(float(distance["distance_m"]), 2),
+                    "near_boundary": bool(distance["near_boundary"]),
+                    "distance_definition": distance["distance_definition"],
                     "occlusion_a": occ_cache.get(a["id"], ("unknown", 0.0))[0],
                     "occlusion_b": occ_cache.get(b["id"], ("unknown", 0.0))[0],
                 }
@@ -722,9 +1051,18 @@ def find_changed_relations(
         o = old_map[key]
         n = new_map[key]
         diffs = {}
-        for field in ("direction_b_rel_a", "distance_bin", "occlusion_a", "occlusion_b"):
+        for field in ("direction_b_rel_a", "occlusion_a", "occlusion_b"):
             if o.get(field) != n.get(field):
                 diffs[field] = {"old": o[field], "new": n[field]}
+        old_distance_bin_id = o.get("distance_bin_id", DISTANCE_LABEL_TO_ID.get(str(o.get("distance_bin", "")), ""))
+        new_distance_bin_id = n.get("distance_bin_id", DISTANCE_LABEL_TO_ID.get(str(n.get("distance_bin", "")), ""))
+        if old_distance_bin_id != new_distance_bin_id:
+            diffs["distance_bin"] = {
+                "old": o.get("distance_bin"),
+                "new": n.get("distance_bin"),
+                "old_bin_id": old_distance_bin_id,
+                "new_bin_id": new_distance_bin_id,
+            }
         if diffs:
             changed.append(
                 {

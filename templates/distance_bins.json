@@ -1,0 +1,26 @@
+{
+  "boundary_margin_m": 0.1,
+  "distance_definition_default": "surface_sample_min_euclidean",
+  "bins": [
+    {
+      "bin_id": "very_close",
+      "upper_bound_m": 1.0,
+      "display_label": "very close (<1.0m)"
+    },
+    {
+      "bin_id": "close",
+      "upper_bound_m": 2.0,
+      "display_label": "close (1.0-2.0m)"
+    },
+    {
+      "bin_id": "moderate",
+      "upper_bound_m": 3.3,
+      "display_label": "moderate (2.0-3.3m)"
+    },
+    {
+      "bin_id": "far",
+      "upper_bound_m": null,
+      "display_label": "far (>3.3m)"
+    }
+  ]
+}

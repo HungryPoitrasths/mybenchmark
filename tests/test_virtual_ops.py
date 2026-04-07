@@ -2,9 +2,15 @@ import unittest
 
 import numpy as np
 
+from src.relation_engine import (
+    DISTANCE_SURFACE_POINTS_KEY,
+    DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
+)
 from src.utils.colmap_loader import CameraPose
 from src.virtual_ops import (
+    apply_movement,
     apply_removal,
+    apply_coordinate_rotation,
     find_meaningful_movement,
     find_meaningful_orbit_rotation,
     has_terminal_bbox_collision,
@@ -109,6 +115,96 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
 
         self.assertEqual([obj["id"] for obj in remaining], [2])
         self.assertIsNot(remaining[0], objects[1])
+
+    def test_apply_coordinate_rotation_handles_empty_object_list(self) -> None:
+        rotated = apply_coordinate_rotation([], 90.0)
+        self.assertEqual(rotated, [])
+
+    def test_apply_movement_translates_runtime_distance_surface_geometry(self) -> None:
+        obj = make_object(
+            1,
+            (0.0, 0.0, 0.0),
+            (-0.1, -0.1, -0.1),
+            (0.1, 0.1, 0.1),
+            label="mover",
+        )
+        obj[DISTANCE_SURFACE_POINTS_KEY] = np.array(
+            [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]],
+            dtype=np.float64,
+        )
+        obj[DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY] = np.array(
+            [[
+                [0.0, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
+                [0.0, 0.1, 0.0],
+            ]],
+            dtype=np.float64,
+        )
+
+        moved = apply_movement(
+            [obj],
+            attachment_graph={},
+            target_obj_id=1,
+            delta_position=np.array([1.0, 2.0, 0.5], dtype=np.float64),
+        )
+
+        np.testing.assert_allclose(
+            moved[0][DISTANCE_SURFACE_POINTS_KEY],
+            np.array([[1.0, 2.0, 0.5], [1.1, 2.0, 0.5]], dtype=np.float64),
+        )
+        np.testing.assert_allclose(
+            moved[0][DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY],
+            np.array(
+                [[
+                    [1.0, 2.0, 0.5],
+                    [1.1, 2.0, 0.5],
+                    [1.0, 2.1, 0.5],
+                ]],
+                dtype=np.float64,
+            ),
+        )
+        np.testing.assert_allclose(
+            obj[DISTANCE_SURFACE_POINTS_KEY],
+            np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], dtype=np.float64),
+        )
+
+    def test_apply_coordinate_rotation_rotates_runtime_distance_surface_geometry(self) -> None:
+        obj = make_object(
+            1,
+            (1.0, 0.0, 0.0),
+            (0.9, -0.1, -0.1),
+            (1.1, 0.1, 0.1),
+            label="mover",
+        )
+        obj[DISTANCE_SURFACE_POINTS_KEY] = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+        obj[DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY] = np.array(
+            [[
+                [1.0, 0.0, 0.0],
+                [1.1, 0.0, 0.0],
+                [1.0, 0.1, 0.0],
+            ]],
+            dtype=np.float64,
+        )
+
+        rotated = apply_coordinate_rotation([obj], 90.0)
+
+        np.testing.assert_allclose(
+            rotated[0][DISTANCE_SURFACE_POINTS_KEY],
+            np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        )
+        np.testing.assert_allclose(
+            rotated[0][DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY],
+            np.array(
+                [[
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.1, 0.0],
+                    [0.9, 0.0, 0.0],
+                ]],
+                dtype=np.float64,
+            ),
+            atol=1e-6,
+        )
+
     def test_find_meaningful_movement_skips_bbox_out_of_room_candidate(self) -> None:
         objects = [
             make_object(1, (0.75, 0.0, 0.0), (0.5, -0.1, -0.1), (1.0, 0.1, 0.1), label="mover"),
@@ -128,7 +224,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(delta)
-        self.assertEqual(delta.tolist(), [-1.0, 0.0, 0.0])
+        self.assertEqual(delta.tolist(), [-0.5, 0.0, 0.0])
         self.assertTrue(changed)
 
     def test_find_meaningful_movement_uses_collision_objects(self) -> None:

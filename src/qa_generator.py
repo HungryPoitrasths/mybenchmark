@@ -23,6 +23,11 @@ from .relation_engine import (
     ALL_DIRECTIONS_10,
     CARDINAL_DIRECTIONS_8,
     DISTANCE_BINS,
+    DISTANCE_BIN_IDS,
+    DISTANCE_SURFACE_BARYCENTRICS_KEY,
+    DISTANCE_SURFACE_POINTS_KEY,
+    DISTANCE_SURFACE_TRIANGLE_IDS_KEY,
+    DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
     HORIZONTAL_DIRECTIONS,
     MIN_DIRECTION_DISTANCE,
     compute_all_relations,
@@ -31,8 +36,9 @@ from .relation_engine import (
     primary_direction_object_centric,
     primary_direction_allocentric,
     camera_cardinal_direction,
-    compute_distance,
+    compute_distance_details,
 )
+from .support_graph import compute_bottom_footprint_overlap_metrics
 from .virtual_ops import (
     MOVEMENT_CANDIDATES,
     apply_movement,
@@ -164,6 +170,7 @@ OCCLUSION_DEFINITION_NOTE = (
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.1
 DISTANCE_MOVE_SEARCH_MAX_M = 3.0
+MIN_DISTANCE_QUESTION_DISTANCE_M = 0.2
 DISTANCE_MOVE_DIRECTIONS = [
     np.array([1.0, 0.0, 0.0], dtype=np.float64),
     np.array([-1.0, 0.0, 0.0], dtype=np.float64),
@@ -184,11 +191,8 @@ L1_OCCLUSION_OCCLUDED_MIN = 0.10
 L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
-L1_OCCLUSION_MASK_PAD_RATIO = 0.20
-L1_OCCLUSION_MASK_MIN_CROP_SIZE = 128
-L1_OCCLUSION_MASK_ALPHA = 0.35
-L1_OCCLUSION_MASK_FILL_BGR = (40, 40, 255)
-L1_OCCLUSION_MASK_BORDER_BGR = (0, 255, 255)
+HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN = 0.10
+VERTICAL_DIRECTIONS = {"above", "below"}
 
 
 def _bbox_rect_xy(obj: dict) -> np.ndarray:
@@ -219,6 +223,64 @@ def _translated_bbox(obj: dict, delta: np.ndarray) -> tuple[np.ndarray, np.ndarr
         np.asarray(obj["bbox_min"], dtype=float) + offset,
         np.asarray(obj["bbox_max"], dtype=float) + offset,
     )
+
+
+def _build_attachment_edge_lookup(
+    attachment_edges: list[dict[str, Any]] | None,
+) -> dict[frozenset[int], dict[str, Any]]:
+    lookup: dict[frozenset[int], dict[str, Any]] = {}
+    for edge in attachment_edges or []:
+        try:
+            pair_key = frozenset((int(edge["parent_id"]), int(edge["child_id"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        lookup[pair_key] = edge
+    return lookup
+
+
+def _direction_suppression_reason(
+    obj_a: dict[str, Any],
+    obj_b: dict[str, Any],
+    answer_direction: str,
+    attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None,
+) -> tuple[str, str, dict[str, Any]] | None:
+    if answer_direction in VERTICAL_DIRECTIONS:
+        return None
+
+    edge = None
+    if attachment_edge_lookup:
+        pair_key = frozenset((int(obj_a["id"]), int(obj_b["id"])))
+        edge = attachment_edge_lookup.get(pair_key)
+    if edge is not None:
+        return (
+            "attached_pair_non_vertical_direction",
+            "directly attached object pairs only allow vertical direction questions",
+            {
+                "direction": answer_direction,
+                "attachment_edge_type": str(edge.get("type", "unknown")),
+                "attachment_parent_id": int(edge["parent_id"]),
+                "attachment_child_id": int(edge["child_id"]),
+            },
+        )
+
+    overlap_metrics = compute_bottom_footprint_overlap_metrics(obj_a, obj_b)
+    if overlap_metrics["coverage_small"] >= HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN:
+        return (
+            "horizontal_projection_overlap",
+            "horizontal-answer direction questions require sufficiently separated floor-plane footprints",
+            {
+                "direction": answer_direction,
+                "overlap_area": float(overlap_metrics["overlap_area"]),
+                "coverage_a": float(overlap_metrics["coverage_a"]),
+                "coverage_b": float(overlap_metrics["coverage_b"]),
+                "coverage_small": float(overlap_metrics["coverage_small"]),
+                "footprint_source_a": str(overlap_metrics["source_a"]),
+                "footprint_source_b": str(overlap_metrics["source_b"]),
+                "threshold": HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN,
+                "attachment_edge_type": None,
+            },
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -364,6 +426,51 @@ def _instance_surface_sample_metadata(
         np.asarray(triangle_ids, dtype=np.int64),
         np.asarray(barycentrics, dtype=np.float64),
     )
+
+
+def _clear_distance_geometry_fields(obj: dict[str, Any]) -> None:
+    for key in (
+        DISTANCE_SURFACE_POINTS_KEY,
+        DISTANCE_SURFACE_TRIANGLE_IDS_KEY,
+        DISTANCE_SURFACE_BARYCENTRICS_KEY,
+        DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
+    ):
+        obj.pop(key, None)
+
+
+def enrich_objects_with_distance_geometry(
+    objects: list[dict[str, Any]],
+    instance_mesh_data: InstanceMeshData | None,
+) -> None:
+    """Attach runtime-only surface samples used by closest-point distance GT."""
+    if instance_mesh_data is None:
+        for obj in objects:
+            _clear_distance_geometry_fields(obj)
+        return
+
+    vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+    faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)
+    for obj in objects:
+        _clear_distance_geometry_fields(obj)
+        obj_id = int(obj["id"])
+        surface_points = _instance_surface_samples(instance_mesh_data, obj_id)
+        if len(surface_points) == 0:
+            continue
+        triangle_ids, barycentrics = _instance_surface_sample_metadata(instance_mesh_data, obj_id)
+        obj[DISTANCE_SURFACE_POINTS_KEY] = np.asarray(surface_points, dtype=np.float64).copy()
+        if len(triangle_ids) != len(surface_points) or len(barycentrics) != len(surface_points):
+            continue
+        valid_triangle_mask = (
+            triangle_ids >= 0
+        ) & (
+            triangle_ids < len(faces)
+        )
+        if not np.all(valid_triangle_mask):
+            continue
+        triangle_vertices = vertices[faces[triangle_ids]]
+        obj[DISTANCE_SURFACE_TRIANGLE_IDS_KEY] = np.asarray(triangle_ids, dtype=np.int64).copy()
+        obj[DISTANCE_SURFACE_BARYCENTRICS_KEY] = np.asarray(barycentrics, dtype=np.float64).copy()
+        obj[DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY] = np.asarray(triangle_vertices, dtype=np.float64).copy()
 
 
 def _invoke_method_with_supported_kwargs(
@@ -711,8 +818,8 @@ def _default_templates() -> dict:
             "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}?",
         ],
         "L1_distance": [
-            "Approximately how far apart are {obj_a} and {obj_b}?",
-            "What is the approximate distance between {obj_a} and {obj_b}?",
+            "What is the approximate shortest distance between {obj_a} and {obj_b}, measured from their closest points?",
+            "Measured from the closest points of each object, what is the approximate shortest distance between {obj_a} and {obj_b}?",
         ],
         "L1_occlusion": [
             f"What is the occlusion status of {{obj_a}} in the current view? {OCCLUSION_DEFINITION_NOTE}",
@@ -740,8 +847,8 @@ def _default_templates() -> dict:
             "From the camera's perspective, if we move {obj_a} {direction_with_camera_hint} by {distance}, where is {obj_b} relative to {obj_c}?",
         ],
         "L2_object_move_distance": [
-            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, how far apart would {obj_b} and {obj_c} be?",
-            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the distance between {obj_b} and {obj_c}?",
+            "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?",
+            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?",
         ],
         "L2_object_move_occlusion": [
             f"From the camera's perspective, imagine moving {{obj_a}} {{direction_with_camera_hint}} by {{distance}}. After this change, what is the occlusion status of {{obj_b}}? {OCCLUSION_DEFINITION_NOTE}",
@@ -933,6 +1040,10 @@ def generate_direction_options(
 def generate_l1_direction(
     relation: dict,
     templates: dict,
+    *,
+    obj_a: dict[str, Any] | None = None,
+    obj_b: dict[str, Any] | None = None,
+    attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
 ) -> dict | None:
     """Generate an L1-direction question from a precomputed relation."""
     if relation["ambiguity_score"] > 0.7:
@@ -943,6 +1054,15 @@ def generate_l1_direction(
         return None  # same label → "chair relative to chair" is meaningless
 
     correct = relation["direction_b_rel_a"]
+    if obj_a is not None and obj_b is not None:
+        suppression = _direction_suppression_reason(
+            obj_a,
+            obj_b,
+            str(correct),
+            attachment_edge_lookup,
+        )
+        if suppression is not None:
+            return None
     tpl_list = templates.get(
         "L1_direction_agent",
         templates.get("L1_direction", _default_templates()["L1_direction_agent"]),
@@ -983,6 +1103,8 @@ def generate_l1_distance(
     templates: dict,
 ) -> dict | None:
     """Generate an L1-distance question."""
+    if _relation_distance_for_distance_questions(relation) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+        return None
     if relation["near_boundary"]:
         return None
     if relation["obj_a_label"] == relation["obj_b_label"]:
@@ -1003,6 +1125,9 @@ def generate_l1_distance(
         "options": options,
         "answer": answer,
         "correct_value": correct,
+        "distance_m": float(relation.get("distance_m", 0.0)),
+        "distance_bin_id": relation.get("distance_bin_id"),
+        "distance_definition": relation.get("distance_definition"),
         "obj_a_id": relation["obj_a_id"],
         "obj_b_id": relation["obj_b_id"],
         "obj_a_label": relation["obj_a_label"],
@@ -1220,26 +1345,11 @@ def _is_l1_occlusion_frame_skip(metrics: _L1OcclusionMetrics) -> bool:
     )
 
 
-def _should_retry_l1_with_mesh_ray(metrics: _L1OcclusionMetrics) -> bool:
-    if metrics.decision == "grayzone":
-        return True
-    if metrics.decision != "skip":
-        return False
-    return not _is_l1_occlusion_frame_skip(metrics)
-
-
 def _resolve_l1_occlusion_decision(
     *,
-    obj_id: int,
-    label: str,
     metrics: _L1OcclusionMetrics,
     source_used: str,
     grayzone_fallback_source: str,
-    camera_pose: CameraPose,
-    color_intrinsics: CameraIntrinsics | None,
-    instance_mesh_data: InstanceMeshData | None,
-    frame_image: np.ndarray | None,
-    occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None,
 ) -> tuple[str | None, str, bool]:
     decision = metrics.decision
     overlay_available = False
@@ -1868,65 +1978,6 @@ def _render_instance_projection_mask(
     return mask
 
 
-def _local_mask_overlay_image(
-    frame_image: np.ndarray,
-    mask: np.ndarray,
-) -> np.ndarray | None:
-    if frame_image is None or mask is None or not np.any(mask):
-        return None
-
-    import cv2
-
-    ys, xs = np.where(mask > 0)
-    if len(xs) == 0 or len(ys) == 0:
-        return None
-    x_min = int(xs.min())
-    x_max = int(xs.max())
-    y_min = int(ys.min())
-    y_max = int(ys.max())
-    width = x_max - x_min + 1
-    height = y_max - y_min + 1
-    pad_x = max(1, int(round(width * L1_OCCLUSION_MASK_PAD_RATIO)))
-    pad_y = max(1, int(round(height * L1_OCCLUSION_MASK_PAD_RATIO)))
-
-    crop_x0 = max(0, x_min - pad_x)
-    crop_y0 = max(0, y_min - pad_y)
-    crop_x1 = min(frame_image.shape[1], x_max + pad_x + 1)
-    crop_y1 = min(frame_image.shape[0], y_max + pad_y + 1)
-
-    crop_w = crop_x1 - crop_x0
-    crop_h = crop_y1 - crop_y0
-    need_w = max(0, L1_OCCLUSION_MASK_MIN_CROP_SIZE - crop_w)
-    need_h = max(0, L1_OCCLUSION_MASK_MIN_CROP_SIZE - crop_h)
-    if need_w > 0:
-        extra_left = need_w // 2
-        extra_right = need_w - extra_left
-        crop_x0 = max(0, crop_x0 - extra_left)
-        crop_x1 = min(frame_image.shape[1], crop_x1 + extra_right)
-    if need_h > 0:
-        extra_top = need_h // 2
-        extra_bottom = need_h - extra_top
-        crop_y0 = max(0, crop_y0 - extra_top)
-        crop_y1 = min(frame_image.shape[0], crop_y1 + extra_bottom)
-
-    crop = frame_image[crop_y0:crop_y1, crop_x0:crop_x1].copy()
-    crop_mask = mask[crop_y0:crop_y1, crop_x0:crop_x1]
-    if crop.size == 0 or not np.any(crop_mask):
-        return None
-
-    overlay = crop.copy()
-    fill = np.zeros_like(overlay)
-    fill[:, :] = L1_OCCLUSION_MASK_FILL_BGR
-    mask_bool = crop_mask > 0
-    overlay[mask_bool] = (
-        crop[mask_bool] * (1.0 - L1_OCCLUSION_MASK_ALPHA)
-        + fill[mask_bool] * L1_OCCLUSION_MASK_ALPHA
-    ).astype(np.uint8)
-    contours, _ = cv2.findContours(crop_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(overlay, contours, -1, L1_OCCLUSION_MASK_BORDER_BGR, 2)
-    return overlay
-
-
 def generate_l1_occlusion_questions(
     objects: list[dict[str, Any]],
     camera_pose: CameraPose,
@@ -1940,8 +1991,6 @@ def generate_l1_occlusion_questions(
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     referable_object_ids: list[int] | None = None,
-    frame_image: np.ndarray | None = None,
-    occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_statuses = _normalize_label_statuses(label_statuses)
     normalized_counts = _normalize_label_counts(label_counts)
@@ -1988,16 +2037,9 @@ def generate_l1_occlusion_questions(
         grayzone_fallback_source = "geometry_grayzone_fallback"
 
         decision, source_used, overlay_available = _resolve_l1_occlusion_decision(
-            obj_id=obj_id,
-            label=label,
             metrics=metrics,
             source_used=source_used,
             grayzone_fallback_source=grayzone_fallback_source,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            instance_mesh_data=instance_mesh_data,
-            frame_image=frame_image,
-            occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
         )
         if decision is None:
             return
@@ -2094,6 +2136,7 @@ def generate_l1_direction_object_centric(
     objects: list[dict],
     templates: dict,
     max_questions: int = 20,
+    attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
 ) -> list[dict]:
@@ -2228,6 +2271,28 @@ def generate_l1_direction_object_centric(
                         evidence={"ambiguity_score": float(ambiguity), "threshold": 0.7},
                     )
                     continue
+                suppression = _direction_suppression_reason(
+                    ref,
+                    target,
+                    direction,
+                    attachment_edge_lookup,
+                )
+                if suppression is not None:
+                    reason_code, reason_detail, evidence = suppression
+                    reason_counts[reason_code] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l1_direction_object_centric",
+                        candidate_kind="object_triplet",
+                        candidate_key=candidate_id,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code=reason_code,
+                        reason_detail=reason_detail,
+                        evidence=evidence,
+                    )
+                    continue
 
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
@@ -2316,6 +2381,7 @@ def generate_l1_direction_allocentric(
     camera_pose: CameraPose,
     templates: dict,
     max_questions: int = 20,
+    attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
 ) -> list[dict]:
@@ -2410,6 +2476,28 @@ def generate_l1_direction_allocentric(
                     reason_code="non_cardinal_direction",
                     reason_detail="computed allocentric direction is not one of the supported cardinal answers",
                     evidence={"direction": direction},
+                )
+                continue
+            suppression = _direction_suppression_reason(
+                a,
+                b,
+                direction,
+                attachment_edge_lookup,
+            )
+            if suppression is not None:
+                reason_code, reason_detail, evidence = suppression
+                reason_counts[reason_code] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction_allocentric",
+                    candidate_kind="object_pair",
+                    candidate_key=candidate_id,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code=reason_code,
+                    reason_detail=reason_detail,
+                    evidence=evidence,
                 )
                 continue
 
@@ -3399,11 +3487,37 @@ def _find_object_move_delta_and_changes(
     return None, []
 
 
-def _distance_bin_index(label: str) -> int | None:
+def _distance_bin_index(
+    label: str | None = None,
+    *,
+    bin_id: str | None = None,
+) -> int | None:
+    if bin_id:
+        for idx, candidate_id in enumerate(DISTANCE_BIN_IDS):
+            if candidate_id == bin_id:
+                return idx
     for idx, (_, candidate_label) in enumerate(DISTANCE_BINS):
         if candidate_label == label:
             return idx
     return None
+
+
+def _relation_distance_for_distance_questions(relation: dict[str, Any]) -> float:
+    raw_distance = relation.get("distance_m_raw")
+    if raw_distance is not None:
+        try:
+            return float(raw_distance)
+        except (TypeError, ValueError):
+            pass
+
+    rounded_distance = relation.get("distance_m")
+    if rounded_distance is not None:
+        try:
+            return float(rounded_distance)
+        except (TypeError, ValueError):
+            pass
+
+    return float("inf")
 
 
 def _iter_distance_move_deltas():
@@ -3432,7 +3546,8 @@ def _find_stable_distance_move_for_relation(
     explicitly marked as unchanged.
     """
     old_label = str(relation.get("distance_bin", "")).strip()
-    old_idx = _distance_bin_index(old_label)
+    old_bin_id = str(relation.get("distance_bin_id", "")).strip() or None
+    old_idx = _distance_bin_index(old_label, bin_id=old_bin_id)
     if old_idx is None:
         return None, None, None, False
 
@@ -3448,6 +3563,8 @@ def _find_stable_distance_move_for_relation(
     obj_map = {int(obj["id"]): obj for obj in objects}
     if obj_a_id not in obj_map or obj_b_id not in obj_map:
         return None, None, None, False
+    if _relation_distance_for_distance_questions(relation) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+        return None, old_label, None, False
 
     for delta in _iter_distance_move_deltas():
         new_objects = apply_movement(objects, attachment_graph, target_id, delta)
@@ -3462,11 +3579,32 @@ def _find_stable_distance_move_for_relation(
             continue
 
         new_map = {int(obj["id"]): obj for obj in new_objects}
-        new_label, _new_dist, new_near_boundary = compute_distance(
-            np.asarray(new_map[obj_a_id]["center"], dtype=float),
-            np.asarray(new_map[obj_b_id]["center"], dtype=float),
+        approx_details = compute_distance_details(
+            new_map[obj_a_id],
+            new_map[obj_b_id],
+            force_aabb=True,
         )
-        new_idx = _distance_bin_index(new_label)
+        approx_idx = _distance_bin_index(
+            str(approx_details.get("distance_bin", "")),
+            bin_id=str(approx_details.get("distance_bin_id", "")).strip() or None,
+        )
+        if approx_idx is None:
+            continue
+        if abs(approx_idx - old_idx) != 1 and not bool(approx_details.get("near_boundary", False)):
+            continue
+
+        exact_details = compute_distance_details(
+            new_map[obj_a_id],
+            new_map[obj_b_id],
+        )
+        if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+            continue
+        new_label = str(exact_details["distance_bin"])
+        new_near_boundary = bool(exact_details["near_boundary"])
+        new_idx = _distance_bin_index(
+            new_label,
+            bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
+        )
         if new_idx is None or abs(new_idx - old_idx) != 1:
             continue
         if new_near_boundary:
@@ -3482,10 +3620,13 @@ def _find_stable_distance_move_for_relation(
             collision_objects=collision_objects,
         ):
             new_map = {int(obj["id"]): obj for obj in new_objects}
-            new_label, _new_dist, _new_near_boundary = compute_distance(
-                np.asarray(new_map[obj_a_id]["center"], dtype=float),
-                np.asarray(new_map[obj_b_id]["center"], dtype=float),
+            exact_details = compute_distance_details(
+                new_map[obj_a_id],
+                new_map[obj_b_id],
             )
+            if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+                continue
+            new_label = str(exact_details["distance_bin"])
             if new_label != old_label:
                 continue
             return np.asarray(delta, dtype=np.float64), old_label, new_label, True
@@ -3539,6 +3680,15 @@ def _generate_l2_distance_questions_for_object(
             relation_obj_b_id = relation["obj_a_id"]
             relation_obj_c_id = relation["obj_b_id"]
 
+        moved_state = apply_movement(movement_scene_objects, attachment_graph, move_source_id, delta)
+        moved_map = {int(obj["id"]): obj for obj in moved_state}
+        new_distance = compute_distance_details(
+            moved_map[int(relation["obj_a_id"])],
+            moved_map[int(relation["obj_b_id"])],
+        )
+        if float(new_distance.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+            continue
+        answer_value = str(new_distance.get("distance_bin", answer_value))
         obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
         obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
         direction_desc = _delta_to_description(delta, camera_pose)
@@ -3562,6 +3712,13 @@ def _generate_l2_distance_questions_for_object(
             "correct_value": answer_value,
             "old_correct_value": old_value,
             "new_correct_value": answer_value,
+            "old_distance_m": float(relation.get("distance_m", 0.0)),
+            "new_distance_m": float(new_distance.get("distance_m", 0.0)),
+            "old_distance_bin_id": relation.get("distance_bin_id"),
+            "new_distance_bin_id": new_distance.get("distance_bin_id"),
+            "distance_definition": new_distance.get("distance_definition"),
+            "old_distance_definition": relation.get("distance_definition"),
+            "new_distance_definition": new_distance.get("distance_definition"),
             "moved_obj_id": move_source_id,
             "moved_obj_label": move_source["label"],
             "query_obj_id": query_obj["id"],
@@ -4514,6 +4671,7 @@ def generate_l2_object_rotate_object_centric(
         attachment_remapped = move_source_id != obj["id"]
         if attachment_remapped and move_source_id not in referable_object_ids:
             continue
+        has_attachment_chain = len(moved_ids) > 1
         query_center = np.array(obj["center"], dtype=float)
 
         obj_questions: list[dict] = []
@@ -4586,7 +4744,8 @@ def generate_l2_object_rotate_object_centric(
                         continue
                     if max(old_amb, new_amb) > 0.7:
                         continue
-                    if old_dir == new_dir:
+                    relation_unchanged = old_dir == new_dir
+                    if relation_unchanged and not attachment_remapped:
                         continue
 
                     tpl = random.choice(tpl_list)
@@ -4607,6 +4766,8 @@ def generate_l2_object_rotate_object_centric(
                         "options": options,
                         "answer": answer,
                         "correct_value": new_dir,
+                        "old_correct_value": old_dir,
+                        "new_correct_value": new_dir,
                         "moved_obj_id": move_source_id,
                         "moved_obj_label": move_source["label"],
                         "query_obj_id": obj["id"],
@@ -4627,7 +4788,8 @@ def generate_l2_object_rotate_object_centric(
                             _mention("reference_facing", face["label"], face["id"]),
                         ],
                         "delta": query_delta.tolist(),
-                        "relation_unchanged": False,
+                        "relation_unchanged": relation_unchanged,
+                        "has_attachment_chain": has_attachment_chain,
                     })
 
         if obj_questions:
@@ -5646,8 +5808,6 @@ def generate_all_questions(
     referable_object_ids: list[int] | None = None,
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
-    frame_image: np.ndarray | None = None,
-    occlusion_vlm_adjudicator: Callable[[np.ndarray, str], str | None] | None = None,
     room_bounds: dict | None = None,
     wall_objects: list[dict] | None = None,
     attachment_edges: list[dict] | None = None,
@@ -5667,11 +5827,6 @@ def generate_all_questions(
     label_statuses: if provided, use per-label VLM absent/unique/multiple/unsure
     decisions to guide L1 occlusion generation.
     label_counts: optional compatibility field derived from label_statuses.
-    frame_image: optional BGR frame image used for gray-zone local mask VLM
-    adjudication in L1 occlusion.
-    occlusion_vlm_adjudicator: optional callback that receives a local masked
-    BGR crop and the target label, and returns "not occluded", "occluded", or
-    None.
     room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
     wall_objects: visible filtering for ordinary objects does not touch these;
     they are only used to construct allocentric wall-anchor wording.
@@ -5689,6 +5844,7 @@ def generate_all_questions(
     attachment_edge_input = len(attachment_edges)
     trace_counter = 0
     original_objects = list(objects)
+    enrich_objects_with_distance_geometry(objects, instance_mesh_data)
 
     def _snapshot_question(question: dict[str, Any]) -> dict[str, Any]:
         return json.loads(json.dumps(question, ensure_ascii=False))
@@ -5946,6 +6102,7 @@ def generate_all_questions(
         if int(o["id"]) in graph_eligible_ids
     ]
     movement_object_map = {int(o["id"]): o for o in movement_objects}
+    attachment_edge_lookup = _build_attachment_edge_lookup(attachment_edges)
     l1_occlusion_subject_ids = {
         int(obj["id"])
         for obj in (l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq)
@@ -6056,7 +6213,40 @@ def generate_all_questions(
             )
             q = None
         else:
-            q = generate_l1_direction(rel, templates)
+            obj_a = movement_object_map.get(int(rel["obj_a_id"]))
+            obj_b = movement_object_map.get(int(rel["obj_b_id"]))
+            suppression = None
+            if obj_a is not None and obj_b is not None:
+                suppression = _direction_suppression_reason(
+                    obj_a,
+                    obj_b,
+                    str(rel["direction_b_rel_a"]),
+                    attachment_edge_lookup,
+                )
+            if suppression is not None:
+                reason_code, reason_detail, evidence = suppression
+                l1_dir_reason_counts[reason_code] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l1_direction",
+                    candidate_kind="relation_pair",
+                    candidate_key=relation_key,
+                    object_ids=relation_object_ids,
+                    status="skipped",
+                    reason_code=reason_code,
+                    reason_detail=reason_detail,
+                    evidence=evidence,
+                )
+                q = None
+            else:
+                q = generate_l1_direction(
+                    rel,
+                    templates,
+                    obj_a=obj_a,
+                    obj_b=obj_b,
+                    attachment_edge_lookup=attachment_edge_lookup,
+                )
         if q:
             l1_dir_qs.append(q)
             l1_dir_generated_candidate_count += 1
@@ -6094,6 +6284,25 @@ def generate_all_questions(
                 evidence={
                     "distance_bin": rel.get("distance_bin"),
                     "distance_m": float(rel.get("distance_m", 0.0)),
+                },
+            )
+            q = None
+        elif _relation_distance_for_distance_questions(rel) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+            l1_dist_reason_counts["distance_too_small"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_distance",
+                candidate_kind="relation_pair",
+                candidate_key=relation_key,
+                object_ids=relation_object_ids,
+                status="skipped",
+                reason_code="distance_too_small",
+                reason_detail="distance questions require object pairs to be at least 0.2m apart",
+                evidence={
+                    "distance_m": float(rel.get("distance_m", 0.0)),
+                    "distance_m_raw": _relation_distance_for_distance_questions(rel),
+                    "min_distance": MIN_DISTANCE_QUESTION_DISTANCE_M,
                 },
             )
             q = None
@@ -6179,8 +6388,6 @@ def generate_all_questions(
         label_statuses=label_statuses,
         label_counts=label_counts,
         referable_object_ids=referable_object_ids,
-        frame_image=frame_image,
-        occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
     )
     l1_occ_qs = _register_generated_questions("generate_l1_occlusion_questions", l1_occ_qs)
 
@@ -6196,6 +6403,7 @@ def generate_all_questions(
     )
     l1_dir_oc_qs = generate_l1_direction_object_centric(
         objects_uniq, templates, max_questions=MAX_L1_DIRECTION_OC,
+        attachment_edge_lookup=attachment_edge_lookup,
         trace_recorder=trace_recorder,
         trace_detail=trace_detail,
     )
@@ -6210,6 +6418,7 @@ def generate_all_questions(
     )
     l1_dir_allo_qs = generate_l1_direction_allocentric(
         objects_uniq, camera_pose, templates, max_questions=MAX_L1_DIRECTION_ALLO,
+        attachment_edge_lookup=attachment_edge_lookup,
         trace_recorder=trace_recorder,
         trace_detail=trace_detail,
     )
