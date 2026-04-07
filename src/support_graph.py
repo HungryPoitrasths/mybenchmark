@@ -239,6 +239,29 @@ def _bottom_support_polygon(obj: dict) -> tuple[np.ndarray, str]:
     return _bbox_xy_polygon(obj), "bbox"
 
 
+def compute_bottom_footprint_overlap_metrics(obj_a: dict, obj_b: dict) -> dict[str, float | str]:
+    """Compute overlap statistics for two bottom-footprint polygons."""
+    poly_a, source_a = _bottom_support_polygon(obj_a)
+    poly_b, source_b = _bottom_support_polygon(obj_b)
+    area_a = _polygon_area(poly_a)
+    area_b = _polygon_area(poly_b)
+    overlap_area = _convex_intersection_area(poly_a, poly_b)
+    min_area = min(area_a, area_b)
+    coverage_a = overlap_area / area_a if area_a > GEOM_EPS else 0.0
+    coverage_b = overlap_area / area_b if area_b > GEOM_EPS else 0.0
+    coverage_small = overlap_area / min_area if min_area > GEOM_EPS else 0.0
+    return {
+        "overlap_area": float(overlap_area),
+        "area_a": float(area_a),
+        "area_b": float(area_b),
+        "coverage_a": float(coverage_a),
+        "coverage_b": float(coverage_b),
+        "coverage_small": float(coverage_small),
+        "source_a": source_a,
+        "source_b": source_b,
+    }
+
+
 def _point_in_convex_polygon(point: np.ndarray, poly: np.ndarray) -> bool:
     if len(poly) < 3:
         return False

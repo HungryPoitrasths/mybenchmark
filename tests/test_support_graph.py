@@ -6,6 +6,7 @@ from src.support_graph import (
     _contained_in_metrics,
     _supported_by_metrics,
     build_attachment_graph,
+    compute_bottom_footprint_overlap_metrics,
 )
 
 
@@ -48,6 +49,52 @@ def make_object(
 
 
 class SupportGraphHeuristicTests(unittest.TestCase):
+    def test_compute_bottom_footprint_overlap_metrics_prefers_bottom_hulls(self) -> None:
+        obj_a = make_object(
+            1,
+            "book",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.2),
+            bottom_hull_xy=_rect(0.0, 0.0, 1.0, 1.0),
+        )
+        obj_b = make_object(
+            2,
+            "box",
+            (0.5, 0.5, 0.0),
+            (1.5, 1.5, 0.3),
+            bottom_hull_xy=_rect(0.5, 0.5, 1.5, 1.5),
+        )
+
+        metrics = compute_bottom_footprint_overlap_metrics(obj_a, obj_b)
+
+        self.assertAlmostEqual(metrics["overlap_area"], 0.25)
+        self.assertAlmostEqual(metrics["coverage_a"], 0.25)
+        self.assertAlmostEqual(metrics["coverage_b"], 0.25)
+        self.assertAlmostEqual(metrics["coverage_small"], 0.25)
+        self.assertEqual(metrics["source_a"], "bottom_hull_xy")
+        self.assertEqual(metrics["source_b"], "bottom_hull_xy")
+
+    def test_compute_bottom_footprint_overlap_metrics_falls_back_to_bbox(self) -> None:
+        obj_a = make_object(
+            1,
+            "book",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.2),
+        )
+        obj_b = make_object(
+            2,
+            "box",
+            (0.8, 0.0, 0.0),
+            (1.8, 1.0, 0.3),
+        )
+
+        metrics = compute_bottom_footprint_overlap_metrics(obj_a, obj_b)
+
+        self.assertAlmostEqual(metrics["overlap_area"], 0.2)
+        self.assertAlmostEqual(metrics["coverage_small"], 0.2)
+        self.assertEqual(metrics["source_a"], "bbox")
+        self.assertEqual(metrics["source_b"], "bbox")
+
     def test_supported_by_allows_small_penetration_but_rejects_large_below_surface_gap(self) -> None:
         parent = make_object(
             10,

@@ -323,6 +323,54 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(rotate_questions, [])
         self.assertEqual(allocentric_questions, [])
 
+    def test_attachment_remapped_rotate_questions_can_be_kept_when_answer_is_unchanged(self) -> None:
+        child = make_object(1, "cup")
+        parent = make_object(2, "table")
+        face = make_object(3, "lamp")
+        ref = make_object(4, "chair")
+        objects = [child, parent, face, ref]
+        rotated_objects = [make_object(1, "cup"), make_object(2, "table"), face, ref]
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator.find_meaningful_orbit_rotation",
+                return_value=[{
+                    "angle": 90,
+                    "rotation_direction": "clockwise",
+                    "signed_angle": -90,
+                    "objects": rotated_objects,
+                }],
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                return_value=("left", 0.1),
+            ),
+        ):
+            questions = generate_l2_object_rotate_object_centric(
+                objects=[child, parent, face, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_rotate_object_centric": [
+                        "rotate {obj_move_source}: where is {obj_ref} from {obj_query} while facing {obj_face}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+            )
+
+        self.assertTrue(questions)
+        question = next(q for q in questions if q.get("attachment_remapped"))
+        self.assertEqual(question["type"], "object_rotate_object_centric")
+        self.assertTrue(question["attachment_remapped"])
+        self.assertTrue(question["relation_unchanged"])
+        self.assertEqual(question["correct_value"], "left")
+        self.assertEqual(question["old_correct_value"], "left")
+        self.assertEqual(question["new_correct_value"], "left")
+        self.assertTrue(question["has_attachment_chain"])
+
     def test_full_quality_pipeline_leaves_attachment_counts_untouched(self) -> None:
         from src.quality_control import full_quality_pipeline
 

@@ -21,7 +21,6 @@ from scripts.make_pipeline_trace_viewer import build_single_frame_trace_html
 from scripts.run_pipeline import (
     DEFAULT_VLM_URL,
     _build_frame_debug_entry,
-    _build_occlusion_vlm_adjudicator,
     _build_scene_attachment_rows,
     _filter_frame_attachment_rows,
     _get_referability_entry,
@@ -613,7 +612,6 @@ def run_single_frame_trace(
     referability_cache_path: Path | None = None,
     use_occlusion: bool = True,
     occlusion_backend: str = "mesh_ray",
-    use_occlusion_vlm: bool = False,
     vlm_url: str | None = None,
     vlm_model: str | None = None,
     label_batch_size: int = LABEL_BATCH_SIZE,
@@ -645,7 +643,6 @@ def run_single_frame_trace(
             "referability_cache_path": None if referability_cache_path is None else str(referability_cache_path),
             "occlusion_backend": occlusion_backend,
             "use_occlusion": bool(use_occlusion),
-            "use_occlusion_vlm": bool(use_occlusion_vlm),
             "vlm_url": vlm_url,
             "vlm_model": vlm_model,
             "trace_detail": trace_detail,
@@ -689,14 +686,7 @@ def run_single_frame_trace(
             trace_doc["stop_reason"] = "scene_directory_not_found"
             return trace_doc
 
-        occlusion_vlm_adjudicator = (
-            _build_occlusion_vlm_adjudicator(vlm_url, vlm_model)
-            if use_occlusion_vlm else None
-        )
-        needs_mesh_resources = (
-            occlusion_backend in ("depth", "mesh_ray")
-            or occlusion_vlm_adjudicator is not None
-        )
+        needs_mesh_resources = occlusion_backend in ("depth", "mesh_ray")
         preloaded_geometry = None
         if needs_mesh_resources:
             try:
@@ -938,13 +928,6 @@ def run_single_frame_trace(
                 depth_image = load_depth_image(depth_path)
             except Exception as exc:
                 logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
-        frame_image = None
-        if occlusion_vlm_adjudicator is not None:
-            import cv2
-
-            frame_image = cv2.imread(str(image_path))
-            if frame_image is None:
-                logger.warning("Cannot read frame image for occlusion VLM: %s", image_path)
 
         raw_questions = generate_all_questions(
             objects=scene["objects"],
@@ -963,8 +946,6 @@ def run_single_frame_trace(
             referable_object_ids=referable_ids,
             label_statuses=label_statuses,
             label_counts=label_counts,
-            frame_image=frame_image,
-            occlusion_vlm_adjudicator=occlusion_vlm_adjudicator,
             room_bounds=scene.get("room_bounds"),
             wall_objects=scene.get("wall_objects"),
             attachment_edges=scene.get("attachment_edges", []),
@@ -1152,7 +1133,6 @@ def main() -> None:
         choices=("depth", "mesh_ray"),
         default="mesh_ray",
     )
-    parser.add_argument("--use_occlusion_vlm", action="store_true")
     parser.add_argument("--vlm_url", type=str, default=DEFAULT_VLM_URL)
     parser.add_argument("--vlm_model", type=str, default=None)
     parser.add_argument("--label_batch_size", type=int, default=LABEL_BATCH_SIZE)
@@ -1187,7 +1167,6 @@ def main() -> None:
         referability_cache_path=referability_cache_path,
         use_occlusion=not args.no_occlusion,
         occlusion_backend=args.occlusion_backend,
-        use_occlusion_vlm=args.use_occlusion_vlm,
         vlm_url=args.vlm_url,
         vlm_model=args.vlm_model,
         label_batch_size=args.label_batch_size,
