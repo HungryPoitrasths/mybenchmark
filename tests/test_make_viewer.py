@@ -271,6 +271,30 @@ class MakeViewerTests(unittest.TestCase):
             notes,
         )
 
+    def test_question_review_notes_renders_instance_presence_review(self) -> None:
+        notes = question_review_notes(
+            {
+                "manual_review_reason": "VLM flagged mentioned objects: cabinet#42=unsure",
+                "question_presence_review": {
+                    "decision": "manual_review",
+                    "flagged_labels": ["cabinet"],
+                    "flagged_object_ids": [42],
+                    "object_reviews": [
+                        {
+                            "label": "cabinet",
+                            "obj_id": 42,
+                            "roles": ["reference", "target"],
+                            "status": "unsure",
+                            "reason": "invalid_crop",
+                        }
+                    ],
+                },
+            }
+        )
+
+        self.assertIn("flagged object ids: 42", notes)
+        self.assertIn("cabinet#42 [reference, target]: unsure (invalid_crop)", notes)
+
 
 if __name__ == "__main__":
     unittest.main()

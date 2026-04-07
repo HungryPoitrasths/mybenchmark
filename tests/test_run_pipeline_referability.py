@@ -49,6 +49,39 @@ def make_case_dir(prefix: str) -> Path:
     return path
 
 
+def make_frame_context(
+    *,
+    image_path: Path,
+    objects: list[dict] | None = None,
+    invalid_obj_ids: set[int] | None = None,
+    has_projection_context: bool = True,
+) -> dict:
+    objects = list(objects or [])
+    invalid_obj_ids = set(invalid_obj_ids or set())
+    objects_by_id = {int(obj["id"]): obj for obj in objects}
+    crop_by_obj_id = {}
+    for obj_id in objects_by_id:
+        crop_by_obj_id[obj_id] = {
+            "valid": obj_id not in invalid_obj_ids,
+            "reason": "invalid_crop" if obj_id in invalid_obj_ids else "",
+            "roi_bounds_px": [10, 30, 12, 36],
+            "image_b64": "Y3JvcA==",
+            "mime": "image/jpeg",
+        }
+    return {
+        "scene_id": image_path.parent.parent.name,
+        "image_name": image_path.name,
+        "image_path": image_path,
+        "image_exists": image_path.exists(),
+        "image_b64": "ZnVsbA==",
+        "mime": "image/jpeg",
+        "objects_by_id": objects_by_id,
+        "crop_by_obj_id": crop_by_obj_id,
+        "has_projection_context": has_projection_context,
+        "context_errors": [],
+    }
+
+
 def make_fake_review_response(text: str):
     return type(
         "FakeResponse",
@@ -90,20 +123,52 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         warning_mock.assert_called_once()
         self.assertIn("placeholder API key", warning_mock.call_args.args[0])
 
-    def test_collect_question_presence_labels_prefers_mentioned_objects(self) -> None:
-        labels = run_pipeline_module._collect_question_presence_labels(
+    def test_collect_question_presence_targets_prefers_mentioned_objects(self) -> None:
+        targets = run_pipeline_module._collect_question_presence_targets(
             {
                 "mentioned_objects": [
-                    {"label": "Cup"},
-                    {"label": "cup"},
-                    {"label": "Table"},
+                    {"label": "Cup", "obj_id": 1, "role": "target"},
+                    {"label": "cup", "obj_id": 1, "role": "query_obj"},
+                    {"label": "Table", "obj_id": 2, "role": "reference"},
                 ],
                 "obj_a_label": "Chair",
                 "obj_b_label": "Lamp",
-            }
+            },
+            objects_by_id={
+                1: make_object(1, "cup"),
+                2: make_object(2, "table"),
+            },
         )
 
-        self.assertEqual(labels, ["Cup", "Table"])
+        self.assertEqual(
+            targets,
+            [
+                {"label": "Cup", "obj_id": 1, "roles": ["query_obj", "target"]},
+                {"label": "Table", "obj_id": 2, "roles": ["reference"]},
+            ],
+        )
+
+    def test_collect_question_presence_targets_uses_fallback_obj_ids(self) -> None:
+        targets = run_pipeline_module._collect_question_presence_targets(
+            {
+                "obj_a_id": 2,
+                "obj_a_label": "table",
+                "obj_b_id": 1,
+                "obj_b_label": "cup",
+            },
+            objects_by_id={
+                1: make_object(1, "cup"),
+                2: make_object(2, "table"),
+            },
+        )
+
+        self.assertEqual(
+            targets,
+            [
+                {"label": "table", "obj_id": 2, "roles": ["obj_a"]},
+                {"label": "cup", "obj_id": 1, "roles": ["obj_b"]},
+            ],
+        )
 
     def test_build_question_referability_audit_drops_ambiguous_nonreferable_label(self) -> None:
         audit = run_pipeline_module._build_question_referability_audit(
@@ -189,6 +254,61 @@ class RunPipelineReferabilityTests(unittest.TestCase):
     def test_parse_mcq_answer_rejects_ambiguous_multi_letter_responses(self) -> None:
         self.assertEqual(run_pipeline_module._parse_mcq_answer("Answer: B"), "B")
         self.assertIsNone(run_pipeline_module._parse_mcq_answer("A or B"))
+
+    def test_make_question_presence_reviewer_uses_instance_targets_and_dynamic_tokens(self) -> None:
+        client = make_fake_review_client(
+            '{"objects":['
+            '{"obj_id":1,"status":"present","reason":"visible"},'
+            '{"obj_id":2,"status":"absent","reason":"not visible"},'
+            '{"obj_id":3,"status":"unsure","reason":"component of larger desk"}'
+            "]}"
+        )
+        _model, review_fn = run_pipeline_module._make_question_presence_reviewer(client, "fake-vlm")
+
+        review = review_fn(
+            {
+                "image_name": "000123.jpg",
+                "image_b64": "ZnVsbA==",
+                "mime": "image/jpeg",
+            },
+            {"question": "Where is the cup relative to the table?"},
+            [
+                {
+                    "label": "cup",
+                    "obj_id": 1,
+                    "roles": ["target"],
+                    "crop_image_b64": "Y3JvcDE=",
+                    "crop_mime": "image/jpeg",
+                    "roi_bounds_px": [1, 2, 3, 4],
+                },
+                {
+                    "label": "table",
+                    "obj_id": 2,
+                    "roles": ["reference"],
+                    "crop_image_b64": "Y3JvcDI=",
+                    "crop_mime": "image/jpeg",
+                    "roi_bounds_px": [5, 6, 7, 8],
+                },
+                {
+                    "label": "cabinet",
+                    "obj_id": 3,
+                    "roles": ["reference"],
+                    "crop_image_b64": "Y3JvcDM=",
+                    "crop_mime": "image/jpeg",
+                    "roi_bounds_px": [9, 10, 11, 12],
+                },
+            ],
+        )
+
+        create_kwargs = client.chat.completions.create.call_args.kwargs
+        self.assertEqual(create_kwargs["max_tokens"], 384)
+        content = create_kwargs["messages"][0]["content"]
+        self.assertEqual(sum(1 for item in content if item["type"] == "image_url"), 4)
+        self.assertIn('"obj_id": 1', content[-1]["text"])
+        self.assertIn("component/substructure", content[-1]["text"])
+        self.assertEqual(review["object_reviews"][0]["obj_id"], 1)
+        self.assertEqual(review["object_reviews"][1]["status"], "absent")
+        self.assertEqual(review["object_reviews"][2]["status"], "unsure")
 
     def test_combine_manual_review_reasons_deduplicates(self) -> None:
         combined = run_pipeline_module._combine_manual_review_reasons(
@@ -573,22 +693,42 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 "type": "direction_agent",
                 "level": "L1",
                 "mentioned_objects": [
-                    {"label": "cup"},
-                    {"label": "table"},
+                    {"label": "cup", "obj_id": 1, "role": "target"},
+                    {"label": "table", "obj_id": 2, "role": "reference"},
                 ],
             }
         ]
 
-        def fake_presence_review(image_path, question, labels):
-            self.assertEqual(image_path.name, image_name)
-            self.assertEqual(labels, ["cup", "table"])
+        frame_context = {
+            (scene_id, image_name): make_frame_context(
+                image_path=color_dir / image_name,
+                objects=[make_object(1, "cup"), make_object(2, "table")],
+            )
+        }
+
+        def fake_presence_review(frame_context_arg, question, targets):
+            self.assertEqual(frame_context_arg["image_name"], image_name)
+            self.assertEqual([target["obj_id"] for target in targets], [1, 2])
             return {
-                "decision": "manual_review",
-                "flagged_labels": ["cup"],
                 "object_reviews": [
-                    {"label": "cup", "status": "absent", "reason": "not visible"},
-                    {"label": "table", "status": "present", "reason": "visible"},
+                    {
+                        "label": "cup",
+                        "obj_id": 1,
+                        "roles": ["target"],
+                        "status": "absent",
+                        "reason": "not visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
+                    {
+                        "label": "table",
+                        "obj_id": 2,
+                        "roles": ["reference"],
+                        "status": "present",
+                        "reason": "visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
                 ],
+                "raw_response": '{"objects":[]}',
             }
 
         def fake_answer_review(image_path, question):
@@ -607,6 +747,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "_resolve_question_review_vlm", return_value=(object(), "fake-vlm")),
             patch.object(run_pipeline_module, "_make_question_presence_reviewer", return_value=("fake-vlm", fake_presence_review)),
             patch.object(run_pipeline_module, "_make_question_answer_reviewer", return_value=("fake-vlm", fake_answer_review)),
+            patch.object(run_pipeline_module, "_prebuild_question_review_frame_contexts", return_value=frame_context),
         ):
             summary = run_pipeline_module._run_question_presence_review(
                 questions=questions,
@@ -634,13 +775,21 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(len(flagged_json["questions"]), 1)
         self.assertEqual(
             flagged_json["questions"][0]["manual_review_reason"],
-            "VLM flagged mentioned objects: cup=absent",
+            "VLM flagged mentioned objects: cup#1=absent",
         )
         self.assertEqual(
             flagged_json["questions"][0]["question_answer_review"]["decision"],
             "pass",
         )
-        self.assertIn("VLM flagged mentioned objects: cup=absent", flagged_html)
+        self.assertEqual(
+            flagged_json["questions"][0]["question_presence_review"]["review_mode"],
+            "instance",
+        )
+        self.assertEqual(
+            flagged_json["questions"][0]["question_presence_review"]["flagged_object_ids"],
+            [1],
+        )
+        self.assertIn("VLM flagged mentioned objects: cup#1=absent", flagged_html)
 
     def test_run_question_presence_review_flags_answer_mismatch_for_target_types(self) -> None:
         root = make_case_dir("answer_review")
@@ -664,22 +813,42 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 "type": "direction_agent",
                 "level": "L1",
                 "mentioned_objects": [
-                    {"label": "cup"},
-                    {"label": "chair"},
+                    {"label": "cup", "obj_id": 1, "role": "target"},
+                    {"label": "chair", "obj_id": 2, "role": "reference"},
                 ],
             }
         ]
 
-        def fake_presence_review(image_path, question, labels):
-            self.assertEqual(image_path.name, image_name)
-            self.assertEqual(labels, ["cup", "chair"])
+        frame_context = {
+            (scene_id, image_name): make_frame_context(
+                image_path=color_dir / image_name,
+                objects=[make_object(1, "cup"), make_object(2, "chair")],
+            )
+        }
+
+        def fake_presence_review(frame_context_arg, question, targets):
+            self.assertEqual(frame_context_arg["image_name"], image_name)
+            self.assertEqual([target["obj_id"] for target in targets], [1, 2])
             return {
-                "decision": "pass",
-                "flagged_labels": [],
                 "object_reviews": [
-                    {"label": "cup", "status": "present", "reason": "visible"},
-                    {"label": "chair", "status": "present", "reason": "visible"},
+                    {
+                        "label": "cup",
+                        "obj_id": 1,
+                        "roles": ["target"],
+                        "status": "present",
+                        "reason": "visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
+                    {
+                        "label": "chair",
+                        "obj_id": 2,
+                        "roles": ["reference"],
+                        "status": "present",
+                        "reason": "visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
                 ],
+                "raw_response": '{"objects":[]}',
             }
 
         def fake_answer_review(image_path, question):
@@ -698,6 +867,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "_resolve_question_review_vlm", return_value=(object(), "fake-vlm")),
             patch.object(run_pipeline_module, "_make_question_presence_reviewer", return_value=("fake-vlm", fake_presence_review)),
             patch.object(run_pipeline_module, "_make_question_answer_reviewer", return_value=("fake-vlm", fake_answer_review)),
+            patch.object(run_pipeline_module, "_prebuild_question_review_frame_contexts", return_value=frame_context),
         ):
             summary = run_pipeline_module._run_question_presence_review(
                 questions=questions,
@@ -746,24 +916,125 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             "answer": "A",
             "options": ["yes", "no"],
             "type": "attachment_chain",
-            "mentioned_objects": [{"label": "cup"}, {"label": "table"}],
+            "mentioned_objects": [
+                {"label": "cup", "obj_id": 1, "role": "target"},
+                {"label": "table", "obj_id": 2, "role": "reference"},
+            ],
+        }
+        frame_context_by_key = {
+            (scene_id, image_name): make_frame_context(
+                image_path=color_dir / image_name,
+                objects=[make_object(1, "cup"), make_object(2, "table")],
+            )
         }
 
         reviewed = run_pipeline_module._review_question_object_presence(
             lambda *_args, **_kwargs: {
-                "decision": "pass",
-                "flagged_labels": [],
-                "object_reviews": [],
+                "object_reviews": [
+                    {
+                        "label": "cup",
+                        "obj_id": 1,
+                        "roles": ["target"],
+                        "status": "present",
+                        "reason": "visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
+                    {
+                        "label": "table",
+                        "obj_id": 2,
+                        "roles": ["reference"],
+                        "status": "present",
+                        "reason": "visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
+                ],
+                "raw_response": "",
             },
             lambda *_args, **_kwargs: self.fail("answer review should be skipped"),
             question_index=0,
             question=question,
             data_root=data_root,
+            frame_context_by_key=frame_context_by_key,
         )
 
         self.assertEqual(reviewed["question_presence_review"]["decision"], "pass")
         self.assertEqual(reviewed["question_answer_review"]["decision"], "skipped")
         self.assertNotIn("manual_review_reason", reviewed)
+
+    def test_review_question_object_presence_marks_missing_obj_id_for_manual_review(self) -> None:
+        root = make_case_dir("missing_obj_id_review")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        color_dir = data_root / scene_id / "color"
+        color_dir.mkdir(parents=True)
+        (color_dir / image_name).write_bytes(b"not-a-real-jpeg")
+
+        reviewed = run_pipeline_module._review_question_object_presence(
+            lambda *_args, **_kwargs: self.fail("presence review should not run"),
+            lambda *_args, **_kwargs: self.fail("answer review should be skipped"),
+            question_index=0,
+            question={
+                "scene_id": scene_id,
+                "image_name": image_name,
+                "question": "Where is the cup relative to the table?",
+                "type": "attachment_chain",
+                "mentioned_objects": [{"label": "cup", "role": "target"}],
+            },
+            data_root=data_root,
+            frame_context_by_key={},
+        )
+
+        self.assertEqual(reviewed["question_presence_review"]["decision"], "manual_review")
+        self.assertEqual(
+            reviewed["question_presence_review"]["object_reviews"][0]["reason"],
+            "missing_obj_id",
+        )
+        self.assertEqual(
+            reviewed["manual_review_reason"],
+            "VLM flagged mentioned objects: cup=unsure",
+        )
+
+    def test_review_question_object_presence_marks_invalid_crop_for_manual_review(self) -> None:
+        root = make_case_dir("invalid_crop_review")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        color_dir = data_root / scene_id / "color"
+        color_dir.mkdir(parents=True)
+        (color_dir / image_name).write_bytes(b"not-a-real-jpeg")
+        frame_context_by_key = {
+            (scene_id, image_name): make_frame_context(
+                image_path=color_dir / image_name,
+                objects=[make_object(1, "cup"), make_object(2, "table")],
+                invalid_obj_ids={1},
+            )
+        }
+
+        reviewed = run_pipeline_module._review_question_object_presence(
+            lambda *_args, **_kwargs: self.fail("presence review should not run for invalid crops"),
+            lambda *_args, **_kwargs: self.fail("answer review should be skipped"),
+            question_index=0,
+            question={
+                "scene_id": scene_id,
+                "image_name": image_name,
+                "question": "Where is the cup relative to the table?",
+                "type": "attachment_chain",
+                "mentioned_objects": [
+                    {"label": "cup", "obj_id": 1, "role": "target"},
+                ],
+            },
+            data_root=data_root,
+            frame_context_by_key=frame_context_by_key,
+        )
+
+        self.assertEqual(reviewed["question_presence_review"]["decision"], "manual_review")
+        self.assertEqual(
+            reviewed["question_presence_review"]["object_reviews"][0]["reason"],
+            "invalid_crop",
+        )
 
     def test_review_question_object_presence_combines_presence_and_answer_reasons(self) -> None:
         root = make_case_dir("combine_review")
@@ -782,17 +1053,39 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             "answer": "A",
             "options": ["left", "right", "front", "behind"],
             "type": "direction_agent",
-            "mentioned_objects": [{"label": "cup"}, {"label": "chair"}],
+            "mentioned_objects": [
+                {"label": "cup", "obj_id": 1, "role": "target"},
+                {"label": "chair", "obj_id": 2, "role": "reference"},
+            ],
+        }
+        frame_context_by_key = {
+            (scene_id, image_name): make_frame_context(
+                image_path=color_dir / image_name,
+                objects=[make_object(1, "cup"), make_object(2, "chair")],
+            )
         }
 
         reviewed = run_pipeline_module._review_question_object_presence(
             lambda *_args, **_kwargs: {
-                "decision": "manual_review",
-                "flagged_labels": ["cup"],
                 "object_reviews": [
-                    {"label": "cup", "status": "absent", "reason": "not visible"},
-                    {"label": "chair", "status": "present", "reason": "visible"},
+                    {
+                        "label": "cup",
+                        "obj_id": 1,
+                        "roles": ["target"],
+                        "status": "absent",
+                        "reason": "not visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
+                    {
+                        "label": "chair",
+                        "obj_id": 2,
+                        "roles": ["reference"],
+                        "status": "present",
+                        "reason": "visible",
+                        "roi_bounds_px": [10, 30, 12, 36],
+                    },
                 ],
+                "raw_response": "",
             },
             lambda *_args, **_kwargs: {
                 "decision": "manual_review",
@@ -806,11 +1099,12 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             question_index=0,
             question=question,
             data_root=data_root,
+            frame_context_by_key=frame_context_by_key,
         )
 
         self.assertEqual(
             reviewed["manual_review_reason"],
-            "VLM flagged mentioned objects: cup=absent | VLM answered B (right) but gold answer is A (left)",
+            "VLM flagged mentioned objects: cup#1=absent | VLM answered B (right) but gold answer is A (left)",
         )
 
     def test_make_question_answer_reviewer_flags_invalid_gold_answer(self) -> None:

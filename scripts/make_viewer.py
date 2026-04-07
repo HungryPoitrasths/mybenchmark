@@ -489,6 +489,14 @@ def question_review_notes(question: dict) -> str:
             labels_text = ", ".join(str(label) for label in flagged_labels if str(label).strip())
             if labels_text:
                 lines.append(f"flagged labels: {labels_text}")
+        flagged_object_ids = review.get("flagged_object_ids", [])
+        if isinstance(flagged_object_ids, list) and flagged_object_ids:
+            object_text = ", ".join(
+                str(obj_id) for obj_id in flagged_object_ids
+                if str(obj_id).strip()
+            )
+            if object_text:
+                lines.append(f"flagged object ids: {object_text}")
 
         object_reviews = review.get("object_reviews", [])
         if isinstance(object_reviews, list):
@@ -496,11 +504,22 @@ def question_review_notes(question: dict) -> str:
                 if not isinstance(obj_review, dict):
                     continue
                 label = str(obj_review.get("label", "")).strip()
+                obj_id = obj_review.get("obj_id")
+                roles = obj_review.get("roles", [])
                 status = str(obj_review.get("status", "")).strip()
                 reason = str(obj_review.get("reason", "")).strip()
-                if not label and not status:
+                if not label and obj_id in (None, "") and not status:
                     continue
-                line = f"{label}: {status}" if label else status
+                subject = label or "object"
+                if obj_id not in (None, ""):
+                    subject = f"{subject}#{obj_id}"
+                if isinstance(roles, list):
+                    role_text = ", ".join(
+                        str(role).strip() for role in roles if str(role).strip()
+                    )
+                    if role_text:
+                        subject = f"{subject} [{role_text}]"
+                line = f"{subject}: {status}" if status else subject
                 if reason:
                     line = f"{line} ({reason})"
                 lines.append(line)

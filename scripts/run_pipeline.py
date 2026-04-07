@@ -1209,6 +1209,7 @@ def _review_question_object_presence(
     question_index: int,
     question: dict[str, object],
     data_root: Path,
+    frame_context_by_key: dict[tuple[str, str], dict[str, object]],
 ) -> dict[str, object]:
     reviewed_question = dict(question)
     reviewed_question["benchmark_index"] = int(question_index)
@@ -1216,45 +1217,121 @@ def _review_question_object_presence(
 
     scene_id = str(question.get("scene_id", "")).strip()
     image_name = str(question.get("image_name", "")).strip()
-    image_path = data_root / scene_id / "color" / image_name
+    frame_context = frame_context_by_key.get((scene_id, image_name))
+    image_path = (
+        frame_context.get("image_path")
+        if isinstance(frame_context, dict) and isinstance(frame_context.get("image_path"), Path)
+        else (data_root / scene_id / "color" / image_name)
+    )
 
-    labels = _collect_question_presence_labels(question)
-    if not labels:
-        review = {
-            "decision": "pass",
-            "flagged_labels": [],
-            "object_reviews": [],
-        }
-    else:
-        if not image_path.exists():
-            review = {
-                "decision": "manual_review",
-                "flagged_labels": list(labels),
-                "object_reviews": [
+    objects_by_id = (
+        dict(frame_context.get("objects_by_id", {}))
+        if isinstance(frame_context, dict) else {}
+    )
+    targets = _collect_question_presence_targets(question, objects_by_id)
+    object_reviews: list[dict[str, object]] = []
+    raw_response = ""
+    valid_targets: list[dict[str, object]] = []
+
+    for target in targets:
+        obj_id = _coerce_object_id(target.get("obj_id"))
+        if obj_id is None:
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_obj_id",
+                )
+            )
+            continue
+        if not isinstance(frame_context, dict):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_frame_context",
+                )
+            )
+            continue
+        if not bool(frame_context.get("image_exists", False)):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="image_not_found",
+                )
+            )
+            continue
+        if obj_id not in objects_by_id:
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="object_not_in_scene",
+                )
+            )
+            continue
+        if not bool(frame_context.get("has_projection_context", False)) or not str(frame_context.get("image_b64", "") or ""):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_frame_context",
+                )
+            )
+            continue
+
+        crop_entry = frame_context.get("crop_by_obj_id", {}).get(obj_id)
+        if not isinstance(crop_entry, dict):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_projection",
+                )
+            )
+            continue
+        if not bool(crop_entry.get("valid", False)):
+            object_reviews.append(
+                _build_presence_review_entry(
                     {
-                        "label": label,
-                        "status": "unsure",
-                        "reason": f"image not found: {image_path.name}",
-                    }
-                    for label in labels
-                ],
+                        **target,
+                        "roi_bounds_px": crop_entry.get("roi_bounds_px"),
+                    },
+                    status="unsure",
+                    reason=str(crop_entry.get("reason", "")).strip() or "invalid_crop",
+                )
+            )
+            continue
+
+        valid_targets.append(
+            {
+                **target,
+                "roi_bounds_px": crop_entry.get("roi_bounds_px"),
+                "crop_image_b64": crop_entry.get("image_b64"),
+                "crop_mime": crop_entry.get("mime", "image/jpeg"),
             }
-        else:
-            try:
-                review = review_fn(image_path, question, labels)
-            except Exception as e:
-                review = {
-                    "decision": "manual_review",
-                    "flagged_labels": list(labels),
-                    "object_reviews": [
-                        {
-                            "label": label,
-                            "status": "unsure",
-                            "reason": f"VLM review failed: {e}",
-                        }
-                        for label in labels
-                    ],
-                }
+        )
+
+    if valid_targets:
+        try:
+            vlm_review = review_fn(frame_context, question, valid_targets)
+            raw_response = str(vlm_review.get("raw_response", "") or "")
+            object_reviews.extend(list(vlm_review.get("object_reviews", [])))
+        except Exception as e:
+            object_reviews.extend(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason=f"VLM review failed: {e}",
+                )
+                for target in valid_targets
+            )
+
+    review = _finalize_presence_review(object_reviews, raw_response=raw_response)
+    if not targets:
+        review = _finalize_presence_review([], raw_response="")
+        review["decision"] = "pass"
 
     reviewed_question["question_presence_review"] = review
     if review.get("decision") == "manual_review":
@@ -1317,6 +1394,11 @@ def _run_question_presence_review(
     _, review_fn = _make_question_presence_reviewer(client, model_name)
     _, answer_review_fn = _make_question_answer_reviewer(client, model_name)
     reviewed_questions: list[dict[str, object]] = []
+    frame_context_by_key = _prebuild_question_review_frame_contexts(
+        questions=questions,
+        data_root=data_root,
+        output_dir=output_dir,
+    )
 
     if questions:
         with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
@@ -1328,6 +1410,7 @@ def _run_question_presence_review(
                     question_index=idx,
                     question=question,
                     data_root=data_root,
+                    frame_context_by_key=frame_context_by_key,
                 )
                 for idx, question in enumerate(questions)
             ]
