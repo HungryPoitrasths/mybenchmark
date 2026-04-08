@@ -142,7 +142,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 8.0"):
+        with self.assertRaisesRegex(ValueError, "expected 9.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_run_pipeline_requires_referability_cache(self) -> None:
@@ -173,7 +173,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "8.0",
+            "version": "9.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -265,7 +265,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "8.0",
+            "version": "9.0",
             "frames": {
                 scene_id: {
                     image_name: {

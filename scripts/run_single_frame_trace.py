@@ -829,7 +829,7 @@ def run_single_frame_trace(
         trace_doc["frame_context"]["referability_source"] = referability_source
         if not referability_entry.get("frame_usable", True):
             trace_doc["status"] = "stopped"
-            trace_doc["stop_reason"] = "frame_rejected_by_focus_check"
+            trace_doc["stop_reason"] = "frame_rejected_by_vlm_frame_review"
             trace_doc["stop_details"] = {
                 "requested_image_name": image_name,
                 "frame_reject_reason": referability_entry.get("frame_reject_reason"),

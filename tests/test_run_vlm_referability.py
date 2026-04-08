@@ -53,13 +53,14 @@ def make_visibility_meta(
 
 
 class RunVlmReferabilityTests(unittest.TestCase):
-    def test_frame_prompt_focuses_on_focus_quality_only(self) -> None:
+    def test_frame_prompt_requests_clarity_scoring_with_lenient_blur_handling(self) -> None:
         prompt = referability_module._frame_prompt().lower()
 
-        self.assertIn("focus", prompt)
-        self.assertIn("out of focus", prompt)
-        self.assertIn("only about image focus quality", prompt)
-        self.assertNotIn("candidate label list", prompt)
+        self.assertIn("clarity_score", prompt)
+        self.assertIn("slight softness is acceptable", prompt)
+        self.assertIn("severely_out_of_focus", prompt)
+        self.assertIn("usable_for_spatial_reasoning", prompt)
+        self.assertIn("prioritize image clarity", prompt)
 
     def test_object_review_prompt_uses_full_image_plus_crop(self) -> None:
         prompt = referability_module._object_review_prompt("chair").lower()
@@ -71,11 +72,19 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("unsure", prompt)
         self.assertNotIn("obj_id", prompt)
 
-    def test_frame_decision_propagates_focus_result(self) -> None:
+    def test_frame_decision_propagates_clarity_review_result(self) -> None:
         with patch.object(
             referability_module,
             "_call_vlm_json",
-            return_value=({"frame_usable": False, "reason": "out_of_focus"}, ""),
+            return_value=(
+                {
+                    "clarity_score": 28,
+                    "severely_out_of_focus": True,
+                    "usable_for_spatial_reasoning": False,
+                    "reason": "severely blurry",
+                },
+                "",
+            ),
         ):
             decision = referability_module._frame_decision(
                 client=object(),
@@ -86,8 +95,56 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(
             decision,
             {
+                "clarity_score": 28,
+                "severely_out_of_focus": True,
+                "usable_for_spatial_reasoning": False,
                 "frame_usable": False,
-                "reason": "out_of_focus",
+                "reason": "severely blurry",
+            },
+        )
+
+    def test_frame_selection_score_prioritizes_usable_and_clarity(self) -> None:
+        clear_usable = referability_module._frame_selection_score(
+            10,
+            {
+                "clarity_score": 70,
+                "frame_usable": True,
+            },
+        )
+        sharper_but_unusable = referability_module._frame_selection_score(
+            999,
+            {
+                "clarity_score": 95,
+                "frame_usable": False,
+            },
+        )
+        slightly_clearer = referability_module._frame_selection_score(
+            1,
+            {
+                "clarity_score": 71,
+                "frame_usable": True,
+            },
+        )
+
+        self.assertGreater(clear_usable, sharper_but_unusable)
+        self.assertGreater(slightly_clearer, clear_usable)
+
+    def test_normalize_frame_review_backfills_from_partial_entry(self) -> None:
+        normalized = referability_module._normalize_frame_review(
+            {
+                "frame_usable": False,
+                "reason": "too blurry for geometry",
+            }
+        )
+
+        self.assertEqual(
+            normalized,
+            {
+                "clarity_score": 60,
+                "severely_out_of_focus": False,
+                "usable_for_spatial_reasoning": False,
+                "frame_usable": False,
+                "reason": "too blurry for geometry",
             },
         )
 
@@ -198,7 +255,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(referable_ids, [1])
 
-    def test_compute_frame_referability_entry_builds_v8_object_reviews(self) -> None:
+    def test_compute_frame_referability_entry_builds_v9_object_reviews(self) -> None:
         scene_objects = [
             make_object(1, "chair"),
             make_object(2, "chair"),
@@ -215,7 +272,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_frame_decision",
-                return_value={"frame_usable": True, "reason": "in_focus"},
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
             ),
             patch.object(
                 referability_module,
@@ -248,6 +311,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(frame_entry["frame_usable"], True)
+        self.assertEqual(frame_entry["frame_quality_score"], 82)
+        self.assertEqual(frame_entry["frame_quality_severely_out_of_focus"], False)
+        self.assertEqual(frame_entry["frame_quality_usable_for_spatial_reasoning"], True)
+        self.assertEqual(frame_entry["frame_quality_reason"], "clear enough")
         self.assertEqual(frame_entry["candidate_visibility_source"], "depth_refined")
         self.assertEqual(frame_entry["label_statuses"], {"chair": "unique", "lamp": "absent"})
         self.assertEqual(frame_entry["label_counts"], {"chair": 1, "lamp": 0})

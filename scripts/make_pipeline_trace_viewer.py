@@ -427,7 +427,7 @@ def build_single_frame_trace_html(
           <div class="metrics">
             <div class="metric"><div class="k">Selector Visible</div><div class="v">{len(frame_context.get("selector_visible_object_ids", []))}</div><div class="s">{_h(frame_context.get("candidate_visibility_source", "-"))}</div></div>
             <div class="metric"><div class="k">Pipeline Visible</div><div class="v">{len(frame_context.get("pipeline_visible_object_ids_used_for_generation", []))}</div><div class="s">{_h(frame_context.get("pipeline_skip_reason") or "generated")}</div></div>
-            <div class="metric"><div class="k">Referable Objects</div><div class="v">{len(frame_context.get("referable_object_ids", []))}</div><div class="s">{_h(frame_context.get("frame_reject_reason") or "focus check passed")}</div></div>
+            <div class="metric"><div class="k">Referable Objects</div><div class="v">{len(frame_context.get("referable_object_ids", []))}</div><div class="s">{_h(frame_context.get("frame_reject_reason") or "frame review passed")}</div></div>
             <div class="metric"><div class="k">Attachments</div><div class="v">{len(frame_context.get("attachment_rows", []))}</div><div class="s">{_h(frame_context.get("image_path", "-"))}</div></div>
           </div>
           <h3 style="margin-top:16px">Referability Audit</h3>

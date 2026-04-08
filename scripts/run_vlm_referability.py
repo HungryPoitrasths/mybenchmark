@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""VLM-based frame-focus and per-object referability prefilter.
+"""VLM-based frame-quality and per-object referability prefilter.
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
-  1. whether the frame passes an image-focus check;
+  1. how clear the full frame is and whether it is severely out of focus;
   2. for each projected candidate object, whether its crop is clear, absent,
      or unsure for the expected label.
 
@@ -52,13 +52,16 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "8.0"
+REFERABILITY_CACHE_VERSION = "9.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
+FRAME_SELECTION_CANDIDATE_MULTIPLIER = 3
+FRAME_QUALITY_PRIMARY_WEIGHT = 1000
+FRAME_USABLE_BONUS = 100000
 
 OBJECT_STATUS_CLEAR = "clear"
 OBJECT_STATUS_ABSENT = "absent"
@@ -121,13 +124,14 @@ def _call_vlm_json(
 
 def _frame_prompt() -> str:
     return (
-        "You are given one original scene image. "
-        "Decide whether the camera appears properly focused in this frame. "
-        "This check is only about image focus quality. "
-        "Mark frame_usable=true only when the image looks in focus and there is no obvious autofocus failure, defocus blur, or globally soft focus. "
-        "Mark frame_usable=false when the image looks unfocused, out of focus, or the camera clearly failed to lock focus. "
-        "Do not judge whether the frame is good for question generation, object coverage, or scene semantics. "
-        'Answer with strict JSON only: {"frame_usable": true, "reason": "in_focus"}'
+        "You are given one original indoor scene image. "
+        "Evaluate the full-frame image clarity first. "
+        "Slight softness is acceptable; only mark severely_out_of_focus=true when the image has obvious global defocus blur, autofocus failure, or severe blur that makes object boundaries hard to read. "
+        "Then decide whether the frame is still usable for spatial-reasoning questions. "
+        "A frame can be usable even if it is slightly soft, as long as the scene layout and object extents remain readable. "
+        "Return a clarity_score from 0 to 100, where higher means clearer and sharper. "
+        "Prioritize image clarity over scene semantics when assigning the score. "
+        'Answer with strict JSON only: {"clarity_score": 78, "severely_out_of_focus": false, "usable_for_spatial_reasoning": true, "reason": "clear enough with minor softness"}'
     )
 
 
@@ -155,6 +159,54 @@ def _normalize_object_review_status(value: object) -> str | None:
     return None
 
 
+def _coerce_bool(value: object, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "yes", "1"}:
+        return True
+    if text in {"false", "no", "0"}:
+        return False
+    return default
+
+
+def _normalize_clarity_score(value: object, *, default: int = 60) -> int:
+    try:
+        score = int(round(float(value)))
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(100, score))
+
+
+def _normalize_frame_review(value: dict[str, Any] | None) -> dict[str, Any]:
+    parsed = value if isinstance(value, dict) else {}
+    fallback_usable = (
+        bool(parsed.get("frame_usable"))
+        if "usable_for_spatial_reasoning" not in parsed and isinstance(parsed.get("frame_usable"), bool)
+        else True
+    )
+    clarity_score = _normalize_clarity_score(parsed.get("clarity_score"), default=60)
+    severely_out_of_focus = _coerce_bool(parsed.get("severely_out_of_focus"), default=False)
+    usable_for_spatial_reasoning = _coerce_bool(
+        parsed.get("usable_for_spatial_reasoning"),
+        default=fallback_usable,
+    )
+    return {
+        "clarity_score": clarity_score,
+        "severely_out_of_focus": severely_out_of_focus,
+        "usable_for_spatial_reasoning": usable_for_spatial_reasoning,
+        "frame_usable": usable_for_spatial_reasoning and not severely_out_of_focus,
+        "reason": str(parsed.get("reason", "")).strip() or "frame_quality_parse_fallback",
+    }
+
+
+def _frame_selection_score(selector_score: int, frame_info: dict[str, Any]) -> int:
+    normalized = _normalize_frame_review(frame_info)
+    usable_bonus = FRAME_USABLE_BONUS if normalized["frame_usable"] else 0
+    clarity_score = normalized["clarity_score"]
+    return usable_bonus + (clarity_score * FRAME_QUALITY_PRIMARY_WEIGHT) + int(selector_score)
+
+
 def _frame_decision(
     client,
     model: str,
@@ -162,8 +214,10 @@ def _frame_decision(
 ) -> dict[str, Any]:
     full_b64 = _image_to_base64(image)
     default = {
-        "frame_usable": True,
-        "reason": "focus_check_parse_fallback",
+        "clarity_score": 60,
+        "severely_out_of_focus": False,
+        "usable_for_spatial_reasoning": True,
+        "reason": "frame_quality_parse_fallback",
     }
     parsed, _raw_text = _call_vlm_json(
         client,
@@ -175,10 +229,7 @@ def _frame_decision(
         default=default,
         max_tokens=128,
     )
-    return {
-        "frame_usable": bool(parsed.get("frame_usable", default["frame_usable"])),
-        "reason": str(parsed.get("reason", default["reason"])),
-    }
+    return _normalize_frame_review({**default, **parsed})
 
 
 def _object_review_decision(
@@ -432,6 +483,9 @@ def _compute_frame_referability_entry(
     depth_image: np.ndarray | None,
     depth_intrinsics,
     selector_visible_object_ids: list[int],
+    selector_score: int | None = None,
+    frame_info: dict[str, Any] | None = None,
+    frame_selection_score: int | None = None,
 ) -> dict[str, Any]:
     selector_visible_object_ids = sorted(
         int(obj_id)
@@ -454,13 +508,23 @@ def _compute_frame_referability_entry(
         objects_by_id,
     )
 
-    frame_info = _frame_decision(client, model_name, image)
+    normalized_frame_info = (
+        _normalize_frame_review(frame_info)
+        if isinstance(frame_info, dict)
+        else _frame_decision(client, model_name, image)
+    )
+    selector_score_value = int(selector_score) if selector_score is not None else len(selector_visible_object_ids)
+    selection_score_value = (
+        int(frame_selection_score)
+        if frame_selection_score is not None
+        else _frame_selection_score(selector_score_value, normalized_frame_info)
+    )
     object_reviews: dict[int, dict[str, Any]] = {}
     label_statuses: dict[str, str] = {}
     label_counts: dict[str, int] = {}
     referable_object_ids: list[int] = []
 
-    if frame_info["frame_usable"]:
+    if normalized_frame_info["frame_usable"]:
         visibility_by_obj_id = compute_frame_object_visibility(
             scene_objects,
             camera_pose,
@@ -501,9 +565,20 @@ def _compute_frame_referability_entry(
         )
 
     return {
-        "frame_usable": frame_info["frame_usable"],
-        "frame_reject_reason": None if frame_info["frame_usable"] else frame_info["reason"],
-        "selector_score": len(selector_visible_object_ids),
+        "frame_usable": normalized_frame_info["frame_usable"],
+        "frame_reject_reason": None if normalized_frame_info["frame_usable"] else normalized_frame_info["reason"],
+        "selector_score": selector_score_value,
+        "frame_quality_score": _normalize_clarity_score(normalized_frame_info.get("clarity_score"), default=60),
+        "frame_quality_severely_out_of_focus": _coerce_bool(
+            normalized_frame_info.get("severely_out_of_focus"),
+            default=False,
+        ),
+        "frame_quality_usable_for_spatial_reasoning": _coerce_bool(
+            normalized_frame_info.get("usable_for_spatial_reasoning"),
+            default=True,
+        ),
+        "frame_quality_reason": str(normalized_frame_info.get("reason", "")).strip(),
+        "frame_selection_score": selection_score_value,
         "selector_visible_object_ids": selector_visible_object_ids,
         "selector_visible_label_counts": selector_visible_label_counts,
         "candidate_visible_object_ids": candidate_visible_object_ids,
@@ -532,6 +607,11 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
     if not isinstance(entry, dict):
         return False
     required_keys = {
+        "frame_quality_score",
+        "frame_quality_severely_out_of_focus",
+        "frame_quality_usable_for_spatial_reasoning",
+        "frame_quality_reason",
+        "frame_selection_score",
         "candidate_visible_object_ids",
         "candidate_visibility_source",
         "candidate_labels",
@@ -544,6 +624,59 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
         "referable_object_ids",
     }
     return required_keys.issubset(entry.keys())
+
+
+def _select_and_rerank_frames(
+    *,
+    client,
+    model_name: str,
+    scene_dir: Path,
+    frame_candidates: list[dict[str, Any]],
+    max_frames: int,
+) -> list[dict[str, Any]]:
+    color_dir = scene_dir / "color"
+    reranked: list[dict[str, Any]] = []
+    for frame in frame_candidates:
+        image_name = str(frame.get("image_name", "")).strip()
+        if not image_name:
+            continue
+        image_path = color_dir / image_name
+        image = cv2.imread(str(image_path))
+        if image is None:
+            logger.warning("Cannot read image %s", image_path)
+            continue
+        frame_info = _frame_decision(client, model_name, image)
+        selector_score = int(frame.get("score", frame.get("n_visible", 0)) or 0)
+        reranked.append(
+            {
+                **frame,
+                "selector_score": selector_score,
+                "frame_info": frame_info,
+                "frame_selection_score": _frame_selection_score(selector_score, frame_info),
+            }
+        )
+
+    reranked.sort(
+        key=lambda entry: (
+            int(entry.get("frame_selection_score", 0)),
+            int(entry.get("selector_score", 0)),
+            int(entry.get("n_visible", 0)),
+            str(entry.get("image_name", "")),
+        ),
+        reverse=True,
+    )
+    selected = reranked[:max(0, int(max_frames))]
+    if reranked:
+        logger.info(
+            "VLM reranked %d geometric frame candidates for %s; kept %d (usable candidates=%d, best clarity=%d, best rerank score=%d)",
+            len(reranked),
+            scene_dir.name,
+            len(selected),
+            sum(1 for entry in reranked if entry.get("frame_info", {}).get("frame_usable", True)),
+            int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
+            int(reranked[0].get("frame_selection_score", 0)),
+        )
+    return selected
 
 
 def main():
@@ -671,9 +804,23 @@ def main():
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)
             continue
+        scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
+        if scene_cache and all(_frame_entry_has_debug_fields(entry) for entry in scene_cache.values()):
+            logger.info("Scene %s already cached -> skipping", scene_id)
+            processed += 1
+            continue
 
-        frames = select_frames(scene_dir, scene["objects"], attachment_graph, args.max_frames)
-        if not frames:
+        frame_candidate_limit = max(
+            int(args.max_frames),
+            int(args.max_frames) * FRAME_SELECTION_CANDIDATE_MULTIPLIER,
+        )
+        frame_candidates = select_frames(
+            scene_dir,
+            scene["objects"],
+            attachment_graph,
+            frame_candidate_limit,
+        )
+        if not frame_candidates:
             continue
 
         axis_align = load_axis_alignment(scene_dir)
@@ -689,21 +836,36 @@ def main():
             logger.warning("Depth intrinsics load failed for %s: %s", scene_id, exc)
             depth_intrinsics = None
 
-        scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         objects_by_id = {int(obj["id"]): obj for obj in scene["objects"]}
+        frames = _select_and_rerank_frames(
+            client=client,
+            model_name=model_name,
+            scene_dir=scene_dir,
+            frame_candidates=frame_candidates,
+            max_frames=int(args.max_frames),
+        )
+        if not frames:
+            logger.info("Scene %s has no reranked frames -> skipping", scene_id)
+            continue
+        selected_names = {str(frame["image_name"]) for frame in frames}
+        for stale_name in list(scene_cache.keys()):
+            if stale_name not in selected_names:
+                del scene_cache[stale_name]
         pending_frames = [
             frame
             for frame in frames
             if not _frame_entry_has_debug_fields(scene_cache.get(frame["image_name"]))
         ]
         if not pending_frames:
-            logger.info("Scene %s already cached -> skipping", scene_id)
+            logger.info("Scene %s selected frames already cached -> skipping", scene_id)
+            processed += 1
             continue
         logger.info(
-            "Processing referability scene %s (%d/%d) with %d pending frames",
+            "Processing referability scene %s (%d/%d) with %d selected frames (%d pending after resume)",
             scene_id,
             processed + 1,
             args.max_scenes,
+            len(frames),
             len(pending_frames),
         )
 
@@ -745,6 +907,9 @@ def main():
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
                 selector_visible_object_ids=selector_visible_object_ids,
+                selector_score=int(frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0),
+                frame_info=dict(frame.get("frame_info", {})),
+                frame_selection_score=int(frame.get("frame_selection_score", 0) or 0),
             )
 
             output_path.parent.mkdir(parents=True, exist_ok=True)
