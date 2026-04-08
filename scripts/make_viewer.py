@@ -553,6 +553,208 @@ def question_review_notes(question: dict) -> str:
     return f'<div class="review-notes">{"".join(parts)}</div>'
 
 
+REVIEW_NOTES_STYLE = """\
+.review-summary{display:grid;gap:6px}
+.review-chips{display:flex;flex-wrap:wrap;gap:8px}
+.review-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;
+             font-size:11px;font-weight:700;background:#ffedd5;color:#9a3412}
+.review-chip-manual{background:#fed7aa;color:#9a3412}
+.review-chip-warn{background:#fee2e2;color:#991b1b}
+.review-chip-pass{background:#dcfce7;color:#166534}
+.review-summary-line{font-size:13px;color:#7c2d12;line-height:1.5}
+.review-summary-label{font-weight:700;color:#9a3412;margin-right:6px}
+.review-details{margin-top:10px;padding-top:8px;border-top:1px dashed #fdba74}
+.review-details>summary{cursor:pointer;list-style:none;color:#9a3412;font-size:12px;
+                        font-weight:700}
+.review-details>summary::-webkit-details-marker{display:none}
+.review-details>summary::after{content:"+";float:right;color:#c2410c}
+.review-details[open]>summary::after{content:"-"}
+.review-raw{margin-top:10px}
+.review-block{padding:10px 12px;border:1px solid #ffedd5;border-radius:8px;
+              background:rgba(255,255,255,.78)}
+.review-block+.review-block{margin-top:8px}
+"""
+
+
+REVIEW_NOTES_SCRIPT = r"""\
+<script>
+(function () {
+  function textOf(node) {
+    return node && node.textContent ? node.textContent.trim() : "";
+  }
+
+  function chip(label, kind) {
+    const node = document.createElement("span");
+    node.className = "review-chip" + (kind ? " review-chip-" + kind : "");
+    node.textContent = label;
+    return node;
+  }
+
+  function summaryLine(label, value) {
+    const line = document.createElement("div");
+    line.className = "review-summary-line";
+    const strong = document.createElement("span");
+    strong.className = "review-summary-label";
+    strong.textContent = label + ":";
+    line.appendChild(strong);
+    line.appendChild(document.createTextNode(" " + value));
+    return line;
+  }
+
+  function simplifyManualLine(line) {
+    return line
+      .replace(/^VLM flagged mentioned objects:\s*/i, "Flagged by VLM: ")
+      .replace(/^VLM answer review flagged this question:\s*/i, "Answer review: ")
+      .replace(/^VLM answered\s+/i, "Answer mismatch: VLM answered ");
+  }
+
+  function simplifyObjectLine(line) {
+    const match = line.match(/^([^:]+):\s*([^(]+?)(?:\s*\(|$)/);
+    if (!match) {
+      return line;
+    }
+    const subject = match[1].replace(/\s*\[[^\]]+\]\s*$/, "").trim();
+    const status = match[2].trim();
+    return (subject + " " + status).trim();
+  }
+
+  function decisionValue(lines) {
+    const line = lines.find((item) => /^decision:/i.test(item));
+    return line ? line.split(":").slice(1).join(":").trim() : "";
+  }
+
+  function summarizeObjects(lines, isManualReview) {
+    const objectLines = lines.filter(
+      (line) =>
+        !/^decision:/i.test(line) &&
+        !/^flagged labels:/i.test(line) &&
+        !/^flagged object ids:/i.test(line)
+    );
+    const priority = objectLines.filter(
+      (line) => /:\s*(absent|unsure)\b/i.test(line) || /\binvalid_crop\b/i.test(line)
+    );
+    const selected = (priority.length ? priority : objectLines).slice(
+      0,
+      isManualReview ? 2 : 1
+    );
+    return selected.map(simplifyObjectLine).filter(Boolean);
+  }
+
+  function summarizeAudit(lines, decision) {
+    if (!decision) {
+      return "";
+    }
+    if (decision.toLowerCase() === "pass") {
+      const idsLine = lines.find((line) => /^frame referable ids:/i.test(line));
+      if (!idsLine) {
+        return "pass";
+      }
+      return "pass (" + idsLine.replace(/^frame referable ids:\s*/i, "ids ") + ")";
+    }
+    const reasonLine = lines.find((line) => /^reason codes:/i.test(line));
+    if (!reasonLine) {
+      return decision;
+    }
+    return decision + " (" + reasonLine.replace(/^reason codes:\s*/i, "") + ")";
+  }
+
+  function enhanceReviewNotes(note) {
+    if (!note || note.dataset.enhanced === "true") {
+      return;
+    }
+
+    const blocks = Array.from(note.children).filter((child) =>
+      child.classList.contains("review-block")
+    );
+    if (!blocks.length) {
+      return;
+    }
+
+    const blockData = blocks.map((block) => ({
+      title: textOf(block.querySelector(".review-title")),
+      lines: Array.from(block.querySelectorAll(".review-line")).map(textOf).filter(Boolean),
+      node: block,
+    }));
+
+    const manualBlock = blockData.find((block) => /manual review/i.test(block.title));
+    const vlmBlock = blockData.find((block) => /vlm review/i.test(block.title));
+    const auditBlock = blockData.find((block) => /referability audit/i.test(block.title));
+
+    const manualLine = manualBlock && manualBlock.lines.length ? manualBlock.lines[0] : "";
+    const vlmDecision = vlmBlock ? decisionValue(vlmBlock.lines) : "";
+    const auditDecision = auditBlock ? decisionValue(auditBlock.lines) : "";
+
+    const summary = document.createElement("div");
+    summary.className = "review-summary";
+
+    const chips = document.createElement("div");
+    chips.className = "review-chips";
+    chips.appendChild(chip(manualLine ? "Manual review" : "Review notes", "manual"));
+    if (vlmDecision && vlmDecision.toLowerCase() !== "pass") {
+      chips.appendChild(chip("VLM: " + vlmDecision, "warn"));
+    }
+    if (auditDecision) {
+      chips.appendChild(
+        chip(
+          "Referability: " + auditDecision,
+          auditDecision.toLowerCase() === "pass" ? "pass" : "warn"
+        )
+      );
+    }
+    summary.appendChild(chips);
+
+    if (manualLine) {
+      summary.appendChild(summaryLine("Issue", simplifyManualLine(manualLine)));
+    }
+
+    if (vlmBlock) {
+      const objectSummary = summarizeObjects(
+        vlmBlock.lines,
+        vlmDecision.toLowerCase() === "manual_review"
+      );
+      if (objectSummary.length) {
+        summary.appendChild(summaryLine("Objects", objectSummary.join(" | ")));
+      }
+    }
+
+    if (auditBlock) {
+      const auditSummary = summarizeAudit(auditBlock.lines, auditDecision);
+      if (auditSummary) {
+        summary.appendChild(summaryLine("Audit", auditSummary));
+      }
+    }
+
+    const details = document.createElement("details");
+    details.className = "review-details";
+
+    const toggle = document.createElement("summary");
+    toggle.textContent = "Show raw review details";
+    details.appendChild(toggle);
+
+    const raw = document.createElement("div");
+    raw.className = "review-raw";
+    blocks.forEach((block) => raw.appendChild(block));
+    details.appendChild(raw);
+
+    note.prepend(summary);
+    note.appendChild(details);
+    note.dataset.enhanced = "true";
+  }
+
+  function init() {
+    document.querySelectorAll(".review-notes").forEach(enhanceReviewNotes);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+"""
+
+
 PAGE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -602,6 +804,7 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .review-line{{font-size:13px;color:#7c2d12;line-height:1.5}}
 .footer{{margin-top:14px;font-size:11px;color:#aaa}}
 .idx{{float:right;color:#ccc;font-size:12px}}
+{review_notes_style}
 </style>
 </head>
 <body>
@@ -612,6 +815,7 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
   <div class="summary-block">{task_summary}</div>
 </div>
 {cards}
+{review_notes_script}
 </body>
 </html>
 """
@@ -714,6 +918,8 @@ def build_viewer_html(
         levels=levels_str,
         task_summary=task_summary,
         cards="\n".join(cards),
+        review_notes_style=REVIEW_NOTES_STYLE,
+        review_notes_script=REVIEW_NOTES_SCRIPT,
     )
 
 
