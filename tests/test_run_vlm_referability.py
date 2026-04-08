@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -31,8 +32,23 @@ def make_object(obj_id: int, label: str) -> dict:
     return {
         "id": obj_id,
         "label": label,
-        "bbox_min": [base, 0.0, 0.5],
-        "bbox_max": [base + 0.2, 0.2, 1.5],
+        "center": [base, 0.0, 1.0],
+        "bbox_min": [base - 0.1, -0.1, 0.9],
+        "bbox_max": [base + 0.1, 0.1, 1.1],
+    }
+
+
+def make_visibility_meta(
+    *,
+    roi_bounds_px: list[int] | None = None,
+    projected_area_px: float = 900.0,
+    bbox_in_frame_ratio: float = 0.2,
+) -> dict:
+    return {
+        "roi_bounds_px": roi_bounds_px if roi_bounds_px is not None else [20, 60, 30, 90],
+        "projected_area_px": projected_area_px,
+        "bbox_in_frame_ratio": bbox_in_frame_ratio,
+        "edge_margin_px": 5.0,
     }
 
 
@@ -43,7 +59,17 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("focus", prompt)
         self.assertIn("out of focus", prompt)
         self.assertIn("only about image focus quality", prompt)
-        self.assertNotIn("spatial-reasoning", prompt)
+        self.assertNotIn("candidate label list", prompt)
+
+    def test_object_review_prompt_uses_full_image_plus_crop(self) -> None:
+        prompt = referability_module._object_review_prompt("chair").lower()
+
+        self.assertIn("full scene image", prompt)
+        self.assertIn("crop", prompt)
+        self.assertIn("clear", prompt)
+        self.assertIn("absent", prompt)
+        self.assertIn("unsure", prompt)
+        self.assertNotIn("obj_id", prompt)
 
     def test_frame_decision_propagates_focus_result(self) -> None:
         with patch.object(
@@ -65,41 +91,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
             },
         )
 
-    def test_resolve_referable_object_ids_separates_ambiguous_labels(self) -> None:
-        referable_ids, ambiguous = referability_module._resolve_referable_object_ids(
-            {"lamp": "unique", "cup": "unique", "chair": "multiple"},
-            {"lamp": [8], "cup": [5, 3], "chair": [1, 2]},
-        )
+    def test_object_review_decision_normalizes_status(self) -> None:
+        with patch.object(
+            referability_module,
+            "_call_vlm_json",
+            return_value=({"status": "visible"}, '{"status":"visible"}'),
+        ):
+            status, raw = referability_module._object_review_decision(
+                client=object(),
+                model="fake-model",
+                image_b64="ZnVsbA==",
+                crop_b64="Y3JvcA==",
+                label="chair",
+            )
 
-        self.assertEqual(referable_ids, [8])
-        self.assertEqual(ambiguous, {"cup": [5, 3]})
-
-    def test_label_status_decision_falls_back_to_unsure_for_missing_or_invalid_labels(self) -> None:
-        statuses = referability_module._normalize_label_status_map(
-            [
-                {"label": "chair", "status": "unique"},
-                {"label": "lamp", "status": "bogus"},
-            ],
-            ["chair", "lamp"],
-        )
-
-        self.assertEqual(statuses, {"chair": "unique"})
-        merged = dict(statuses)
-        for label in ["chair", "lamp"]:
-            merged.setdefault(label, "unsure")
-        self.assertEqual(merged, {"chair": "unique", "lamp": "unsure"})
-
-    def test_label_statuses_to_counts_derives_l1_visibility_counts(self) -> None:
-        counts = referability_module._label_statuses_to_counts(
-            {
-                "chair": "multiple",
-                "lamp": "absent",
-                "cup": "unique",
-                "box": "unsure",
-            }
-        )
-
-        self.assertEqual(counts, {"chair": 2, "cup": 1, "lamp": 0})
+        self.assertEqual(status, "clear")
+        self.assertEqual(raw, '{"status":"visible"}')
 
     def test_refine_candidate_visible_object_ids_uses_depth_when_available(self) -> None:
         with patch.object(
@@ -119,152 +126,136 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(source, "depth_refined")
         refine_mock.assert_called_once()
 
-    def test_refine_candidate_visible_object_ids_falls_back_without_depth(self) -> None:
-        refined_ids, source = referability_module._refine_candidate_visible_object_ids(
-            visible_object_ids=[2, 1],
-            objects=[make_object(1, "cup"), make_object(2, "cup")],
-            camera_pose=make_camera_pose(),
-            depth_image=None,
-            depth_intrinsics=None,
+    def test_build_object_review_crop_treats_missing_projection_as_out_of_frame(self) -> None:
+        crop = referability_module._build_object_review_crop(
+            np.zeros((120, 120, 3), dtype=np.uint8),
+            {"projected_area_px": 0.0},
         )
 
-        self.assertEqual(refined_ids, [1, 2])
-        self.assertEqual(source, "projection_fallback")
+        self.assertFalse(crop["valid"])
+        self.assertEqual(crop["local_outcome"], "out_of_frame")
+        self.assertEqual(crop["reason"], "missing_projection")
 
-    def test_disambiguate_by_depth_selects_clear_winner(self) -> None:
-        objects_by_id = {
-            1: make_object(1, "cup"),
-            2: make_object(2, "cup"),
+    def test_build_object_review_crop_excludes_small_projection_but_does_not_gate_on_in_frame_ratio(self) -> None:
+        tiny_crop = referability_module._build_object_review_crop(
+            np.zeros((120, 120, 3), dtype=np.uint8),
+            make_visibility_meta(projected_area_px=399.0, bbox_in_frame_ratio=0.1),
+        )
+        valid_crop = referability_module._build_object_review_crop(
+            np.zeros((120, 120, 3), dtype=np.uint8),
+            make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.1),
+        )
+
+        self.assertEqual(tiny_crop["local_outcome"], "excluded")
+        self.assertEqual(tiny_crop["reason"], "projected_area_too_small")
+        self.assertTrue(valid_crop["valid"])
+        self.assertEqual(valid_crop["local_outcome"], "reviewed")
+
+    def test_aggregate_label_reviews_uses_strict_policy(self) -> None:
+        label_to_ids = {
+            "chair": [1, 2],
+            "lamp": [3, 4],
+            "plant": [5, 6],
+            "table": [7],
+            "sofa": [8, 9],
         }
-        with patch.object(
-            referability_module,
-            "compute_depth_occlusion",
-            side_effect=[("partially occluded", 0.58), ("partially occluded", 0.29)],
-        ):
-            best_id, meta = referability_module._disambiguate_by_depth(
-                obj_ids=[1, 2],
-                objects_by_id=objects_by_id,
-                camera_pose=make_camera_pose(),
-                depth_image=np.ones((4, 4), dtype=np.float32),
-                depth_intrinsics=make_camera_intrinsics(),
-            )
+        object_reviews = {
+            1: {"obj_id": 1, "local_outcome": "reviewed", "vlm_status": "clear"},
+            2: {"obj_id": 2, "local_outcome": "out_of_frame", "vlm_status": None},
+            3: {"obj_id": 3, "local_outcome": "reviewed", "vlm_status": "clear"},
+            4: {"obj_id": 4, "local_outcome": "reviewed", "vlm_status": "clear"},
+            5: {"obj_id": 5, "local_outcome": "reviewed", "vlm_status": "absent"},
+            6: {"obj_id": 6, "local_outcome": "excluded", "vlm_status": None},
+            7: {"obj_id": 7, "local_outcome": "reviewed", "vlm_status": "unsure"},
+            8: {"obj_id": 8, "local_outcome": "reviewed", "vlm_status": "clear"},
+            9: {"obj_id": 9, "local_outcome": "reviewed", "vlm_status": "unsure"},
+        }
 
-        self.assertEqual(best_id, 1)
-        self.assertEqual(meta["decision"], "selected")
-        self.assertEqual(meta["selected_object_id"], 1)
+        label_statuses, label_counts, referable_ids = referability_module._aggregate_label_reviews(
+            label_to_ids,
+            object_reviews,
+        )
+
         self.assertEqual(
-            meta["candidate_scores"],
-            [
-                {"object_id": 1, "visible_ratio": 0.58},
-                {"object_id": 2, "visible_ratio": 0.29},
-            ],
-        )
-
-    def test_disambiguate_by_depth_rejects_low_visible_ratio(self) -> None:
-        objects_by_id = {
-            1: make_object(1, "cup"),
-            2: make_object(2, "cup"),
-        }
-        with patch.object(
-            referability_module,
-            "compute_depth_occlusion",
-            side_effect=[("not visible", 0.19), ("not visible", 0.02)],
-        ):
-            best_id, meta = referability_module._disambiguate_by_depth(
-                obj_ids=[1, 2],
-                objects_by_id=objects_by_id,
-                camera_pose=make_camera_pose(),
-                depth_image=np.ones((4, 4), dtype=np.float32),
-                depth_intrinsics=make_camera_intrinsics(),
-            )
-
-        self.assertIsNone(best_id)
-        self.assertEqual(meta["decision"], "winner_below_min_ratio")
-        self.assertIsNone(meta["selected_object_id"])
-
-    def test_disambiguate_by_depth_rejects_small_gap(self) -> None:
-        objects_by_id = {
-            1: make_object(1, "cup"),
-            2: make_object(2, "cup"),
-        }
-        with patch.object(
-            referability_module,
-            "compute_depth_occlusion",
-            side_effect=[("partially occluded", 0.41), ("partially occluded", 0.33)],
-        ):
-            best_id, meta = referability_module._disambiguate_by_depth(
-                obj_ids=[1, 2],
-                objects_by_id=objects_by_id,
-                camera_pose=make_camera_pose(),
-                depth_image=np.ones((4, 4), dtype=np.float32),
-                depth_intrinsics=make_camera_intrinsics(),
-            )
-
-        self.assertIsNone(best_id)
-        self.assertEqual(meta["decision"], "gap_too_small")
-        self.assertIsNone(meta["selected_object_id"])
-
-    def test_augment_with_depth_disambiguation_reports_missing_depth(self) -> None:
-        extra_ids, meta = referability_module._augment_with_depth_disambiguation(
-            ambiguous_labels_to_ids={"cup": [1, 2]},
-            objects_by_id={1: make_object(1, "cup"), 2: make_object(2, "cup")},
-            camera_pose=make_camera_pose(),
-            depth_image=None,
-            depth_intrinsics=None,
-        )
-
-        self.assertEqual(extra_ids, [])
-        self.assertEqual(
-            meta,
+            label_statuses,
             {
-                "cup": {
-                    "decision": "missing_depth",
-                    "selected_object_id": None,
-                    "candidate_scores": [],
-                }
+                "chair": "unique",
+                "lamp": "multiple",
+                "plant": "absent",
+                "sofa": "unsure",
+                "table": "unsure",
             },
         )
+        self.assertEqual(
+            label_counts,
+            {
+                "chair": 1,
+                "lamp": 2,
+                "plant": 0,
+                "sofa": 1,
+                "table": 0,
+            },
+        )
+        self.assertEqual(referable_ids, [1])
 
-    def test_augment_with_depth_disambiguation_collects_extra_ids_and_meta(self) -> None:
-        def fake_disambiguate(**kwargs):
-            label_ids = tuple(kwargs["obj_ids"])
-            if label_ids == (1, 2):
-                return 2, {
-                    "decision": "selected",
-                    "selected_object_id": 2,
-                    "candidate_scores": [
-                        {"object_id": 2, "visible_ratio": 0.47},
-                        {"object_id": 1, "visible_ratio": 0.20},
-                    ],
-                }
-            return None, {
-                "decision": "gap_too_small",
-                "selected_object_id": None,
-                "candidate_scores": [
-                    {"object_id": 3, "visible_ratio": 0.42},
-                    {"object_id": 4, "visible_ratio": 0.35},
-                ],
-            }
+    def test_compute_frame_referability_entry_builds_v8_object_reviews(self) -> None:
+        scene_objects = [
+            make_object(1, "chair"),
+            make_object(2, "chair"),
+            make_object(3, "lamp"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+            2: {"projected_area_px": 0.0},
+            3: make_visibility_meta(projected_area_px=900.0),
+        }
 
-        with patch.object(referability_module, "_disambiguate_by_depth", side_effect=fake_disambiguate):
-            extra_ids, meta = referability_module._augment_with_depth_disambiguation(
-                ambiguous_labels_to_ids={"cup": [1, 2], "lamp": [3, 4]},
-                objects_by_id={
-                    1: make_object(1, "cup"),
-                    2: make_object(2, "cup"),
-                    3: make_object(3, "lamp"),
-                    4: make_object(4, "lamp"),
-                },
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={"frame_usable": True, "reason": "in_focus"},
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([1, 2, 3], "depth_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_object_review_decision",
+                side_effect=[("clear", '{"status":"clear"}'), ("absent", '{"status":"absent"}')],
+            ) as review_mock,
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
                 camera_pose=make_camera_pose(),
-                depth_image=np.ones((4, 4), dtype=np.float32),
-                depth_intrinsics=make_camera_intrinsics(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1, 2, 3],
             )
 
-        self.assertEqual(extra_ids, [2])
-        self.assertEqual(meta["cup"]["decision"], "selected")
-        self.assertEqual(meta["cup"]["selected_object_id"], 2)
-        self.assertEqual(meta["lamp"]["decision"], "gap_too_small")
-        self.assertIsNone(meta["lamp"]["selected_object_id"])
+        self.assertEqual(frame_entry["frame_usable"], True)
+        self.assertEqual(frame_entry["candidate_visibility_source"], "depth_refined")
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "unique", "lamp": "absent"})
+        self.assertEqual(frame_entry["label_counts"], {"chair": 1, "lamp": 0})
+        self.assertEqual(frame_entry["referable_object_ids"], [1])
+        self.assertEqual(frame_entry["object_reviews"]["1"]["vlm_status"], "clear")
+        self.assertEqual(frame_entry["object_reviews"]["2"]["local_outcome"], "out_of_frame")
+        self.assertEqual(frame_entry["object_reviews"]["3"]["vlm_status"], "absent")
+        self.assertEqual(review_mock.call_count, 2)
 
 
 if __name__ == "__main__":

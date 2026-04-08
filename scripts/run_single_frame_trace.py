@@ -33,15 +33,8 @@ from scripts.run_pipeline import (
 )
 from scripts.run_vlm_referability import (
     LABEL_BATCH_SIZE,
-    _augment_with_depth_disambiguation,
-    _build_frame_label_candidates,
-    _count_labels_for_object_ids as _count_referability_labels,
-    _frame_decision,
+    _compute_frame_referability_entry,
     _frame_entry_has_debug_fields,
-    _label_status_decision,
-    _label_statuses_to_counts,
-    _refine_candidate_visible_object_ids,
-    _resolve_referable_object_ids,
 )
 from src.frame_selector import get_visible_objects
 from src.qa_generator import generate_all_questions
@@ -180,6 +173,27 @@ def _sanitize_vlm_label_reviews(
     return sanitized
 
 
+def _sanitize_object_reviews(
+    reviews: Any,
+    *,
+    payload_mode: str,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(reviews, dict):
+        return {}
+    mode = str(payload_mode).strip().lower()
+    sanitized: dict[str, dict[str, Any]] = {}
+    for obj_id, review in reviews.items():
+        if not isinstance(review, dict):
+            continue
+        item = _json_clone(review)
+        if mode == "none":
+            item.pop("raw_response", None)
+        elif mode == "summary":
+            item.pop("raw_response", None)
+        sanitized[str(obj_id)] = item
+    return dict(sorted(sanitized.items()))
+
+
 def _build_referability_audit(
     referability_entry: dict[str, Any] | None,
     *,
@@ -192,8 +206,13 @@ def _build_referability_audit(
         entry.get("vlm_label_reviews"),
         payload_mode=payload_mode,
     )
+    entry["object_reviews"] = _sanitize_object_reviews(
+        entry.get("object_reviews"),
+        payload_mode=payload_mode,
+    )
     if str(payload_mode).strip().lower() == "none":
         entry.pop("vlm_label_reviews", None)
+        entry.pop("object_reviews", None)
     return entry
 
 
@@ -482,6 +501,7 @@ def _compute_single_frame_referability_entry(
     vlm_model: str | None,
     label_batch_size: int,
 ) -> tuple[dict[str, Any], str]:
+    _ = int(label_batch_size)
     if color_intrinsics is None:
         raise RuntimeError("color intrinsics are required for single-frame referability fallback")
     if not image_path.exists():
@@ -497,10 +517,6 @@ def _compute_single_frame_referability_entry(
         for object_entry in get_visible_objects(scene["objects"], camera_pose, color_intrinsics)
         if int(object_entry["id"]) in objects_by_id
     ]
-    selector_visible_label_counts = _count_referability_labels(
-        selector_visible_object_ids,
-        objects_by_id,
-    )
 
     depth_image = None
     depth_path = scene_dir / "depth" / f"{Path(image_name).stem}.png"
@@ -510,96 +526,26 @@ def _compute_single_frame_referability_entry(
         except Exception as exc:
             logger.warning("Depth load failed for referability fallback %s/%s: %s", scene_dir.name, image_name, exc)
 
-    candidate_visible_object_ids, candidate_visibility_source = _refine_candidate_visible_object_ids(
-        selector_visible_object_ids,
-        scene["objects"],
-        camera_pose,
-        depth_image,
-        depth_intrinsics,
-    )
-    candidate_labels, label_to_ids = _build_frame_label_candidates(
-        candidate_visible_object_ids,
-        objects_by_id,
-    )
-
     import cv2
 
     image = cv2.imread(str(image_path))
     if image is None:
         raise RuntimeError(f"cannot read image: {image_path}")
-
-    frame_info = _frame_decision(client, model_name, image)
-    label_statuses: dict[str, str] = {}
-    label_counts: dict[str, int] = {}
-    referable_object_ids: list[int] = []
-    depth_disambiguation: dict[str, dict[str, Any]] = {}
-    vlm_label_reviews: list[dict[str, Any]] = []
-
-    if frame_info["frame_usable"]:
-        from scripts.run_vlm_referability import _image_to_base64
-
-        encoded_image = _image_to_base64(image)
-        batch_size = max(1, int(label_batch_size))
-        for start_idx in range(0, len(candidate_labels), batch_size):
-            label_batch = candidate_labels[start_idx:start_idx + batch_size]
-            batch_statuses, raw_text = _label_status_decision(
-                client,
-                model_name,
-                encoded_image,
-                label_batch,
-            )
-            vlm_label_reviews.append(
-                {
-                    "labels": list(label_batch),
-                    "label_statuses": dict(sorted(batch_statuses.items())),
-                    "raw_response": raw_text,
-                }
-            )
-            label_statuses.update(batch_statuses)
-
-        label_counts = _label_statuses_to_counts(label_statuses)
-        referable_object_ids, ambiguous_labels_to_ids = _resolve_referable_object_ids(
-            label_statuses,
-            label_to_ids,
-        )
-        if ambiguous_labels_to_ids:
-            extra_ids, depth_disambiguation = _augment_with_depth_disambiguation(
-                ambiguous_labels_to_ids=ambiguous_labels_to_ids,
-                objects_by_id=objects_by_id,
-                camera_pose=camera_pose,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-            )
-            referable_object_ids = sorted(set(referable_object_ids) | set(extra_ids))
-
-    return (
-        {
-            "frame_usable": frame_info["frame_usable"],
-            "frame_reject_reason": None if frame_info["frame_usable"] else frame_info["reason"],
-            "selector_score": len(selector_visible_object_ids),
-            "selector_visible_object_ids": selector_visible_object_ids,
-            "selector_visible_label_counts": selector_visible_label_counts,
-            "candidate_visible_object_ids": candidate_visible_object_ids,
-            "candidate_visibility_source": candidate_visibility_source,
-            "candidate_visible_label_counts": _count_referability_labels(
-                candidate_visible_object_ids,
-                objects_by_id,
-            ),
-            "candidate_labels": list(candidate_labels),
-            "label_to_object_ids": {
-                str(label): [int(obj_id) for obj_id in obj_ids]
-                for label, obj_ids in sorted(label_to_ids.items())
-            },
-            "vlm_label_reviews": vlm_label_reviews,
-            "label_statuses": dict(sorted(label_statuses.items())),
-            "label_counts": dict(sorted(label_counts.items())),
-            "referable_object_ids": referable_object_ids,
-            "depth_disambiguation": depth_disambiguation,
-            "vlm_unique_object_ids": list(referable_object_ids),
-            "referability_model": model_name,
-        },
-        "online",
+    frame_entry = _compute_frame_referability_entry(
+        client=client,
+        model_name=model_name,
+        scene_objects=scene["objects"],
+        objects_by_id=objects_by_id,
+        image=image,
+        image_path=image_path,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        depth_image=depth_image,
+        depth_intrinsics=depth_intrinsics,
+        selector_visible_object_ids=selector_visible_object_ids,
     )
+    frame_entry["referability_model"] = model_name
+    return frame_entry, "online"
 
 
 def run_single_frame_trace(
