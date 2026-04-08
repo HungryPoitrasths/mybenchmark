@@ -389,408 +389,6 @@ def filter_viewer_questions(
     return _apply_global_object_move_ratio_filter(filtered)
 
 
-def question_badges(question: dict) -> str:
-    badges: list[str] = []
-    if bool(question.get("attachment_remapped", False)):
-        badges.append('<span class="badge extra attachment">attachment</span>')
-    if bool(question.get("relation_unchanged", False)):
-        badges.append('<span class="badge extra unchanged">unchanged</span>')
-    if bool(question.get("manual_review_reason")):
-        badges.append('<span class="badge extra review">manual-review</span>')
-    return "".join(badges)
-
-
-def _referability_audit_lines(question: dict) -> list[str]:
-    audit = question.get("question_referability_audit")
-    if not isinstance(audit, dict):
-        return []
-
-    lines: list[str] = []
-    decision = str(audit.get("decision", "")).strip()
-    if decision:
-        lines.append(f"decision: {decision}")
-
-    reason_codes = audit.get("reason_codes", [])
-    if isinstance(reason_codes, list):
-        reason_text = ", ".join(
-            str(code) for code in reason_codes if str(code).strip()
-        ) or "-"
-        lines.append(f"reason codes: {reason_text}")
-
-    frame_referable_ids = audit.get("frame_referable_object_ids", [])
-    if isinstance(frame_referable_ids, list):
-        frame_text = ", ".join(
-            str(obj_id) for obj_id in frame_referable_ids if str(obj_id).strip()
-        ) or "-"
-        lines.append(f"frame referable ids: {frame_text}")
-
-    mentioned_objects = audit.get("mentioned_objects", [])
-    if isinstance(mentioned_objects, list):
-        for mention in mentioned_objects:
-            if not isinstance(mention, dict):
-                continue
-            role = str(mention.get("role", "mentioned")).strip() or "mentioned"
-            label = str(mention.get("label", "")).strip() or "?"
-            obj_id = mention.get("obj_id")
-            obj_id_text = "-" if obj_id in (None, "") else str(obj_id)
-            label_status = str(mention.get("label_status", "")).strip() or "-"
-            candidate_ids = mention.get("candidate_object_ids", [])
-            referable_ids = mention.get("referable_object_ids", [])
-            candidate_text = ", ".join(
-                str(candidate_id)
-                for candidate_id in candidate_ids
-                if str(candidate_id).strip()
-            ) or "-"
-            referable_text = ", ".join(
-                str(referable_id)
-                for referable_id in referable_ids
-                if str(referable_id).strip()
-            ) or "-"
-            mention_reason_codes = mention.get("reason_codes", [])
-            mention_reason_text = ", ".join(
-                str(code) for code in mention_reason_codes if str(code).strip()
-            ) or "-"
-            mention_result = (
-                "pass"
-                if bool(mention.get("passes_referability_check", False))
-                else "drop"
-            )
-            lines.append(
-                f"{role}: label={label}, obj_id={obj_id_text}, "
-                f"label_status={label_status}, candidates={candidate_text}, "
-                f"referable={referable_text}, result={mention_result}, "
-                f"reasons={mention_reason_text}"
-            )
-
-    return lines
-
-
-def question_review_notes(question: dict) -> str:
-    parts: list[str] = []
-
-    manual_review_reason = str(question.get("manual_review_reason", "")).strip()
-    if manual_review_reason:
-        parts.append(
-            '<div class="review-block">'
-            '<div class="review-title">Manual Review</div>'
-            f'<div class="review-line">{html.escape(manual_review_reason)}</div>'
-            '</div>'
-        )
-
-    review = question.get("question_presence_review")
-    if isinstance(review, dict):
-        lines: list[str] = []
-        decision = str(review.get("decision", "")).strip()
-        if decision:
-            lines.append(f"decision: {decision}")
-
-        flagged_labels = review.get("flagged_labels", [])
-        if isinstance(flagged_labels, list) and flagged_labels:
-            labels_text = ", ".join(str(label) for label in flagged_labels if str(label).strip())
-            if labels_text:
-                lines.append(f"flagged labels: {labels_text}")
-        flagged_object_ids = review.get("flagged_object_ids", [])
-        if isinstance(flagged_object_ids, list) and flagged_object_ids:
-            object_text = ", ".join(
-                str(obj_id) for obj_id in flagged_object_ids
-                if str(obj_id).strip()
-            )
-            if object_text:
-                lines.append(f"flagged object ids: {object_text}")
-
-        object_reviews = review.get("object_reviews", [])
-        if isinstance(object_reviews, list):
-            for obj_review in object_reviews:
-                if not isinstance(obj_review, dict):
-                    continue
-                label = str(obj_review.get("label", "")).strip()
-                obj_id = obj_review.get("obj_id")
-                roles = obj_review.get("roles", [])
-                status = str(obj_review.get("status", "")).strip()
-                reason = str(obj_review.get("reason", "")).strip()
-                if not label and obj_id in (None, "") and not status:
-                    continue
-                subject = label or "object"
-                if obj_id not in (None, ""):
-                    subject = f"{subject}#{obj_id}"
-                if isinstance(roles, list):
-                    role_text = ", ".join(
-                        str(role).strip() for role in roles if str(role).strip()
-                    )
-                    if role_text:
-                        subject = f"{subject} [{role_text}]"
-                line = f"{subject}: {status}" if status else subject
-                if reason:
-                    line = f"{line} ({reason})"
-                lines.append(line)
-
-        if lines:
-            review_lines = "".join(
-                f'<div class="review-line">{html.escape(line)}</div>'
-                for line in lines
-            )
-            parts.append(
-                '<div class="review-block">'
-                '<div class="review-title">VLM Review</div>'
-                f"{review_lines}"
-                "</div>"
-            )
-
-    answer_review = question.get("question_answer_review")
-    if isinstance(answer_review, dict):
-        lines: list[str] = []
-        decision = str(answer_review.get("decision", "")).strip()
-        if decision:
-            lines.append(f"decision: {decision}")
-        predicted_answer = str(answer_review.get("predicted_answer", "")).strip().upper()
-        gold_answer = str(answer_review.get("gold_answer", "")).strip().upper()
-        predicted_option = str(answer_review.get("predicted_option", "")).strip()
-        gold_option = str(answer_review.get("gold_option", "")).strip()
-        reason = str(answer_review.get("reason", "")).strip()
-        if predicted_answer:
-            line = f"predicted: {predicted_answer}"
-            if predicted_option:
-                line += f" ({predicted_option})"
-            lines.append(line)
-        if gold_answer:
-            line = f"gold: {gold_answer}"
-            if gold_option:
-                line += f" ({gold_option})"
-            lines.append(line)
-        if reason:
-            lines.append(f"reason: {reason}")
-
-        if lines:
-            review_lines = "".join(
-                f'<div class="review-line">{html.escape(line)}</div>'
-                for line in lines
-            )
-            parts.append(
-                '<div class="review-block">'
-                '<div class="review-title">VLM Answer Review</div>'
-                f"{review_lines}"
-                "</div>"
-            )
-
-    referability_lines = _referability_audit_lines(question)
-    if referability_lines:
-        parts.append(
-            '<div class="review-block">'
-            '<div class="review-title">Referability Audit</div>'
-            + "".join(
-                f'<div class="review-line">{html.escape(line)}</div>'
-                for line in referability_lines
-            )
-            + "</div>"
-        )
-
-    if not parts:
-        return ""
-    return f'<div class="review-notes">{"".join(parts)}</div>'
-
-
-REVIEW_NOTES_STYLE = """\
-.review-summary{display:grid;gap:6px}
-.review-chips{display:flex;flex-wrap:wrap;gap:8px}
-.review-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;
-             font-size:11px;font-weight:700;background:#ffedd5;color:#9a3412}
-.review-chip-manual{background:#fed7aa;color:#9a3412}
-.review-chip-warn{background:#fee2e2;color:#991b1b}
-.review-chip-pass{background:#dcfce7;color:#166534}
-.review-summary-line{font-size:13px;color:#7c2d12;line-height:1.5}
-.review-summary-label{font-weight:700;color:#9a3412;margin-right:6px}
-.review-details{margin-top:10px;padding-top:8px;border-top:1px dashed #fdba74}
-.review-details>summary{cursor:pointer;list-style:none;color:#9a3412;font-size:12px;
-                        font-weight:700}
-.review-details>summary::-webkit-details-marker{display:none}
-.review-details>summary::after{content:"+";float:right;color:#c2410c}
-.review-details[open]>summary::after{content:"-"}
-.review-raw{margin-top:10px}
-.review-block{padding:10px 12px;border:1px solid #ffedd5;border-radius:8px;
-              background:rgba(255,255,255,.78)}
-.review-block+.review-block{margin-top:8px}
-"""
-
-
-REVIEW_NOTES_SCRIPT = r"""\
-<script>
-(function () {
-  function textOf(node) {
-    return node && node.textContent ? node.textContent.trim() : "";
-  }
-
-  function chip(label, kind) {
-    const node = document.createElement("span");
-    node.className = "review-chip" + (kind ? " review-chip-" + kind : "");
-    node.textContent = label;
-    return node;
-  }
-
-  function summaryLine(label, value) {
-    const line = document.createElement("div");
-    line.className = "review-summary-line";
-    const strong = document.createElement("span");
-    strong.className = "review-summary-label";
-    strong.textContent = label + ":";
-    line.appendChild(strong);
-    line.appendChild(document.createTextNode(" " + value));
-    return line;
-  }
-
-  function simplifyManualLine(line) {
-    return line
-      .replace(/^VLM flagged mentioned objects:\s*/i, "Flagged by VLM: ")
-      .replace(/^VLM answer review flagged this question:\s*/i, "Answer review: ")
-      .replace(/^VLM answered\s+/i, "Answer mismatch: VLM answered ");
-  }
-
-  function simplifyObjectLine(line) {
-    const match = line.match(/^([^:]+):\s*([^(]+?)(?:\s*\(|$)/);
-    if (!match) {
-      return line;
-    }
-    const subject = match[1].replace(/\s*\[[^\]]+\]\s*$/, "").trim();
-    const status = match[2].trim();
-    return (subject + " " + status).trim();
-  }
-
-  function decisionValue(lines) {
-    const line = lines.find((item) => /^decision:/i.test(item));
-    return line ? line.split(":").slice(1).join(":").trim() : "";
-  }
-
-  function summarizeObjects(lines, isManualReview) {
-    const objectLines = lines.filter(
-      (line) =>
-        !/^decision:/i.test(line) &&
-        !/^flagged labels:/i.test(line) &&
-        !/^flagged object ids:/i.test(line)
-    );
-    const priority = objectLines.filter(
-      (line) => /:\s*(absent|unsure)\b/i.test(line) || /\binvalid_crop\b/i.test(line)
-    );
-    const selected = (priority.length ? priority : objectLines).slice(
-      0,
-      isManualReview ? 2 : 1
-    );
-    return selected.map(simplifyObjectLine).filter(Boolean);
-  }
-
-  function summarizeAudit(lines, decision) {
-    if (!decision) {
-      return "";
-    }
-    if (decision.toLowerCase() === "pass") {
-      const idsLine = lines.find((line) => /^frame referable ids:/i.test(line));
-      if (!idsLine) {
-        return "pass";
-      }
-      return "pass (" + idsLine.replace(/^frame referable ids:\s*/i, "ids ") + ")";
-    }
-    const reasonLine = lines.find((line) => /^reason codes:/i.test(line));
-    if (!reasonLine) {
-      return decision;
-    }
-    return decision + " (" + reasonLine.replace(/^reason codes:\s*/i, "") + ")";
-  }
-
-  function enhanceReviewNotes(note) {
-    if (!note || note.dataset.enhanced === "true") {
-      return;
-    }
-
-    const blocks = Array.from(note.children).filter((child) =>
-      child.classList.contains("review-block")
-    );
-    if (!blocks.length) {
-      return;
-    }
-
-    const blockData = blocks.map((block) => ({
-      title: textOf(block.querySelector(".review-title")),
-      lines: Array.from(block.querySelectorAll(".review-line")).map(textOf).filter(Boolean),
-      node: block,
-    }));
-
-    const manualBlock = blockData.find((block) => /manual review/i.test(block.title));
-    const vlmBlock = blockData.find((block) => /vlm review/i.test(block.title));
-    const auditBlock = blockData.find((block) => /referability audit/i.test(block.title));
-
-    const manualLine = manualBlock && manualBlock.lines.length ? manualBlock.lines[0] : "";
-    const vlmDecision = vlmBlock ? decisionValue(vlmBlock.lines) : "";
-    const auditDecision = auditBlock ? decisionValue(auditBlock.lines) : "";
-
-    const summary = document.createElement("div");
-    summary.className = "review-summary";
-
-    const chips = document.createElement("div");
-    chips.className = "review-chips";
-    chips.appendChild(chip(manualLine ? "Manual review" : "Review notes", "manual"));
-    if (vlmDecision && vlmDecision.toLowerCase() !== "pass") {
-      chips.appendChild(chip("VLM: " + vlmDecision, "warn"));
-    }
-    if (auditDecision) {
-      chips.appendChild(
-        chip(
-          "Referability: " + auditDecision,
-          auditDecision.toLowerCase() === "pass" ? "pass" : "warn"
-        )
-      );
-    }
-    summary.appendChild(chips);
-
-    if (manualLine) {
-      summary.appendChild(summaryLine("Issue", simplifyManualLine(manualLine)));
-    }
-
-    if (vlmBlock) {
-      const objectSummary = summarizeObjects(
-        vlmBlock.lines,
-        vlmDecision.toLowerCase() === "manual_review"
-      );
-      if (objectSummary.length) {
-        summary.appendChild(summaryLine("Objects", objectSummary.join(" | ")));
-      }
-    }
-
-    if (auditBlock) {
-      const auditSummary = summarizeAudit(auditBlock.lines, auditDecision);
-      if (auditSummary) {
-        summary.appendChild(summaryLine("Audit", auditSummary));
-      }
-    }
-
-    const details = document.createElement("details");
-    details.className = "review-details";
-
-    const toggle = document.createElement("summary");
-    toggle.textContent = "Show raw review details";
-    details.appendChild(toggle);
-
-    const raw = document.createElement("div");
-    raw.className = "review-raw";
-    blocks.forEach((block) => raw.appendChild(block));
-    details.appendChild(raw);
-
-    note.prepend(summary);
-    note.appendChild(details);
-    note.dataset.enhanced = "true";
-  }
-
-  function init() {
-    document.querySelectorAll(".review-notes").forEach(enhanceReviewNotes);
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
-    init();
-  }
-})();
-</script>
-"""
-
-
 PAGE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -800,16 +398,7 @@ PAGE = """\
 <style>
 *{{box-sizing:border-box}}
 body{{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}}
-h1{{text-align:center;color:#333;margin-bottom:4px}}
-.stats{{text-align:center;color:#666;font-size:14px;margin-bottom:24px}}
-.summary{{max-width:1100px;margin:0 auto 24px;background:#fff;border-radius:10px;
-          box-shadow:0 2px 6px rgba(0,0,0,.12);padding:18px 20px}}
-.summary h2{{margin:0 0 12px;color:#111;font-size:18px}}
-.summary-block{{color:#374151;font-size:14px;line-height:1.7}}
-.summary-line{{margin:2px 0}}
-.summary-section{{margin-top:10px}}
-.summary-section:first-child{{margin-top:0}}
-.summary-other{{margin-top:12px;color:#6b7280}}
+h1{{text-align:center;color:#333;margin-bottom:24px}}
 .card{{display:flex;background:#fff;border-radius:10px;
        box-shadow:0 2px 6px rgba(0,0,0,.12);margin-bottom:18px;overflow:hidden}}
 .img-wrap{{flex:0 0 auto;width:480px;background:#222;display:flex;
@@ -818,40 +407,15 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .no-img{{width:480px;height:200px;display:flex;align-items:center;
          justify-content:center;color:#999;font-size:13px}}
 .body{{padding:18px 20px;flex:1;min-width:0}}
-.meta{{font-size:12px;color:#888;margin-bottom:10px}}
-.badge{{display:inline-block;padding:2px 9px;border-radius:12px;
-        font-weight:bold;font-size:11px;margin-right:6px}}
-.L1{{background:#dbeafe;color:#1d4ed8}}
-.L2{{background:#fce7f3;color:#9d174d}}
-.L3{{background:#ede9fe;color:#5b21b6}}
-.extra{{background:#f3f4f6;color:#374151}}
-.attachment{{background:#d1fae5;color:#065f46}}
-.unchanged{{background:#fef3c7;color:#92400e}}
-.review{{background:#fee2e2;color:#991b1b}}
 .qtext{{font-size:15px;font-weight:600;color:#111;margin:0 0 14px}}
 .opt{{padding:7px 12px;margin:4px 0;border-radius:6px;font-size:14px;
       background:#f8f9fa;border:1px solid #e5e7eb}}
 .opt.correct{{background:#dcfce7;border-color:#86efac;font-weight:700}}
-.review-notes{{margin-top:14px;padding:12px 14px;border-radius:8px;background:#fff7ed;
-              border:1px solid #fed7aa}}
-.review-block + .review-block{{margin-top:10px}}
-.review-title{{font-size:12px;font-weight:700;color:#9a3412;margin-bottom:6px;
-              text-transform:uppercase;letter-spacing:.04em}}
-.review-line{{font-size:13px;color:#7c2d12;line-height:1.5}}
-.footer{{margin-top:14px;font-size:11px;color:#aaa}}
-.idx{{float:right;color:#ccc;font-size:12px}}
-{review_notes_style}
 </style>
 </head>
 <body>
 <h1>{title}</h1>
-<div class="stats">{n} questions &nbsp;&middot;&nbsp; {levels}</div>
-<div class="summary">
-  <h2>Task Summary</h2>
-  <div class="summary-block">{task_summary}</div>
-</div>
 {cards}
-{review_notes_script}
 </body>
 </html>
 """
@@ -860,16 +424,8 @@ CARD = """\
 <div class="card">
   <div class="img-wrap">{img}</div>
   <div class="body">
-    <div class="meta">
-      <span class="badge {level}">{level}</span>
-      <span class="badge" style="background:#f3f4f6;color:#374151">{qtype}</span>
-      {extra_badges}
-      <span class="idx">#{idx}</span>
-    </div>
     <p class="qtext">{question}</p>
     {options}
-    {notes}
-    <div class="footer">{scene_id} &nbsp;/&nbsp; {image_name}</div>
   </div>
 </div>"""
 
@@ -899,18 +455,13 @@ def build_viewer_html(
         )
     displayed_questions = order_questions_for_viewer(displayed_questions, seed=shuffle_seed)
 
-    level_counter: Counter = Counter()
     cards: list[str] = []
 
-    for idx, q in enumerate(displayed_questions, 1):
-        level = q.get("level", "?")
-        qtype = _canonical_qtype(str(q.get("type", "")).strip()) or "unknown"
+    for q in displayed_questions:
         scene = str(q.get("scene_id", ""))
         frame = str(q.get("image_name", ""))
         answer = str(q.get("answer", ""))
         opts = q.get("options", [])
-
-        level_counter[level] += 1
 
         img_path = image_root / scene / "color" / frame
         b64 = img_to_b64(img_path, max_width)
@@ -932,30 +483,14 @@ def build_viewer_html(
         cards.append(
             CARD.format(
                 img=img_html,
-                level=html.escape(str(level)),
-                qtype=html.escape(QTYPE_DISPLAY.get(qtype, qtype)),
-                extra_badges=question_badges(q),
-                idx=idx,
                 question=html.escape(str(q.get("question", ""))),
                 options=opt_html,
-                notes=question_review_notes(q),
-                scene_id=html.escape(scene),
-                image_name=html.escape(frame),
             )
         )
 
-    levels_str = " &nbsp;&middot;&nbsp; ".join(
-        f"{html.escape(str(k))}: {v}" for k, v in sorted(level_counter.items())
-    )
-    task_summary = build_task_summary_v2(displayed_questions)
     return PAGE.format(
         title=html.escape(title),
-        n=len(displayed_questions),
-        levels=levels_str,
-        task_summary=task_summary,
         cards="\n".join(cards),
-        review_notes_style=REVIEW_NOTES_STYLE,
-        review_notes_script=REVIEW_NOTES_SCRIPT,
     )
 
 
