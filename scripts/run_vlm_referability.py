@@ -4,7 +4,9 @@
 This script runs *before* QA generation. For each selected frame it asks a VLM:
   1. how clear the full frame is and whether it is severely out of focus;
   2. for each projected candidate object, whether its crop is clear, absent,
-     or unsure for the expected label.
+     or unsure for the expected label;
+  3. for labels that survive crop review as uniquely grounded, whether the
+     full frame still makes that label unique, multiple, absent, or unsure.
 
 The output is a cache that can be consumed by scripts/run_pipeline.py via
 --referability_cache.
@@ -52,7 +54,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "9.0"
+REFERABILITY_CACHE_VERSION = "10.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -75,6 +77,11 @@ VALID_OBJECT_STATUSES = {
 LOCAL_OUTCOME_OUT_OF_FRAME = "out_of_frame"
 LOCAL_OUTCOME_EXCLUDED = "excluded"
 LOCAL_OUTCOME_REVIEWED = "reviewed"
+
+LABEL_STATUS_UNIQUE = "unique"
+LABEL_STATUS_MULTIPLE = "multiple"
+LABEL_STATUS_ABSENT = "absent"
+LABEL_STATUS_UNSURE = "unsure"
 
 
 def _image_to_base64(image: np.ndarray) -> str:
@@ -148,6 +155,19 @@ def _object_review_prompt(label: str) -> str:
     )
 
 
+def _full_frame_label_review_prompt(label: str) -> str:
+    return (
+        "You are given one indoor scene image. "
+        "Decide how many objects in the full frame would reasonably be called "
+        f"{json.dumps(str(label), ensure_ascii=False)} by a human viewer. "
+        "Return unique when exactly one object in the image would be called that label. "
+        "Return multiple when two or more objects in the image would be called that label. "
+        "Return absent when none would be called that label. "
+        "Return unsure when you cannot decide confidently. "
+        'Answer with strict JSON only using this schema: {"status": "unique", "reason": "short reason"}'
+    )
+
+
 def _normalize_object_review_status(value: object) -> str | None:
     text = str(value or "").strip().lower()
     if text in {"clear", "present", "visible", "yes"}:
@@ -157,6 +177,48 @@ def _normalize_object_review_status(value: object) -> str | None:
     if text in {"unsure", "uncertain", "unknown", "cannot_tell", "can't tell"}:
         return OBJECT_STATUS_UNSURE
     return None
+
+
+def _normalize_full_frame_label_status(value: object, *, count: object = None) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {"unique", "one", "single", "exactly_one", "exactly one"}:
+        return LABEL_STATUS_UNIQUE
+    if text in {"multiple", "many", "more_than_one", "more than one", "two_or_more", "two or more"}:
+        return LABEL_STATUS_MULTIPLE
+    if text in {"absent", "none", "zero", "not_present", "not present"}:
+        return LABEL_STATUS_ABSENT
+    if text in {"unsure", "uncertain", "unknown", "unclear", "cannot_tell", "can't tell"}:
+        return LABEL_STATUS_UNSURE
+    try:
+        count_int = int(count)
+    except (TypeError, ValueError):
+        return None
+    if count_int <= 0:
+        return LABEL_STATUS_ABSENT
+    if count_int == 1:
+        return LABEL_STATUS_UNIQUE
+    return LABEL_STATUS_MULTIPLE
+
+
+def _label_status_count(status: object) -> int | None:
+    text = str(status or "").strip().lower()
+    if text == LABEL_STATUS_ABSENT:
+        return 0
+    if text == LABEL_STATUS_UNIQUE:
+        return 1
+    if text == LABEL_STATUS_MULTIPLE:
+        return 2
+    return None
+
+
+def _label_counts_from_statuses(label_statuses: dict[str, str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for label, status in sorted(label_statuses.items()):
+        count = _label_status_count(status)
+        if count is None:
+            continue
+        counts[str(label)] = int(count)
+    return counts
 
 
 def _coerce_bool(value: object, *, default: bool) -> bool:
@@ -252,6 +314,33 @@ def _object_review_decision(
         max_tokens=128,
     )
     status = _normalize_object_review_status(parsed.get("status")) or OBJECT_STATUS_UNSURE
+    return status, raw_text
+
+
+def _full_frame_label_review_decision(
+    client,
+    model: str,
+    image_b64: str,
+    label: str,
+) -> tuple[str, str]:
+    default = {"status": LABEL_STATUS_UNSURE, "reason": "parse_fallback"}
+    parsed, raw_text = _call_vlm_json(
+        client,
+        model,
+        [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            {"type": "text", "text": _full_frame_label_review_prompt(label)},
+        ],
+        default=default,
+        max_tokens=128,
+    )
+    status = (
+        _normalize_full_frame_label_status(
+            parsed.get("status"),
+            count=parsed.get("count"),
+        )
+        or LABEL_STATUS_UNSURE
+    )
     return status, raw_text
 
 
@@ -420,9 +509,21 @@ def _aggregate_label_reviews(
     label_to_ids: dict[str, list[int]],
     object_reviews: dict[int, dict[str, Any]],
 ) -> tuple[dict[str, str], dict[str, int], list[int]]:
+    label_statuses, label_counts, referable_object_ids, _unique_label_object_ids = _aggregate_crop_label_reviews(
+        label_to_ids,
+        object_reviews,
+    )
+    return label_statuses, label_counts, referable_object_ids
+
+
+def _aggregate_crop_label_reviews(
+    label_to_ids: dict[str, list[int]],
+    object_reviews: dict[int, dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, int], list[int], dict[str, int]]:
     label_statuses: dict[str, str] = {}
     label_counts: dict[str, int] = {}
     referable_object_ids: list[int] = []
+    unique_label_object_ids: dict[str, int] = {}
 
     for label, obj_ids in sorted(label_to_ids.items()):
         clear_ids: list[int] = []
@@ -452,21 +553,24 @@ def _aggregate_label_reviews(
         label_counts[label] = clear_count
 
         if clear_count == 1 and not has_unsure:
-            label_statuses[label] = "unique"
-            referable_object_ids.append(int(clear_ids[0]))
+            label_statuses[label] = LABEL_STATUS_UNIQUE
+            unique_obj_id = int(clear_ids[0])
+            unique_label_object_ids[label] = unique_obj_id
+            referable_object_ids.append(unique_obj_id)
             continue
         if clear_count >= 2:
-            label_statuses[label] = "multiple"
+            label_statuses[label] = LABEL_STATUS_MULTIPLE
             continue
         if clear_count == 0 and not has_unsure and all_absent_like:
-            label_statuses[label] = "absent"
+            label_statuses[label] = LABEL_STATUS_ABSENT
             continue
-        label_statuses[label] = "unsure"
+        label_statuses[label] = LABEL_STATUS_UNSURE
 
     return (
         dict(sorted(label_statuses.items())),
         dict(sorted(label_counts.items())),
         sorted(set(int(obj_id) for obj_id in referable_object_ids)),
+        {str(label): int(obj_id) for label, obj_id in sorted(unique_label_object_ids.items())},
     )
 
 
@@ -520,6 +624,12 @@ def _compute_frame_referability_entry(
         else _frame_selection_score(selector_score_value, normalized_frame_info)
     )
     object_reviews: dict[int, dict[str, Any]] = {}
+    crop_label_statuses: dict[str, str] = {}
+    crop_label_counts: dict[str, int] = {}
+    crop_referable_object_ids: list[int] = []
+    full_frame_label_reviews: list[dict[str, Any]] = []
+    full_frame_label_statuses: dict[str, str] = {}
+    full_frame_label_counts: dict[str, int] = {}
     label_statuses: dict[str, str] = {}
     label_counts: dict[str, int] = {}
     referable_object_ids: list[int] = []
@@ -559,10 +669,44 @@ def _compute_frame_referability_entry(
                 review["vlm_status"] = status
                 review["raw_response"] = raw_response or None
             object_reviews[int(obj_id)] = review
-        label_statuses, label_counts, referable_object_ids = _aggregate_label_reviews(
+        crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = _aggregate_crop_label_reviews(
             label_to_object_ids,
             object_reviews,
         )
+        label_statuses = dict(crop_label_statuses)
+        referable_set = set(int(obj_id) for obj_id in crop_referable_object_ids)
+
+        if crop_unique_label_object_ids:
+            if image_b64 is None:
+                image_b64 = _image_to_base64(image)
+            for label, obj_id in sorted(crop_unique_label_object_ids.items()):
+                status, raw_response = _full_frame_label_review_decision(
+                    client,
+                    model_name,
+                    str(image_b64 or ""),
+                    label,
+                )
+                status = _normalize_full_frame_label_status(status) or LABEL_STATUS_UNSURE
+                full_frame_label_reviews.append(
+                    {
+                        "label": str(label),
+                        "status": status,
+                        "crop_status": crop_label_statuses.get(label),
+                        "crop_clear_count": crop_label_counts.get(label),
+                        "crop_referable_object_id": int(obj_id),
+                        "raw_response": raw_response or None,
+                    }
+                )
+                full_frame_label_statuses[str(label)] = status
+                label_statuses[str(label)] = status
+                if status != LABEL_STATUS_UNIQUE and int(obj_id) in referable_set:
+                    referable_set.remove(int(obj_id))
+
+        full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
+        full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
+        label_statuses = dict(sorted(label_statuses.items()))
+        label_counts = _label_counts_from_statuses(label_statuses)
+        referable_object_ids = sorted(referable_set)
 
     return {
         "frame_usable": normalized_frame_info["frame_usable"],
@@ -596,6 +740,13 @@ def _compute_frame_referability_entry(
             str(obj_id): review
             for obj_id, review in sorted(object_reviews.items())
         },
+        "crop_label_statuses": dict(sorted(crop_label_statuses.items())),
+        "crop_label_counts": dict(sorted(crop_label_counts.items())),
+        "crop_referable_object_ids": sorted(set(int(obj_id) for obj_id in crop_referable_object_ids)),
+        "full_frame_label_reviews": list(full_frame_label_reviews),
+        "full_frame_label_statuses": full_frame_label_statuses,
+        "full_frame_label_counts": full_frame_label_counts,
+        "vlm_label_reviews": list(full_frame_label_reviews),
         "label_statuses": dict(sorted(label_statuses.items())),
         "label_counts": dict(sorted(label_counts.items())),
         "referable_object_ids": referable_object_ids,
@@ -619,6 +770,12 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
         "selector_visible_object_ids",
         "selector_visible_label_counts",
         "object_reviews",
+        "crop_label_statuses",
+        "crop_label_counts",
+        "crop_referable_object_ids",
+        "full_frame_label_reviews",
+        "full_frame_label_statuses",
+        "full_frame_label_counts",
         "label_statuses",
         "label_counts",
         "referable_object_ids",

@@ -278,8 +278,120 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 9.0"):
+        with self.assertRaisesRegex(ValueError, "expected 10.0"):
             run_pipeline_module._load_referability_cache(cache_path)
+
+    def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
+        self.assertTrue(
+            run_pipeline_module._has_l1_visibility_candidates({"lamp": "absent"})
+        )
+        self.assertFalse(
+            run_pipeline_module._has_l1_visibility_candidates(
+                {"chair": "unique", "table": "multiple", "sofa": "unsure"}
+            )
+        )
+
+    def test_run_pipeline_keeps_frame_with_full_frame_absent_label_for_l1_visibility(self) -> None:
+        root = make_case_dir("pipeline_l1_absent_candidate")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        referability_cache = {
+            "version": "10.0",
+            "frames": {
+                scene_id: {
+                    image_name: {
+                        "frame_usable": True,
+                        "candidate_visible_object_ids": [1],
+                        "crop_label_statuses": {"lamp": "unique"},
+                        "crop_label_counts": {"lamp": 1},
+                        "crop_referable_object_ids": [1],
+                        "full_frame_label_reviews": [
+                            {
+                                "label": "lamp",
+                                "status": "absent",
+                                "crop_status": "unique",
+                                "crop_clear_count": 1,
+                                "crop_referable_object_id": 1,
+                                "raw_response": '{"status":"absent"}',
+                            }
+                        ],
+                        "full_frame_label_statuses": {"lamp": "absent"},
+                        "full_frame_label_counts": {"lamp": 0},
+                        "referable_object_ids": [],
+                        "label_statuses": {"lamp": "absent"},
+                        "label_counts": {"lamp": 0},
+                        "candidate_labels": ["lamp"],
+                        "label_to_object_ids": {"lamp": [1]},
+                    }
+                }
+            },
+        }
+
+        scene = {
+            "scene_id": scene_id,
+            "objects": [
+                make_object(1, "lamp"),
+                make_object(2, "table"),
+            ],
+            "attachment_edges": [
+                {"parent_id": 2, "child_id": 1, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+
+        captured: dict[str, object] = {"called": False}
+
+        def fake_generate_all_questions(**kwargs):
+            captured["called"] = True
+            captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
+            captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
+            captured["label_counts"] = dict(kwargs["label_counts"] or {})
+            return []
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        self.assertTrue(captured["called"])
+        self.assertEqual(captured["visible_object_ids"], [1])
+        self.assertEqual(captured["referable_object_ids"], [])
+        self.assertEqual(captured["label_statuses"], {"lamp": "absent"})
+        self.assertEqual(captured["label_counts"], {"lamp": 0})
+        self.assertEqual(questions, [])
 
     def test_run_pipeline_requires_referability_cache(self) -> None:
         root = make_case_dir("pipeline_requires_cache")
@@ -309,12 +421,18 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "9.0",
+            "version": "10.0",
             "frames": {
                 scene_id: {
                     image_name: {
                         "frame_usable": True,
                         "candidate_visible_object_ids": [2, 1],
+                        "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                        "crop_label_counts": {"cup": 1, "table": 1},
+                        "crop_referable_object_ids": [1, 2],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {},
+                        "full_frame_label_counts": {},
                         "referable_object_ids": [1],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
@@ -404,12 +522,18 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "9.0",
+            "version": "10.0",
             "frames": {
                 scene_id: {
                     image_name: {
                         "frame_usable": True,
                         "candidate_visible_object_ids": [3, 2, 1],
+                        "crop_label_statuses": {"chair": "unique", "curtain": "multiple"},
+                        "crop_label_counts": {"chair": 1, "curtain": 2},
+                        "crop_referable_object_ids": [1],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {},
+                        "full_frame_label_counts": {},
                         "referable_object_ids": [1],
                         "label_statuses": {
                             "chair": "unique",

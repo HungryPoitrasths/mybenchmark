@@ -72,6 +72,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("unsure", prompt)
         self.assertNotIn("obj_id", prompt)
 
+    def test_full_frame_label_review_prompt_requests_uniqueness_judgment(self) -> None:
+        prompt = referability_module._full_frame_label_review_prompt("table").lower()
+
+        self.assertIn("full frame", prompt)
+        self.assertIn("unique", prompt)
+        self.assertIn("multiple", prompt)
+        self.assertIn("absent", prompt)
+        self.assertIn("how many objects", prompt)
+
     def test_frame_decision_propagates_clarity_review_result(self) -> None:
         with patch.object(
             referability_module,
@@ -165,6 +174,38 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(status, "clear")
         self.assertEqual(raw, '{"status":"visible"}')
 
+    def test_full_frame_label_review_decision_normalizes_multiple(self) -> None:
+        with patch.object(
+            referability_module,
+            "_call_vlm_json",
+            return_value=({"status": "two_or_more"}, '{"status":"two_or_more"}'),
+        ):
+            status, raw = referability_module._full_frame_label_review_decision(
+                client=object(),
+                model="fake-model",
+                image_b64="ZnVsbA==",
+                label="table",
+            )
+
+        self.assertEqual(status, "multiple")
+        self.assertEqual(raw, '{"status":"two_or_more"}')
+
+    def test_full_frame_label_review_decision_falls_back_to_unsure_for_invalid_status(self) -> None:
+        with patch.object(
+            referability_module,
+            "_call_vlm_json",
+            return_value=({"status": "banana"}, '{"status":"banana"}'),
+        ):
+            status, raw = referability_module._full_frame_label_review_decision(
+                client=object(),
+                model="fake-model",
+                image_b64="ZnVsbA==",
+                label="table",
+            )
+
+        self.assertEqual(status, "unsure")
+        self.assertEqual(raw, '{"status":"banana"}')
+
     def test_refine_candidate_visible_object_ids_uses_depth_when_available(self) -> None:
         with patch.object(
             referability_module,
@@ -255,7 +296,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(referable_ids, [1])
 
-    def test_compute_frame_referability_entry_builds_v9_object_reviews(self) -> None:
+    def test_compute_frame_referability_entry_builds_v10_object_reviews(self) -> None:
         scene_objects = [
             make_object(1, "chair"),
             make_object(2, "chair"),
@@ -295,6 +336,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "_object_review_decision",
                 side_effect=[("clear", '{"status":"clear"}'), ("absent", '{"status":"absent"}')],
             ) as review_mock,
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+                return_value=("unique", '{"status":"unique"}'),
+            ) as full_frame_mock,
         ):
             frame_entry = referability_module._compute_frame_referability_entry(
                 client=object(),
@@ -316,13 +362,151 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["frame_quality_usable_for_spatial_reasoning"], True)
         self.assertEqual(frame_entry["frame_quality_reason"], "clear enough")
         self.assertEqual(frame_entry["candidate_visibility_source"], "depth_refined")
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique", "lamp": "absent"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 1, "lamp": 0})
+        self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["full_frame_label_counts"], {"chair": 1})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "unique", "lamp": "absent"})
         self.assertEqual(frame_entry["label_counts"], {"chair": 1, "lamp": 0})
         self.assertEqual(frame_entry["referable_object_ids"], [1])
+        self.assertEqual(frame_entry["full_frame_label_reviews"][0]["crop_referable_object_id"], 1)
         self.assertEqual(frame_entry["object_reviews"]["1"]["vlm_status"], "clear")
         self.assertEqual(frame_entry["object_reviews"]["2"]["local_outcome"], "out_of_frame")
         self.assertEqual(frame_entry["object_reviews"]["3"]["vlm_status"], "absent")
         self.assertEqual(review_mock.call_count, 2)
+        full_frame_mock.assert_called_once_with(
+            unittest.mock.ANY,
+            "fake-vlm",
+            unittest.mock.ANY,
+            "chair",
+        )
+
+    def test_compute_frame_referability_entry_drops_crop_unique_label_when_full_frame_is_multiple(self) -> None:
+        scene_objects = [
+            make_object(1, "chair"),
+            make_object(2, "chair"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+            2: {"projected_area_px": 0.0},
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([1, 2], "depth_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_object_review_decision",
+                return_value=("clear", '{"status":"clear"}'),
+            ),
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+                return_value=("multiple", '{"status":"multiple"}'),
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1, 2],
+            )
+
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple"})
+        self.assertEqual(frame_entry["label_counts"], {"chair": 2})
+        self.assertEqual(frame_entry["referable_object_ids"], [])
+
+    def test_compute_frame_referability_entry_drops_crop_unique_label_when_full_frame_is_absent(self) -> None:
+        scene_objects = [make_object(1, "lamp")]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([1], "depth_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_object_review_decision",
+                return_value=("clear", '{"status":"clear"}'),
+            ),
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+                return_value=("absent", '{"status":"absent"}'),
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1],
+            )
+
+        self.assertEqual(frame_entry["crop_label_statuses"], {"lamp": "unique"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"lamp": 1})
+        self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {"lamp": "absent"})
+        self.assertEqual(frame_entry["full_frame_label_counts"], {"lamp": 0})
+        self.assertEqual(frame_entry["label_statuses"], {"lamp": "absent"})
+        self.assertEqual(frame_entry["label_counts"], {"lamp": 0})
+        self.assertEqual(frame_entry["referable_object_ids"], [])
 
 
 if __name__ == "__main__":

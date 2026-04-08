@@ -836,7 +836,7 @@ def run_single_frame_trace(
                 "referability_source": referability_source,
             }
             return trace_doc
-        if not referable_ids and not _has_l1_visibility_candidates(label_counts):
+        if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
             trace_doc["status"] = "stopped"
             trace_doc["stop_reason"] = "no_referable_objects_or_l1_candidates"
             trace_doc["stop_details"] = {

@@ -67,7 +67,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
-EXPECTED_REFERABILITY_CACHE_VERSION = "9.0"
+EXPECTED_REFERABILITY_CACHE_VERSION = "10.0"
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -1420,15 +1420,11 @@ def _get_referability_scene_ids(cache: dict | None) -> set[str]:
     return scene_ids
 
 
-def _has_l1_visibility_candidates(label_counts: object) -> bool:
-    if not isinstance(label_counts, dict):
+def _has_l1_visibility_candidates(label_statuses: object) -> bool:
+    if not isinstance(label_statuses, dict):
         return False
-    for count in label_counts.values():
-        try:
-            count_int = int(count)
-        except (TypeError, ValueError):
-            continue
-        if count_int in (0, 1):
+    for status in label_statuses.values():
+        if str(status or "").strip().lower() == "absent":
             return True
     return False
 
@@ -1673,6 +1669,12 @@ def _build_frame_debug_entry(
         "candidate_visible_label_counts": _normalize_label_counts(
             (referability_entry or {}).get("candidate_visible_label_counts")
         ),
+        "crop_label_statuses": _normalize_label_statuses((referability_entry or {}).get("crop_label_statuses")),
+        "crop_label_counts": _normalize_label_counts((referability_entry or {}).get("crop_label_counts")),
+        "crop_referable_object_ids": _normalize_object_ids((referability_entry or {}).get("crop_referable_object_ids")),
+        "full_frame_label_reviews": list((referability_entry or {}).get("full_frame_label_reviews", [])),
+        "full_frame_label_statuses": _normalize_label_statuses((referability_entry or {}).get("full_frame_label_statuses")),
+        "full_frame_label_counts": _normalize_label_counts((referability_entry or {}).get("full_frame_label_counts")),
         "vlm_label_statuses": _normalize_label_statuses((referability_entry or {}).get("label_statuses")),
         "vlm_label_counts": _normalize_label_counts((referability_entry or {}).get("label_counts")),
         "referable_object_ids": _normalize_object_ids((referability_entry or {}).get("referable_object_ids")),
@@ -1681,7 +1683,10 @@ def _build_frame_debug_entry(
             str(label): _normalize_object_ids(obj_ids)
             for label, obj_ids in label_to_object_ids.items()
         },
-        "vlm_label_reviews": list((referability_entry or {}).get("vlm_label_reviews", [])),
+        "vlm_label_reviews": list(
+            (referability_entry or {}).get("vlm_label_reviews")
+            or (referability_entry or {}).get("full_frame_label_reviews", [])
+        ),
         "object_reviews": dict((referability_entry or {}).get("object_reviews", {})),
         "object_rows": _build_object_debug_rows(
             scene_objects,
@@ -1892,7 +1897,7 @@ def run_pipeline(
                     int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
                     if int(obj_id) in visible_id_set
                 ]
-                if not referable_ids and not _has_l1_visibility_candidates(label_counts):
+                if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
                     if write_frame_debug:
                         frame_attachment_rows = _filter_frame_attachment_rows(
                             scene_attachment_rows,
