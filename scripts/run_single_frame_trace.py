@@ -892,6 +892,7 @@ def run_single_frame_trace(
             referable_object_ids=referable_ids,
             label_statuses=label_statuses,
             label_counts=label_counts,
+            label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
             room_bounds=scene.get("room_bounds"),
             wall_objects=scene.get("wall_objects"),
             attachment_edges=scene.get("attachment_edges", []),

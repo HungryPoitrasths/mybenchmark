@@ -133,6 +133,142 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             [],
         )
 
+    def test_apply_question_referability_filter_raises_on_nonreferable_mention(self) -> None:
+        with self.assertRaisesRegex(AssertionError, "Referability backstop detected"):
+            run_pipeline_module._apply_question_referability_filter(
+                [
+                    {
+                        "scene_id": "scene0000_00",
+                        "image_name": "000123.jpg",
+                        "question": "Where is the chair relative to the curtain?",
+                        "type": "direction_agent",
+                        "mentioned_objects": [
+                            {"role": "target", "label": "chair", "obj_id": 1},
+                            {"role": "reference", "label": "curtain"},
+                        ],
+                    }
+                ],
+                objects_by_id={
+                    1: make_object(1, "chair"),
+                    2: make_object(2, "curtain"),
+                    3: make_object(3, "curtain"),
+                },
+                referability_entry={
+                    "label_statuses": {"chair": "unique", "curtain": "multiple"},
+                    "label_to_object_ids": {"chair": [1], "curtain": [2, 3]},
+                },
+                frame_referable_ids=[1],
+            )
+
+    def test_l1_not_visible_occlusion_passes_audit(self) -> None:
+        audit = run_pipeline_module._build_question_referability_audit(
+            {
+                "type": "occlusion",
+                "correct_value": "not visible",
+                "question": "Is the lamp visible?",
+                "mentioned_objects": [
+                    {"role": "target", "label": "lamp", "obj_id": None},
+                ],
+                "obj_a_label": "lamp",
+                "obj_a_id": None,
+            },
+            objects_by_id={5: make_object(5, "lamp")},
+            referability_entry={
+                "label_statuses": {"lamp": "absent"},
+                "label_to_object_ids": {"lamp": [5]},
+            },
+            frame_referable_ids=[],
+        )
+
+        self.assertEqual(audit["decision"], "pass")
+        self.assertEqual(audit["reason_codes"], [])
+        self.assertEqual(len(audit["mentioned_objects"]), 1)
+        self.assertTrue(audit["mentioned_objects"][0]["exempt"])
+
+    def test_object_move_occlusion_target_is_not_exempt(self) -> None:
+        audit = run_pipeline_module._build_question_referability_audit(
+            {
+                "type": "object_move_occlusion",
+                "correct_value": "not visible",
+                "question": "If the table moves, is the lamp visible?",
+                "mentioned_objects": [
+                    {"role": "moved_object", "label": "table", "obj_id": 1},
+                    {"role": "target_object", "label": "lamp", "obj_id": 2},
+                ],
+            },
+            objects_by_id={
+                1: make_object(1, "table"),
+                2: make_object(2, "lamp"),
+            },
+            referability_entry={
+                "label_statuses": {"table": "unique", "lamp": "absent"},
+                "label_to_object_ids": {"table": [1], "lamp": [2]},
+            },
+            frame_referable_ids=[1],
+        )
+
+        self.assertEqual(audit["decision"], "drop")
+        self.assertIn("mentioned_nonreferable_object", audit["reason_codes"])
+
+    def test_build_question_referability_audit_drops_same_object_used_by_multiple_roles(self) -> None:
+        audit = run_pipeline_module._build_question_referability_audit(
+            {
+                "type": "direction_agent",
+                "question": "Where is the chair relative to itself?",
+                "mentioned_objects": [
+                    {"role": "target", "label": "chair", "obj_id": 1},
+                    {"role": "reference", "label": "chair", "obj_id": 1},
+                ],
+            },
+            objects_by_id={1: make_object(1, "chair")},
+            referability_entry={
+                "label_statuses": {"chair": "unique"},
+                "label_to_object_ids": {"chair": [1]},
+            },
+            frame_referable_ids=[1],
+        )
+
+        self.assertEqual(audit["decision"], "drop")
+        self.assertEqual(audit["reason_codes"], ["mentioned_object_multi_role"])
+        self.assertEqual(
+            audit["mentioned_objects"][0]["same_object_roles"],
+            ["reference", "target"],
+        )
+        self.assertEqual(
+            audit["mentioned_objects"][1]["same_object_roles"],
+            ["reference", "target"],
+        )
+
+    def test_build_question_referability_audit_ignores_legacy_alias_when_explicit_role_matches(self) -> None:
+        audit = run_pipeline_module._build_question_referability_audit(
+            {
+                "type": "object_move_agent",
+                "question": "If the table moves, where is the cup?",
+                "query_obj_id": 1,
+                "query_obj_label": "cup",
+                "mentioned_objects": [
+                    {"role": "query_object", "label": "cup", "obj_id": 1},
+                ],
+            },
+            objects_by_id={1: make_object(1, "cup")},
+            referability_entry={
+                "label_statuses": {"cup": "unique"},
+                "label_to_object_ids": {"cup": [1]},
+            },
+            frame_referable_ids=[1],
+        )
+
+        self.assertEqual(audit["decision"], "pass")
+        self.assertEqual(audit["reason_codes"], [])
+        self.assertEqual(
+            audit["mentioned_objects"][0]["explicit_roles"],
+            ["query_object"],
+        )
+        self.assertEqual(
+            audit["mentioned_objects"][0]["fallback_roles"],
+            ["query_obj"],
+        )
+
     def test_load_referability_cache_rejects_old_version(self) -> None:
         case_dir = make_case_dir("cache")
         self.addCleanup(shutil.rmtree, case_dir, True)
@@ -209,6 +345,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
             captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
             captured["label_counts"] = dict(kwargs["label_counts"] or {})
+            captured["label_to_object_ids"] = dict(kwargs["label_to_object_ids"] or {})
             return [
                 {
                     "question": "Is the cup on the table?",
@@ -244,6 +381,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 max_frames=10,
                 use_occlusion=False,
                 referability_cache=referability_cache,
+                run_question_presence_review=False,
                 write_frame_debug=False,
             )
 
@@ -251,6 +389,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["referable_object_ids"], [1])
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
+        self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})
         self.assertEqual(len(questions), 1)
 
     def test_run_pipeline_drops_questions_with_ambiguous_nonreferable_mentions(self) -> None:
@@ -338,32 +477,16 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
             patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
         ):
-            questions = run_pipeline_module.run_pipeline(
-                data_root=data_root,
-                output_dir=output_dir,
-                max_scenes=10,
-                max_frames=10,
-                use_occlusion=False,
-                referability_cache=referability_cache,
-                write_frame_debug=True,
-            )
-
-        self.assertEqual(questions, [])
-
-        frame_debug = json.loads(
-            (output_dir / "frame_debug" / f"{scene_id}.json").read_text(encoding="utf-8")
-        )
-        generated_questions = frame_debug["frames"][0]["generated_questions"]
-        self.assertEqual(len(generated_questions), 1)
-        self.assertEqual(
-            generated_questions[0]["question_referability_audit"]["decision"],
-            "drop",
-        )
-        self.assertEqual(
-            generated_questions[0]["question_referability_audit"]["reason_codes"],
-            ["mentioned_label_not_unique", "mentioned_label_not_resolved"],
-        )
-        self.assertEqual(frame_debug["frames"][0]["final_question_count"], 0)
+            with self.assertRaisesRegex(AssertionError, "Referability backstop detected"):
+                run_pipeline_module.run_pipeline(
+                    data_root=data_root,
+                    output_dir=output_dir,
+                    max_scenes=10,
+                    max_frames=10,
+                    use_occlusion=False,
+                    referability_cache=referability_cache,
+                    write_frame_debug=True,
+                )
 
 if __name__ == "__main__":
     unittest.main()

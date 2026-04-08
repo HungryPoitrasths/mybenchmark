@@ -44,6 +44,13 @@ from src.support_graph import (
     has_nontrivial_attachment,
 )
 from src.qa_generator import generate_all_questions
+from src.referability_checks import (
+    QUESTION_MENTION_FIELDS,
+    build_question_referability_audit as _shared_build_question_referability_audit,
+    collect_question_mentions as _shared_collect_question_mentions,
+    coerce_object_id as _shared_coerce_object_id,
+    normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
+)
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
     load_axis_alignment,
@@ -73,21 +80,7 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
-QUESTION_MENTION_FALLBACK_FIELDS = (
-    ("obj_a_id", "obj_a_label", "obj_a"),
-    ("obj_b_id", "obj_b_label", "obj_b"),
-    ("obj_ref_id", "obj_ref_label", "obj_ref"),
-    ("obj_face_id", "obj_face_label", "obj_face"),
-    ("obj_target_id", "obj_target_label", "obj_target"),
-    ("moved_obj_id", "moved_obj_label", "moved_obj"),
-    ("query_obj_id", "query_obj_label", "query_obj"),
-    ("obj_c_id", "obj_c_label", "obj_c"),
-    ("removed_obj_id", "removed_obj_label", "removed_obj"),
-    ("grandparent_id", "grandparent_label", "grandparent"),
-    ("parent_id", "parent_label", "parent"),
-    ("grandchild_id", "grandchild_label", "grandchild"),
-    ("neighbor_id", "neighbor_label", "neighbor"),
-)
+QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -237,82 +230,18 @@ def _dedupe_strings(values: list[str]) -> list[str]:
 
 
 def _normalize_label_to_object_ids(value: object) -> dict[str, list[int]]:
-    label_to_object_ids: dict[str, list[int]] = {}
-    if not isinstance(value, dict):
-        return label_to_object_ids
-    for key, obj_ids in value.items():
-        if not isinstance(key, str):
-            continue
-        label = key.strip().lower()
-        if not label:
-            continue
-        label_to_object_ids[label] = _normalize_object_ids(obj_ids)
-    return dict(sorted(label_to_object_ids.items()))
+    return _shared_normalize_label_to_object_ids(value)
 
 
 def _coerce_object_id(value: object) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return _shared_coerce_object_id(value)
 
 
 def _iter_question_referability_mentions(
     question: dict[str, object],
     objects_by_id: dict[int, dict[str, object]],
 ) -> list[dict[str, object]]:
-    mentions: list[dict[str, object]] = []
-    seen: set[tuple[object, str, str]] = set()
-    raw_mentions = question.get("mentioned_objects")
-
-    def _append_mention(
-        *,
-        role: object,
-        label_value: object,
-        obj_id_value: object,
-    ) -> None:
-        obj_id = _coerce_object_id(obj_id_value)
-        label = str(label_value or "").strip()
-        if not label and obj_id is not None:
-            label = str(objects_by_id.get(obj_id, {}).get("label", "")).strip()
-        if not label and obj_id is None:
-            return
-        role_text = str(role or "mentioned").strip() or "mentioned"
-        key = (obj_id if obj_id is not None else "", label.lower(), role_text)
-        if key in seen:
-            return
-        seen.add(key)
-        mentions.append(
-            {
-                "role": role_text,
-                "label": label,
-                "obj_id": obj_id,
-                "obj_id_parse_failed": (
-                    obj_id is None and obj_id_value not in (None, "")
-                ),
-            }
-        )
-
-    if isinstance(raw_mentions, list) and raw_mentions:
-        for mention in raw_mentions:
-            if not isinstance(mention, dict):
-                continue
-            _append_mention(
-                role=mention.get("role"),
-                label_value=mention.get("label"),
-                obj_id_value=mention.get("obj_id"),
-            )
-        return mentions
-
-    for id_key, label_key, role in QUESTION_MENTION_FALLBACK_FIELDS:
-        _append_mention(
-            role=role,
-            label_value=question.get(label_key),
-            obj_id_value=question.get(id_key),
-        )
-    return mentions
+    return _shared_collect_question_mentions(question, objects_by_id)
 
 
 def _build_question_referability_audit(
@@ -322,68 +251,13 @@ def _build_question_referability_audit(
     referability_entry: dict[str, object] | None,
     frame_referable_ids: list[int],
 ) -> dict[str, object]:
-    referable_set = set(int(obj_id) for obj_id in frame_referable_ids)
-    label_statuses = _normalize_label_statuses((referability_entry or {}).get("label_statuses"))
-    label_to_object_ids = _normalize_label_to_object_ids((referability_entry or {}).get("label_to_object_ids"))
-    audited_mentions: list[dict[str, object]] = []
-    reason_codes: list[str] = []
-    seen_reasons: set[str] = set()
-
-    def _add_reason(code: str, mention_reasons: list[str]) -> None:
-        if code not in mention_reasons:
-            mention_reasons.append(code)
-        if code not in seen_reasons:
-            seen_reasons.add(code)
-            reason_codes.append(code)
-
-    for mention in _iter_question_referability_mentions(question, objects_by_id):
-        label = str(mention.get("label", "")).strip()
-        label_key = label.lower()
-        mention_obj_id = _coerce_object_id(mention.get("obj_id"))
-        label_status = label_statuses.get(label_key)
-        candidate_ids = label_to_object_ids.get(label_key, [])
-        referable_label_ids = [
-            obj_id for obj_id in candidate_ids
-            if int(obj_id) in referable_set
-        ]
-        mention_reasons: list[str] = []
-
-        if mention_obj_id is not None and mention_obj_id not in referable_set:
-            _add_reason("mentioned_nonreferable_object", mention_reasons)
-
-        if label_key:
-            if label_status == "multiple":
-                _add_reason("mentioned_label_not_unique", mention_reasons)
-            elif label_status != "unique":
-                _add_reason("mentioned_label_not_resolved", mention_reasons)
-
-            if len(referable_label_ids) != 1:
-                _add_reason("mentioned_label_not_resolved", mention_reasons)
-            elif mention_obj_id is not None and mention_obj_id not in set(referable_label_ids):
-                _add_reason("mentioned_nonreferable_object", mention_reasons)
-        elif mention_obj_id is None:
-            _add_reason("mentioned_label_not_resolved", mention_reasons)
-
-        audited_mentions.append(
-            {
-                "role": str(mention.get("role", "mentioned")),
-                "label": label,
-                "obj_id": mention_obj_id,
-                "obj_id_parse_failed": bool(mention.get("obj_id_parse_failed", False)),
-                "label_status": label_status,
-                "candidate_object_ids": candidate_ids,
-                "referable_object_ids": referable_label_ids,
-                "passes_referability_check": not mention_reasons,
-                "reason_codes": mention_reasons,
-            }
-        )
-
-    return {
-        "decision": "drop" if reason_codes else "pass",
-        "reason_codes": reason_codes,
-        "mentioned_objects": audited_mentions,
-        "frame_referable_object_ids": sorted(referable_set),
-    }
+    return _shared_build_question_referability_audit(
+        question,
+        objects_by_id=objects_by_id,
+        label_statuses=(referability_entry or {}).get("label_statuses"),
+        label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
+        frame_referable_ids=frame_referable_ids,
+    )
 
 
 def _apply_question_referability_filter(
@@ -395,7 +269,7 @@ def _apply_question_referability_filter(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     kept_questions: list[dict[str, object]] = []
     audited_questions: list[dict[str, object]] = []
-    dropped = 0
+    dropped_summaries: list[str] = []
 
     for question in questions:
         audited_question = dict(question)
@@ -410,14 +284,23 @@ def _apply_question_referability_filter(
         if audit.get("decision") == "pass":
             kept_questions.append(audited_question)
             continue
-        dropped += 1
+        dropped_summaries.append(
+            "  scene="
+            f"{audited_question.get('scene_id', '<unknown>')} "
+            "frame="
+            f"{audited_question.get('image_name', '<unknown>')} "
+            "type="
+            f"{audited_question.get('type', '<unknown>')} "
+            "reasons="
+            f"{audit.get('reason_codes', [])}"
+        )
 
-    if dropped:
-        logger.info(
-            "Referability backstop removed %d questions for frame %s/%s",
-            dropped,
-            str(questions[0].get("scene_id", "<unknown>")) if questions else "<unknown>",
-            str(questions[0].get("image_name", "<unknown>")) if questions else "<unknown>",
+    if dropped_summaries:
+        raise AssertionError(
+            "Referability backstop detected "
+            f"{len(dropped_summaries)} question(s) that should have been filtered by the generator "
+            "(generator bug):\n"
+            + "\n".join(dropped_summaries)
         )
     return kept_questions, audited_questions
 
@@ -2048,6 +1931,7 @@ def run_pipeline(
                 referable_object_ids=referable_ids,
                 label_statuses=label_statuses,
                 label_counts=label_counts,
+                label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),

@@ -39,6 +39,11 @@ from .relation_engine import (
     compute_distance_details,
 )
 from .support_graph import compute_bottom_footprint_overlap_metrics
+from .referability_checks import (
+    build_question_referability_audit,
+    collect_question_mentions,
+    normalize_label_to_object_ids,
+)
 from .virtual_ops import (
     MOVEMENT_CANDIDATES,
     apply_movement,
@@ -186,8 +191,9 @@ MIN_WALL_MAJOR_AXIS = 1.5
 MAX_WALL_MINOR_AXIS = 1.0
 MIN_WALL_AXIS_RATIO = 2.0
 L1_OCCLUSION_MIN_IN_FRAME_RATIO = 0.05
-L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.02
+L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.01
 L1_OCCLUSION_OCCLUDED_MIN = 0.10
+L1_OCCLUSION_OCCLUDED_MIN_COUNT = 16
 L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
@@ -294,6 +300,8 @@ class _L1OcclusionMetrics:
     projected_area: float
     in_frame_ratio: float
     occlusion_ratio_in_frame: float
+    visible_in_frame_count: int
+    occluded_in_frame_count: int
     valid_in_frame_count: int
     sampled_point_count: int
     in_frame_sample_count: int
@@ -528,7 +536,13 @@ def _make_l1_occlusion_metrics(
     sampled_point_count: int,
     in_frame_sample_count: int,
     backend: str,
+    visible_in_frame_count: int | None = None,
 ) -> _L1OcclusionMetrics:
+    valid_in_frame_count = int(valid_in_frame_count)
+    if visible_in_frame_count is None:
+        visible_in_frame_count = int(round(valid_in_frame_count * (1.0 - float(occlusion_ratio_in_frame))))
+    visible_in_frame_count = max(0, min(int(visible_in_frame_count), valid_in_frame_count))
+    occluded_in_frame_count = max(valid_in_frame_count - visible_in_frame_count, 0)
     effective_ratio = (
         float(valid_in_frame_count / in_frame_sample_count)
         if in_frame_sample_count > 0 else 0.0
@@ -541,7 +555,9 @@ def _make_l1_occlusion_metrics(
         projected_area=float(projected_area),
         in_frame_ratio=float(in_frame_ratio),
         occlusion_ratio_in_frame=float(occlusion_ratio_in_frame),
-        valid_in_frame_count=int(valid_in_frame_count),
+        visible_in_frame_count=visible_in_frame_count,
+        occluded_in_frame_count=occluded_in_frame_count,
+        valid_in_frame_count=valid_in_frame_count,
         sampled_point_count=int(sampled_point_count),
         in_frame_sample_count=int(in_frame_sample_count),
         effective_ratio=effective_ratio,
@@ -553,6 +569,8 @@ def _make_l1_occlusion_metrics(
         projected_area=metrics.projected_area,
         in_frame_ratio=metrics.in_frame_ratio,
         occlusion_ratio_in_frame=metrics.occlusion_ratio_in_frame,
+        visible_in_frame_count=metrics.visible_in_frame_count,
+        occluded_in_frame_count=metrics.occluded_in_frame_count,
         valid_in_frame_count=metrics.valid_in_frame_count,
         sampled_point_count=metrics.sampled_point_count,
         in_frame_sample_count=metrics.in_frame_sample_count,
@@ -1332,7 +1350,10 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
         return "skip"
     if metrics.occlusion_ratio_in_frame < L1_OCCLUSION_NOT_OCCLUDED_MAX:
         return "not occluded"
-    if metrics.occlusion_ratio_in_frame > L1_OCCLUSION_OCCLUDED_MIN:
+    if (
+        metrics.occlusion_ratio_in_frame > L1_OCCLUSION_OCCLUDED_MIN
+        and metrics.occluded_in_frame_count >= L1_OCCLUSION_OCCLUDED_MIN_COUNT
+    ):
         return "occluded"
     return "grayzone"
 
@@ -1476,6 +1497,7 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            visible_in_frame_count=int(depth_metrics["visible_in_frame_count"]),
         )
 
     if backend == "mesh_ray" and ray_caster is not None:
@@ -1507,6 +1529,7 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            visible_in_frame_count=visible_count,
         )
 
     return _make_l1_occlusion_metrics(
@@ -1525,6 +1548,8 @@ def _l1_occlusion_metrics_payload(metrics: _L1OcclusionMetrics) -> dict[str, Any
         "projected_area": float(metrics.projected_area),
         "in_frame_ratio": float(metrics.in_frame_ratio),
         "occlusion_ratio_in_frame": float(metrics.occlusion_ratio_in_frame),
+        "visible_in_frame_count": int(metrics.visible_in_frame_count),
+        "occluded_in_frame_count": int(metrics.occluded_in_frame_count),
         "valid_in_frame_count": int(metrics.valid_in_frame_count),
         "sampled_point_count": int(metrics.sampled_point_count),
         "in_frame_sample_count": int(metrics.in_frame_sample_count),
@@ -1647,6 +1672,7 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
         sampled_point_count=sampled_point_count,
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
+        visible_in_frame_count=int(visible_count),
     )
 
 
@@ -1802,6 +1828,7 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
         sampled_point_count=sampled_point_count,
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
+        visible_in_frame_count=int(visible_count),
     )
 
 
@@ -5435,46 +5462,11 @@ def _normalize_object_id_set(
 
 def _ensure_question_mentions(
     question: dict[str, Any],
-    id_to_object: dict[int, dict],
-    label_to_object: dict[str, dict],
+    objects_by_id: dict[int, dict],
+    _unused_label_to_object: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
-    """Backfill `mentioned_objects` for generators that do not set it explicitly."""
-    if question.get("mentioned_objects"):
-        return question
-
-    mentions: list[dict[str, Any]] = []
-    role_specs = [
-        ("obj_a_id", "obj_a_label", "obj_a"),
-        ("obj_b_id", "obj_b_label", "obj_b"),
-        ("obj_ref_id", "obj_ref_label", "obj_ref"),
-        ("obj_face_id", "obj_face_label", "obj_face"),
-        ("obj_target_id", "obj_target_label", "obj_target"),
-        ("moved_obj_id", "moved_obj_label", "moved_obj"),
-        ("query_obj_id", "query_obj_label", "query_obj"),
-        ("removed_obj_id", "removed_obj_label", "removed_obj"),
-        ("grandparent_id", "grandparent_label", "grandparent"),
-        ("parent_id", "parent_label", "parent"),
-        ("grandchild_id", "grandchild_label", "grandchild"),
-        ("neighbor_id", "neighbor_label", "neighbor"),
-    ]
-    seen: set[int] = set()
-    for id_key, label_key, role in role_specs:
-        obj_id = question.get(id_key)
-        label = question.get(label_key)
-        obj = None
-        if obj_id is not None:
-            obj = id_to_object.get(int(obj_id))
-        elif label:
-            obj = label_to_object.get(str(label))
-        if obj is None:
-            continue
-        real_id = int(obj["id"])
-        if real_id in seen:
-            continue
-        mentions.append(_mention(role, obj["label"], real_id))
-        seen.add(real_id)
-
-    question["mentioned_objects"] = mentions
+    """Normalize `mentioned_objects` and backfill any missing legacy fields."""
+    question["mentioned_objects"] = collect_question_mentions(question, objects_by_id)
     return question
 
 
@@ -5613,34 +5605,25 @@ def _emit_generator_candidate(
 def _enforce_referable_mentions(
     questions: list[dict[str, Any]],
     referable_ids: set[int],
+    *,
+    objects_by_id: dict[int, dict[str, Any]],
+    label_statuses: dict[str, Any] | None = None,
+    label_to_object_ids: dict[str, Any] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Drop questions that mention a concrete object outside the referable set."""
+    """Drop questions whose mention audit fails strict referability checks."""
     kept: list[dict[str, Any]] = []
     removed = 0
     for question in questions:
-        mentions = question.get("mentioned_objects")
-        if not isinstance(mentions, list):
-            kept.append(question)
-            continue
-
-        valid = True
-        for mention in mentions:
-            if not isinstance(mention, dict):
-                continue
-            obj_id = mention.get("obj_id")
-            if obj_id is None:
-                continue
-            try:
-                mention_id = int(obj_id)
-            except (TypeError, ValueError):
-                valid = False
-                break
-            if mention_id not in referable_ids:
-                valid = False
-                break
-
-        if valid:
+        audit = build_question_referability_audit(
+            question,
+            objects_by_id=objects_by_id,
+            label_statuses=label_statuses,
+            label_to_object_ids=label_to_object_ids,
+            frame_referable_ids=sorted(referable_ids),
+        )
+        question["question_referability_audit"] = audit
+        if audit.get("decision") == "pass":
             kept.append(question)
             continue
         removed += 1
@@ -5650,7 +5633,8 @@ def _enforce_referable_mentions(
                 "event": "question_removed",
                 "stage": "qa_generation",
                 "filter": "referable_mentions",
-                "reason": "mentions_non_referable_object",
+                "reason": "referability_audit_failed",
+                "reason_codes": list(audit.get("reason_codes", [])),
                 "trace_question_id": question.get("trace_question_id"),
                 "question": question,
             },
@@ -5808,6 +5792,7 @@ def generate_all_questions(
     referable_object_ids: list[int] | None = None,
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
+    label_to_object_ids: dict[str, Any] | None = None,
     room_bounds: dict | None = None,
     wall_objects: list[dict] | None = None,
     attachment_edges: list[dict] | None = None,
@@ -5827,6 +5812,9 @@ def generate_all_questions(
     label_statuses: if provided, use per-label VLM absent/unique/multiple/unsure
     decisions to guide L1 occlusion generation.
     label_counts: optional compatibility field derived from label_statuses.
+    label_to_object_ids: optional candidate visible object ids per label from the
+    referability stage. When omitted, a fallback mapping is built from the
+    visible, non-excluded object pool.
     room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
     wall_objects: visible filtering for ordinary objects does not touch these;
     they are only used to construct allocentric wall-anchor wording.
@@ -6024,6 +6012,17 @@ def generate_all_questions(
     # pool of question-eligible visible objects for that path only.
     l1_occlusion_objects = list(objects_for_questions)
     l2_collision_objects = list(objects_for_questions)
+    label_to_object_ids_for_audit = normalize_label_to_object_ids(label_to_object_ids)
+    if not label_to_object_ids_for_audit:
+        fallback_label_to_object_ids: dict[str, list[int]] = {}
+        for obj in l1_occlusion_objects:
+            label = str(obj.get("label", "")).strip().lower()
+            if not label:
+                continue
+            fallback_label_to_object_ids.setdefault(label, []).append(int(obj["id"]))
+        label_to_object_ids_for_audit = normalize_label_to_object_ids(
+            fallback_label_to_object_ids,
+        )
     graph_ids = {int(o["id"]) for o in all_objects_for_graph}
     attachment_edges = [
         e for e in attachment_edges
@@ -6715,17 +6714,19 @@ def generate_all_questions(
         details={"audit_mode": "summary_only"},
     )
 
-    id_to_object = {int(o["id"]): o for o in objects_uniq}
-    label_to_object = {str(o["label"]): o for o in objects_uniq}
+    id_to_object = {int(o["id"]): o for o in original_objects}
     for idx, question in enumerate(all_questions):
         all_questions[idx] = _ensure_question_mentions(
-            question, id_to_object, label_to_object,
+            question, id_to_object,
         )
 
     if trace_recorder is not None:
         all_questions = _enforce_referable_mentions(
             all_questions,
             referable_question_ids,
+            objects_by_id=id_to_object,
+            label_statuses=label_statuses,
+            label_to_object_ids=label_to_object_ids_for_audit,
             trace_recorder=trace_recorder,
         )
         all_questions = _enforce_stable_facing_references(
@@ -6737,6 +6738,9 @@ def generate_all_questions(
         all_questions = _enforce_referable_mentions(
             all_questions,
             referable_question_ids,
+            objects_by_id=id_to_object,
+            label_statuses=label_statuses,
+            label_to_object_ids=label_to_object_ids_for_audit,
         )
         all_questions = _enforce_stable_facing_references(
             all_questions,
