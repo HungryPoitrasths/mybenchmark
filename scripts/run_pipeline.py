@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import os
+import re
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -24,6 +27,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.frame_selector import compute_frame_object_visibility
 from src.scene_parser import (
     EXCLUDED_LABELS,
     _load_scene_geometry,
@@ -57,6 +61,10 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "9.0"
+QUESTION_REVIEW_MAX_RETRIES = 4
+QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
+QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
+QUESTION_REVIEW_MAX_TOKENS_CAP = 1024
 VLM_API_KEY_ENV_NAMES = ("DASHSCOPE_API_KEY", "OPENAI_API_KEY")
 PLACEHOLDER_VLM_API_KEY = "EMPTY"
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
@@ -131,6 +139,101 @@ def _encode_review_image_to_base64(image: np.ndarray) -> str:
     if not ok:
         raise ValueError("Failed to encode review image")
     return base64.b64encode(buf.tobytes()).decode()
+
+
+def _extract_json_object(text: str) -> dict | None:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def _image_path_to_base64(path: Path) -> tuple[str, str]:
+    ext = path.suffix.lstrip(".").lower()
+    mime = "image/jpeg" if ext in ("jpg", "jpeg") else f"image/{ext}"
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode(), mime
+
+
+def _is_question_review_retryable_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "concurrent_request_limit_exceeded" in text
+        or "too many concurrent requests" in text
+    )
+
+
+def _is_authentication_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return (
+        "401" in text
+        or "unauthorized" in text
+        or "authentication" in text
+        or "invalid api key" in text
+    )
+
+
+def _call_question_review_vlm(create_fn, *, context: str):
+    last_exc: Exception | None = None
+    for attempt in range(1, QUESTION_REVIEW_MAX_RETRIES + 1):
+        try:
+            return create_fn()
+        except Exception as exc:
+            last_exc = exc
+            if _is_authentication_error(exc):
+                raise RuntimeError(
+                    f"{context} failed with an authentication error: {exc}. "
+                    "Set DASHSCOPE_API_KEY or OPENAI_API_KEY for the configured VLM endpoint, "
+                    "or disable this step with --no-question_presence_review."
+                ) from exc
+            if (
+                not _is_question_review_retryable_error(exc)
+                or attempt >= QUESTION_REVIEW_MAX_RETRIES
+            ):
+                raise
+            delay_seconds = QUESTION_REVIEW_RETRY_DELAY_SECONDS * attempt
+            logger.warning(
+                "%s hit a VLM concurrency limit (%d/%d). Retrying in %.1fs: %s",
+                context,
+                attempt,
+                QUESTION_REVIEW_MAX_RETRIES,
+                delay_seconds,
+                exc,
+            )
+            time.sleep(delay_seconds)
+    if last_exc is None:
+        raise RuntimeError(f"{context} failed without raising a review error")
+    raise last_exc
+
+
+def _normalize_question_presence_status(value: object) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {"present", "visible", "in_image", "in image", "yes"}:
+        return "present"
+    if text in {"absent", "missing", "not_present", "not present", "no"}:
+        return "absent"
+    if text in {"unsure", "uncertain", "unknown", "cannot_tell", "can't tell"}:
+        return "unsure"
+    return None
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
 
 
 def _normalize_label_to_object_ids(value: object) -> dict[str, list[int]]:
@@ -395,6 +498,437 @@ def _build_question_review_crop(
     return result
 
 
+def _build_question_review_scene_context(
+    *,
+    scene_id: str,
+    data_root: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    scene_dir = data_root / scene_id
+    scene = None
+    errors: list[str] = []
+    metadata_path = _question_review_scene_metadata_path(output_dir, scene_id)
+
+    if metadata_path.exists():
+        try:
+            scene = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning(
+                "Failed to load scene metadata for question review %s: %s",
+                scene_id,
+                e,
+            )
+            errors.append("invalid_scene_metadata")
+    elif scene_dir.exists():
+        try:
+            scene = parse_scene(scene_dir)
+        except Exception as e:
+            logger.warning("Question review parse fallback failed for %s: %s", scene_id, e)
+            errors.append("parse_scene_failed")
+    else:
+        errors.append("scene_dir_missing")
+
+    objects = scene.get("objects", []) if isinstance(scene, dict) else []
+    objects_by_id: dict[int, dict[str, object]] = {}
+    if isinstance(objects, list):
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            obj_id = _coerce_object_id(obj.get("id"))
+            if obj_id is None:
+                continue
+            objects_by_id[obj_id] = obj
+    if not objects_by_id:
+        errors.append("missing_scene_objects")
+
+    poses: dict[str, object] = {}
+    color_intrinsics = None
+    if scene_dir.exists():
+        try:
+            axis_align = load_axis_alignment(scene_dir)
+            poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        except Exception as e:
+            logger.warning("Question review pose load failed for %s: %s", scene_id, e)
+            errors.append("missing_pose_data")
+        try:
+            color_intrinsics = load_scannet_intrinsics(scene_dir)
+        except Exception as e:
+            logger.warning(
+                "Question review color intrinsics load failed for %s: %s",
+                scene_id,
+                e,
+            )
+            errors.append("missing_color_intrinsics")
+
+    return {
+        "scene_id": scene_id,
+        "scene_dir": scene_dir if scene_dir.exists() else None,
+        "objects": objects,
+        "objects_by_id": objects_by_id,
+        "poses": poses,
+        "color_intrinsics": color_intrinsics,
+        "errors": _dedupe_strings(errors),
+    }
+
+
+def _build_question_review_frame_context(
+    *,
+    scene_id: str,
+    image_name: str,
+    data_root: Path,
+    scene_context: dict[str, object],
+) -> dict[str, object]:
+    image_path = data_root / scene_id / "color" / image_name
+    image_exists = image_path.exists()
+    image_b64 = None
+    mime = "image/jpeg"
+    image = None
+    errors = list(scene_context.get("errors", []))
+
+    if image_exists:
+        try:
+            image_b64, mime = _image_path_to_base64(image_path)
+        except Exception as e:
+            logger.warning(
+                "Question review image encode failed for %s/%s: %s",
+                scene_id,
+                image_name,
+                e,
+            )
+            errors.append("image_encode_failed")
+        image = cv2.imread(str(image_path))
+        if image is None:
+            errors.append("image_unreadable")
+    else:
+        errors.append("image_not_found")
+
+    objects = scene_context.get("objects", [])
+    objects_by_id = dict(scene_context.get("objects_by_id", {}))
+    poses = scene_context.get("poses", {})
+    pose = poses.get(image_name) if isinstance(poses, dict) else None
+    color_intrinsics = scene_context.get("color_intrinsics")
+    if pose is None:
+        errors.append("missing_pose")
+    if color_intrinsics is None:
+        errors.append("missing_color_intrinsics")
+    if not objects_by_id:
+        errors.append("missing_scene_objects")
+
+    has_projection_context = (
+        image is not None
+        and pose is not None
+        and color_intrinsics is not None
+        and isinstance(objects, list)
+        and bool(objects)
+    )
+    visibility_by_obj_id: dict[int, dict[str, object]] = {}
+    crop_by_obj_id: dict[int, dict[str, object]] = {}
+    if has_projection_context:
+        try:
+            raw_visibility = compute_frame_object_visibility(
+                objects=objects,
+                pose=pose,
+                color_intrinsics=color_intrinsics,
+                image_path=image_path,
+                depth_image=None,
+                depth_intrinsics=None,
+                strict_mode=False,
+            )
+            visibility_by_obj_id = {
+                int(obj_id): meta
+                for obj_id, meta in raw_visibility.items()
+            }
+            for obj_id, meta in visibility_by_obj_id.items():
+                crop_by_obj_id[int(obj_id)] = _build_question_review_crop(image, meta)
+        except Exception as e:
+            logger.warning(
+                "Question review visibility build failed for %s/%s: %s",
+                scene_id,
+                image_name,
+                e,
+            )
+            errors.append("visibility_compute_failed")
+            has_projection_context = False
+
+    return {
+        "scene_id": scene_id,
+        "image_name": image_name,
+        "image_path": image_path,
+        "image_exists": image_exists,
+        "image_b64": image_b64,
+        "mime": mime,
+        "objects_by_id": objects_by_id,
+        "visibility_by_obj_id": visibility_by_obj_id,
+        "crop_by_obj_id": crop_by_obj_id,
+        "has_projection_context": has_projection_context,
+        "context_errors": _dedupe_strings(errors),
+    }
+
+
+def _prebuild_question_review_frame_contexts(
+    *,
+    questions: list[dict[str, object]],
+    data_root: Path,
+    output_dir: Path,
+) -> dict[tuple[str, str], dict[str, object]]:
+    frame_keys: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for question in questions:
+        scene_id = str(question.get("scene_id", "")).strip()
+        image_name = str(question.get("image_name", "")).strip()
+        key = (scene_id, image_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        frame_keys.append(key)
+
+    scene_contexts: dict[str, dict[str, object]] = {}
+    frame_contexts: dict[tuple[str, str], dict[str, object]] = {}
+    for scene_id, image_name in frame_keys:
+        if scene_id not in scene_contexts:
+            scene_contexts[scene_id] = _build_question_review_scene_context(
+                scene_id=scene_id,
+                data_root=data_root,
+                output_dir=output_dir,
+            )
+        frame_contexts[(scene_id, image_name)] = _build_question_review_frame_context(
+            scene_id=scene_id,
+            image_name=image_name,
+            data_root=data_root,
+            scene_context=scene_contexts[scene_id],
+        )
+    return frame_contexts
+
+
+def _collect_question_presence_targets(
+    question: dict[str, object],
+    objects_by_id: dict[int, dict[str, object]],
+) -> list[dict[str, object]]:
+    targets: list[dict[str, object]] = []
+    targets_by_obj_id: dict[int, dict[str, object]] = {}
+    unresolved_targets: dict[str, dict[str, object]] = {}
+
+    for idx, mention in enumerate(_iter_question_referability_mentions(question, objects_by_id)):
+        label = str(mention.get("label", "")).strip()
+        label_key = label.lower()
+        if label_key in EXCLUDED_LABELS:
+            continue
+        role = str(mention.get("role", "mentioned")).strip() or "mentioned"
+        obj_id = _coerce_object_id(mention.get("obj_id"))
+
+        if obj_id is not None:
+            target = targets_by_obj_id.get(obj_id)
+            if target is None:
+                target = {
+                    "sort_index": idx,
+                    "label": label,
+                    "obj_id": obj_id,
+                    "roles": [role],
+                }
+                targets_by_obj_id[obj_id] = target
+                targets.append(target)
+            else:
+                if not str(target.get("label", "")).strip() and label:
+                    target["label"] = label
+                if role not in target["roles"]:
+                    target["roles"].append(role)
+            continue
+
+        unresolved_key = label_key or f"unresolved:{idx}"
+        target = unresolved_targets.get(unresolved_key)
+        if target is None:
+            target = {
+                "sort_index": idx,
+                "label": label,
+                "obj_id": None,
+                "roles": [role],
+            }
+            unresolved_targets[unresolved_key] = target
+            targets.append(target)
+        elif role not in target["roles"]:
+            target["roles"].append(role)
+
+    normalized_targets: list[dict[str, object]] = []
+    for target in sorted(targets, key=lambda item: int(item.get("sort_index", 0))):
+        normalized_targets.append(
+            {
+                "label": str(target.get("label", "")).strip(),
+                "obj_id": _coerce_object_id(target.get("obj_id")),
+                "roles": sorted(
+                    {
+                        str(role).strip()
+                        for role in target.get("roles", [])
+                        if str(role).strip()
+                    }
+                ),
+            }
+        )
+    return normalized_targets
+
+
+def _question_presence_prompt(
+    question_text: str,
+    targets: list[dict[str, object]],
+) -> str:
+    targets_json = json.dumps(
+        [
+            {
+                "crop_index": idx + 1,
+                "obj_id": int(target["obj_id"]),
+                "label": str(target.get("label", "")).strip(),
+                "roles": list(target.get("roles", [])),
+            }
+            for idx, target in enumerate(targets)
+        ],
+        ensure_ascii=False,
+    )
+    return (
+        "You are auditing whether specific object instances mentioned in a visual question are clearly visible "
+        "and uniquely identifiable in the frame.\n"
+        "You will receive the full scene image first, followed by one crop for each target instance.\n"
+        "Use the crop as the primary evidence and the full image only as context.\n"
+        "Judge each obj_id independently.\n"
+        "Return present only when the exact instance is clearly visible, belongs to the given label, and can be "
+        "uniquely identified as a standalone instance in the frame.\n"
+        "If the crop is too partial, blurry, heavily occluded, confusing among multiple same-label instances, or "
+        "might only show a component/substructure of a larger object, return unsure instead of present.\n"
+        "If the instance does not appear in the image, return absent.\n"
+        "Return strict JSON only with this schema:\n"
+        '{"objects":[{"obj_id":42,"status":"present","reason":"short reason"}]}\n'
+        f"Question: {question_text}\n"
+        f"Targets: {targets_json}"
+    )
+
+
+def _build_presence_review_entry(
+    target: dict[str, object],
+    *,
+    status: str,
+    reason: str,
+) -> dict[str, object]:
+    roi_bounds = target.get("roi_bounds_px")
+    normalized_roi = None
+    if isinstance(roi_bounds, (list, tuple)) and len(roi_bounds) == 4:
+        try:
+            normalized_roi = [int(value) for value in roi_bounds]
+        except (TypeError, ValueError):
+            normalized_roi = None
+    return {
+        "label": str(target.get("label", "")).strip(),
+        "obj_id": _coerce_object_id(target.get("obj_id")),
+        "roles": _dedupe_strings(
+            [str(role).strip() for role in target.get("roles", []) if str(role).strip()]
+        ),
+        "status": status,
+        "reason": reason,
+        "roi_bounds_px": normalized_roi,
+    }
+
+
+def _finalize_presence_review(
+    object_reviews: list[dict[str, object]],
+    *,
+    raw_response: str,
+) -> dict[str, object]:
+    flagged_labels: list[str] = []
+    flagged_object_ids: list[int] = []
+    seen_labels: set[str] = set()
+    seen_obj_ids: set[int] = set()
+    flagged = False
+    for item in object_reviews:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip()
+        if status not in {"absent", "unsure"}:
+            continue
+        flagged = True
+        label = str(item.get("label", "")).strip()
+        if label and label not in seen_labels:
+            seen_labels.add(label)
+            flagged_labels.append(label)
+        obj_id = _coerce_object_id(item.get("obj_id"))
+        if obj_id is not None and obj_id not in seen_obj_ids:
+            seen_obj_ids.add(obj_id)
+            flagged_object_ids.append(obj_id)
+    return {
+        "review_mode": "instance",
+        "decision": "manual_review" if flagged else "pass",
+        "flagged_labels": flagged_labels,
+        "flagged_object_ids": flagged_object_ids,
+        "object_reviews": object_reviews,
+        "raw_response": raw_response,
+    }
+
+
+def _question_answer_prompt(question: dict[str, object]) -> str | None:
+    question_text = str(question.get("question", "")).strip()
+    options = question.get("options")
+    if not question_text or not isinstance(options, list) or not options:
+        return None
+
+    prompt_lines = [question_text, ""]
+    for idx, option in enumerate(options):
+        prompt_lines.append(f"{chr(65 + idx)}) {option}")
+    prompt_lines.append("")
+    letters = [chr(65 + idx) for idx in range(len(options))]
+    if len(letters) == 1:
+        answer_choices = letters[0]
+    elif len(letters) == 2:
+        answer_choices = " or ".join(letters)
+    else:
+        answer_choices = ", ".join(letters[:-1]) + f", or {letters[-1]}"
+    prompt_lines.append(
+        f"Answer with a single letter only ({answer_choices}). Do not explain."
+    )
+    return "\n".join(prompt_lines)
+
+
+def _parse_mcq_answer(raw: str) -> str | None:
+    if not raw:
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+
+    upper = stripped.upper()
+    if re.fullmatch(r"[ABCD]", upper):
+        return upper
+
+    match = re.match(r"^[\(\[]?([ABCD])(?:[\)\].:\s-]*)?$", upper)
+    if match:
+        return match.group(1)
+
+    explicit_patterns = [
+        r"\bANSWER(?:\s+IS)?\s*[:\-]?\s*[\(\[]?([ABCD])(?:[\)\]]|\b)",
+        r"\bOPTION\s+([ABCD])\b",
+        r"\bI\s+CHOOSE\s+([ABCD])\b",
+        r"\bMY\s+ANSWER\s+IS\s+([ABCD])\b",
+    ]
+    for pattern in explicit_patterns:
+        match = re.search(pattern, upper)
+        if match:
+            return match.group(1)
+
+    standalone_letters = re.findall(r"\b([ABCD])\b", upper)
+    unique_letters: list[str] = []
+    for letter in standalone_letters:
+        if letter not in unique_letters:
+            unique_letters.append(letter)
+    return unique_letters[0] if len(unique_letters) == 1 else None
+
+
+def _question_option_for_answer(question: dict[str, object], answer: str | None) -> str | None:
+    if answer not in {"A", "B", "C", "D"}:
+        return None
+    options = question.get("options")
+    if not isinstance(options, list):
+        return None
+    idx = ord(answer) - ord("A")
+    if idx < 0 or idx >= len(options):
+        return None
+    return str(options[idx])
+
+
 def _resolve_question_review_vlm(
     vlm_url: str | None,
     vlm_model: str | None,
@@ -426,6 +960,552 @@ def _resolve_question_review_vlm(
             raise RuntimeError(f"Cannot reach {purpose} VLM at {vlm_url}: {e}") from e
 
     return client, model_name
+
+
+def _make_question_presence_reviewer(client, model_name: str):
+    logger.info("Using question presence review VLM model: %s", model_name)
+
+    def _review(
+        frame_context: dict[str, object],
+        question: dict[str, object],
+        targets: list[dict[str, object]],
+    ) -> dict[str, object]:
+        image_b64 = str(frame_context.get("image_b64", "") or "")
+        mime = str(frame_context.get("mime", "") or "image/jpeg")
+        content: list[dict[str, object]] = [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}}
+        ]
+        for target in targets:
+            crop_b64 = str(target.get("crop_image_b64", "") or "")
+            crop_mime = str(target.get("crop_mime", "") or "image/jpeg")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{crop_mime};base64,{crop_b64}"},
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": _question_presence_prompt(str(question.get("question", "")), targets),
+            }
+        )
+        resp = _call_question_review_vlm(
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=[{
+                    "role": "user",
+                    "content": content,
+                }],
+                max_tokens=min(
+                    QUESTION_REVIEW_MAX_TOKENS_CAP,
+                    max(256, QUESTION_REVIEW_MAX_TOKENS_PER_TARGET * max(1, len(targets))),
+                ),
+                temperature=0,
+            ),
+            context=f"question presence review for {frame_context.get('image_name', '<unknown>')}",
+        )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        parsed = _extract_json_object(raw_text)
+
+        target_by_obj_id = {
+            int(target["obj_id"]): target
+            for target in targets
+            if _coerce_object_id(target.get("obj_id")) is not None
+        }
+        mapped_reviews: dict[int, dict[str, object]] = {}
+        objects = parsed.get("objects") if isinstance(parsed, dict) else None
+        if isinstance(objects, list):
+            for item in objects:
+                if not isinstance(item, dict):
+                    continue
+                obj_id = _coerce_object_id(item.get("obj_id"))
+                if obj_id is None or obj_id not in target_by_obj_id:
+                    continue
+                status = _normalize_question_presence_status(item.get("status")) or "unsure"
+                target = target_by_obj_id[obj_id]
+                mapped_reviews[obj_id] = {
+                    "label": str(target.get("label", "")).strip(),
+                    "obj_id": obj_id,
+                    "roles": list(target.get("roles", [])),
+                    "status": status,
+                    "reason": str(item.get("reason", "")).strip(),
+                    "roi_bounds_px": target.get("roi_bounds_px"),
+                }
+
+        object_reviews: list[dict[str, object]] = []
+        for target in targets:
+            obj_id = int(target["obj_id"])
+            object_reviews.append(
+                mapped_reviews.get(
+                    obj_id,
+                    _build_presence_review_entry(
+                        target,
+                        status="unsure",
+                        reason="missing_obj_id_in_vlm_response",
+                    ),
+                )
+            )
+        return {
+            "object_reviews": object_reviews,
+            "raw_response": raw_text,
+        }
+
+    return model_name, _review
+
+
+def _make_question_answer_reviewer(client, model_name: str):
+    logger.info("Using question answer review VLM model: %s", model_name)
+
+    def _review(image_path: Path, question: dict[str, object]) -> dict[str, object]:
+        prompt = _question_answer_prompt(question)
+        gold_answer = str(question.get("answer", "")).strip().upper()
+        if prompt is None:
+            return {
+                "decision": "manual_review",
+                "predicted_answer": None,
+                "gold_answer": gold_answer or None,
+                "predicted_option": None,
+                "gold_option": _question_option_for_answer(question, gold_answer),
+                "reason": "missing question text or options",
+                "raw_response": "",
+            }
+        if gold_answer not in {"A", "B", "C", "D"}:
+            return {
+                "decision": "manual_review",
+                "predicted_answer": None,
+                "gold_answer": gold_answer or None,
+                "predicted_option": None,
+                "gold_option": _question_option_for_answer(question, gold_answer),
+                "reason": f"invalid gold answer: {gold_answer or '<missing>'}",
+                "raw_response": "",
+            }
+
+        image_b64, mime = _image_path_to_base64(image_path)
+        resp = _call_question_review_vlm(
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+                max_tokens=32,
+                temperature=0,
+            ),
+            context=f"question answer review for {image_path.name}",
+        )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        predicted_answer = _parse_mcq_answer(raw_text)
+        gold_option = _question_option_for_answer(question, gold_answer)
+        predicted_option = _question_option_for_answer(question, predicted_answer)
+
+        if predicted_answer is None:
+            decision = "manual_review"
+            reason = "could not parse model answer"
+        elif predicted_answer != gold_answer:
+            decision = "manual_review"
+            reason = f"model answered {predicted_answer} but gold answer is {gold_answer}"
+        else:
+            decision = "pass"
+            reason = ""
+
+        return {
+            "decision": decision,
+            "predicted_answer": predicted_answer,
+            "gold_answer": gold_answer or None,
+            "predicted_option": predicted_option,
+            "gold_option": gold_option,
+            "reason": reason,
+            "raw_response": raw_text,
+        }
+
+    return model_name, _review
+
+
+def _manual_review_reason_from_presence_review(review: dict[str, object]) -> str:
+    object_reviews = review.get("object_reviews", [])
+    if not isinstance(object_reviews, list):
+        return "VLM marked this question for manual review."
+    parts: list[str] = []
+    for item in object_reviews:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip()
+        if status not in {"absent", "unsure"}:
+            continue
+        label = str(item.get("label", "")).strip() or "object"
+        obj_id = _coerce_object_id(item.get("obj_id"))
+        if obj_id is not None:
+            parts.append(f"{label}#{obj_id}={status}")
+        else:
+            parts.append(f"{label}={status}")
+    if parts:
+        return "VLM flagged mentioned objects: " + ", ".join(parts)
+    return "VLM marked this question for manual review."
+
+
+def _manual_review_reason_from_answer_review(review: dict[str, object]) -> str:
+    predicted_answer = str(review.get("predicted_answer", "")).strip().upper()
+    gold_answer = str(review.get("gold_answer", "")).strip().upper()
+    predicted_option = str(review.get("predicted_option", "")).strip()
+    gold_option = str(review.get("gold_option", "")).strip()
+    reason = str(review.get("reason", "")).strip()
+
+    if (
+        predicted_answer in {"A", "B", "C", "D"}
+        and gold_answer in {"A", "B", "C", "D"}
+        and predicted_answer != gold_answer
+    ):
+        detail = f"VLM answered {predicted_answer}"
+        if predicted_option:
+            detail += f" ({predicted_option})"
+        detail += f" but gold answer is {gold_answer}"
+        if gold_option:
+            detail += f" ({gold_option})"
+        return detail
+    if reason:
+        return f"VLM answer review flagged this question: {reason}"
+    return "VLM answer review marked this question for manual review."
+
+
+def _combine_manual_review_reasons(reasons: list[str]) -> str:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        text = reason.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        cleaned.append(text)
+    return " | ".join(cleaned)
+
+
+def _should_review_question_answer(question: dict[str, object]) -> bool:
+    options = question.get("options")
+    return (
+        isinstance(options, list)
+        and len(options) >= 2
+        and bool(str(question.get("question", "")).strip())
+    )
+
+
+def _is_answer_mismatch_review(review: dict[str, object]) -> bool:
+    predicted_answer = str(review.get("predicted_answer", "")).strip().upper()
+    gold_answer = str(review.get("gold_answer", "")).strip().upper()
+    return (
+        predicted_answer in {"A", "B", "C", "D"}
+        and gold_answer in {"A", "B", "C", "D"}
+        and predicted_answer != gold_answer
+    )
+
+
+def _review_question_object_presence(
+    review_fn,
+    answer_review_fn,
+    *,
+    question_index: int,
+    question: dict[str, object],
+    data_root: Path,
+    frame_context_by_key: dict[tuple[str, str], dict[str, object]],
+) -> dict[str, object]:
+    reviewed_question = dict(question)
+    reviewed_question["benchmark_index"] = int(question_index)
+    review_reasons: list[str] = []
+
+    scene_id = str(question.get("scene_id", "")).strip()
+    image_name = str(question.get("image_name", "")).strip()
+    frame_context = frame_context_by_key.get((scene_id, image_name))
+    image_path = (
+        frame_context.get("image_path")
+        if isinstance(frame_context, dict) and isinstance(frame_context.get("image_path"), Path)
+        else (data_root / scene_id / "color" / image_name)
+    )
+
+    objects_by_id = (
+        dict(frame_context.get("objects_by_id", {}))
+        if isinstance(frame_context, dict) else {}
+    )
+    targets = _collect_question_presence_targets(question, objects_by_id)
+    object_reviews: list[dict[str, object]] = []
+    raw_response = ""
+    valid_targets: list[dict[str, object]] = []
+
+    for target in targets:
+        obj_id = _coerce_object_id(target.get("obj_id"))
+        if obj_id is None:
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_obj_id",
+                )
+            )
+            continue
+        if not isinstance(frame_context, dict):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_frame_context",
+                )
+            )
+            continue
+        if not bool(frame_context.get("image_exists", False)):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="image_not_found",
+                )
+            )
+            continue
+        if obj_id not in objects_by_id:
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="object_not_in_scene",
+                )
+            )
+            continue
+        if (
+            not bool(frame_context.get("has_projection_context", False))
+            or not str(frame_context.get("image_b64", "") or "")
+        ):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_frame_context",
+                )
+            )
+            continue
+
+        crop_entry = frame_context.get("crop_by_obj_id", {}).get(obj_id)
+        if not isinstance(crop_entry, dict):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason="missing_projection",
+                )
+            )
+            continue
+        if not bool(crop_entry.get("valid", False)):
+            object_reviews.append(
+                _build_presence_review_entry(
+                    {
+                        **target,
+                        "roi_bounds_px": crop_entry.get("roi_bounds_px"),
+                    },
+                    status="unsure",
+                    reason=str(crop_entry.get("reason", "")).strip() or "invalid_crop",
+                )
+            )
+            continue
+
+        valid_targets.append(
+            {
+                **target,
+                "roi_bounds_px": crop_entry.get("roi_bounds_px"),
+                "crop_image_b64": crop_entry.get("image_b64"),
+                "crop_mime": crop_entry.get("mime", "image/jpeg"),
+            }
+        )
+
+    if valid_targets:
+        try:
+            vlm_review = review_fn(frame_context, question, valid_targets)
+            raw_response = str(vlm_review.get("raw_response", "") or "")
+            object_reviews.extend(list(vlm_review.get("object_reviews", [])))
+        except Exception as e:
+            object_reviews.extend(
+                _build_presence_review_entry(
+                    target,
+                    status="unsure",
+                    reason=f"VLM review failed: {e}",
+                )
+                for target in valid_targets
+            )
+
+    review = _finalize_presence_review(object_reviews, raw_response=raw_response)
+    if not targets:
+        review = _finalize_presence_review([], raw_response="")
+        review["decision"] = "pass"
+
+    reviewed_question["question_presence_review"] = review
+    if review.get("decision") == "manual_review":
+        review_reasons.append(_manual_review_reason_from_presence_review(review))
+
+    answer_review: dict[str, object] = {"decision": "skipped"}
+    if _should_review_question_answer(question):
+        gold_answer = str(question.get("answer", "")).strip().upper()
+        if not image_path.exists():
+            answer_review = {
+                "decision": "manual_review",
+                "predicted_answer": None,
+                "gold_answer": gold_answer or None,
+                "predicted_option": None,
+                "gold_option": _question_option_for_answer(question, gold_answer),
+                "reason": f"image not found: {image_path.name}",
+                "raw_response": "",
+            }
+        else:
+            try:
+                answer_review = answer_review_fn(image_path, question)
+            except Exception as e:
+                answer_review = {
+                    "decision": "manual_review",
+                    "predicted_answer": None,
+                    "gold_answer": gold_answer or None,
+                    "predicted_option": None,
+                    "gold_option": _question_option_for_answer(question, gold_answer),
+                    "reason": f"VLM answer review failed: {e}",
+                    "raw_response": "",
+                }
+        if answer_review.get("decision") == "manual_review":
+            review_reasons.append(_manual_review_reason_from_answer_review(answer_review))
+    reviewed_question["question_answer_review"] = answer_review
+
+    if review_reasons:
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+    else:
+        reviewed_question.pop("manual_review_reason", None)
+    return reviewed_question
+
+
+def _run_question_presence_review(
+    *,
+    questions: list[dict[str, object]],
+    data_root: Path,
+    output_dir: Path,
+    vlm_url: str | None,
+    vlm_model: str | None,
+    workers: int = 8,
+) -> dict[str, object]:
+    from scripts.make_viewer import build_viewer_html
+
+    client, model_name = _resolve_question_review_vlm(
+        vlm_url,
+        vlm_model,
+        purpose="question post-review",
+    )
+    answer_model_name = model_name
+    _, review_fn = _make_question_presence_reviewer(client, model_name)
+    _, answer_review_fn = _make_question_answer_reviewer(client, model_name)
+    reviewed_questions: list[dict[str, object]] = []
+    frame_context_by_key = _prebuild_question_review_frame_contexts(
+        questions=questions,
+        data_root=data_root,
+        output_dir=output_dir,
+    )
+
+    if questions:
+        with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+            futures = [
+                pool.submit(
+                    _review_question_object_presence,
+                    review_fn,
+                    answer_review_fn,
+                    question_index=idx,
+                    question=question,
+                    data_root=data_root,
+                    frame_context_by_key=frame_context_by_key,
+                )
+                for idx, question in enumerate(questions)
+            ]
+            for future in as_completed(futures):
+                reviewed_questions.append(future.result())
+    reviewed_questions.sort(key=lambda item: int(item.get("benchmark_index", -1)))
+
+    referability_issue_count = sum(
+        1
+        for question in reviewed_questions
+        if isinstance(question.get("question_presence_review"), dict)
+        and question["question_presence_review"].get("decision") == "manual_review"
+    )
+    flagged_questions = [
+        question for question in reviewed_questions
+        if (
+            isinstance(question.get("question_presence_review"), dict)
+            and question["question_presence_review"].get("decision") == "manual_review"
+        ) or (
+            isinstance(question.get("question_answer_review"), dict)
+            and question["question_answer_review"].get("decision") == "manual_review"
+        )
+    ]
+    answer_review_question_count = sum(
+        1 for question in reviewed_questions if _should_review_question_answer(question)
+    )
+    answer_mismatch_count = sum(
+        1
+        for question in reviewed_questions
+        if isinstance(question.get("question_answer_review"), dict)
+        and _is_answer_mismatch_review(question["question_answer_review"])
+    )
+
+    review_payload = {
+        "name": "CausalSpatial-Bench question presence review",
+        "model": model_name,
+        "answer_review_model": answer_model_name,
+        "reviewed_question_count": len(reviewed_questions),
+        "manual_review_count": len(flagged_questions),
+        "referability_issue_count": referability_issue_count,
+        "answer_review_question_count": answer_review_question_count,
+        "answer_mismatch_count": answer_mismatch_count,
+        "questions": reviewed_questions,
+    }
+    flagged_payload = {
+        "name": "CausalSpatial-Bench question presence review (flagged)",
+        "model": model_name,
+        "answer_review_model": answer_model_name,
+        "reviewed_question_count": len(reviewed_questions),
+        "manual_review_count": len(flagged_questions),
+        "referability_issue_count": referability_issue_count,
+        "answer_review_question_count": answer_review_question_count,
+        "answer_mismatch_count": answer_mismatch_count,
+        "questions": flagged_questions,
+    }
+
+    review_json_path = output_dir / "question_presence_review.json"
+    flagged_json_path = output_dir / "question_presence_review_flagged.json"
+    flagged_html_path = output_dir / "question_presence_review_flagged.html"
+
+    with open(review_json_path, "w", encoding="utf-8") as f:
+        json.dump(review_payload, f, indent=2, ensure_ascii=False)
+    with open(flagged_json_path, "w", encoding="utf-8") as f:
+        json.dump(flagged_payload, f, indent=2, ensure_ascii=False)
+
+    flagged_html = build_viewer_html(
+        flagged_questions,
+        data_root,
+        title="question presence manual review",
+        apply_filters=False,
+    )
+    flagged_html_path.write_text(flagged_html, encoding="utf-8")
+
+    logger.info(
+        "Question presence review complete: %d reviewed, %d flagged. JSON: %s HTML: %s",
+        len(reviewed_questions),
+        len(flagged_questions),
+        flagged_json_path,
+        flagged_html_path,
+    )
+    return {
+        "model": model_name,
+        "answer_review_model": answer_model_name,
+        "reviewed_question_count": len(reviewed_questions),
+        "manual_review_count": len(flagged_questions),
+        "referability_issue_count": referability_issue_count,
+        "answer_review_question_count": answer_review_question_count,
+        "answer_mismatch_count": answer_mismatch_count,
+        "review_json_path": review_json_path,
+        "flagged_json_path": flagged_json_path,
+        "flagged_html_path": flagged_html_path,
+    }
 
 
 def _get_referability_scene_frames(cache: dict | None, scene_id: str) -> dict[str, dict]:
@@ -743,6 +1823,8 @@ def run_pipeline(
     vlm_url: str | None = None,
     vlm_model: str | None = None,
     write_frame_debug: bool = True,
+    run_question_presence_review: bool = True,
+    question_presence_review_workers: int = 8,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     if referability_cache is None:
@@ -1063,6 +2145,16 @@ def run_pipeline(
     with open(benchmark_path, "w", encoding="utf-8") as f:
         json.dump(benchmark, f, indent=2, ensure_ascii=False)
 
+    if run_question_presence_review:
+        _run_question_presence_review(
+            questions=final_questions,
+            data_root=data_root,
+            output_dir=output_dir,
+            vlm_url=vlm_url,
+            vlm_model=vlm_model,
+            workers=question_presence_review_workers,
+        )
+
     logger.info(
         "Pipeline complete! %d questions saved to %s",
         len(final_questions), benchmark_path,
@@ -1124,6 +2216,18 @@ def main():
         default=True,
         help="Write per-scene frame_debug/<scene_id>.json with frame/object audit data",
     )
+    parser.add_argument(
+        "--question_presence_review",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="After benchmark generation, ask the VLM whether mentioned objects are clearly visible and uniquely identifiable, then answer each question and export flagged samples for manual review",
+    )
+    parser.add_argument(
+        "--question_presence_review_workers",
+        type=int,
+        default=8,
+        help="Thread pool size for post-generation question presence/answer review",
+    )
     args = parser.parse_args()
 
     if args.label_map:
@@ -1142,6 +2246,8 @@ def main():
         vlm_url=args.vlm_url,
         vlm_model=args.vlm_model,
         write_frame_debug=args.write_frame_debug,
+        run_question_presence_review=args.question_presence_review,
+        question_presence_review_workers=args.question_presence_review_workers,
     )
 
 

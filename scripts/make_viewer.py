@@ -536,6 +536,42 @@ def question_review_notes(question: dict) -> str:
                 "</div>"
             )
 
+    answer_review = question.get("question_answer_review")
+    if isinstance(answer_review, dict):
+        lines: list[str] = []
+        decision = str(answer_review.get("decision", "")).strip()
+        if decision:
+            lines.append(f"decision: {decision}")
+        predicted_answer = str(answer_review.get("predicted_answer", "")).strip().upper()
+        gold_answer = str(answer_review.get("gold_answer", "")).strip().upper()
+        predicted_option = str(answer_review.get("predicted_option", "")).strip()
+        gold_option = str(answer_review.get("gold_option", "")).strip()
+        reason = str(answer_review.get("reason", "")).strip()
+        if predicted_answer:
+            line = f"predicted: {predicted_answer}"
+            if predicted_option:
+                line += f" ({predicted_option})"
+            lines.append(line)
+        if gold_answer:
+            line = f"gold: {gold_answer}"
+            if gold_option:
+                line += f" ({gold_option})"
+            lines.append(line)
+        if reason:
+            lines.append(f"reason: {reason}")
+
+        if lines:
+            review_lines = "".join(
+                f'<div class="review-line">{html.escape(line)}</div>'
+                for line in lines
+            )
+            parts.append(
+                '<div class="review-block">'
+                '<div class="review-title">VLM Answer Review</div>'
+                f"{review_lines}"
+                "</div>"
+            )
+
     referability_lines = _referability_audit_lines(question)
     if referability_lines:
         parts.append(
