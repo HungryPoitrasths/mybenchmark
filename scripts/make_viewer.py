@@ -590,7 +590,7 @@ def _build_meta_html(question: dict, idx: int) -> str:
     if is_attachment_unchanged_object_move(question):
         badges.append('<span class="badge unchanged">answer-unchanged</span>')
     if _is_manual_review_question(question):
-        badges.append('<span class="badge extra review">manual-review</span>')
+        badges.append('<span class="badge review">manual-review</span>')
 
     return (
         '<div class="meta">'
@@ -600,7 +600,11 @@ def _build_meta_html(question: dict, idx: int) -> str:
     )
 
 
-def _build_review_notes_html(question: dict) -> str:
+def _build_review_notes_html(
+    question: dict,
+    *,
+    include_referability_audit: bool = False,
+) -> str:
     blocks: list[str] = []
 
     manual_review_reason = str(question.get("manual_review_reason", "")).strip()
@@ -645,7 +649,7 @@ def _build_review_notes_html(question: dict) -> str:
         blocks.append(_render_review_block("Answer Review", lines))
 
     referability_audit = question.get("question_referability_audit")
-    if isinstance(referability_audit, dict):
+    if include_referability_audit and isinstance(referability_audit, dict):
         lines = [
             f"decision: {str(referability_audit.get('decision', '-')).strip() or '-'}",
         ]
@@ -670,10 +674,14 @@ def _build_review_notes_html(question: dict) -> str:
 def _build_footer_html(question: dict) -> str:
     scene = str(question.get("scene_id", "")).strip()
     frame = str(question.get("image_name", "")).strip()
-    parts = [html.escape(part) for part in (scene, frame) if part]
-    if not parts:
-        return ""
-    return '<div class="footer">' + " &nbsp;/&nbsp; ".join(parts) + "</div>"
+    if not scene or not frame:
+        scene = scene or "scene unavailable"
+        frame = frame or "frame unavailable"
+    return (
+        '<div class="footer">'
+        + " &nbsp;/&nbsp; ".join(html.escape(part) for part in (scene, frame))
+        + "</div>"
+    )
 
 
 def build_viewer_html(
@@ -686,6 +694,7 @@ def build_viewer_html(
     requested_qtypes: set[str] | None = None,
     attachment_only: bool = False,
     include_attachment_unchanged: bool = True,
+    include_referability_audit: bool = False,
     apply_filters: bool = True,
 ) -> str:
     displayed_questions = list(questions)
@@ -739,7 +748,10 @@ def build_viewer_html(
                 meta=_build_meta_html(q, idx),
                 question=html.escape(str(q.get("question", ""))),
                 options=opt_html,
-                review_notes=_build_review_notes_html(q),
+                review_notes=_build_review_notes_html(
+                    q,
+                    include_referability_audit=include_referability_audit,
+                ),
                 footer=_build_footer_html(q),
             )
         )
@@ -754,7 +766,10 @@ def build_viewer_html(
 
 def main():
     parser = argparse.ArgumentParser(description="Build HTML QA viewer")
-    parser.set_defaults(include_attachment_unchanged=True)
+    parser.set_defaults(
+        include_attachment_unchanged=True,
+        include_referability_audit=False,
+    )
     parser.add_argument(
         "--questions",
         required=True,
@@ -800,6 +815,12 @@ def main():
         default=42,
         help="Random seed used to shuffle questions within the same type",
     )
+    parser.add_argument(
+        "--include_referability_audit",
+        dest="include_referability_audit",
+        action="store_true",
+        help="Render Referability Audit blocks in review cards (hidden by default)",
+    )
     args = parser.parse_args()
 
     if Image is None:
@@ -826,6 +847,7 @@ def main():
         requested_qtypes=requested_qtypes,
         attachment_only=args.attachment_only,
         include_attachment_unchanged=args.include_attachment_unchanged,
+        include_referability_audit=args.include_referability_audit,
         apply_filters=True,
     )
 

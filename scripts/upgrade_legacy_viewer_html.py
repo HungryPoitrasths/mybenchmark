@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Upgrade legacy self-contained QA viewer HTML files.
 
-This script preserves the original page title/stats/summary, upgrades legacy
-cards to the richer card layout, restores scene/frame footers from local source
-artifacts, and optionally injects review blocks for manual-review pages.
+This script preserves the original page title, rebuilds page stats and task
+summary from the displayed cards, upgrades legacy cards to the richer card
+layout, restores scene/frame footers from local source artifacts, and
+optionally injects review blocks for manual-review pages.
 """
 
 from __future__ import annotations
@@ -20,7 +21,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.make_viewer import QTYPE_DISPLAY, QTYPE_LEVEL, _canonical_qtype
+from scripts.make_viewer import (
+    QTYPE_DISPLAY,
+    QTYPE_LEVEL,
+    _canonical_qtype,
+    build_task_summary_v2,
+)
 from scripts.review_viewer_html import _iter_div_ranges
 
 QTYPE_DISPLAY_TO_RAW = {label: raw for raw, label in QTYPE_DISPLAY.items()}
@@ -640,10 +646,14 @@ def build_footer_html(scene: str | None, frame: str | None) -> str:
     return f'<div class="footer">{html_escape(scene)} &nbsp;/&nbsp; {html_escape(frame)}</div>'
 
 
-def resolve_qtype_raw(card: dict, source_index: dict) -> str:
+def resolve_source_badges(card: dict, source_index: dict) -> list[str]:
     exact_key = (card["image_hash"], card["question"])
     canon_key = (card["image_hash"], card["canonical_question"])
-    source_badges = source_index["badge_by_exact"].get(exact_key) or source_index["badge_by_canon"].get(canon_key) or []
+    return source_index["badge_by_exact"].get(exact_key) or source_index["badge_by_canon"].get(canon_key) or []
+
+
+def resolve_qtype_raw(card: dict, source_index: dict) -> str:
+    source_badges = resolve_source_badges(card, source_index)
 
     qtype_raw = ""
     for badge in source_badges:
@@ -673,6 +683,24 @@ def build_stats_html(cards: list[dict], source_index: dict) -> str:
         f'L1: {counts["L1"]} &nbsp;&middot;&nbsp; '
         f'L2: {counts["L2"]} &nbsp;&middot;&nbsp; '
         f'L3: {counts["L3"]}'
+        "</div>"
+    )
+
+
+def build_summary_html(cards: list[dict], source_index: dict) -> str:
+    displayed_questions = []
+    for card in cards:
+        source_badges = resolve_source_badges(card, source_index)
+        displayed_questions.append(
+            {
+                "type": resolve_qtype_raw(card, source_index),
+                "attachment_remapped": "with-attachment" in source_badges,
+            }
+        )
+    return (
+        '<div class="summary">\n'
+        '  <h2>Task Summary</h2>\n'
+        f'  <div class="summary-block">{build_task_summary_v2(displayed_questions)}</div>\n'
         "</div>"
     )
 
@@ -755,8 +783,8 @@ def render_card(card: dict, idx: int, page_mode: str, source_index: dict, *, omi
 def upgrade_html(target: Path, output: Path, page_mode: str, *, omit_referability: bool) -> None:
     source_index = build_source_index(target.parent)
     page = parse_legacy_page(target)
-    summary_html = SUMMARY_NOTE_RE.sub("", page["summary_html"])
     stats_html = build_stats_html(page["cards"], source_index)
+    summary_html = build_summary_html(page["cards"], source_index)
     cards_html = "\n".join(
         render_card(card, idx, page_mode, source_index, omit_referability=omit_referability)
         for idx, card in enumerate(page["cards"], start=1)

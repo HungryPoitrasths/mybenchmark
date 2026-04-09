@@ -1366,6 +1366,7 @@ def _run_question_presence_review(
         flagged_questions,
         data_root,
         title="question presence manual review",
+        include_referability_audit=False,
         apply_filters=False,
     )
     flagged_html_path.write_text(flagged_html, encoding="utf-8")
