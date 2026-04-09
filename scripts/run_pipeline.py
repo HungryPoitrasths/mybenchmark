@@ -80,6 +80,7 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
+OCCLUSION_QUESTION_MIN_IN_FRAME_RATIO = 0.90
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 
 
@@ -1466,6 +1467,64 @@ def _normalize_object_ids(value: object) -> list[int]:
     return sorted(set(object_ids))
 
 
+def _build_occlusion_eligible_object_ids(
+    *,
+    visible_object_ids: list[int],
+    referability_entry: dict[str, object] | None,
+    scene_objects: list[dict],
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+) -> list[int]:
+    visible_ids = _normalize_object_ids(visible_object_ids)
+    if not visible_ids:
+        return []
+
+    ratios_by_obj_id: dict[int, float] = {}
+    object_reviews = (referability_entry or {}).get("object_reviews")
+    if isinstance(object_reviews, dict):
+        for obj_id in visible_ids:
+            review = object_reviews.get(str(obj_id))
+            if not isinstance(review, dict):
+                review = object_reviews.get(obj_id)
+            if not isinstance(review, dict):
+                continue
+            try:
+                ratios_by_obj_id[int(obj_id)] = float(review.get("bbox_in_frame_ratio", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+    missing_ids = [
+        int(obj_id)
+        for obj_id in visible_ids
+        if int(obj_id) not in ratios_by_obj_id
+    ]
+    if missing_ids and camera_pose is not None and color_intrinsics is not None:
+        visible_set = set(missing_ids)
+        fallback_visibility = compute_frame_object_visibility(
+            objects=[
+                obj for obj in scene_objects
+                if int(obj.get("id", -1)) in visible_set
+            ],
+            pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            image_path=None,
+            depth_image=None,
+            depth_intrinsics=None,
+            strict_mode=False,
+        )
+        for obj_id, meta in fallback_visibility.items():
+            try:
+                ratios_by_obj_id[int(obj_id)] = float(meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+    return [
+        int(obj_id)
+        for obj_id in visible_ids
+        if float(ratios_by_obj_id.get(int(obj_id), 0.0)) >= OCCLUSION_QUESTION_MIN_IN_FRAME_RATIO
+    ]
+
+
 def _normalize_label_counts(value: object) -> dict[str, int]:
     counts: dict[str, int] = {}
     if not isinstance(value, dict):
@@ -1650,6 +1709,7 @@ def _build_frame_debug_entry(
     objects_by_id: dict[int, dict],
     selector_visible_ids: list[int],
     pipeline_visible_ids: list[int],
+    occlusion_eligible_object_ids: list[int] | None,
     referability_entry: dict | None,
     frame_attachment_rows: list[dict[str, object]],
     generated_questions: list[dict] | None = None,
@@ -1666,6 +1726,7 @@ def _build_frame_debug_entry(
         "selector_visible_label_counts": _count_labels_for_object_ids(selector_visible_ids, objects_by_id),
         "pipeline_visible_object_ids_used_for_generation": _normalize_object_ids(pipeline_visible_ids),
         "pipeline_visible_label_counts": _count_labels_for_object_ids(pipeline_visible_ids, objects_by_id),
+        "occlusion_eligible_object_ids": _normalize_object_ids(occlusion_eligible_object_ids),
         "candidate_visibility_source": (referability_entry or {}).get("candidate_visibility_source"),
         "candidate_visible_label_counts": _normalize_label_counts(
             (referability_entry or {}).get("candidate_visible_label_counts")
@@ -1863,6 +1924,7 @@ def run_pipeline(
                         objects_by_id=objects_by_id,
                         selector_visible_ids=selector_visible_ids,
                         pipeline_visible_ids=[],
+                        occlusion_eligible_object_ids=[],
                         referability_entry=_get_referability_entry(referability_cache, scene_id, image_name),
                         frame_attachment_rows=frame_attachment_rows,
                         pipeline_skip_reason="missing_pose",
@@ -1891,6 +1953,13 @@ def run_pipeline(
             referability_entry = _get_referability_entry(
                 referability_cache, scene_id, image_name,
             )
+            occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+                visible_object_ids=visible_ids,
+                referability_entry=referability_entry,
+                scene_objects=scene["objects"],
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+            )
             if referability_entry is not None:
                 label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
                 label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
@@ -1910,6 +1979,7 @@ def run_pipeline(
                             objects_by_id=objects_by_id,
                             selector_visible_ids=selector_visible_ids,
                             pipeline_visible_ids=list(visible_ids),
+                            occlusion_eligible_object_ids=occlusion_eligible_ids,
                             referability_entry=referability_entry,
                             frame_attachment_rows=frame_attachment_rows,
                             pipeline_skip_reason="no_referable_objects_or_l1_candidates",
@@ -1935,6 +2005,7 @@ def run_pipeline(
                 instance_mesh_data=instance_mesh_data,
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
+                occlusion_eligible_object_ids=occlusion_eligible_ids,
                 label_statuses=label_statuses,
                 label_counts=label_counts,
                 label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
@@ -1966,6 +2037,7 @@ def run_pipeline(
                     objects_by_id=objects_by_id,
                     selector_visible_ids=selector_visible_ids,
                     pipeline_visible_ids=list(visible_ids),
+                    occlusion_eligible_object_ids=occlusion_eligible_ids,
                     referability_entry=referability_entry,
                     frame_attachment_rows=frame_attachment_rows,
                     generated_questions=audited_questions,

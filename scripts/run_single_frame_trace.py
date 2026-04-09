@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.make_pipeline_trace_viewer import build_single_frame_trace_html
 from scripts.run_pipeline import (
     DEFAULT_VLM_URL,
+    _build_occlusion_eligible_object_ids,
     _build_frame_debug_entry,
     _build_scene_attachment_rows,
     _filter_frame_attachment_rows,
@@ -795,6 +796,13 @@ def run_single_frame_trace(
             for obj_id in _normalize_object_ids(referability_entry.get("referable_object_ids"))
             if int(obj_id) in visible_id_set
         ]
+        occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+            visible_object_ids=visible_ids,
+            referability_entry=referability_entry,
+            scene_objects=scene["objects"],
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+        )
         _record_stage(
             trace_doc,
             stage="referability",
@@ -806,6 +814,7 @@ def run_single_frame_trace(
                 "selector_visible_count": len(selector_visible_ids),
                 "candidate_visible_count": len(visible_ids),
                 "referable_count": len(referable_ids),
+                "occlusion_eligible_count": len(occlusion_eligible_ids),
             },
         )
         frame_attachment_rows = _filter_frame_attachment_rows(
@@ -815,13 +824,14 @@ def run_single_frame_trace(
         trace_doc["frame_context"] = {
             **trace_doc.get("frame_context", {}),
             **_build_frame_debug_entry(
-            image_name=image_name,
-            scene_objects=scene["objects"],
-            objects_by_id=objects_by_id,
-            selector_visible_ids=selector_visible_ids,
-            pipeline_visible_ids=visible_ids,
-            referability_entry=referability_entry,
-            frame_attachment_rows=frame_attachment_rows,
+                image_name=image_name,
+                scene_objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                selector_visible_ids=selector_visible_ids,
+                pipeline_visible_ids=visible_ids,
+                occlusion_eligible_object_ids=occlusion_eligible_ids,
+                referability_entry=referability_entry,
+                frame_attachment_rows=frame_attachment_rows,
             ),
         }
         trace_doc["frame_context"]["image_path"] = str(image_path)
@@ -890,6 +900,7 @@ def run_single_frame_trace(
             instance_mesh_data=instance_mesh_data,
             visible_object_ids=visible_ids,
             referable_object_ids=referable_ids,
+            occlusion_eligible_object_ids=occlusion_eligible_ids,
             label_statuses=label_statuses,
             label_counts=label_counts,
             label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),

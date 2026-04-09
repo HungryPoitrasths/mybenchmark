@@ -85,6 +85,7 @@ def make_referability_entry() -> dict:
             "1": {
                 "obj_id": 1,
                 "label": "cup",
+                "bbox_in_frame_ratio": 1.0,
                 "local_outcome": "reviewed",
                 "local_reason": "",
                 "vlm_status": "clear",
@@ -93,6 +94,7 @@ def make_referability_entry() -> dict:
             "2": {
                 "obj_id": 2,
                 "label": "table",
+                "bbox_in_frame_ratio": 1.0,
                 "local_outcome": "reviewed",
                 "local_reason": "",
                 "vlm_status": "clear",
@@ -197,8 +199,12 @@ class RunSingleFrameTraceTests(unittest.TestCase):
                 }
             },
         }
+        captured: dict[str, object] = {}
 
         def fake_generate_all_questions(**_kwargs):
+            captured["occlusion_eligible_object_ids"] = list(
+                _kwargs.get("occlusion_eligible_object_ids") or []
+            )
             trace_recorder = _kwargs.get("trace_recorder")
             if trace_recorder is not None:
                 trace_recorder(
@@ -260,6 +266,8 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertEqual(trace_json["question_lifecycle"][0]["status"], "kept")
         self.assertEqual(trace_json["input"]["trace_detail"], "full")
         self.assertEqual(trace_json["input"]["trace_vlm_payload"], "summary")
+        self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
+        self.assertEqual(trace_json["frame_context"]["occlusion_eligible_object_ids"], [1, 2])
         self.assertIn("object_pool", trace_json["artifacts"]["audits"])
         self.assertIn("reason_index", trace_json["artifacts"]["audits"])
         self.assertIn("generator:fake_generator", trace_json["artifacts"]["audits"])

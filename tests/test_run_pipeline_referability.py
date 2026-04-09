@@ -50,6 +50,21 @@ def make_case_dir(prefix: str) -> Path:
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_build_frame_debug_entry_records_occlusion_eligible_object_ids(self) -> None:
+        objects = [make_object(1, "lamp"), make_object(2, "table")]
+        entry = run_pipeline_module._build_frame_debug_entry(
+            image_name="000123.jpg",
+            scene_objects=objects,
+            objects_by_id={int(obj["id"]): obj for obj in objects},
+            selector_visible_ids=[1, 2],
+            pipeline_visible_ids=[1, 2],
+            occlusion_eligible_object_ids=[2, 1],
+            referability_entry=None,
+            frame_attachment_rows=[],
+        )
+
+        self.assertEqual(entry["occlusion_eligible_object_ids"], [1, 2])
+
     def test_resolve_vlm_api_key_warns_when_env_is_missing(self) -> None:
         with (
             patch.dict(run_pipeline_module.os.environ, {}, clear=True),
@@ -353,6 +368,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["called"] = True
             captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
             captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
             captured["label_counts"] = dict(kwargs["label_counts"] or {})
             return []
@@ -370,6 +386,13 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
             patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
             patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                },
+            ),
             patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
             patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
@@ -389,6 +412,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertTrue(captured["called"])
         self.assertEqual(captured["visible_object_ids"], [1])
         self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(captured["occlusion_eligible_object_ids"], [1])
         self.assertEqual(captured["label_statuses"], {"lamp": "unique"})
         self.assertEqual(captured["label_counts"], {"lamp": 1})
         self.assertEqual(questions, [])
@@ -461,6 +485,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         def fake_generate_all_questions(**kwargs):
             captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
             captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
             captured["label_counts"] = dict(kwargs["label_counts"] or {})
             captured["label_to_object_ids"] = dict(kwargs["label_to_object_ids"] or {})
@@ -487,6 +512,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
             patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
             patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.85},
+                },
+            ),
             patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
             patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
@@ -505,6 +538,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1, 2])
+        self.assertEqual(captured["occlusion_eligible_object_ids"], [1])
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})

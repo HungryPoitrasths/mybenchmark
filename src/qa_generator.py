@@ -168,6 +168,12 @@ ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = [label for _, label in DISTANCE_BINS]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
+OCCLUSION_FILTER_QUESTION_TYPES = {
+    "occlusion",
+    "object_move_occlusion",
+    "viewpoint_move",
+    "object_remove",
+}
 OCCLUSION_DEFINITION_NOTE = (
     "Here, 'occluded' means blocked by another object; being partly outside "
     "the image frame does not count as occlusion."
@@ -5701,6 +5707,77 @@ def _enforce_stable_facing_references(
     return kept
 
 
+def _enforce_occlusion_in_frame_mentions(
+    questions: list[dict[str, Any]],
+    occlusion_eligible_object_ids: list[int] | list[str] | None,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    eligible_set = _normalize_object_id_set(
+        occlusion_eligible_object_ids,
+        "occlusion_eligible_object_ids",
+    )
+    if occlusion_eligible_object_ids is None:
+        return questions
+
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for question in questions:
+        question_type = str(question.get("type", "")).strip().lower()
+        if question_type not in OCCLUSION_FILTER_QUESTION_TYPES:
+            kept.append(question)
+            continue
+
+        if (
+            question_type == "occlusion"
+            and str(question.get("correct_value", "")).strip().lower() == "not visible"
+        ):
+            kept.append(question)
+            continue
+
+        ineligible_mentions: list[dict[str, Any]] = []
+        for mention in question.get("mentioned_objects", []):
+            if not isinstance(mention, dict):
+                continue
+            obj_id = mention.get("obj_id")
+            if obj_id is None:
+                continue
+            try:
+                obj_id_int = int(obj_id)
+            except (TypeError, ValueError):
+                continue
+            if obj_id_int not in eligible_set:
+                ineligible_mentions.append(
+                    {
+                        "role": str(mention.get("role", "")).strip(),
+                        "label": str(mention.get("label", "")).strip(),
+                        "obj_id": obj_id_int,
+                    }
+                )
+
+        if not ineligible_mentions:
+            kept.append(question)
+            continue
+
+        removed += 1
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "question_removed",
+                "stage": "qa_generation",
+                "filter": "occlusion_in_frame_mentions",
+                "reason": "mentioned_object_not_sufficiently_in_frame",
+                "trace_question_id": question.get("trace_question_id"),
+                "eligible_object_ids": sorted(eligible_set),
+                "ineligible_mentions": ineligible_mentions,
+                "question": question,
+            },
+        )
+
+    if removed:
+        logger.info("Occlusion in-frame filter removed %d questions", removed)
+    return kept
+
+
 def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:
     """Convert a 3D world-frame delta to a camera-relative direction string.
 
@@ -5790,6 +5867,7 @@ def generate_all_questions(
     templates: dict | None = None,
     visible_object_ids: list[int] | None = None,
     referable_object_ids: list[int] | None = None,
+    occlusion_eligible_object_ids: list[int] | None = None,
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     label_to_object_ids: dict[str, Any] | None = None,
@@ -5809,6 +5887,9 @@ def generate_all_questions(
     unanswerable from the image and should never be included.
     referable_object_ids: if provided, restrict question generation to the
     object_id subset judged referable by the VLM for this frame.
+    occlusion_eligible_object_ids: if provided, occlusion-style questions
+    require every mentioned in-frame object to belong to this set. Static L1
+    occlusion questions whose answer is "not visible" are exempt.
     label_statuses: if provided, use per-label VLM absent/unique/multiple/unsure
     decisions to guide L1 occlusion generation.
     label_counts: optional compatibility field derived from label_statuses.
@@ -6719,6 +6800,12 @@ def generate_all_questions(
         all_questions[idx] = _ensure_question_mentions(
             question, id_to_object,
         )
+
+    all_questions = _enforce_occlusion_in_frame_mentions(
+        all_questions,
+        occlusion_eligible_object_ids,
+        trace_recorder=trace_recorder,
+    )
 
     if trace_recorder is not None:
         all_questions = _enforce_referable_mentions(
