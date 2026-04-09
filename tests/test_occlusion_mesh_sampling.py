@@ -18,6 +18,7 @@ from src.qa_generator import (
     _counterfactual_hit_path,
     _get_instance_intersector,
     _instance_surface_sample_metadata,
+    _make_l1_occlusion_metrics,
     generate_l1_occlusion_questions,
 )
 from src.scene_parser import (
@@ -206,6 +207,23 @@ class _FixedVisibilityStatsCaster:
         local_resample_count=12,
     ):
         return self.visible_count, self.valid_count
+
+
+class _AlwaysVisibleBBoxCaster(_FixedVisibilityStatsCaster):
+    def cast_ray(self, origin, direction):
+        return []
+
+
+class _AlwaysBlockedBBoxCaster(_FixedVisibilityStatsCaster):
+    def cast_ray(self, origin, direction):
+        origin = np.asarray(origin, dtype=np.float64)
+        direction = np.asarray(direction, dtype=np.float64)
+        sample_dist = float(np.linalg.norm(direction))
+        if sample_dist <= 1e-12:
+            return []
+        unit_dir = direction / sample_dist
+        hit_dist = max(0.05, sample_dist * 0.5)
+        return [(origin + unit_dir * hit_dist, 99, hit_dist)]
 
 
 class OcclusionHelperTests(unittest.TestCase):
@@ -1046,7 +1064,7 @@ class L1OcclusionQuestionTests(unittest.TestCase):
             depth_image=None,
             depth_intrinsics=None,
             occlusion_backend="mesh_ray",
-            ray_caster=_FixedVisibilityStatsCaster(visible_count=502, valid_count=512),
+            ray_caster=_FixedVisibilityStatsCaster(visible_count=507, valid_count=512),
             instance_mesh_data=instance_mesh_data,
         )
         occluded_metrics = _compute_l1_occlusion_metrics(
@@ -1059,13 +1077,123 @@ class L1OcclusionQuestionTests(unittest.TestCase):
             ray_caster=_FixedVisibilityStatsCaster(visible_count=460, valid_count=512),
             instance_mesh_data=instance_mesh_data,
         )
+        not_visible_metrics = _compute_l1_occlusion_metrics(
+            obj=obj,
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend="mesh_ray",
+            ray_caster=_AlwaysBlockedBBoxCaster(visible_count=0, valid_count=512),
+            instance_mesh_data=instance_mesh_data,
+        )
 
         self.assertEqual(not_occluded_metrics.decision, "not occluded")
-        self.assertLess(not_occluded_metrics.occlusion_ratio_in_frame, 0.02)
+        self.assertLess(not_occluded_metrics.occlusion_ratio_in_frame, 0.01)
+        self.assertEqual(not_occluded_metrics.occluded_in_frame_count, 5)
         self.assertEqual(occluded_metrics.decision, "occluded")
         self.assertGreater(occluded_metrics.occlusion_ratio_in_frame, 0.10)
+        self.assertEqual(occluded_metrics.occluded_in_frame_count, 52)
+        self.assertEqual(not_visible_metrics.decision, "not visible")
+        self.assertEqual(not_visible_metrics.not_visible_probe_visible_count, 0)
 
-    def test_l1_occlusion_skips_grayzone_ratio_between_2_and_10_percent(self) -> None:
+    def test_l1_occlusion_requires_strictly_less_than_one_percent_for_not_occluded(self) -> None:
+        not_occluded_metrics = _make_l1_occlusion_metrics(
+            projected_area=500.0,
+            in_frame_ratio=1.0,
+            occlusion_ratio_in_frame=0.009,
+            valid_in_frame_count=512,
+            sampled_point_count=512,
+            in_frame_sample_count=512,
+            backend="mesh_ray",
+        )
+        boundary_metrics = _make_l1_occlusion_metrics(
+            projected_area=500.0,
+            in_frame_ratio=1.0,
+            occlusion_ratio_in_frame=0.01,
+            valid_in_frame_count=512,
+            sampled_point_count=512,
+            in_frame_sample_count=512,
+            backend="mesh_ray",
+        )
+
+        self.assertEqual(not_occluded_metrics.decision, "not occluded")
+        self.assertEqual(boundary_metrics.decision, "grayzone")
+
+    def test_l1_occlusion_demotes_high_ratio_with_too_few_occluded_samples_to_grayzone(self) -> None:
+        insufficient_count_metrics = _make_l1_occlusion_metrics(
+            projected_area=500.0,
+            in_frame_ratio=1.0,
+            occlusion_ratio_in_frame=0.125,
+            valid_in_frame_count=64,
+            sampled_point_count=512,
+            in_frame_sample_count=64,
+            backend="mesh_ray",
+            visible_in_frame_count=56,
+        )
+        sufficient_count_metrics = _make_l1_occlusion_metrics(
+            projected_area=500.0,
+            in_frame_ratio=1.0,
+            occlusion_ratio_in_frame=0.25,
+            valid_in_frame_count=64,
+            sampled_point_count=512,
+            in_frame_sample_count=64,
+            backend="mesh_ray",
+            visible_in_frame_count=48,
+        )
+
+        self.assertGreater(insufficient_count_metrics.occlusion_ratio_in_frame, 0.10)
+        self.assertEqual(insufficient_count_metrics.occluded_in_frame_count, 8)
+        self.assertEqual(insufficient_count_metrics.decision, "grayzone")
+        self.assertEqual(sufficient_count_metrics.occluded_in_frame_count, 16)
+        self.assertEqual(sufficient_count_metrics.decision, "occluded")
+
+    def test_l1_occlusion_absent_vlm_status_uses_geometry_review_not_direct_absent_label(self) -> None:
+        surface_points = np.column_stack(
+            [
+                np.linspace(-0.5, 0.5, L1_OCCLUSION_SAMPLE_COUNT, dtype=np.float64),
+                np.zeros(L1_OCCLUSION_SAMPLE_COUNT, dtype=np.float64),
+                np.full(L1_OCCLUSION_SAMPLE_COUNT, 2.0, dtype=np.float64),
+            ]
+        )
+
+        questions = generate_l1_occlusion_questions(
+            objects=[
+                {
+                    "id": 1,
+                    "label": "cup",
+                    "center": [0.0, 0.0, 2.0],
+                    "bbox_min": [-0.5, -0.25, 1.9],
+                    "bbox_max": [0.5, 0.25, 2.1],
+                }
+            ],
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend="mesh_ray",
+            ray_caster=_AlwaysBlockedBBoxCaster(visible_count=0, valid_count=512),
+            instance_mesh_data=InstanceMeshData(
+                vertices=np.empty((0, 3), dtype=np.float64),
+                faces=np.empty((0, 3), dtype=np.int64),
+                triangle_ids_by_instance={1: np.array([0], dtype=np.int64)},
+                boundary_triangle_ids_by_instance={},
+                surface_points_by_instance={1: surface_points},
+            ),
+            templates={},
+            label_statuses={"cup": "absent"},
+            label_counts={"cup": 0},
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "not visible")
+        self.assertEqual(
+            questions[0]["occlusion_decision_source"],
+            "geometry_review_from_vlm_absent",
+        )
+        self.assertEqual(questions[0]["vlm_label_status"], "absent")
+
+    def test_l1_occlusion_skips_grayzone_ratio_between_1_and_10_percent(self) -> None:
         xs = np.linspace(-0.5, 0.5, 32, dtype=np.float64)
         ys = np.linspace(-0.25, 0.25, 16, dtype=np.float64)
         grid = np.stack(np.meshgrid(xs, ys), axis=-1).reshape(-1, 2)

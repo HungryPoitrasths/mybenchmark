@@ -195,6 +195,7 @@ L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.01
 L1_OCCLUSION_OCCLUDED_MIN = 0.10
 L1_OCCLUSION_OCCLUDED_MIN_COUNT = 16
 L1_OCCLUSION_SAMPLE_COUNT = 512
+L1_NOT_VISIBLE_PROBE_RAY_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
 HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN = 0.10
@@ -305,6 +306,9 @@ class _L1OcclusionMetrics:
     valid_in_frame_count: int
     sampled_point_count: int
     in_frame_sample_count: int
+    not_visible_probe_sample_count: int
+    not_visible_probe_valid_count: int
+    not_visible_probe_visible_count: int
     effective_ratio: float
     sufficient_evidence: bool
     decision: str
@@ -537,12 +541,21 @@ def _make_l1_occlusion_metrics(
     in_frame_sample_count: int,
     backend: str,
     visible_in_frame_count: int | None = None,
+    not_visible_probe_sample_count: int = 0,
+    not_visible_probe_valid_count: int = 0,
+    not_visible_probe_visible_count: int = 0,
 ) -> _L1OcclusionMetrics:
     valid_in_frame_count = int(valid_in_frame_count)
     if visible_in_frame_count is None:
         visible_in_frame_count = int(round(valid_in_frame_count * (1.0 - float(occlusion_ratio_in_frame))))
     visible_in_frame_count = max(0, min(int(visible_in_frame_count), valid_in_frame_count))
     occluded_in_frame_count = max(valid_in_frame_count - visible_in_frame_count, 0)
+    not_visible_probe_sample_count = max(0, int(not_visible_probe_sample_count))
+    not_visible_probe_valid_count = max(0, int(not_visible_probe_valid_count))
+    not_visible_probe_visible_count = max(
+        0,
+        min(int(not_visible_probe_visible_count), not_visible_probe_valid_count),
+    )
     effective_ratio = (
         float(valid_in_frame_count / in_frame_sample_count)
         if in_frame_sample_count > 0 else 0.0
@@ -560,6 +573,9 @@ def _make_l1_occlusion_metrics(
         valid_in_frame_count=valid_in_frame_count,
         sampled_point_count=int(sampled_point_count),
         in_frame_sample_count=int(in_frame_sample_count),
+        not_visible_probe_sample_count=not_visible_probe_sample_count,
+        not_visible_probe_valid_count=not_visible_probe_valid_count,
+        not_visible_probe_visible_count=not_visible_probe_visible_count,
         effective_ratio=effective_ratio,
         sufficient_evidence=bool(sufficient_evidence),
         decision="skip",
@@ -574,6 +590,9 @@ def _make_l1_occlusion_metrics(
         valid_in_frame_count=metrics.valid_in_frame_count,
         sampled_point_count=metrics.sampled_point_count,
         in_frame_sample_count=metrics.in_frame_sample_count,
+        not_visible_probe_sample_count=metrics.not_visible_probe_sample_count,
+        not_visible_probe_valid_count=metrics.not_visible_probe_valid_count,
+        not_visible_probe_visible_count=metrics.not_visible_probe_visible_count,
         effective_ratio=metrics.effective_ratio,
         sufficient_evidence=metrics.sufficient_evidence,
         decision=_classify_l1_occlusion_metrics(metrics),
@@ -1336,6 +1355,154 @@ def _in_frame_surface_sample_subset(
     )
 
 
+def _camera_facing_bbox_probe_points(
+    bbox_min: np.ndarray,
+    bbox_max: np.ndarray,
+    camera_pos: np.ndarray,
+    n_samples: int = L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+) -> np.ndarray:
+    """Sample deterministic points on the camera-facing bbox shell."""
+    sample_count = max(int(n_samples), 0)
+    if sample_count <= 0:
+        return np.empty((0, 3), dtype=np.float64)
+
+    lo = np.asarray(bbox_min, dtype=np.float64)
+    hi = np.asarray(bbox_max, dtype=np.float64)
+    if lo.shape != (3,) or hi.shape != (3,):
+        return np.empty((0, 3), dtype=np.float64)
+
+    mid = (lo + hi) / 2.0
+    face_specs: list[tuple[int, list[int], float]] = []
+    for fixed_axis in range(3):
+        other_axes = [axis for axis in range(3) if axis != fixed_axis]
+        fixed_value = float(lo[fixed_axis] if camera_pos[fixed_axis] <= mid[fixed_axis] else hi[fixed_axis])
+        side_lengths = np.maximum(hi[other_axes] - lo[other_axes], 0.0)
+        face_area = float(np.prod(side_lengths))
+        face_specs.append((fixed_axis, other_axes, max(face_area, 1e-12)))
+
+    total_area = sum(face_area for _, _, face_area in face_specs)
+    if total_area <= 0.0:
+        center = ((lo + hi) / 2.0).reshape(1, 3)
+        return np.repeat(center, sample_count, axis=0).astype(np.float64)
+
+    seed_bytes = np.concatenate(
+        [
+            np.asarray(camera_pos, dtype=np.float32),
+            np.asarray(lo, dtype=np.float32),
+            np.asarray(hi, dtype=np.float32),
+            np.asarray([float(sample_count)], dtype=np.float32),
+        ]
+    ).tobytes()
+    rng = np.random.RandomState(zlib.crc32(seed_bytes) & 0xFFFFFFFF)
+    face_probs = np.asarray(
+        [face_area / total_area for _, _, face_area in face_specs],
+        dtype=np.float64,
+    )
+    face_choices = rng.choice(len(face_specs), size=sample_count, p=face_probs)
+
+    probe_points = np.empty((sample_count, 3), dtype=np.float64)
+    for idx, face_idx in enumerate(face_choices):
+        fixed_axis, other_axes, _face_area = face_specs[int(face_idx)]
+        coords = mid.copy()
+        coords[fixed_axis] = float(
+            lo[fixed_axis] if camera_pos[fixed_axis] <= mid[fixed_axis] else hi[fixed_axis]
+        )
+        for axis in other_axes:
+            low = float(lo[axis])
+            high = float(hi[axis])
+            if high <= low:
+                coords[axis] = low
+            else:
+                coords[axis] = float(rng.uniform(low, high))
+        probe_points[idx] = coords
+    return probe_points
+
+
+def _bbox_probe_visibility_counts(
+    *,
+    ray_caster,
+    camera_pos: np.ndarray,
+    probe_points: np.ndarray,
+    ignored_tri_ids: set[int] | None = None,
+    hit_epsilon: float = 0.05,
+) -> tuple[int, int]:
+    first_visible_hit = getattr(ray_caster, "first_visible_hit", None)
+    cast_ray = getattr(ray_caster, "cast_ray", None)
+    if not callable(first_visible_hit) and not callable(cast_ray):
+        return 0, 0
+
+    origin = np.asarray(camera_pos, dtype=np.float64)
+    visible_count = 0
+    valid_count = 0
+    for point in np.asarray(probe_points, dtype=np.float64):
+        direction = np.asarray(point, dtype=np.float64) - origin
+        target_dist = float(np.linalg.norm(direction))
+        if not np.isfinite(target_dist) or target_dist <= 1e-6:
+            continue
+        valid_count += 1
+
+        hit = None
+        if callable(first_visible_hit):
+            hit = _invoke_method_with_supported_kwargs(
+                first_visible_hit,
+                origin=origin,
+                direction=direction,
+                ignored_tri_ids=ignored_tri_ids,
+            )
+        else:
+            for hit_point, tri_id, dist in cast_ray(origin, direction):
+                if ignored_tri_ids and int(tri_id) in ignored_tri_ids:
+                    continue
+                hit = (hit_point, int(tri_id), float(dist))
+                break
+
+        if hit is None or float(hit[2]) >= target_dist - float(hit_epsilon):
+            visible_count += 1
+    return int(visible_count), int(valid_count)
+
+
+def _surface_probe_subset(
+    sample_points: np.ndarray,
+    max_samples: int,
+    sample_triangle_ids: np.ndarray | None = None,
+    sample_barycentrics: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    points = np.asarray(sample_points, dtype=np.float64)
+    if len(points) == 0 or max_samples <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    n_select = min(int(max_samples), len(points))
+    if n_select <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    if n_select == len(points):
+        indices = np.arange(len(points), dtype=np.int64)
+    else:
+        indices = np.floor(
+            np.arange(n_select, dtype=np.float64) * (len(points) / float(n_select))
+        ).astype(np.int64)
+
+    tri_ids = (
+        np.asarray(sample_triangle_ids, dtype=np.int64)[indices]
+        if sample_triangle_ids is not None and len(sample_triangle_ids) == len(points)
+        else np.empty((0,), dtype=np.int64)
+    )
+    barycentrics = (
+        np.asarray(sample_barycentrics, dtype=np.float64)[indices]
+        if sample_barycentrics is not None and len(sample_barycentrics) == len(points)
+        else np.empty((0, 3), dtype=np.float64)
+    )
+    return points[indices], tri_ids, barycentrics
+
+
 def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
     if (
         metrics.projected_area < MIN_PROJECTED_AREA_PX
@@ -1343,6 +1510,15 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
         or metrics.in_frame_sample_count <= 0
     ):
         return "skip"
+    if (
+        metrics.not_visible_probe_sample_count >= L1_NOT_VISIBLE_PROBE_RAY_COUNT
+        and metrics.not_visible_probe_valid_count >= metrics.not_visible_probe_sample_count
+        and metrics.not_visible_probe_visible_count == 0
+        and metrics.valid_in_frame_count > 0
+        and metrics.sufficient_evidence
+        and metrics.visible_in_frame_count == 0
+    ):
+        return "not visible"
     if (
         metrics.valid_in_frame_count <= 0
         or not metrics.sufficient_evidence
@@ -1374,6 +1550,12 @@ def _resolve_l1_occlusion_decision(
 ) -> tuple[str | None, str, bool]:
     decision = metrics.decision
     overlay_available = False
+    if (
+        metrics.projected_area <= 0.0
+        or metrics.in_frame_sample_count <= 0
+        or metrics.in_frame_ratio <= 0.0
+    ):
+        return "not visible", source_used, overlay_available
     if decision == "skip":
         return None, source_used, overlay_available
 
@@ -1462,6 +1644,30 @@ def _compute_l1_occlusion_metrics(
         if len(sample_barycentrics) == sampled_point_count
         else np.empty((0, 3), dtype=np.float64)
     )
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    vertices_arr = (
+        np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+        if instance_mesh_data is not None else None
+    )
+    faces_arr = (
+        np.asarray(instance_mesh_data.faces, dtype=np.int64)
+        if instance_mesh_data is not None else None
+    )
+    probe_visible_count = 0
+    probe_valid_count = 0
+    bbox_probe_points = _camera_facing_bbox_probe_points(
+        bbox_min=np.asarray(obj["bbox_min"], dtype=np.float64),
+        bbox_max=np.asarray(obj["bbox_max"], dtype=np.float64),
+        camera_pos=camera_pos,
+        n_samples=L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+    )
+    probe_sample_count = int(len(bbox_probe_points))
+    if ray_caster is not None and probe_sample_count > 0:
+        probe_visible_count, probe_valid_count = _bbox_probe_visibility_counts(
+            ray_caster=ray_caster,
+            camera_pos=camera_pos,
+            probe_points=bbox_probe_points,
+        )
 
     if backend == "depth":
         if not _depth_backend_inputs_ready(
@@ -1478,6 +1684,9 @@ def _compute_l1_occlusion_metrics(
                 sampled_point_count=sampled_point_count,
                 in_frame_sample_count=in_frame_sample_count,
                 backend=backend,
+                not_visible_probe_sample_count=probe_sample_count,
+                not_visible_probe_valid_count=probe_valid_count,
+                not_visible_probe_visible_count=probe_visible_count,
             )
         depth_metrics = compute_mesh_depth_occlusion_metrics(
             # Share the same color-in-frame sample pool with mesh_ray so the
@@ -1498,10 +1707,12 @@ def _compute_l1_occlusion_metrics(
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
             visible_in_frame_count=int(depth_metrics["visible_in_frame_count"]),
+            not_visible_probe_sample_count=probe_sample_count,
+            not_visible_probe_valid_count=probe_valid_count,
+            not_visible_probe_visible_count=probe_visible_count,
         )
 
     if backend == "mesh_ray" and ray_caster is not None:
-        camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
         visible_count, valid_count = _mesh_visibility_stats_compat(
             ray_caster,
             camera_pos=camera_pos,
@@ -1509,14 +1720,8 @@ def _compute_l1_occlusion_metrics(
             target_tri_ids=target_tri_ids,
             sample_triangle_ids=in_frame_triangle_ids,
             sample_barycentrics=in_frame_barycentrics,
-            vertices=(
-                np.asarray(instance_mesh_data.vertices, dtype=np.float64)
-                if instance_mesh_data is not None else None
-            ),
-            faces=(
-                np.asarray(instance_mesh_data.faces, dtype=np.int64)
-                if instance_mesh_data is not None else None
-            ),
+            vertices=vertices_arr,
+            faces=faces_arr,
         )
         occlusion_ratio = 1.0
         if valid_count > 0:
@@ -1530,6 +1735,9 @@ def _compute_l1_occlusion_metrics(
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
             visible_in_frame_count=visible_count,
+            not_visible_probe_sample_count=probe_sample_count,
+            not_visible_probe_valid_count=probe_valid_count,
+            not_visible_probe_visible_count=probe_visible_count,
         )
 
     return _make_l1_occlusion_metrics(
@@ -1540,6 +1748,9 @@ def _compute_l1_occlusion_metrics(
         sampled_point_count=sampled_point_count,
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
+        not_visible_probe_sample_count=probe_sample_count,
+        not_visible_probe_valid_count=probe_valid_count,
+        not_visible_probe_visible_count=probe_visible_count,
     )
 
 
@@ -1553,6 +1764,9 @@ def _l1_occlusion_metrics_payload(metrics: _L1OcclusionMetrics) -> dict[str, Any
         "valid_in_frame_count": int(metrics.valid_in_frame_count),
         "sampled_point_count": int(metrics.sampled_point_count),
         "in_frame_sample_count": int(metrics.in_frame_sample_count),
+        "not_visible_probe_sample_count": int(metrics.not_visible_probe_sample_count),
+        "not_visible_probe_valid_count": int(metrics.not_visible_probe_valid_count),
+        "not_visible_probe_visible_count": int(metrics.not_visible_probe_visible_count),
         "effective_ratio": float(metrics.effective_ratio),
         "sufficient_evidence": bool(metrics.sufficient_evidence),
         "decision": str(metrics.decision),
@@ -1650,9 +1864,27 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
             backend=backend,
         )
 
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    bbox_probe_points = _camera_facing_bbox_probe_points(
+        bbox_min=np.asarray(obj["bbox_min"], dtype=np.float64),
+        bbox_max=np.asarray(obj["bbox_max"], dtype=np.float64),
+        camera_pos=camera_pos,
+        n_samples=L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+    )
+    probe_sample_count = int(len(bbox_probe_points))
+    probe_visible_count = 0
+    probe_valid_count = 0
+    if probe_sample_count > 0:
+        probe_visible_count, probe_valid_count = _bbox_probe_visibility_counts(
+            ray_caster=modified_scene.ray_caster,
+            camera_pos=camera_pos,
+            probe_points=bbox_probe_points,
+            ignored_tri_ids=set(modified_scene.ignored_tri_ids),
+        )
+
     visible_count, valid_count = _mesh_visibility_stats_compat(
         modified_scene.ray_caster,
-        camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
+        camera_pos=camera_pos,
         target_points=in_frame_points,
         target_tri_ids=target_tri_ids,
         ignored_tri_ids=set(modified_scene.ignored_tri_ids),
@@ -1673,6 +1905,9 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
         visible_in_frame_count=int(visible_count),
+        not_visible_probe_sample_count=probe_sample_count,
+        not_visible_probe_valid_count=probe_valid_count,
+        not_visible_probe_visible_count=probe_visible_count,
     )
 
 
@@ -1799,6 +2034,49 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
             backend=backend,
         )
 
+    moved_blocker_deltas = {
+        moved_id: delta
+        for moved_id, delta in moved_deltas.items()
+        if moved_id != target_obj_id
+    }
+    blocker_casters: dict[int, Any] = {}
+    for moved_id in moved_blocker_deltas:
+        blocker_caster = _get_instance_intersector(instance_mesh_data, int(moved_id))
+        if blocker_caster is not None:
+            blocker_casters[int(moved_id)] = blocker_caster
+
+    bbox_min = np.asarray(moved_target["bbox_min"], dtype=np.float64)
+    bbox_max = np.asarray(moved_target["bbox_max"], dtype=np.float64)
+    bbox_probe_points = _camera_facing_bbox_probe_points(
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
+        n_samples=L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+    )
+    probe_sample_count = int(len(bbox_probe_points))
+    probe_visible_count = 0
+    probe_valid_count = 0
+    if probe_sample_count > 0:
+        for point in np.asarray(bbox_probe_points, dtype=np.float64):
+            direction = np.asarray(point, dtype=np.float64) - np.asarray(camera_pose.position, dtype=np.float64)
+            target_dist = float(np.linalg.norm(direction))
+            if not np.isfinite(target_dist) or target_dist <= 1e-6:
+                continue
+            probe_valid_count += 1
+            hit_path = _counterfactual_hit_path(
+                modified_scene=moved_scene_context,
+                camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
+                direction=direction,
+                max_distance=target_dist + 0.05,
+                target_triangle_ids=set(),
+                target_caster=None,
+                target_delta=np.zeros(3, dtype=np.float64),
+                blocker_casters=blocker_casters,
+                blocker_deltas=moved_blocker_deltas,
+            )
+            if not hit_path or float(hit_path[0][1]) >= target_dist - 0.05:
+                probe_visible_count += 1
+
     visible_count, valid_count = _compute_counterfactual_target_visibility_stats(
         modified_scene=moved_scene_context,
         target_surface_points=in_frame_points,
@@ -1807,11 +2085,7 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
         instance_mesh_data=instance_mesh_data,
         target_obj_id=target_obj_id,
         target_delta=target_delta,
-        moved_blocker_deltas={
-            moved_id: delta
-            for moved_id, delta in moved_deltas.items()
-            if moved_id != target_obj_id
-        },
+        moved_blocker_deltas=moved_blocker_deltas,
         sample_triangle_ids=in_frame_triangle_ids,
         sample_barycentrics=in_frame_barycentrics,
         vertices=np.asarray(instance_mesh_data.vertices, dtype=np.float64),
@@ -1829,6 +2103,9 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
         visible_in_frame_count=int(visible_count),
+        not_visible_probe_sample_count=probe_sample_count,
+        not_visible_probe_valid_count=probe_valid_count,
+        not_visible_probe_visible_count=probe_visible_count,
     )
 
 
@@ -1946,6 +2223,12 @@ def _resolve_counterfactual_l1_visibility_status(
             None,
             "grayzone_visibility",
             "occlusion ratio falls into the L1 grayzone and is intentionally not trusted",
+        )
+    if metrics.decision == "not visible":
+        return (
+            "not visible",
+            "resolved_visibility",
+            "visibility state is resolved as not visible under strict ray probes",
         )
     if metrics.decision in {"not occluded", "occluded"}:
         return (
@@ -2099,19 +2382,57 @@ def generate_l1_occlusion_questions(
         for label, status in sorted(normalized_statuses.items()):
             count = normalized_counts.get(label)
             if status == "absent":
-                questions.append(
-                    _l1_occlusion_question(
-                        label=label,
-                        correct="not visible",
-                        templates=templates,
-                        obj_id=None,
-                        extra={
-                            "occlusion_decision_source": "vlm_status_absent",
-                            "vlm_label_status": status,
-                            "vlm_label_count": 0 if count is None else count,
-                        },
+                candidates = label_to_objects.get(label, [])
+                if not candidates:
+                    continue
+
+                candidate_reviews: list[dict[str, Any]] = []
+                all_not_visible = True
+                for candidate in candidates:
+                    metrics = _compute_l1_occlusion_metrics(
+                        obj=candidate,
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        depth_image=depth_image,
+                        depth_intrinsics=depth_intrinsics,
+                        occlusion_backend=occlusion_backend,
+                        ray_caster=ray_caster,
+                        instance_mesh_data=instance_mesh_data,
                     )
-                )
+                    decision, _source_unused, _overlay_unused = _resolve_l1_occlusion_decision(
+                        metrics=metrics,
+                        source_used="geometry_review_from_vlm_absent",
+                        grayzone_fallback_source="geometry_grayzone_fallback",
+                    )
+                    candidate_reviews.append(
+                        {
+                            "obj_id": int(candidate["id"]),
+                            "decision": decision,
+                            "projected_area": float(metrics.projected_area),
+                            "in_frame_ratio": float(metrics.in_frame_ratio),
+                            "valid_in_frame_count": int(metrics.valid_in_frame_count),
+                            "not_visible_probe_visible_count": int(metrics.not_visible_probe_visible_count),
+                            "not_visible_probe_valid_count": int(metrics.not_visible_probe_valid_count),
+                        }
+                    )
+                    if decision != "not visible":
+                        all_not_visible = False
+
+                if all_not_visible:
+                    questions.append(
+                        _l1_occlusion_question(
+                            label=label,
+                            correct="not visible",
+                            templates=templates,
+                            obj_id=None,
+                            extra={
+                                "occlusion_decision_source": "geometry_review_from_vlm_absent",
+                                "vlm_label_status": status,
+                                "vlm_label_count": 0 if count is None else count,
+                                "geometry_candidate_reviews": candidate_reviews,
+                            },
+                        )
+                    )
                 continue
             if status != "unique":
                 continue
