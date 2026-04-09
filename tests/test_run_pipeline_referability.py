@@ -554,6 +554,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
             captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
+            captured["mention_in_frame_ratio_by_obj_id"] = dict(
+                kwargs.get("mention_in_frame_ratio_by_obj_id") or {}
+            )
             captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
             captured["label_counts"] = dict(kwargs["label_counts"] or {})
             return []
@@ -598,6 +601,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["visible_object_ids"], [1])
         self.assertEqual(captured["referable_object_ids"], [1])
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1])
+        self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95})
         self.assertEqual(captured["label_statuses"], {"lamp": "unique"})
         self.assertEqual(captured["label_counts"], {"lamp": 1})
         self.assertEqual(questions, [])
@@ -671,6 +675,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
             captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
+            captured["mention_in_frame_ratio_by_obj_id"] = dict(
+                kwargs.get("mention_in_frame_ratio_by_obj_id") or {}
+            )
             captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
             captured["label_counts"] = dict(kwargs["label_counts"] or {})
             captured["label_to_object_ids"] = dict(kwargs["label_to_object_ids"] or {})
@@ -724,6 +731,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1, 2])
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
+        self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95, 2: 0.85})
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})

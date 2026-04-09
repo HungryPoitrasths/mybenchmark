@@ -198,6 +198,31 @@ L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_NOT_VISIBLE_PROBE_RAY_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
+QUESTION_MENTION_MIN_IN_FRAME_RATIO_DEFAULT = 0.60
+QUESTION_MENTION_MIN_IN_FRAME_RATIO_RELAXED = 0.50
+QUESTION_MENTION_POLICY_VISIBLE_ONLY = "visible_only"
+QUESTION_MENTION_POLICY_MIN_RATIO_050 = "min_ratio_0_50"
+QUESTION_MENTION_POLICY_MIN_RATIO_060 = "min_ratio_0_60"
+QUESTION_MENTION_VISIBLE_ONLY_TYPES = {
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_occlusion",
+    "object_rotate_object_centric",
+    "object_move_allocentric",
+}
+QUESTION_MENTION_MIN_RATIO_050_TYPES = {
+    "direction",
+    "direction_agent",
+    "distance",
+    "direction_object_centric",
+    "direction_allocentric",
+    "coordinate_rotation_agent",
+    "coordinate_rotation_object_centric",
+    "coordinate_rotation_allocentric",
+}
+QUESTION_MENTION_TYPE_ALIASES = {
+    "object_move_object_centric": "object_rotate_object_centric",
+}
 HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN = 0.10
 VERTICAL_DIRECTIONS = {"above", "below"}
 
@@ -5781,6 +5806,48 @@ def _normalize_object_id_set(
     return normalized
 
 
+def _normalize_in_frame_ratio_map(
+    ratio_by_obj_id: dict[Any, Any] | None,
+    field_name: str,
+) -> dict[int, float]:
+    """Best-effort int/float normalization for object in-frame ratios."""
+    normalized: dict[int, float] = {}
+    if not isinstance(ratio_by_obj_id, dict):
+        return normalized
+
+    for obj_id, ratio in ratio_by_obj_id.items():
+        try:
+            normalized[int(obj_id)] = float(ratio)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Skipping invalid %s entry: %r -> %r",
+                field_name,
+                obj_id,
+                ratio,
+            )
+    return normalized
+
+
+def _canonical_question_type_for_mention_policy(question_type: Any) -> str:
+    canonical = str(question_type or "").strip().lower()
+    return QUESTION_MENTION_TYPE_ALIASES.get(canonical, canonical)
+
+
+def _question_mention_policy(question_type: Any) -> tuple[str, float | None]:
+    canonical = _canonical_question_type_for_mention_policy(question_type)
+    if canonical in QUESTION_MENTION_VISIBLE_ONLY_TYPES:
+        return QUESTION_MENTION_POLICY_VISIBLE_ONLY, None
+    if canonical in QUESTION_MENTION_MIN_RATIO_050_TYPES:
+        return (
+            QUESTION_MENTION_POLICY_MIN_RATIO_050,
+            QUESTION_MENTION_MIN_IN_FRAME_RATIO_RELAXED,
+        )
+    return (
+        QUESTION_MENTION_POLICY_MIN_RATIO_060,
+        QUESTION_MENTION_MIN_IN_FRAME_RATIO_DEFAULT,
+    )
+
+
 def _ensure_question_mentions(
     question: dict[str, Any],
     objects_by_id: dict[int, dict],
@@ -6025,13 +6092,36 @@ def _enforce_stable_facing_references(
 def _enforce_in_frame_mentions(
     questions: list[dict[str, Any]],
     occlusion_eligible_object_ids: list[int] | list[str] | None,
+    *,
+    visible_object_ids: list[int] | list[str] | None = None,
+    mention_in_frame_ratio_by_obj_id: dict[Any, Any] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    eligible_set = _normalize_object_id_set(
+    legacy_eligible_set = _normalize_object_id_set(
         occlusion_eligible_object_ids,
         "occlusion_eligible_object_ids",
     )
-    if occlusion_eligible_object_ids is None:
+    visible_set = _normalize_object_id_set(
+        visible_object_ids,
+        "visible_object_ids",
+    ) if visible_object_ids is not None else set(legacy_eligible_set)
+    ratio_map = _normalize_in_frame_ratio_map(
+        mention_in_frame_ratio_by_obj_id,
+        "mention_in_frame_ratio_by_obj_id",
+    )
+    if not visible_set and ratio_map:
+        visible_set = set(ratio_map)
+    if not ratio_map and occlusion_eligible_object_ids is not None:
+        source_ids = visible_set | legacy_eligible_set
+        ratio_map = {
+            int(obj_id): (1.0 if int(obj_id) in legacy_eligible_set else 0.0)
+            for obj_id in source_ids
+        }
+    if (
+        occlusion_eligible_object_ids is None
+        and visible_object_ids is None
+        and mention_in_frame_ratio_by_obj_id is None
+    ):
         return questions
 
     kept: list[dict[str, Any]] = []
@@ -6045,6 +6135,15 @@ def _enforce_in_frame_mentions(
             kept.append(question)
             continue
 
+        policy_name, required_min_ratio = _question_mention_policy(question_type)
+        eligible_set = {
+            int(obj_id)
+            for obj_id in visible_set
+            if (
+                policy_name == QUESTION_MENTION_POLICY_VISIBLE_ONLY
+                or float(ratio_map.get(int(obj_id), 0.0) or 0.0) >= float(required_min_ratio or 0.0)
+            )
+        }
         ineligible_mentions: list[dict[str, Any]] = []
         for mention in question.get("mentioned_objects", []):
             if not isinstance(mention, dict):
@@ -6056,12 +6155,23 @@ def _enforce_in_frame_mentions(
                 obj_id_int = int(obj_id)
             except (TypeError, ValueError):
                 continue
-            if obj_id_int not in eligible_set:
+            actual_ratio = float(ratio_map.get(obj_id_int, 0.0) or 0.0)
+            visible_in_frame = obj_id_int in visible_set
+            mention_is_eligible = (
+                visible_in_frame
+                if policy_name == QUESTION_MENTION_POLICY_VISIBLE_ONLY
+                else visible_in_frame and actual_ratio >= float(required_min_ratio or 0.0)
+            )
+            if not mention_is_eligible:
                 ineligible_mentions.append(
                     {
                         "role": str(mention.get("role", "")).strip(),
                         "label": str(mention.get("label", "")).strip(),
                         "obj_id": obj_id_int,
+                        "visible_in_frame": visible_in_frame,
+                        "actual_in_frame_ratio": actual_ratio,
+                        "required_policy": policy_name,
+                        "required_min_ratio": required_min_ratio,
                     }
                 )
 
@@ -6078,6 +6188,8 @@ def _enforce_in_frame_mentions(
                 "filter": "in_frame_mentions",
                 "reason": "mentioned_object_not_sufficiently_in_frame",
                 "trace_question_id": question.get("trace_question_id"),
+                "required_policy": policy_name,
+                "required_min_ratio": required_min_ratio,
                 "eligible_object_ids": sorted(eligible_set),
                 "ineligible_mentions": ineligible_mentions,
                 "question": question,
@@ -6179,6 +6291,7 @@ def generate_all_questions(
     visible_object_ids: list[int] | None = None,
     referable_object_ids: list[int] | None = None,
     occlusion_eligible_object_ids: list[int] | None = None,
+    mention_in_frame_ratio_by_obj_id: dict[int, float] | None = None,
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     label_to_object_ids: dict[str, Any] | None = None,
@@ -6198,9 +6311,11 @@ def generate_all_questions(
     unanswerable from the image and should never be included.
     referable_object_ids: if provided, restrict question generation to the
     object_id subset judged referable by the VLM for this frame.
-    occlusion_eligible_object_ids: if provided, every generated question must
-    keep its mentioned in-frame objects within this set. Static L1 occlusion
-    questions whose answer is "not visible" are exempt.
+    occlusion_eligible_object_ids: if provided, L1 occlusion generation is
+    restricted to object ids whose projected bbox is sufficiently in-frame.
+    mention_in_frame_ratio_by_obj_id: optional per-visible-object projected
+    bbox in-frame ratios used by the post-generation mentioned-object filter.
+    Static L1 occlusion questions whose answer is "not visible" are exempt.
     label_statuses: if provided, use per-label VLM absent/unique/multiple/unsure
     decisions to guide L1 occlusion generation.
     label_counts: optional compatibility field derived from label_statuses.
@@ -7115,6 +7230,8 @@ def generate_all_questions(
     all_questions = _enforce_in_frame_mentions(
         all_questions,
         occlusion_eligible_object_ids,
+        visible_object_ids=visible_object_ids,
+        mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
         trace_recorder=trace_recorder,
     )
 

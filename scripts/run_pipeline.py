@@ -80,9 +80,8 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
-# Question generation uses a stricter in-frame gate than crop review. The
-# resulting eligible-id set is reused across all question types downstream,
-# except static L1 occlusion questions whose answer is "not visible".
+# L1 occlusion generation uses a stricter in-frame gate than crop review.
+# Other question types now apply their own per-qtype mention thresholds.
 QUESTION_MENTION_MIN_IN_FRAME_RATIO = 0.60
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 
@@ -1477,18 +1476,18 @@ def _normalize_object_ids(value: object) -> list[int]:
     return sorted(set(object_ids))
 
 
-def _build_occlusion_eligible_object_ids(
+def _build_visible_object_in_frame_ratio_map(
     *,
     visible_object_ids: list[int],
     referability_entry: dict[str, object] | None,
     scene_objects: list[dict],
     camera_pose: CameraPose | None,
     color_intrinsics: CameraIntrinsics | None,
-) -> list[int]:
-    """Return visible object ids whose projected bbox is sufficiently in-frame."""
+) -> dict[int, float]:
+    """Return per-visible-object projected bbox in-frame ratios."""
     visible_ids = _normalize_object_ids(visible_object_ids)
     if not visible_ids:
-        return []
+        return {}
 
     ratios_by_obj_id: dict[int, float] = {}
     object_reviews = (referability_entry or {}).get("object_reviews")
@@ -1503,6 +1502,17 @@ def _build_occlusion_eligible_object_ids(
                 ratios_by_obj_id[int(obj_id)] = float(review.get("bbox_in_frame_ratio", 0.0) or 0.0)
             except (TypeError, ValueError):
                 continue
+    elif isinstance(object_reviews, list):
+        for review in object_reviews:
+            if not isinstance(review, dict):
+                continue
+            try:
+                obj_id = int(review.get("obj_id"))
+                ratio = float(review.get("bbox_in_frame_ratio", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if obj_id in visible_ids:
+                ratios_by_obj_id[obj_id] = ratio
 
     missing_ids = [
         int(obj_id)
@@ -1529,10 +1539,27 @@ def _build_occlusion_eligible_object_ids(
             except (TypeError, ValueError):
                 continue
 
+    return {
+        int(obj_id): float(ratios_by_obj_id.get(int(obj_id), 0.0) or 0.0)
+        for obj_id in visible_ids
+    }
+
+
+def _build_occlusion_eligible_object_ids(
+    *,
+    visible_object_ids: list[int],
+    mention_in_frame_ratio_by_obj_id: dict[int, float] | None,
+) -> list[int]:
+    """Return visible object ids whose projected bbox is sufficiently in-frame."""
+    visible_ids = _normalize_object_ids(visible_object_ids)
+    if not visible_ids:
+        return []
+
     return [
         int(obj_id)
         for obj_id in visible_ids
-        if float(ratios_by_obj_id.get(int(obj_id), 0.0)) >= QUESTION_MENTION_MIN_IN_FRAME_RATIO
+        if float((mention_in_frame_ratio_by_obj_id or {}).get(int(obj_id), 0.0) or 0.0)
+        >= QUESTION_MENTION_MIN_IN_FRAME_RATIO
     ]
 
 
@@ -1964,12 +1991,16 @@ def run_pipeline(
             referability_entry = _get_referability_entry(
                 referability_cache, scene_id, image_name,
             )
-            occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+            mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
                 visible_object_ids=visible_ids,
                 referability_entry=referability_entry,
                 scene_objects=scene["objects"],
                 camera_pose=camera_pose,
                 color_intrinsics=color_intrinsics,
+            )
+            occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+                visible_object_ids=visible_ids,
+                mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
             )
             if referability_entry is not None:
                 label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
@@ -2017,6 +2048,7 @@ def run_pipeline(
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
                 occlusion_eligible_object_ids=occlusion_eligible_ids,
+                mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
                 label_statuses=label_statuses,
                 label_counts=label_counts,
                 label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),

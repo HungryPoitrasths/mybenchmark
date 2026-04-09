@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.make_pipeline_trace_viewer import build_single_frame_trace_html
 from scripts.run_pipeline import (
     DEFAULT_VLM_URL,
+    _build_visible_object_in_frame_ratio_map,
     _build_occlusion_eligible_object_ids,
     _build_frame_debug_entry,
     _build_scene_attachment_rows,
@@ -805,12 +806,16 @@ def run_single_frame_trace(
             for obj_id in _normalize_object_ids(referability_entry.get("referable_object_ids"))
             if int(obj_id) in visible_id_set
         ]
-        occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+        mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
             visible_object_ids=visible_ids,
             referability_entry=referability_entry,
             scene_objects=scene["objects"],
             camera_pose=camera_pose,
             color_intrinsics=color_intrinsics,
+        )
+        occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+            visible_object_ids=visible_ids,
+            mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
         )
         _record_stage(
             trace_doc,
@@ -910,6 +915,7 @@ def run_single_frame_trace(
             visible_object_ids=visible_ids,
             referable_object_ids=referable_ids,
             occlusion_eligible_object_ids=occlusion_eligible_ids,
+            mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
             label_statuses=label_statuses,
             label_counts=label_counts,
             label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),

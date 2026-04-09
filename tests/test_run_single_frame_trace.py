@@ -219,6 +219,9 @@ class RunSingleFrameTraceTests(unittest.TestCase):
             captured["occlusion_eligible_object_ids"] = list(
                 _kwargs.get("occlusion_eligible_object_ids") or []
             )
+            captured["mention_in_frame_ratio_by_obj_id"] = dict(
+                _kwargs.get("mention_in_frame_ratio_by_obj_id") or {}
+            )
             trace_recorder = _kwargs.get("trace_recorder")
             if trace_recorder is not None:
                 trace_recorder(
@@ -281,6 +284,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertEqual(trace_json["input"]["trace_detail"], "full")
         self.assertEqual(trace_json["input"]["trace_vlm_payload"], "summary")
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
+        self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 1.0, 2: 0.85})
         self.assertEqual(trace_json["frame_context"]["occlusion_eligible_object_ids"], [1, 2])
         self.assertIn("object_pool", trace_json["artifacts"]["audits"])
         self.assertIn("reason_index", trace_json["artifacts"]["audits"])
