@@ -380,7 +380,7 @@ def is_attachment_viewer_question(question: dict) -> bool:
     return qtype in OBJECT_MOVE_TYPES and bool(question.get("attachment_remapped", False))
 
 
-def filter_viewer_questions(
+def apply_explicit_viewer_filters(
     source_questions: list[dict],
     *,
     include_attachment_unchanged: bool = True,
@@ -391,8 +391,24 @@ def filter_viewer_questions(
             question for question in filtered
             if not is_attachment_unchanged_object_move(question)
         ]
-    filtered = _apply_attachment_viewer_filter(filtered)
+    return filtered
+
+
+def apply_auto_viewer_filters(questions: list[dict]) -> list[dict]:
+    filtered = _apply_attachment_viewer_filter(questions)
     return _apply_global_object_move_ratio_filter(filtered)
+
+
+def filter_viewer_questions(
+    source_questions: list[dict],
+    *,
+    include_attachment_unchanged: bool = True,
+) -> list[dict]:
+    filtered = apply_explicit_viewer_filters(
+        source_questions,
+        include_attachment_unchanged=include_attachment_unchanged,
+    )
+    return apply_auto_viewer_filters(filtered)
 
 
 PAGE = """\
@@ -535,7 +551,7 @@ def _format_presence_object_review(item: dict[str, object]) -> str:
 
     name = f"{label}#{obj_id}" if obj_id not in (None, "") else label
     if roles:
-        name += f" [{'/'.join(roles)}]"
+        name += f" [{', '.join(roles)}]"
     if reason:
         return f"{name}: {status} ({reason})"
     return f"{name}: {status}"
@@ -671,6 +687,10 @@ def _build_review_notes_html(
     return '<div class="review-notes">' + "".join(blocks) + "</div>"
 
 
+def question_review_notes(question: dict) -> str:
+    return _build_review_notes_html(question, include_referability_audit=True)
+
+
 def _build_footer_html(question: dict) -> str:
     scene = str(question.get("scene_id", "")).strip()
     frame = str(question.get("image_name", "")).strip()
@@ -695,19 +715,19 @@ def build_viewer_html(
     attachment_only: bool = False,
     include_attachment_unchanged: bool = True,
     include_referability_audit: bool = False,
-    apply_filters: bool = True,
+    apply_filters: bool = False,
 ) -> str:
-    displayed_questions = list(questions)
+    displayed_questions = select_viewer_source_questions(
+        list(questions),
+        requested_qtypes=requested_qtypes,
+        attachment_only=attachment_only,
+    )
+    displayed_questions = apply_explicit_viewer_filters(
+        displayed_questions,
+        include_attachment_unchanged=include_attachment_unchanged,
+    )
     if apply_filters:
-        source_questions = select_viewer_source_questions(
-            displayed_questions,
-            requested_qtypes=requested_qtypes,
-            attachment_only=attachment_only,
-        )
-        displayed_questions = filter_viewer_questions(
-            source_questions,
-            include_attachment_unchanged=include_attachment_unchanged,
-        )
+        displayed_questions = apply_auto_viewer_filters(displayed_questions)
     displayed_questions = order_questions_for_viewer(displayed_questions, seed=shuffle_seed)
     summary_html = (
         '<div class="summary">\n'
@@ -769,6 +789,7 @@ def main():
     parser.set_defaults(
         include_attachment_unchanged=True,
         include_referability_audit=False,
+        apply_auto_filters=False,
     )
     parser.add_argument(
         "--questions",
@@ -821,6 +842,11 @@ def main():
         action="store_true",
         help="Render Referability Audit blocks in review cards (hidden by default)",
     )
+    parser.add_argument(
+        "--apply_auto_filters",
+        action="store_true",
+        help="Apply legacy attachment-based auto-trimming after explicit viewer filters",
+    )
     args = parser.parse_args()
 
     if Image is None:
@@ -848,7 +874,7 @@ def main():
         attachment_only=args.attachment_only,
         include_attachment_unchanged=args.include_attachment_unchanged,
         include_referability_audit=args.include_referability_audit,
-        apply_filters=True,
+        apply_filters=args.apply_auto_filters,
     )
 
     out = Path(args.output)

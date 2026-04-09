@@ -1,6 +1,8 @@
+from pathlib import Path
 import unittest
 
 from scripts.make_viewer import (
+    build_viewer_html,
     build_task_summary_v2,
     filter_viewer_questions,
     question_review_notes,
@@ -168,6 +170,79 @@ class MakeViewerTests(unittest.TestCase):
         )
 
         self.assertEqual(filtered, [])
+
+    def test_build_viewer_html_keeps_unattached_object_moves_by_default(self) -> None:
+        questions = [
+            make_object_move_question(qtype="object_move_distance", attached=False, text="keep 1"),
+            make_object_move_question(qtype="object_move_distance", attached=False, text="drop 2"),
+            make_object_move_question(qtype="object_move_distance", attached=False, text="drop 3"),
+            make_object_move_question(
+                qtype="object_move_distance",
+                scene_id="scene0000_00",
+                image_name="001.jpg",
+                attached=False,
+                text="keep other frame",
+            ),
+        ]
+
+        html_text = build_viewer_html(questions, Path("."))
+
+        self.assertIn("L2_object_move_distance: with_attachment=0, without_attachment=4", html_text)
+        self.assertIn("keep 1", html_text)
+        self.assertIn("drop 2", html_text)
+        self.assertIn("drop 3", html_text)
+        self.assertIn("keep other frame", html_text)
+
+    def test_build_viewer_html_can_opt_into_legacy_auto_filters(self) -> None:
+        questions = [
+            make_object_move_question(qtype="object_move_distance", attached=False, text="keep 1"),
+            make_object_move_question(qtype="object_move_distance", attached=False, text="drop 2"),
+            make_object_move_question(qtype="object_move_distance", attached=False, text="drop 3"),
+            make_object_move_question(
+                qtype="object_move_distance",
+                scene_id="scene0000_00",
+                image_name="001.jpg",
+                attached=False,
+                text="keep other frame",
+            ),
+        ]
+
+        html_text = build_viewer_html(questions, Path("."), apply_filters=True)
+
+        self.assertIn("L2_object_move_distance: with_attachment=0, without_attachment=0", html_text)
+        self.assertNotIn("keep 1", html_text)
+        self.assertNotIn("drop 2", html_text)
+        self.assertNotIn("drop 3", html_text)
+        self.assertNotIn("keep other frame", html_text)
+
+    def test_build_viewer_html_still_hides_attachment_unchanged_without_auto_filters(self) -> None:
+        questions = [
+            make_object_move_question(
+                qtype="object_rotate_object_centric",
+                attached=True,
+                unchanged=True,
+                text="attached unchanged",
+            ),
+            make_object_move_question(
+                qtype="object_rotate_object_centric",
+                attached=True,
+                unchanged=False,
+                text="attached changed",
+            ),
+        ]
+
+        html_text = build_viewer_html(
+            questions,
+            Path("."),
+            include_attachment_unchanged=False,
+        )
+
+        self.assertNotIn("attached unchanged", html_text)
+        self.assertIn("attached changed", html_text)
+        self.assertIn(
+            "L2_object_rotate_object_centric: with_attachment=1, without_attachment=0",
+            html_text,
+        )
 
     def test_task_summary_v2_canonicalizes_legacy_object_centric_type(self) -> None:
         questions = [
