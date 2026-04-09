@@ -278,7 +278,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 10.0"):
+        with self.assertRaisesRegex(ValueError, "expected 11.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
@@ -291,7 +291,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
         )
 
-    def test_run_pipeline_keeps_frame_with_full_frame_absent_label_for_l1_visibility(self) -> None:
+    def test_run_pipeline_uses_crop_unique_label_even_when_full_frame_marks_absent(self) -> None:
         root = make_case_dir("pipeline_l1_absent_candidate")
         self.addCleanup(shutil.rmtree, root, True)
         data_root = root / "data"
@@ -303,7 +303,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "10.0",
+            "version": "11.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -324,9 +324,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         ],
                         "full_frame_label_statuses": {"lamp": "absent"},
                         "full_frame_label_counts": {"lamp": 0},
-                        "referable_object_ids": [],
-                        "label_statuses": {"lamp": "absent"},
-                        "label_counts": {"lamp": 0},
+                        "referable_object_ids": [1],
+                        "label_statuses": {"lamp": "unique"},
+                        "label_counts": {"lamp": 1},
                         "candidate_labels": ["lamp"],
                         "label_to_object_ids": {"lamp": [1]},
                     }
@@ -388,9 +388,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertTrue(captured["called"])
         self.assertEqual(captured["visible_object_ids"], [1])
-        self.assertEqual(captured["referable_object_ids"], [])
-        self.assertEqual(captured["label_statuses"], {"lamp": "absent"})
-        self.assertEqual(captured["label_counts"], {"lamp": 0})
+        self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(captured["label_statuses"], {"lamp": "unique"})
+        self.assertEqual(captured["label_counts"], {"lamp": 1})
         self.assertEqual(questions, [])
 
     def test_run_pipeline_requires_referability_cache(self) -> None:
@@ -421,7 +421,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "10.0",
+            "version": "11.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -433,7 +433,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "full_frame_label_reviews": [],
                         "full_frame_label_statuses": {},
                         "full_frame_label_counts": {},
-                        "referable_object_ids": [1],
+                        "referable_object_ids": [1, 2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
                         "candidate_labels": ["cup", "table"],
@@ -504,7 +504,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(captured["visible_object_ids"], [1, 2])
-        self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(captured["referable_object_ids"], [1, 2])
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})
@@ -522,7 +522,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "10.0",
+            "version": "11.0",
             "frames": {
                 scene_id: {
                     image_name: {

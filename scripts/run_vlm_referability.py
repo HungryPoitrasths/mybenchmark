@@ -54,7 +54,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "10.0"
+REFERABILITY_CACHE_VERSION = "11.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -673,8 +673,9 @@ def _compute_frame_referability_entry(
             label_to_object_ids,
             object_reviews,
         )
+        # The cache's primary referability fields are crop-based. Full-frame
+        # reviews are preserved for diagnostics but do not gate generation.
         label_statuses = dict(crop_label_statuses)
-        referable_set = set(int(obj_id) for obj_id in crop_referable_object_ids)
 
         if crop_unique_label_object_ids:
             if image_b64 is None:
@@ -698,15 +699,12 @@ def _compute_frame_referability_entry(
                     }
                 )
                 full_frame_label_statuses[str(label)] = status
-                label_statuses[str(label)] = status
-                if status != LABEL_STATUS_UNIQUE and int(obj_id) in referable_set:
-                    referable_set.remove(int(obj_id))
 
         full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
         full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
         label_statuses = dict(sorted(label_statuses.items()))
         label_counts = _label_counts_from_statuses(label_statuses)
-        referable_object_ids = sorted(referable_set)
+        referable_object_ids = sorted(set(int(obj_id) for obj_id in crop_referable_object_ids))
 
     return {
         "frame_usable": normalized_frame_info["frame_usable"],

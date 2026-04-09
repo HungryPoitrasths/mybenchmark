@@ -382,7 +382,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "chair",
         )
 
-    def test_compute_frame_referability_entry_drops_crop_unique_label_when_full_frame_is_multiple(self) -> None:
+    def test_compute_frame_referability_entry_keeps_crop_unique_label_when_full_frame_is_multiple(self) -> None:
         scene_objects = [
             make_object(1, "chair"),
             make_object(2, "chair"),
@@ -441,11 +441,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique"})
-        self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple"})
-        self.assertEqual(frame_entry["label_counts"], {"chair": 2})
-        self.assertEqual(frame_entry["referable_object_ids"], [])
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "multiple"})
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["label_counts"], {"chair": 1})
+        self.assertEqual(frame_entry["referable_object_ids"], [1])
 
-    def test_compute_frame_referability_entry_drops_crop_unique_label_when_full_frame_is_absent(self) -> None:
+    def test_compute_frame_referability_entry_keeps_crop_unique_label_when_full_frame_is_absent(self) -> None:
         scene_objects = [make_object(1, "lamp")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
@@ -504,9 +505,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
         self.assertEqual(frame_entry["full_frame_label_statuses"], {"lamp": "absent"})
         self.assertEqual(frame_entry["full_frame_label_counts"], {"lamp": 0})
-        self.assertEqual(frame_entry["label_statuses"], {"lamp": "absent"})
-        self.assertEqual(frame_entry["label_counts"], {"lamp": 0})
-        self.assertEqual(frame_entry["referable_object_ids"], [])
+        self.assertEqual(frame_entry["label_statuses"], {"lamp": "unique"})
+        self.assertEqual(frame_entry["label_counts"], {"lamp": 1})
+        self.assertEqual(frame_entry["referable_object_ids"], [1])
 
 
 if __name__ == "__main__":
