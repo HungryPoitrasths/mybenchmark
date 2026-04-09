@@ -90,15 +90,29 @@ def make_referability_entry() -> dict:
                 "local_reason": "",
                 "vlm_status": "clear",
                 "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
             },
             "2": {
                 "obj_id": 2,
                 "label": "table",
-                "bbox_in_frame_ratio": 1.0,
+                "bbox_in_frame_ratio": 0.85,
                 "local_outcome": "reviewed",
                 "local_reason": "",
                 "vlm_status": "clear",
                 "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
             },
         },
         "crop_label_statuses": {"cup": "unique", "table": "unique"},
@@ -192,7 +206,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
     def test_run_single_frame_trace_uses_cached_referability_entry(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: make_referability_entry(),
@@ -280,7 +294,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
 
     def test_run_single_frame_trace_falls_back_to_online_referability(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
-        referability_cache = {"version": "11.0", "frames": {scene_id: {}}}
+        referability_cache = {"version": "12.0", "frames": {scene_id: {}}}
 
         def fake_generate_all_questions(**_kwargs):
             return make_fake_questions()
@@ -314,7 +328,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
     def test_run_single_frame_trace_keeps_full_vlm_payload_when_requested(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: make_referability_entry(),
@@ -348,7 +362,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
 
     def test_run_single_frame_trace_stops_when_pose_missing(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
-        referability_cache = {"version": "11.0", "frames": {}}
+        referability_cache = {"version": "12.0", "frames": {}}
 
         with ExitStack() as stack:
             stack.enter_context(patch.object(trace_module, "parse_scene", return_value=make_scene(scene_id)))
@@ -388,7 +402,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         rejected_entry["frame_reject_reason"] = "out_of_focus"
         rejected_entry["referable_object_ids"] = []
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: rejected_entry,
@@ -444,7 +458,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         absent_entry["label_counts"] = {"cup": 1}
         absent_entry["referable_object_ids"] = [1]
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: absent_entry,
@@ -476,7 +490,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
     def test_run_single_frame_trace_records_detailed_near_duplicate_reason(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: make_referability_entry(),

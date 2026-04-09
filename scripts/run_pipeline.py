@@ -67,7 +67,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
-EXPECTED_REFERABILITY_CACHE_VERSION = "11.0"
+EXPECTED_REFERABILITY_CACHE_VERSION = "12.0"
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -80,7 +80,10 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
-OCCLUSION_QUESTION_MIN_IN_FRAME_RATIO = 0.90
+# Question generation uses a stricter in-frame gate than crop review. The
+# resulting eligible-id set is reused across all question types downstream,
+# except static L1 occlusion questions whose answer is "not visible".
+QUESTION_MENTION_MIN_IN_FRAME_RATIO = 0.60
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 
 
@@ -1475,6 +1478,7 @@ def _build_occlusion_eligible_object_ids(
     camera_pose: CameraPose | None,
     color_intrinsics: CameraIntrinsics | None,
 ) -> list[int]:
+    """Return visible object ids whose projected bbox is sufficiently in-frame."""
     visible_ids = _normalize_object_ids(visible_object_ids)
     if not visible_ids:
         return []
@@ -1521,7 +1525,7 @@ def _build_occlusion_eligible_object_ids(
     return [
         int(obj_id)
         for obj_id in visible_ids
-        if float(ratios_by_obj_id.get(int(obj_id), 0.0)) >= OCCLUSION_QUESTION_MIN_IN_FRAME_RATIO
+        if float(ratios_by_obj_id.get(int(obj_id), 0.0)) >= QUESTION_MENTION_MIN_IN_FRAME_RATIO
     ]
 
 

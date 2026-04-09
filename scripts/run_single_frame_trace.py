@@ -36,6 +36,7 @@ from scripts.run_vlm_referability import (
     LABEL_BATCH_SIZE,
     _compute_frame_referability_entry,
     _frame_entry_has_debug_fields,
+    _make_lazy_mesh_ray_resource_getters,
 )
 from src.frame_selector import get_visible_objects
 from src.qa_generator import generate_all_questions
@@ -532,6 +533,12 @@ def _compute_single_frame_referability_entry(
     image = cv2.imread(str(image_path))
     if image is None:
         raise RuntimeError(f"cannot read image: {image_path}")
+    axis_align = load_axis_alignment(scene_dir)
+    ray_caster_getter, instance_mesh_data_getter = _make_lazy_mesh_ray_resource_getters(
+        scene_dir=scene_dir,
+        scene_objects=scene["objects"],
+        axis_alignment=axis_align,
+    )
     frame_entry = _compute_frame_referability_entry(
         client=client,
         model_name=model_name,
@@ -544,6 +551,8 @@ def _compute_single_frame_referability_entry(
         depth_image=depth_image,
         depth_intrinsics=depth_intrinsics,
         selector_visible_object_ids=selector_visible_object_ids,
+        ray_caster_getter=ray_caster_getter,
+        instance_mesh_data_getter=instance_mesh_data_getter,
     )
     frame_entry["referability_model"] = model_name
     return frame_entry, "online"

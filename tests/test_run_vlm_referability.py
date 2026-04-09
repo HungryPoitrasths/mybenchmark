@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -50,6 +51,65 @@ def make_visibility_meta(
         "bbox_in_frame_ratio": bbox_in_frame_ratio,
         "edge_margin_px": 5.0,
     }
+
+
+def make_instance_mesh_data(
+    *,
+    obj_id: int,
+    sample_count: int = 8,
+    point: np.ndarray | None = None,
+):
+    base_point = (
+        np.asarray(point, dtype=np.float64)
+        if point is not None
+        else np.array([0.0, 0.0, 2.0], dtype=np.float64)
+    )
+    surface_points = np.tile(base_point[None, :], (int(sample_count), 1))
+    triangle_ids = np.zeros(int(sample_count), dtype=np.int64)
+    barycentrics = np.tile(
+        np.array([[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64),
+        (int(sample_count), 1),
+    )
+    return SimpleNamespace(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 2.0],
+                [0.5, 0.0, 2.0],
+                [0.0, 0.5, 2.0],
+            ],
+            dtype=np.float64,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        triangle_ids_by_instance={int(obj_id): np.array([0], dtype=np.int64)},
+        boundary_triangle_ids_by_instance={},
+        surface_points_by_instance={int(obj_id): surface_points},
+        surface_triangle_ids_by_instance={int(obj_id): triangle_ids},
+        surface_barycentrics_by_instance={int(obj_id): barycentrics},
+    )
+
+
+class _SequenceVisibilityCaster:
+    def __init__(self, responses: list[tuple[int, int]]) -> None:
+        self._responses = [tuple((int(visible), int(valid))) for visible, valid in responses]
+        self.calls: list[dict[str, object]] = []
+
+    def mesh_visibility_stats(
+        self,
+        camera_pos,
+        target_points,
+        target_tri_ids,
+        **kwargs,
+    ):
+        self.calls.append(
+            {
+                "camera_pos": np.asarray(camera_pos, dtype=np.float64),
+                "target_points": np.asarray(target_points, dtype=np.float64),
+                "target_tri_ids": set(int(tri_id) for tri_id in target_tri_ids),
+            }
+        )
+        if not self._responses:
+            raise AssertionError("mesh_visibility_stats called more times than expected")
+        return self._responses.pop(0)
 
 
 class RunVlmReferabilityTests(unittest.TestCase):
@@ -341,6 +401,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "_full_frame_label_review_decision",
                 return_value=("unique", '{"status":"unique"}'),
             ) as full_frame_mock,
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_ray_review",
+                side_effect=lambda **_kwargs: None,
+            ),
         ):
             frame_entry = referability_module._compute_frame_referability_entry(
                 client=object(),
@@ -425,6 +490,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "_full_frame_label_review_decision",
                 return_value=("multiple", '{"status":"multiple"}'),
             ),
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_ray_review",
+                side_effect=lambda **_kwargs: None,
+            ),
         ):
             frame_entry = referability_module._compute_frame_referability_entry(
                 client=object(),
@@ -485,6 +555,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "_full_frame_label_review_decision",
                 return_value=("absent", '{"status":"absent"}'),
             ),
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_ray_review",
+                side_effect=lambda **_kwargs: None,
+            ),
         ):
             frame_entry = referability_module._compute_frame_referability_entry(
                 client=object(),
@@ -508,6 +583,213 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["label_statuses"], {"lamp": "unique"})
         self.assertEqual(frame_entry["label_counts"], {"lamp": 1})
         self.assertEqual(frame_entry["referable_object_ids"], [1])
+
+    def test_apply_crop_unique_mesh_ray_review_passes_after_stage2_visible_evidence(self) -> None:
+        object_reviews = {
+            1: {
+                "obj_id": 1,
+                "label": "chair",
+                "local_outcome": "reviewed",
+                "local_reason": "",
+                "vlm_status": "clear",
+                "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
+            }
+        }
+        caster = _SequenceVisibilityCaster([(0, 4), (2, 4)])
+        instance_mesh_data = make_instance_mesh_data(obj_id=1, sample_count=8)
+
+        referability_module._apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids={"chair": 1},
+            object_reviews=object_reviews,
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: instance_mesh_data,
+        )
+
+        review = object_reviews[1]["ray_visibility_review"]
+        self.assertEqual(review["decision"], "pass")
+        self.assertEqual(review["reason"], "stage2_visible_evidence")
+        self.assertEqual(review["stage1"]["base_sample_count"], 64)
+        self.assertEqual(review["stage1"]["visible_count"], 0)
+        self.assertEqual(review["stage2"]["base_sample_count"], 512)
+        self.assertEqual(review["stage2"]["visible_count"], 2)
+
+    def test_apply_crop_unique_mesh_ray_review_drops_when_stage2_finds_no_visible_rays(self) -> None:
+        object_reviews = {
+            1: {
+                "obj_id": 1,
+                "label": "chair",
+                "local_outcome": "reviewed",
+                "local_reason": "",
+                "vlm_status": "clear",
+                "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
+            }
+        }
+        caster = _SequenceVisibilityCaster([(0, 3), (0, 6)])
+        instance_mesh_data = make_instance_mesh_data(obj_id=1, sample_count=8)
+
+        referability_module._apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids={"chair": 1},
+            object_reviews=object_reviews,
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: instance_mesh_data,
+        )
+
+        review = object_reviews[1]["ray_visibility_review"]
+        self.assertEqual(review["decision"], "drop")
+        self.assertEqual(review["reason"], "fully_occluded_after_stage2")
+        self.assertEqual(review["stage2"]["valid_count"], 6)
+        self.assertEqual(review["stage2"]["visible_count"], 0)
+
+    def test_apply_crop_unique_mesh_ray_review_drops_when_stage2_has_no_valid_rays(self) -> None:
+        object_reviews = {
+            1: {
+                "obj_id": 1,
+                "label": "chair",
+                "local_outcome": "reviewed",
+                "local_reason": "",
+                "vlm_status": "clear",
+                "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
+            }
+        }
+        caster = _SequenceVisibilityCaster([(0, 0), (0, 0)])
+        instance_mesh_data = make_instance_mesh_data(obj_id=1, sample_count=8)
+
+        referability_module._apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids={"chair": 1},
+            object_reviews=object_reviews,
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: instance_mesh_data,
+        )
+
+        review = object_reviews[1]["ray_visibility_review"]
+        self.assertEqual(review["decision"], "drop")
+        self.assertEqual(review["reason"], "no_valid_rays_after_stage2")
+        self.assertEqual(review["stage2"]["valid_count"], 0)
+
+    def test_aggregate_label_reviews_treats_ray_drop_as_absent_like(self) -> None:
+        label_statuses, label_counts, referable_ids = referability_module._aggregate_label_reviews(
+            {"chair": [1, 2]},
+            {
+                1: {
+                    "obj_id": 1,
+                    "local_outcome": "reviewed",
+                    "vlm_status": "clear",
+                    "ray_visibility_review": {
+                        "applied": True,
+                        "decision": "drop",
+                        "reason": "fully_occluded_after_stage2",
+                        "stage1": {"visible_count": 0, "valid_count": 1},
+                        "stage2": {"visible_count": 0, "valid_count": 2},
+                    },
+                },
+                2: {"obj_id": 2, "local_outcome": "out_of_frame", "vlm_status": None},
+            },
+        )
+
+        self.assertEqual(label_statuses, {"chair": "absent"})
+        self.assertEqual(label_counts, {"chair": 0})
+        self.assertEqual(referable_ids, [])
+
+    def test_compute_frame_referability_entry_drops_crop_unique_object_when_mesh_ray_finds_no_evidence(self) -> None:
+        scene_objects = [
+            make_object(1, "chair"),
+            make_object(2, "chair"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+            2: {"projected_area_px": 0.0},
+        }
+        low_mesh = make_instance_mesh_data(obj_id=1, sample_count=8)
+        high_mesh = make_instance_mesh_data(obj_id=1, sample_count=16)
+        caster = _SequenceVisibilityCaster([(0, 2), (0, 5)])
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([1, 2], "depth_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_object_review_decision",
+                return_value=("clear", '{"status":"clear"}'),
+            ),
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+                side_effect=AssertionError("full-frame review should not run after ray drop"),
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1, 2],
+                ray_caster_getter=lambda: caster,
+                instance_mesh_data_getter=lambda base: low_mesh if int(base) == 64 else high_mesh,
+            )
+
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "absent"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 0})
+        self.assertEqual(frame_entry["crop_referable_object_ids"], [])
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "absent"})
+        self.assertEqual(frame_entry["referable_object_ids"], [])
+        self.assertEqual(frame_entry["full_frame_label_reviews"], [])
+        self.assertEqual(
+            frame_entry["object_reviews"]["1"]["ray_visibility_review"]["reason"],
+            "fully_occluded_after_stage2",
+        )
 
 
 if __name__ == "__main__":

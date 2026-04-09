@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import inspect
 import json
 import logging
 import os
@@ -23,7 +24,7 @@ import re
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -36,12 +37,17 @@ from src.frame_selector import (
     refine_visible_ids_with_depth,
     select_frames,
 )
+from src.scene_parser import InstanceMeshData, load_instance_mesh_data
+from src.utils import RayCaster
 from src.utils.colmap_loader import (
+    CameraIntrinsics,
+    CameraPose,
     load_axis_alignment,
     load_scannet_depth_intrinsics,
     load_scannet_intrinsics,
     load_scannet_poses,
 )
+from src.utils.coordinate_transform import project_to_image
 from src.utils.depth_occlusion import load_depth_image
 
 logging.basicConfig(
@@ -54,13 +60,15 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "11.0"
+REFERABILITY_CACHE_VERSION = "12.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
+REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
+REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 FRAME_SELECTION_CANDIDATE_MULTIPLIER = 3
 FRAME_QUALITY_PRIMARY_WEIGHT = 1000
 FRAME_USABLE_BONUS = 100000
@@ -82,6 +90,33 @@ LABEL_STATUS_UNIQUE = "unique"
 LABEL_STATUS_MULTIPLE = "multiple"
 LABEL_STATUS_ABSENT = "absent"
 LABEL_STATUS_UNSURE = "unsure"
+
+
+def _invoke_method_with_supported_kwargs(method, **kwargs):
+    signature = inspect.signature(method)
+    parameters = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return method(**kwargs)
+
+    supported = {
+        name
+        for name, param in parameters.items()
+        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items() if key in supported
+    }
+    return method(**filtered_kwargs)
+
+
+def _mesh_visibility_stats_compat(
+    ray_caster: Any,
+    **kwargs: Any,
+) -> tuple[int, int]:
+    return _invoke_method_with_supported_kwargs(
+        ray_caster.mesh_visibility_stats,
+        **kwargs,
+    )
 
 
 def _image_to_base64(image: np.ndarray) -> str:
@@ -496,13 +531,334 @@ def _build_object_review_entry(
         "projected_area_px": crop_entry.get("projected_area_px"),
         "bbox_in_frame_ratio": crop_entry.get("bbox_in_frame_ratio"),
         "edge_margin_px": crop_entry.get("edge_margin_px"),
+        "ray_visibility_review": {
+            "applied": False,
+            "decision": "not_applicable",
+            "reason": "not_crop_unique",
+            "stage1": None,
+            "stage2": None,
+        },
     }
+
+
+def _effective_object_review_status(review: dict[str, Any]) -> str | None:
+    status = _normalize_object_review_status(review.get("vlm_status"))
+    ray_review = review.get("ray_visibility_review")
+    if (
+        status == OBJECT_STATUS_CLEAR
+        and isinstance(ray_review, dict)
+        and str(ray_review.get("decision", "")).strip().lower() == "drop"
+    ):
+        return OBJECT_STATUS_ABSENT
+    return status
 
 
 def _is_absent_like_review(review: dict[str, Any]) -> bool:
     local_outcome = str(review.get("local_outcome", "")).strip().lower()
-    status = _normalize_object_review_status(review.get("vlm_status"))
+    status = _effective_object_review_status(review)
     return local_outcome in {LOCAL_OUTCOME_OUT_OF_FRAME, LOCAL_OUTCOME_EXCLUDED} or status == OBJECT_STATUS_ABSENT
+
+
+def _instance_triangle_id_set(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> set[int]:
+    if instance_mesh_data is None:
+        return set()
+
+    triangle_ids_by_instance = getattr(instance_mesh_data, "triangle_ids_by_instance", {}) or {}
+    boundary_triangle_ids_by_instance = getattr(
+        instance_mesh_data,
+        "boundary_triangle_ids_by_instance",
+        {},
+    ) or {}
+    tri_parts = [
+        arr for arr in (
+            triangle_ids_by_instance.get(int(obj_id)),
+            boundary_triangle_ids_by_instance.get(int(obj_id)),
+        )
+        if arr is not None and len(arr) > 0
+    ]
+    if not tri_parts:
+        return set()
+    tri_ids = np.unique(np.concatenate(tri_parts).astype(np.int64))
+    return {int(tid) for tid in tri_ids.tolist()}
+
+
+def _instance_surface_samples(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> np.ndarray:
+    if instance_mesh_data is None:
+        return np.empty((0, 3), dtype=np.float64)
+    surface_points_by_instance = getattr(instance_mesh_data, "surface_points_by_instance", {}) or {}
+    samples = surface_points_by_instance.get(int(obj_id))
+    if samples is None:
+        return np.empty((0, 3), dtype=np.float64)
+    return np.asarray(samples, dtype=np.float64)
+
+
+def _instance_surface_sample_metadata(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    if instance_mesh_data is None:
+        return (
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+    surface_triangle_ids_by_instance = getattr(
+        instance_mesh_data,
+        "surface_triangle_ids_by_instance",
+        {},
+    ) or {}
+    surface_barycentrics_by_instance = getattr(
+        instance_mesh_data,
+        "surface_barycentrics_by_instance",
+        {},
+    ) or {}
+    triangle_ids = surface_triangle_ids_by_instance.get(int(obj_id))
+    barycentrics = surface_barycentrics_by_instance.get(int(obj_id))
+    if triangle_ids is None or barycentrics is None:
+        return (
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+    return (
+        np.asarray(triangle_ids, dtype=np.int64),
+        np.asarray(barycentrics, dtype=np.float64),
+    )
+
+
+def _in_frame_surface_sample_subset(
+    sample_points: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    sample_triangle_ids: np.ndarray | None = None,
+    sample_barycentrics: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    points = np.asarray(sample_points, dtype=np.float64)
+    if len(points) == 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    in_frame_indices: list[int] = []
+    for idx, point in enumerate(points):
+        uv, depth = project_to_image(point, camera_pose, color_intrinsics)
+        if uv is None or depth <= 0:
+            continue
+        u = float(uv[0])
+        v = float(uv[1])
+        if 0 <= u < color_intrinsics.width and 0 <= v < color_intrinsics.height:
+            in_frame_indices.append(int(idx))
+    if not in_frame_indices:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    index_array = np.asarray(in_frame_indices, dtype=np.int64)
+    return (
+        points[index_array],
+        (
+            np.asarray(sample_triangle_ids, dtype=np.int64)[index_array]
+            if sample_triangle_ids is not None and len(sample_triangle_ids) == len(points)
+            else np.empty((0,), dtype=np.int64)
+        ),
+        (
+            np.asarray(sample_barycentrics, dtype=np.float64)[index_array]
+            if sample_barycentrics is not None and len(sample_barycentrics) == len(points)
+            else np.empty((0, 3), dtype=np.float64)
+        ),
+    )
+
+
+def _build_ray_visibility_stage_result(
+    *,
+    base_sample_count: int,
+    sampled_point_count: int,
+    in_frame_sample_count: int,
+    visible_count: int,
+    valid_count: int,
+) -> dict[str, Any]:
+    visible_ratio = float(visible_count / valid_count) if valid_count > 0 else 0.0
+    return {
+        "base_sample_count": int(base_sample_count),
+        "sampled_point_count": int(sampled_point_count),
+        "in_frame_sample_count": int(in_frame_sample_count),
+        "visible_count": int(visible_count),
+        "valid_count": int(valid_count),
+        "visible_ratio": visible_ratio,
+    }
+
+
+def _evaluate_crop_unique_mesh_ray_stage(
+    *,
+    obj_id: int,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    ray_caster: Any,
+    instance_mesh_data: InstanceMeshData,
+    base_sample_count: int,
+) -> dict[str, Any]:
+    sample_points = _instance_surface_samples(instance_mesh_data, int(obj_id))
+    sampled_point_count = int(len(sample_points))
+    sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+        instance_mesh_data,
+        int(obj_id),
+    )
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, int(obj_id))
+    in_frame_points, in_frame_triangle_ids, in_frame_barycentrics = _in_frame_surface_sample_subset(
+        sample_points,
+        camera_pose,
+        color_intrinsics,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+    )
+    in_frame_sample_count = int(len(in_frame_points))
+    visible_count = 0
+    valid_count = 0
+    if in_frame_sample_count > 0 and target_tri_ids:
+        visible_count, valid_count = _mesh_visibility_stats_compat(
+            ray_caster,
+            camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
+            target_points=in_frame_points,
+            target_tri_ids=target_tri_ids,
+            sample_triangle_ids=in_frame_triangle_ids,
+            sample_barycentrics=in_frame_barycentrics,
+            vertices=np.asarray(instance_mesh_data.vertices, dtype=np.float64),
+            faces=np.asarray(instance_mesh_data.faces, dtype=np.int64),
+        )
+    return _build_ray_visibility_stage_result(
+        base_sample_count=base_sample_count,
+        sampled_point_count=sampled_point_count,
+        in_frame_sample_count=in_frame_sample_count,
+        visible_count=visible_count,
+        valid_count=valid_count,
+    )
+
+
+def _apply_crop_unique_mesh_ray_review(
+    *,
+    crop_unique_label_object_ids: dict[str, int],
+    object_reviews: dict[int, dict[str, Any]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster_getter: Callable[[], Any] | None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None,
+) -> None:
+    if not crop_unique_label_object_ids:
+        return
+    if color_intrinsics is None:
+        raise RuntimeError("mesh-ray referability validation requires color intrinsics")
+    if not callable(ray_caster_getter) or not callable(instance_mesh_data_getter):
+        raise RuntimeError(
+            "mesh-ray referability validation requires lazy ray_caster and instance_mesh_data loaders",
+        )
+
+    ray_caster = ray_caster_getter()
+    if ray_caster is None:
+        raise RuntimeError("mesh-ray referability validation requires a ray caster")
+
+    for _label, obj_id in sorted(crop_unique_label_object_ids.items()):
+        review = object_reviews.get(int(obj_id))
+        if not isinstance(review, dict):
+            continue
+
+        stage1 = _evaluate_crop_unique_mesh_ray_stage(
+            obj_id=int(obj_id),
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT),
+            base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+        )
+        if int(stage1.get("visible_count", 0)) > 0:
+            review["ray_visibility_review"] = {
+                "applied": True,
+                "decision": "pass",
+                "reason": "stage1_visible_evidence",
+                "stage1": stage1,
+                "stage2": None,
+            }
+            continue
+
+        stage2 = _evaluate_crop_unique_mesh_ray_stage(
+            obj_id=int(obj_id),
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT),
+            base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
+        )
+        if int(stage2.get("visible_count", 0)) > 0:
+            decision = "pass"
+            reason = "stage2_visible_evidence"
+        elif int(stage2.get("valid_count", 0)) <= 0:
+            decision = "drop"
+            reason = "no_valid_rays_after_stage2"
+        else:
+            decision = "drop"
+            reason = "fully_occluded_after_stage2"
+        review["ray_visibility_review"] = {
+            "applied": True,
+            "decision": decision,
+            "reason": reason,
+            "stage1": stage1,
+            "stage2": stage2,
+        }
+
+
+def _resolve_scene_mesh_path(scene_dir: Path) -> Path:
+    mesh_path = scene_dir / f"{scene_dir.name}_vh_clean.ply"
+    if mesh_path.exists():
+        return mesh_path
+    fallback = scene_dir / f"{scene_dir.name}_vh_clean_2.ply"
+    if fallback.exists():
+        return fallback
+    raise RuntimeError(f"mesh geometry not found for referability scene {scene_dir.name}")
+
+
+def _make_lazy_mesh_ray_resource_getters(
+    *,
+    scene_dir: Path,
+    scene_objects: list[dict[str, Any]],
+    axis_alignment: np.ndarray | None,
+) -> tuple[Callable[[], Any], Callable[[int], InstanceMeshData]]:
+    object_ids = sorted(
+        {
+            int(obj.get("id"))
+            for obj in scene_objects
+            if obj.get("id") is not None
+        }
+    )
+    resource_cache: dict[str, Any] = {}
+
+    def _get_ray_caster() -> Any:
+        if "ray_caster" not in resource_cache:
+            mesh_path = _resolve_scene_mesh_path(scene_dir)
+            resource_cache["ray_caster"] = RayCaster.from_ply(
+                str(mesh_path),
+                axis_alignment=axis_alignment,
+            )
+        return resource_cache["ray_caster"]
+
+    def _get_instance_mesh_data(base_sample_count: int) -> InstanceMeshData:
+        base_count = int(base_sample_count)
+        cache_key = f"instance_mesh_data:{base_count}"
+        if cache_key not in resource_cache:
+            resource_cache[cache_key] = load_instance_mesh_data(
+                scene_dir,
+                instance_ids=list(object_ids),
+                n_surface_samples=base_count,
+            )
+        return resource_cache[cache_key]
+
+    return _get_ray_caster, _get_instance_mesh_data
 
 
 def _aggregate_label_reviews(
@@ -536,7 +892,7 @@ def _aggregate_crop_label_reviews(
                 has_unsure = True
                 all_absent_like = False
                 continue
-            status = _normalize_object_review_status(review.get("vlm_status"))
+            status = _effective_object_review_status(review)
             if status == OBJECT_STATUS_CLEAR:
                 clear_ids.append(int(obj_id))
                 all_absent_like = False
@@ -590,6 +946,8 @@ def _compute_frame_referability_entry(
     selector_score: int | None = None,
     frame_info: dict[str, Any] | None = None,
     frame_selection_score: int | None = None,
+    ray_caster_getter: Callable[[], Any] | None = None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> dict[str, Any]:
     selector_visible_object_ids = sorted(
         int(obj_id)
@@ -669,6 +1027,18 @@ def _compute_frame_referability_entry(
                 review["vlm_status"] = status
                 review["raw_response"] = raw_response or None
             object_reviews[int(obj_id)] = review
+        crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = _aggregate_crop_label_reviews(
+            label_to_object_ids,
+            object_reviews,
+        )
+        _apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids=crop_unique_label_object_ids,
+            object_reviews=object_reviews,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster_getter=ray_caster_getter,
+            instance_mesh_data_getter=instance_mesh_data_getter,
+        )
         crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = _aggregate_crop_label_reviews(
             label_to_object_ids,
             object_reviews,
@@ -992,6 +1362,11 @@ def main():
             depth_intrinsics = None
 
         objects_by_id = {int(obj["id"]): obj for obj in scene["objects"]}
+        ray_caster_getter, instance_mesh_data_getter = _make_lazy_mesh_ray_resource_getters(
+            scene_dir=scene_dir,
+            scene_objects=scene["objects"],
+            axis_alignment=axis_align,
+        )
         frames = _select_and_rerank_frames(
             client=client,
             model_name=model_name,
@@ -1065,6 +1440,8 @@ def main():
                 selector_score=int(frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0),
                 frame_info=dict(frame.get("frame_info", {})),
                 frame_selection_score=int(frame.get("frame_selection_score", 0) or 0),
+                ray_caster_getter=ray_caster_getter,
+                instance_mesh_data_getter=instance_mesh_data_getter,
             )
 
             output_path.parent.mkdir(parents=True, exist_ok=True)

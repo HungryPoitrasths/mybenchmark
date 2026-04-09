@@ -293,7 +293,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 11.0"):
+        with self.assertRaisesRegex(ValueError, "expected 12.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
@@ -318,7 +318,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -445,7 +445,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -538,7 +538,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1, 2])
-        self.assertEqual(captured["occlusion_eligible_object_ids"], [1])
+        self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})
@@ -556,7 +556,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "11.0",
+            "version": "12.0",
             "frames": {
                 scene_id: {
                     image_name: {
