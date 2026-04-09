@@ -198,6 +198,11 @@ L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_NOT_VISIBLE_PROBE_RAY_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
+# Prefer removal questions that actually change visibility. If a frame would
+# otherwise produce too few removal questions, allow a tiny unchanged fallback.
+L2_OBJECT_REMOVE_MIN_CHANGED_QUESTIONS = 2
+L2_OBJECT_REMOVE_MAX_UNCHANGED_RATIO = 0.25
+L2_OBJECT_REMOVE_MAX_UNCHANGED_FALLBACK = 1
 QUESTION_MENTION_MIN_IN_FRAME_RATIO_DEFAULT = 0.60
 QUESTION_MENTION_MIN_IN_FRAME_RATIO_RELAXED = 0.50
 QUESTION_MENTION_POLICY_VISIBLE_ONLY = "visible_only"
@@ -5025,7 +5030,7 @@ def generate_l2_object_remove(
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
 ) -> list[dict]:
-    """Generate L2.3 object-removal questions from visibility changes."""
+    """Generate L2.3 object-removal questions from counterfactual visibility after removal."""
     questions: list[dict] = []
     if color_intrinsics is None:
         _emit_generator_summary(
@@ -5064,6 +5069,7 @@ def generate_l2_object_remove(
     candidate_count = 0
     generated_candidate_count = 0
     reason_counts: Counter[str] = Counter()
+    candidate_records: list[dict[str, Any]] = []
     for obj in objects:
         remaining = apply_removal(objects, obj["id"])
         if len(remaining) < 2:
@@ -5154,30 +5160,7 @@ def generate_l2_object_remove(
                 )
                 continue
 
-            if old_status == new_status:
-                reason_counts["visibility_unchanged"] += 1
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l2_object_remove",
-                    candidate_kind="removal_pair",
-                    candidate_key=candidate_key,
-                    object_ids=object_ids,
-                    status="skipped",
-                    reason_code="visibility_unchanged",
-                    reason_detail="removing this object does not change the remaining object's L1-style occlusion state",
-                    evidence={
-                        "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
-                        "original_status": old_status,
-                        "new_status": new_status,
-                        "original_source": old_source,
-                        "new_source": new_source,
-                        "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                        "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
-                    },
-                )
-                continue
-
+            relation_unchanged = old_status == new_status
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
                 obj_a=_the(obj["label"]),
@@ -5189,7 +5172,19 @@ def generate_l2_object_remove(
                 L1_OCCLUSION_STATES,
                 n_options=3,
             )
-            questions.append({
+            candidate_records.append({
+                "candidate_index": len(candidate_records),
+                "candidate_key": candidate_key,
+                "object_ids": object_ids,
+                "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
+                "old_status": old_status,
+                "new_status": new_status,
+                "old_source": old_source,
+                "new_source": new_source,
+                "old_metrics": old_metrics,
+                "new_metrics": new_metrics,
+                "relation_unchanged": relation_unchanged,
+                "question": {
                 "level": "L2",
                 "type": "object_remove",
                 "question": question_text,
@@ -5211,31 +5206,101 @@ def generate_l2_object_remove(
                     _mention("removed_object", obj["label"], obj["id"]),
                     _mention("remaining_object", other["label"], other["id"]),
                 ],
-                "relation_unchanged": False,
-            })
-            generated_candidate_count += 1
-            reason_counts["generated"] += 1
-            _emit_generator_candidate(
-                trace_recorder,
-                trace_detail=trace_detail,
-                generator="generate_l2_object_remove",
-                candidate_kind="removal_pair",
-                candidate_key=candidate_key,
-                object_ids=object_ids,
-                status="generated",
-                reason_code="generated",
-                reason_detail="removing the object changes the remaining object's L1-style occlusion state",
-                evidence={
-                    "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
-                    "original_status": old_status,
-                    "new_status": new_status,
-                    "original_source": old_source,
-                    "new_source": new_source,
-                    "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                    "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                "relation_unchanged": relation_unchanged,
                 },
-                question_preview=_question_preview_payload(questions[-1]),
+            })
+
+    changed_candidates = [
+        record for record in candidate_records if not bool(record["relation_unchanged"])
+    ]
+    unchanged_candidates = [
+        record for record in candidate_records if bool(record["relation_unchanged"])
+    ]
+    selected_unchanged_count = 0
+    if len(changed_candidates) < L2_OBJECT_REMOVE_MIN_CHANGED_QUESTIONS and unchanged_candidates:
+        target_question_count = (
+            1 if not changed_candidates else L2_OBJECT_REMOVE_MIN_CHANGED_QUESTIONS
+        )
+        deficit = max(target_question_count - len(changed_candidates), 0)
+        ratio_limit = (
+            1
+            if not changed_candidates
+            else max(
+                1,
+                math.ceil(
+                    len(changed_candidates) * L2_OBJECT_REMOVE_MAX_UNCHANGED_RATIO
+                ),
             )
+        )
+        selected_unchanged_count = min(
+            len(unchanged_candidates),
+            deficit,
+            ratio_limit,
+            L2_OBJECT_REMOVE_MAX_UNCHANGED_FALLBACK,
+        )
+
+    selected_records = changed_candidates + unchanged_candidates[:selected_unchanged_count]
+    selected_records.sort(key=lambda record: int(record["candidate_index"]))
+    for record in selected_records:
+        question = record["question"]
+        questions.append(question)
+        generated_candidate_count += 1
+        reason_counts["generated"] += 1
+        if bool(record["relation_unchanged"]):
+            reason_counts["generated_visibility_unchanged"] += 1
+        _emit_generator_candidate(
+            trace_recorder,
+            trace_detail=trace_detail,
+            generator="generate_l2_object_remove",
+            candidate_kind="removal_pair",
+            candidate_key=record["candidate_key"],
+            object_ids=record["object_ids"],
+            status="generated",
+            reason_code="generated",
+            reason_detail=(
+                "removing the object preserves the remaining object's L1-style occlusion state"
+                if bool(record["relation_unchanged"])
+                else "removing the object changes the remaining object's L1-style occlusion state"
+            ),
+            evidence={
+                "removed_ids": record["removed_ids"],
+                "original_status": record["old_status"],
+                "new_status": record["new_status"],
+                "original_source": record["old_source"],
+                "new_source": record["new_source"],
+                "original_metrics": _l1_occlusion_metrics_payload(record["old_metrics"]),
+                "new_metrics": _l1_occlusion_metrics_payload(record["new_metrics"]),
+            },
+            question_preview=_question_preview_payload(question),
+        )
+
+    for record in unchanged_candidates[selected_unchanged_count:]:
+        reason_counts["visibility_unchanged_policy_filtered"] += 1
+        _emit_generator_candidate(
+            trace_recorder,
+            trace_detail=trace_detail,
+            generator="generate_l2_object_remove",
+            candidate_kind="removal_pair",
+            candidate_key=record["candidate_key"],
+            object_ids=record["object_ids"],
+            status="skipped",
+            reason_code="visibility_unchanged_policy_filtered",
+            reason_detail=(
+                "unchanged removal pair held out because this frame already has enough "
+                "changed object-remove questions or reached the unchanged fallback cap"
+            ),
+            evidence={
+                "removed_ids": record["removed_ids"],
+                "original_status": record["old_status"],
+                "new_status": record["new_status"],
+                "original_source": record["old_source"],
+                "new_source": record["new_source"],
+                "original_metrics": _l1_occlusion_metrics_payload(record["old_metrics"]),
+                "new_metrics": _l1_occlusion_metrics_payload(record["new_metrics"]),
+                "changed_candidate_count": int(len(changed_candidates)),
+                "selected_unchanged_count": int(selected_unchanged_count),
+            },
+        )
 
     _emit_generator_summary(
         trace_recorder,

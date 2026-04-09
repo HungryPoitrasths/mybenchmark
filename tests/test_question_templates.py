@@ -250,17 +250,31 @@ class QuestionTemplateTests(unittest.TestCase):
                 instance_mesh_data=object(),
             )
 
-        self.assertEqual(len(questions), 1)
-        self.assertEqual(questions[0]["removed_obj_label"], "chair")
-        self.assertEqual(questions[0]["obj_b_label"], "lamp")
-        self.assertEqual(questions[0]["correct_value"], "occluded")
-        self.assertEqual(
-            set(questions[0]["options"]),
-            {"not occluded", "occluded", "not visible"},
+        self.assertEqual(len(questions), 2)
+        for question in questions:
+            self.assertEqual(
+                set(question["options"]),
+                {"not occluded", "occluded", "not visible"},
+            )
+            self.assertEqual(len(question["options"]), 3)
+            self.assertIn("blocked by another object", question["question"])
+            self.assertIn("does not count as occlusion", question["question"])
+
+        changed_question = next(
+            question
+            for question in questions
+            if question["removed_obj_label"] == "chair"
+            and question["obj_b_label"] == "lamp"
         )
-        self.assertEqual(len(questions[0]["options"]), 3)
-        self.assertIn("blocked by another object", questions[0]["question"])
-        self.assertIn("does not count as occlusion", questions[0]["question"])
+        self.assertEqual(changed_question["correct_value"], "occluded")
+        self.assertFalse(changed_question["relation_unchanged"])
+        self.assertTrue(
+            any(question["relation_unchanged"] for question in questions),
+        )
+        self.assertEqual(
+            sum(1 for question in questions if question["relation_unchanged"]),
+            1,
+        )
 
     def test_viewpoint_move_skips_grayzone_counterfactual_state(self) -> None:
         camera_pose = make_camera_pose()
@@ -297,7 +311,7 @@ class QuestionTemplateTests(unittest.TestCase):
 
         self.assertEqual(len(questions), 0)
 
-    def test_object_remove_skips_grayzone_counterfactual_state(self) -> None:
+    def test_object_remove_skips_only_grayzone_counterfactual_state(self) -> None:
         camera_pose = make_camera_pose()
         intrinsics = make_camera_intrinsics()
         objects = [
@@ -341,7 +355,66 @@ class QuestionTemplateTests(unittest.TestCase):
                 instance_mesh_data=object(),
             )
 
-        self.assertEqual(len(questions), 0)
+        self.assertEqual(len(questions), 1)
+        self.assertTrue(
+            all(question["correct_value"] == "not occluded" for question in questions),
+        )
+        self.assertTrue(
+            all(question["relation_unchanged"] for question in questions),
+        )
+
+    def test_object_remove_does_not_backfill_unchanged_once_changed_floor_is_met(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        objects = [
+            {"id": 1, "label": "chair", "center": [0.0, 0.0, 2.0]},
+            {"id": 2, "label": "lamp", "center": [1.0, 0.0, 2.0]},
+            {"id": 3, "label": "cabinet", "center": [2.0, 0.0, 2.0]},
+        ]
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch("src.qa_generator._build_modified_scene", return_value=None),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
+                    (make_l1_metrics("not visible"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                ],
+            ),
+        ):
+            questions = generate_l2_object_remove(
+                objects=objects,
+                attachment_graph={},
+                camera_pose=camera_pose,
+                templates={
+                    "L2_object_remove": [
+                        "If {obj_a} were removed, what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertEqual(len(questions), 2)
+        self.assertTrue(
+            all(not question["relation_unchanged"] for question in questions),
+        )
+        self.assertEqual(
+            {question["correct_value"] for question in questions},
+            {"occluded", "not visible"},
+        )
 
 
 if __name__ == "__main__":
