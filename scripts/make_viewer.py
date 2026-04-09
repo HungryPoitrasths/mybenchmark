@@ -86,6 +86,12 @@ QTYPE_DISPLAY: dict[str, str] = {
     for _, items in SUMMARY_GROUPS
     for raw, label in items
 }
+QTYPE_LEVEL = {
+    raw: section_title.split()[0]
+    for section_title, items in SUMMARY_GROUPS
+    for raw, _ in items
+}
+LEVEL_DISPLAY_ORDER = ["L1", "L2", "L3"]
 QUESTION_TYPE_ALIASES = {
     "object_move_object_centric": "object_rotate_object_centric",
 }
@@ -398,7 +404,16 @@ PAGE = """\
 <style>
 *{{box-sizing:border-box}}
 body{{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}}
-h1{{text-align:center;color:#333;margin-bottom:24px}}
+h1{{text-align:center;color:#333;margin-bottom:4px}}
+.stats{{text-align:center;color:#666;font-size:14px;margin-bottom:24px}}
+.summary{{max-width:1100px;margin:0 auto 24px;background:#fff;border-radius:10px;
+          box-shadow:0 2px 6px rgba(0,0,0,.12);padding:18px 20px}}
+.summary h2{{margin:0 0 12px;color:#111;font-size:18px}}
+.summary-block{{color:#374151;font-size:14px;line-height:1.7}}
+.summary-line{{margin:2px 0}}
+.summary-section{{margin-top:10px}}
+.summary-section:first-child{{margin-top:0}}
+.summary-other{{margin-top:12px;color:#6b7280}}
 .card{{display:flex;background:#fff;border-radius:10px;
        box-shadow:0 2px 6px rgba(0,0,0,.12);margin-bottom:18px;overflow:hidden}}
 .img-wrap{{flex:0 0 auto;width:480px;background:#222;display:flex;
@@ -407,14 +422,34 @@ h1{{text-align:center;color:#333;margin-bottom:24px}}
 .no-img{{width:480px;height:200px;display:flex;align-items:center;
          justify-content:center;color:#999;font-size:13px}}
 .body{{padding:18px 20px;flex:1;min-width:0}}
+.meta{{font-size:12px;color:#888;margin-bottom:10px}}
+.badge{{display:inline-block;padding:2px 9px;border-radius:12px;
+        font-weight:bold;font-size:11px;margin-right:6px}}
+.L1{{background:#dbeafe;color:#1d4ed8}}
+.L2{{background:#fce7f3;color:#9d174d}}
+.L3{{background:#ede9fe;color:#5b21b6}}
+.extra{{background:#f3f4f6;color:#374151}}
+.attachment{{background:#d1fae5;color:#065f46}}
+.unchanged{{background:#fef3c7;color:#92400e}}
+.review{{background:#fee2e2;color:#991b1b}}
 .qtext{{font-size:15px;font-weight:600;color:#111;margin:0 0 14px}}
 .opt{{padding:7px 12px;margin:4px 0;border-radius:6px;font-size:14px;
       background:#f8f9fa;border:1px solid #e5e7eb}}
 .opt.correct{{background:#dcfce7;border-color:#86efac;font-weight:700}}
+.review-notes{{margin-top:14px;padding:12px 14px;border-radius:8px;background:#fff7ed;
+              border:1px solid #fed7aa}}
+.review-block + .review-block{{margin-top:10px}}
+.review-title{{font-size:12px;font-weight:700;color:#9a3412;margin-bottom:6px;
+              text-transform:uppercase;letter-spacing:.04em}}
+.review-line{{font-size:13px;color:#7c2d12;line-height:1.5}}
+.footer{{margin-top:14px;font-size:11px;color:#aaa}}
+.idx{{float:right;color:#ccc;font-size:12px}}
 </style>
 </head>
 <body>
 <h1>{title}</h1>
+{stats}
+{summary}
 {cards}
 </body>
 </html>
@@ -424,10 +459,221 @@ CARD = """\
 <div class="card">
   <div class="img-wrap">{img}</div>
   <div class="body">
+    {meta}
     <p class="qtext">{question}</p>
     {options}
+    {review_notes}
+    {footer}
   </div>
 </div>"""
+
+
+def build_stats_bar(displayed_questions: list[dict]) -> str:
+    level_counter: Counter = Counter()
+    for question in displayed_questions:
+        qtype = _canonical_qtype(str(question.get("type", "")).strip())
+        level = QTYPE_LEVEL.get(qtype)
+        if level:
+            level_counter[level] += 1
+
+    parts = [f"{len(displayed_questions)} questions"]
+    for level in LEVEL_DISPLAY_ORDER:
+        parts.append(f"{level}: {level_counter.get(level, 0)}")
+    return '<div class="stats">' + " &nbsp;&middot;&nbsp; ".join(
+        html.escape(part) for part in parts
+    ) + "</div>"
+
+
+def _stringify_review_value(value: object) -> str:
+    if value is None or value == "":
+        return "-"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple, set)):
+        parts: list[str] = []
+        for item in value:
+            rendered = _stringify_review_value(item)
+            if rendered != "-":
+                parts.append(rendered)
+        return ", ".join(parts) if parts else "-"
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            rendered = _stringify_review_value(item)
+            if rendered != "-":
+                parts.append(f"{key}={rendered}")
+        return ", ".join(parts) if parts else "-"
+    return str(value)
+
+
+def _render_review_block(title: str, lines: list[str]) -> str:
+    rendered_lines = "".join(
+        f'<div class="review-line">{html.escape(line)}</div>'
+        for line in lines
+        if line.strip()
+    )
+    if not rendered_lines:
+        return ""
+    return (
+        '<div class="review-block">'
+        f'<div class="review-title">{html.escape(title)}</div>'
+        f"{rendered_lines}"
+        "</div>"
+    )
+
+
+def _format_presence_object_review(item: dict[str, object]) -> str:
+    label = str(item.get("label", "")).strip() or "object"
+    obj_id = item.get("obj_id")
+    roles = [
+        str(role).strip()
+        for role in item.get("roles", [])
+        if str(role).strip()
+    ] if isinstance(item.get("roles"), list) else []
+    status = str(item.get("status", "")).strip() or "-"
+    reason = str(item.get("reason", "")).strip()
+
+    name = f"{label}#{obj_id}" if obj_id not in (None, "") else label
+    if roles:
+        name += f" [{'/'.join(roles)}]"
+    if reason:
+        return f"{name}: {status} ({reason})"
+    return f"{name}: {status}"
+
+
+def _format_referability_mention(item: dict[str, object]) -> str:
+    role = str(item.get("role", "mentioned")).strip() or "mentioned"
+    label = str(item.get("label", "")).strip() or "-"
+    obj_id = _stringify_review_value(item.get("obj_id"))
+    label_status = _stringify_review_value(item.get("label_status"))
+    candidate_ids = _stringify_review_value(item.get("candidate_object_ids"))
+    referable_ids = _stringify_review_value(item.get("referable_object_ids"))
+    reasons = _stringify_review_value(item.get("reason_codes"))
+    result = "pass" if bool(item.get("passes_referability_check", False)) else "drop"
+    return (
+        f"{role}: label={label}, obj_id={obj_id}, label_status={label_status}, "
+        f"candidates={candidate_ids}, referable={referable_ids}, result={result}, "
+        f"reasons={reasons}"
+    )
+
+
+def _is_manual_review_question(question: dict) -> bool:
+    if str(question.get("manual_review_reason", "")).strip():
+        return True
+    presence_review = question.get("question_presence_review")
+    if isinstance(presence_review, dict) and presence_review.get("decision") == "manual_review":
+        return True
+    answer_review = question.get("question_answer_review")
+    return (
+        isinstance(answer_review, dict)
+        and answer_review.get("decision") == "manual_review"
+    )
+
+
+def _build_meta_html(question: dict, idx: int) -> str:
+    qtype = _canonical_qtype(str(question.get("type", "")).strip())
+    level = QTYPE_LEVEL.get(qtype, "")
+    qtype_label = QTYPE_DISPLAY.get(qtype, qtype or "unknown")
+    badges: list[str] = []
+
+    if level:
+        badges.append(f'<span class="badge {html.escape(level)}">{html.escape(level)}</span>')
+    badges.append(
+        '<span class="badge extra">'
+        f"{html.escape(qtype_label)}"
+        "</span>"
+    )
+    if bool(question.get("attachment_remapped", False)):
+        badges.append('<span class="badge attachment">with-attachment</span>')
+    elif qtype in OBJECT_MOVE_TYPES:
+        badges.append('<span class="badge extra">without-attachment</span>')
+    if is_attachment_unchanged_object_move(question):
+        badges.append('<span class="badge unchanged">answer-unchanged</span>')
+    if _is_manual_review_question(question):
+        badges.append('<span class="badge extra review">manual-review</span>')
+
+    return (
+        '<div class="meta">'
+        + "".join(badges)
+        + f'<span class="idx">#{idx}</span>'
+        + "</div>"
+    )
+
+
+def _build_review_notes_html(question: dict) -> str:
+    blocks: list[str] = []
+
+    manual_review_reason = str(question.get("manual_review_reason", "")).strip()
+    if manual_review_reason:
+        blocks.append(_render_review_block("Manual Review", [manual_review_reason]))
+
+    presence_review = question.get("question_presence_review")
+    if isinstance(presence_review, dict):
+        lines = [
+            f"decision: {str(presence_review.get('decision', '-')).strip() or '-'}",
+        ]
+        flagged_labels = _stringify_review_value(presence_review.get("flagged_labels"))
+        if flagged_labels != "-":
+            lines.append(f"flagged labels: {flagged_labels}")
+        flagged_object_ids = _stringify_review_value(presence_review.get("flagged_object_ids"))
+        if flagged_object_ids != "-":
+            lines.append(f"flagged object ids: {flagged_object_ids}")
+        object_reviews = presence_review.get("object_reviews", [])
+        if isinstance(object_reviews, list):
+            for item in object_reviews:
+                if isinstance(item, dict):
+                    lines.append(_format_presence_object_review(item))
+        blocks.append(_render_review_block("VLM Review", lines))
+
+    answer_review = question.get("question_answer_review")
+    if isinstance(answer_review, dict) and answer_review.get("decision") != "skipped":
+        lines = [
+            f"decision: {str(answer_review.get('decision', '-')).strip() or '-'}",
+        ]
+        for label, key in (
+            ("predicted answer", "predicted_answer"),
+            ("gold answer", "gold_answer"),
+            ("predicted option", "predicted_option"),
+            ("gold option", "gold_option"),
+        ):
+            rendered = _stringify_review_value(answer_review.get(key))
+            if rendered != "-":
+                lines.append(f"{label}: {rendered}")
+        reason = str(answer_review.get("reason", "")).strip()
+        if reason:
+            lines.append(f"reason: {reason}")
+        blocks.append(_render_review_block("Answer Review", lines))
+
+    referability_audit = question.get("question_referability_audit")
+    if isinstance(referability_audit, dict):
+        lines = [
+            f"decision: {str(referability_audit.get('decision', '-')).strip() or '-'}",
+        ]
+        reason_codes = _stringify_review_value(referability_audit.get("reason_codes"))
+        lines.append(f"reason codes: {reason_codes}")
+        frame_referable_ids = _stringify_review_value(
+            referability_audit.get("frame_referable_object_ids")
+        )
+        lines.append(f"frame referable ids: {frame_referable_ids}")
+        mentioned_objects = referability_audit.get("mentioned_objects", [])
+        if isinstance(mentioned_objects, list):
+            for item in mentioned_objects:
+                if isinstance(item, dict):
+                    lines.append(_format_referability_mention(item))
+        blocks.append(_render_review_block("Referability Audit", lines))
+
+    if not blocks:
+        return ""
+    return '<div class="review-notes">' + "".join(blocks) + "</div>"
+
+
+def _build_footer_html(question: dict) -> str:
+    scene = str(question.get("scene_id", "")).strip()
+    frame = str(question.get("image_name", "")).strip()
+    parts = [html.escape(part) for part in (scene, frame) if part]
+    if not parts:
+        return ""
+    return '<div class="footer">' + " &nbsp;/&nbsp; ".join(parts) + "</div>"
 
 
 def build_viewer_html(
@@ -454,10 +700,17 @@ def build_viewer_html(
             include_attachment_unchanged=include_attachment_unchanged,
         )
     displayed_questions = order_questions_for_viewer(displayed_questions, seed=shuffle_seed)
+    summary_html = (
+        '<div class="summary">\n'
+        '  <h2>Task Summary</h2>\n'
+        f'  <div class="summary-block">{build_task_summary_v2(displayed_questions)}</div>\n'
+        '</div>'
+    )
+    stats_html = build_stats_bar(displayed_questions)
 
     cards: list[str] = []
 
-    for q in displayed_questions:
+    for idx, q in enumerate(displayed_questions, start=1):
         scene = str(q.get("scene_id", ""))
         frame = str(q.get("image_name", ""))
         answer = str(q.get("answer", ""))
@@ -483,13 +736,18 @@ def build_viewer_html(
         cards.append(
             CARD.format(
                 img=img_html,
+                meta=_build_meta_html(q, idx),
                 question=html.escape(str(q.get("question", ""))),
                 options=opt_html,
+                review_notes=_build_review_notes_html(q),
+                footer=_build_footer_html(q),
             )
         )
 
     return PAGE.format(
         title=html.escape(title),
+        stats=stats_html,
+        summary=summary_html,
         cards="\n".join(cards),
     )
 
