@@ -293,7 +293,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 12.0"):
+        with self.assertRaisesRegex(ValueError, "expected 13.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
@@ -318,7 +318,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "12.0",
+            "version": "13.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -445,7 +445,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "12.0",
+            "version": "13.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -556,7 +556,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "12.0",
+            "version": "13.0",
             "frames": {
                 scene_id: {
                     image_name: {

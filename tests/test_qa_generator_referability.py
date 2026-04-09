@@ -5,6 +5,7 @@ import numpy as np
 
 from src.qa_generator import (
     _ensure_question_mentions,
+    _enforce_in_frame_mentions,
     _cap_question_groups,
     generate_all_questions,
     generate_l1_occlusion_questions,
@@ -464,8 +465,31 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             "pass",
         )
         self.assertTrue(
-            questions[0]["question_referability_audit"]["mentioned_objects"][0]["exempt"]
+            any(
+                bool(item.get("exempt"))
+                for item in questions[0]["question_referability_audit"]["mentioned_objects"]
+            )
         )
+
+    def test_in_frame_filter_keeps_static_occlusion_not_visible(self) -> None:
+        kept = _enforce_in_frame_mentions(
+            [
+                {
+                    "level": "L1",
+                    "type": "occlusion",
+                    "question": "Is the lamp visible?",
+                    "options": ["fully visible", "partially occluded", "not visible"],
+                    "answer": "C",
+                    "correct_value": "not visible",
+                    "mentioned_objects": [
+                        {"role": "target", "label": "lamp", "obj_id": 3},
+                    ],
+                }
+            ],
+            [],
+        )
+
+        self.assertEqual(len(kept), 1)
 
     def test_generate_all_questions_drops_static_occlusion_target_below_in_frame_threshold(self) -> None:
         objects = [make_object(3, "lamp")]
@@ -632,7 +656,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(questions, [])
 
-    def test_generate_all_questions_drops_object_move_occlusion_when_mention_not_in_frame_eligible(self) -> None:
+    def test_generate_all_questions_drops_object_move_occlusion_not_visible_when_mention_not_in_frame_eligible(self) -> None:
         objects = [
             make_object(1, "cup"),
             make_object(2, "table"),
@@ -643,8 +667,8 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             "type": "object_move_occlusion",
             "question": "If the table moves, is the lamp visible from the camera?",
             "options": ["not occluded", "occluded", "not visible"],
-            "answer": "B",
-            "correct_value": "occluded",
+            "answer": "C",
+            "correct_value": "not visible",
             "moved_obj_id": 2,
             "moved_obj_label": "table",
             "target_obj_id": 3,
@@ -683,6 +707,61 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 occlusion_eligible_object_ids=[3],
                 label_statuses={"table": "unique", "lamp": "unique"},
                 label_to_object_ids={"table": [2], "lamp": [3]},
+                attachment_edges=[],
+            )
+
+        self.assertEqual(questions, [])
+
+    def test_generate_all_questions_drops_non_occlusion_question_when_mention_not_in_frame_eligible(self) -> None:
+        objects = [
+            make_object(1, "cup"),
+            make_object(2, "table"),
+        ]
+        direction_question = {
+            "level": "L1",
+            "type": "direction",
+            "question": "Where is the cup relative to the table?",
+            "options": ["left", "right", "front", "behind"],
+            "answer": "A",
+            "correct_value": "left",
+            "obj_a_id": 1,
+            "obj_a_label": "cup",
+            "obj_b_id": 2,
+            "obj_b_label": "table",
+            "mentioned_objects": [
+                {"role": "query_object", "obj_id": 1, "label": "cup"},
+                {"role": "reference_object", "obj_id": 2, "label": "table"},
+            ],
+        }
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[direction_question]),
+            patch("src.qa_generator.generate_l2_object_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l3_attachment_chain", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                support_chain_graph={},
+                support_chain_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2],
+                referable_object_ids=[1, 2],
+                occlusion_eligible_object_ids=[1],
+                label_statuses={"cup": "unique", "table": "unique"},
+                label_to_object_ids={"cup": [1], "table": [2]},
                 attachment_edges=[],
             )
 

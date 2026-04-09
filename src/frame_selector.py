@@ -374,6 +374,8 @@ MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_PROJECTED_AREA_MIN = 400.0
+FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.60
+FRAME_CROP_BONUS_WEIGHT = 10
 
 
 def get_visible_objects(
@@ -435,6 +437,30 @@ def _angular_distance(pose_a: CameraPose, pose_b: CameraPose) -> float:
 
 def _count_attachment_objects(visible: list[dict], attachment_ids: set[int]) -> int:
     return sum(1 for o in visible if o["id"] in attachment_ids)
+
+
+def _count_well_cropped_visible_objects(
+    visible: list[dict],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+) -> int:
+    count = 0
+    for obj in visible:
+        roi_info = _project_object_roi(obj, pose, intrinsics)
+        if float(roi_info["bbox_in_frame_ratio"]) >= FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN:
+            count += 1
+    return count
+
+
+def _frame_candidate_score(
+    *,
+    n_visible: int,
+    n_attachment: int,
+    crop_ge_60_count: int,
+) -> tuple[int, int]:
+    base_score = int(n_visible) * (1 + int(n_attachment))
+    crop_bonus = int(crop_ge_60_count) * FRAME_CROP_BONUS_WEIGHT
+    return base_score, base_score + crop_bonus
 
 
 def select_frames(
@@ -508,13 +534,20 @@ def select_frames(
             continue
 
         n_attachment = _count_attachment_objects(visible, attachment_ids)
-        score = len(visible) * (1 + n_attachment)
+        crop_ge_60_count = _count_well_cropped_visible_objects(visible, pose, intrinsics)
+        base_score, score = _frame_candidate_score(
+            n_visible=len(visible),
+            n_attachment=n_attachment,
+            crop_ge_60_count=crop_ge_60_count,
+        )
         frame_entries.append(
             {
                 "image_name":        image_name,
                 "pose":              pose,
                 "visible_object_ids": [o["id"] for o in visible],
                 "n_visible":         len(visible),
+                "base_score":        base_score,
+                "crop_ge_60_count":  crop_ge_60_count,
                 "score":             score,
             }
         )
@@ -567,6 +600,8 @@ def select_frames(
                 "camera_position":   s["pose"].position.tolist(),
                 "visible_object_ids": s["visible_object_ids"],
                 "n_visible":         s["n_visible"],
+                "base_score":        s["base_score"],
+                "crop_ge_60_count":  s["crop_ge_60_count"],
                 "score":             s["score"],
             }
         )
