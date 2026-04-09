@@ -265,6 +265,93 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
 
         self.assertFalse(any(q.get("type") == "object_move_occlusion" for q in questions))
 
+    def test_generate_l2_object_move_uses_query_specific_occlusion_fallback_state(self) -> None:
+        sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
+        cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
+        objects = [sofa, cushion]
+        shared_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=objects,
+            moved_ids={1, 2},
+        )
+        fallback_state = (np.array([1.0, 0.0, 0.0], dtype=np.float64), objects, {1, 2})
+
+        with (
+            patch(
+                "src.qa_generator._select_object_move_state",
+                side_effect=[None, shared_state],
+            ),
+            patch(
+                "src.qa_generator._iter_valid_object_move_states",
+                side_effect=[
+                    [],
+                    [fallback_state],
+                ],
+            ),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                return_value=[],
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                ],
+            ),
+            patch(
+                "src.qa_generator._query_visibility_for_object_move_state",
+                side_effect=[
+                    (
+                        "not occluded",
+                        "mesh_ray",
+                        "static_visible",
+                        make_l1_metrics("not occluded"),
+                        "not occluded",
+                        "mesh_ray",
+                        "counterfactual_visible",
+                        make_l1_metrics("not occluded"),
+                    ),
+                    (
+                        "not occluded",
+                        "mesh_ray",
+                        "static_visible",
+                        make_l1_metrics("not occluded"),
+                        "occluded",
+                        "mesh_ray",
+                        "counterfactual_occluded",
+                        make_l1_metrics("occluded"),
+                    ),
+                ],
+            ),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ),
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+            )
+
+        occlusion_questions = [q for q in questions if q.get("type") == "object_move_occlusion"]
+        self.assertEqual(len(occlusion_questions), 1)
+        self.assertEqual(occlusion_questions[0]["delta"], [1.0, 0.0, 0.0])
+        self.assertEqual(occlusion_questions[0]["correct_value"], "occluded")
+
     def test_generate_l2_object_move_does_not_reuse_occlusion_changes_across_different_deltas(self) -> None:
         objects = [
             make_object(1, "box", (0.0, 0.0, 2.0)),
@@ -363,6 +450,72 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             [(0.5, 0.0, 0.0), (1.0, 0.0, 0.0)],
         )
         self.assertTrue(all(args.args[2] == 1 for args in mocked_helper.call_args_list))
+
+    def test_generate_l2_object_move_uses_relation_specific_agent_fallback_state(self) -> None:
+        table = make_object(1, "table", (0.0, 0.0, 2.0))
+        laptop = make_object(2, "laptop", (0.2, 0.0, 2.0))
+        chair = make_object(3, "chair", (1.0, 0.0, 2.0))
+        objects = [table, laptop, chair]
+        shared_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=objects,
+            moved_ids={1, 2},
+        )
+        fallback_state = (np.array([1.0, 0.0, 0.0], dtype=np.float64), objects, {1, 2})
+        base_relations = [
+            {
+                "obj_a_id": 3,
+                "obj_b_id": 2,
+                "direction_b_rel_a": "left",
+            }
+        ]
+        fallback_relations = [
+            {
+                "obj_a_id": 3,
+                "obj_b_id": 2,
+                "direction_b_rel_a": "front-left",
+            }
+        ]
+
+        with patch(
+            "src.qa_generator._select_object_move_state",
+            side_effect=[None, shared_state, None],
+        ), patch(
+            "src.qa_generator._iter_valid_object_move_states",
+            side_effect=[
+                [fallback_state],
+                [],
+            ],
+        ), patch(
+            "src.qa_generator.compute_all_relations",
+            side_effect=[
+                base_relations,
+                [],
+                fallback_relations,
+            ],
+        ), patch(
+            "src.qa_generator._generate_l2_distance_questions_for_object",
+            return_value=[],
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_agent": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: where is {obj_b} relative to {obj_c}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+            )
+
+        agent_questions = [q for q in questions if q.get("type") == "object_move_agent"]
+        self.assertEqual(len(agent_questions), 1)
+        self.assertTrue(agent_questions[0]["attachment_remapped"])
+        self.assertEqual(agent_questions[0]["delta"], [1.0, 0.0, 0.0])
+        self.assertEqual(agent_questions[0]["correct_value"], "front-left")
 
 
 if __name__ == "__main__":

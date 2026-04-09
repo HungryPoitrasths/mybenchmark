@@ -3615,14 +3615,65 @@ def _first_valid_object_move_state(
         room_bounds=room_bounds,
         collision_objects=collision_objects,
     ):
-        return _SelectedObjectMoveState(
-            delta=np.asarray(delta, dtype=np.float64),
-            moved_objects=moved_objects,
-            moved_ids=set(moved_ids),
-            changed_relations=[],
-            used_changed_delta=False,
+        return _make_selected_object_move_state(
+            delta,
+            moved_objects,
+            moved_ids,
         )
     return None
+
+
+def _delta_key(delta: np.ndarray | list[float] | tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(np.round(np.asarray(delta, dtype=np.float64), 6).tolist())
+
+
+def _make_selected_object_move_state(
+    delta: np.ndarray | list[float] | tuple[float, ...],
+    moved_objects: list[dict[str, Any]],
+    moved_ids: set[int] | list[int],
+    *,
+    changed_relations: list[dict[str, Any]] | None = None,
+    used_changed_delta: bool = False,
+) -> _SelectedObjectMoveState:
+    return _SelectedObjectMoveState(
+        delta=np.asarray(delta, dtype=np.float64),
+        moved_objects=moved_objects,
+        moved_ids=set(int(obj_id) for obj_id in moved_ids),
+        changed_relations=list(changed_relations or []),
+        used_changed_delta=used_changed_delta,
+    )
+
+
+def _iter_additional_object_move_states(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    target_id: int,
+    *,
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+    excluded_deltas: list[np.ndarray] | None = None,
+):
+    excluded = {
+        _delta_key(delta)
+        for delta in (excluded_deltas or [])
+        if delta is not None
+    }
+    for delta, moved_objects, moved_ids in _iter_valid_object_move_states(
+        objects,
+        attachment_graph,
+        target_id,
+        room_bounds=room_bounds,
+        collision_objects=collision_objects,
+    ):
+        delta_key = _delta_key(delta)
+        if delta_key in excluded:
+            continue
+        excluded.add(delta_key)
+        yield _make_selected_object_move_state(
+            delta,
+            moved_objects,
+            moved_ids,
+        )
 
 
 def _select_object_move_state(
@@ -3652,12 +3703,10 @@ def _select_object_move_state(
         instance_mesh_data=instance_mesh_data,
     )
     if delta is not None:
-        moved_objects = apply_movement(objects, attachment_graph, target_id, delta)
-        moved_ids = get_moved_object_ids(target_id, attachment_graph)
-        return _SelectedObjectMoveState(
-            delta=np.asarray(delta, dtype=np.float64),
-            moved_objects=moved_objects,
-            moved_ids=set(moved_ids),
+        return _make_selected_object_move_state(
+            delta,
+            apply_movement(objects, attachment_graph, target_id, delta),
+            get_moved_object_ids(target_id, attachment_graph),
             changed_relations=changed,
             used_changed_delta=True,
         )
@@ -3784,6 +3833,82 @@ def _find_object_move_occlusion_changes(
         })
 
     return occlusion_changes
+
+
+def _query_visibility_for_object_move_state(
+    *,
+    query_obj: dict[str, Any],
+    original_objects: list[dict],
+    selected_state: _SelectedObjectMoveState,
+    original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    compare_backend: str | None,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+) -> tuple[
+    str | None,
+    str,
+    str,
+    _L1OcclusionMetrics,
+    str | None,
+    str,
+    str,
+    _L1OcclusionMetrics,
+]:
+    default_metrics = _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")
+    (
+        query_old_status,
+        query_old_source,
+        query_old_reason_code,
+        query_old_metrics,
+    ) = original_visibility.get(
+        int(query_obj["id"]),
+        (
+            None,
+            "mesh_ray",
+            "missing_original_visibility",
+            default_metrics,
+        ),
+    )
+    if color_intrinsics is None or compare_backend is None:
+        return (
+            query_old_status,
+            query_old_source,
+            query_old_reason_code,
+            query_old_metrics,
+            None,
+            "mesh_ray",
+            "counterfactual_visibility_unresolved",
+            default_metrics,
+        )
+
+    query_new_metrics, query_new_source = _compute_l1_style_visibility_metrics_for_moved_target(
+        target_obj_id=int(query_obj["id"]),
+        original_objects=original_objects,
+        moved_objects=selected_state.moved_objects,
+        moved_ids=selected_state.moved_ids,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        occlusion_backend=compare_backend,
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+    )
+    (
+        query_new_status,
+        query_new_reason_code,
+        _query_new_reason_detail,
+    ) = _resolve_counterfactual_l1_visibility_status(query_new_metrics)
+    return (
+        query_old_status,
+        query_old_source,
+        query_old_reason_code,
+        query_old_metrics,
+        query_new_status,
+        query_new_source,
+        query_new_reason_code,
+        query_new_metrics,
+    )
 
 
 def _find_object_move_delta_and_changes(
@@ -3981,6 +4106,31 @@ def _find_stable_distance_move_for_relation(
         if new_idx is None or abs(new_idx - old_idx) != 1:
             continue
         if new_near_boundary:
+            continue
+        return np.asarray(delta, dtype=np.float64), old_label, new_label, False
+
+    for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
+        objects,
+        attachment_graph,
+        target_id,
+        room_bounds=room_bounds,
+        collision_objects=collision_objects,
+    ):
+        new_map = {int(obj["id"]): obj for obj in new_objects}
+        exact_details = compute_distance_details(
+            new_map[obj_a_id],
+            new_map[obj_b_id],
+        )
+        if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+            continue
+        new_label = str(exact_details["distance_bin"])
+        new_idx = _distance_bin_index(
+            new_label,
+            bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
+        )
+        if new_idx is None or abs(new_idx - old_idx) != 1:
+            continue
+        if bool(exact_details.get("near_boundary", False)):
             continue
         return np.asarray(delta, dtype=np.float64), old_label, new_label, False
 
@@ -4240,7 +4390,7 @@ def generate_l2_object_move(
     attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_object: int = 3,
+    max_per_object: int = 5,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
@@ -4327,129 +4477,146 @@ def generate_l2_object_move(
             instance_mesh_data=instance_mesh_data,
         )
         obj_questions: list[dict] = []
-        if selected_state is not None:
-            delta = selected_state.delta
-            direction_desc = _delta_to_description(delta, camera_pose)
-            distance_desc = f"{np.linalg.norm(delta):.1f}m"
-            moved_relation_map = _relation_map_by_pair(
-                compute_all_relations(selected_state.moved_objects, camera_pose, None, None)
-            )
-            query_old_status: str | None = None
-            query_old_source = "mesh_ray"
-            query_old_reason_code = "missing_original_visibility"
-            query_old_metrics = _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")
-            query_new_status: str | None = None
-            query_new_source = "mesh_ray"
-            query_new_reason_code = "counterfactual_visibility_unresolved"
-            query_new_metrics = _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")
-            if occlusion_enabled and compare_backend is not None:
-                (
-                    query_old_status,
-                    query_old_source,
-                    query_old_reason_code,
-                    query_old_metrics,
-                ) = original_visibility.get(
-                    int(obj["id"]),
-                    (
-                        None,
-                        "mesh_ray",
-                        "missing_original_visibility",
-                        _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray"),
-                    ),
+        state_relation_cache: dict[tuple[float, ...], dict[tuple[int, int], dict[str, Any]]] = {}
+        state_visibility_cache: dict[
+            tuple[float, ...],
+            tuple[
+                str | None,
+                str,
+                str,
+                _L1OcclusionMetrics,
+                str | None,
+                str,
+                str,
+                _L1OcclusionMetrics,
+            ],
+        ] = {}
+        alternative_states: list[_SelectedObjectMoveState] | None = None
+
+        def _relation_map_for_state(state: _SelectedObjectMoveState) -> dict[tuple[int, int], dict[str, Any]]:
+            delta_key = _delta_key(state.delta)
+            relation_map = state_relation_cache.get(delta_key)
+            if relation_map is None:
+                relation_map = _relation_map_by_pair(
+                    compute_all_relations(state.moved_objects, camera_pose, None, None)
                 )
-                query_new_metrics, query_new_source = _compute_l1_style_visibility_metrics_for_moved_target(
-                    target_obj_id=int(obj["id"]),
+                state_relation_cache[delta_key] = relation_map
+            return relation_map
+
+        def _visibility_for_state(
+            state: _SelectedObjectMoveState,
+        ) -> tuple[
+            str | None,
+            str,
+            str,
+            _L1OcclusionMetrics,
+            str | None,
+            str,
+            str,
+            _L1OcclusionMetrics,
+        ]:
+            delta_key = _delta_key(state.delta)
+            visibility = state_visibility_cache.get(delta_key)
+            if visibility is None:
+                visibility = _query_visibility_for_object_move_state(
+                    query_obj=obj,
                     original_objects=movement_scene_objects,
-                    moved_objects=selected_state.moved_objects,
-                    moved_ids=selected_state.moved_ids,
+                    selected_state=state,
+                    original_visibility=original_visibility,
                     camera_pose=camera_pose,
                     color_intrinsics=color_intrinsics,
-                    occlusion_backend=compare_backend,
+                    compare_backend=compare_backend,
                     ray_caster=ray_caster,
                     instance_mesh_data=instance_mesh_data,
                 )
-                (
-                    query_new_status,
-                    query_new_reason_code,
-                    _query_new_reason_detail,
-                ) = _resolve_counterfactual_l1_visibility_status(query_new_metrics)
+                state_visibility_cache[delta_key] = visibility
+            return visibility
 
-            for key, old_relation in base_relation_map.items():
-                if obj["id"] not in key:
-                    continue
-                new_relation = moved_relation_map.get(key)
-                if new_relation is None:
-                    continue
-
-                relation_obj_b_id = int(obj["id"])
-                relation_obj_c_id = _other_obj_id_for_query(obj["id"], old_relation)
-                if relation_obj_c_id is None:
-                    continue
-                obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
-                obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
-
-                direction_values = _direction_values_for_query_object(
-                    obj["id"],
-                    old_relation,
-                    new_relation,
+        def _fallback_states() -> list[_SelectedObjectMoveState]:
+            nonlocal alternative_states
+            if alternative_states is None:
+                excluded_deltas = [selected_state.delta] if selected_state is not None else []
+                alternative_states = list(
+                    _iter_additional_object_move_states(
+                        movement_scene_objects,
+                        attachment_graph,
+                        move_source_id,
+                        room_bounds=room_bounds,
+                        collision_objects=collision_objects,
+                        excluded_deltas=excluded_deltas,
+                    )
                 )
-                if direction_values is not None:
-                    old_value, new_value = direction_values
-                    relation_unchanged = old_value == new_value
-                    if attachment_remapped or not relation_unchanged:
-                        tpl_list = templates.get(
-                            "L2_object_move_agent",
-                            _default_templates()["L2_object_move_agent"],
-                        )
-                        tpl = random.choice(tpl_list)
-                        question_text = tpl.format(
-                            obj_a=_the(move_source["label"]),
-                            direction=direction_desc,
-                            direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
-                            distance=distance_desc,
-                            obj_b=_the(obj_b_label),
-                            obj_c=_the(obj_c_label),
-                        )
-                        options, answer = generate_options(new_value, ALL_DIRECTIONS)
-                        obj_questions.append({
-                            "level": "L2",
-                            "type": "object_move_agent",
-                            "question": question_text,
-                            "options": options,
-                            "answer": answer,
-                            "correct_value": new_value,
-                            "old_correct_value": old_value,
-                            "new_correct_value": new_value,
-                            "moved_obj_id": move_source_id,
-                            "moved_obj_label": move_source["label"],
-                            "query_obj_id": obj["id"],
-                            "query_obj_label": obj["label"],
-                            "attachment_remapped": attachment_remapped,
-                            "obj_b_id": relation_obj_b_id,
-                            "obj_b_label": obj_b_label,
-                            "obj_c_id": relation_obj_c_id,
-                            "obj_c_label": obj_c_label,
-                            "mentioned_objects": [
-                                _mention("moved_object", move_source["label"], move_source_id),
-                                _mention("query_object", obj["label"], obj["id"]),
-                                _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
-                                _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
-                            ],
-                            "delta": delta.tolist(),
-                            "relation_unchanged": relation_unchanged,
-                            "has_attachment_chain": has_attachment_chain,
-                        })
+            return alternative_states
 
-            if (
-                occlusion_enabled
-                and compare_backend is not None
-                and query_old_status is not None
-                and query_new_status is not None
-                and query_old_status != query_new_status
-            ):
+        for key, old_relation in base_relation_map.items():
+            if obj["id"] not in key:
+                continue
+
+            relation_obj_b_id = int(obj["id"])
+            relation_obj_c_id = _other_obj_id_for_query(obj["id"], old_relation)
+            if relation_obj_c_id is None:
+                continue
+            obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
+            obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+
+            agent_state: _SelectedObjectMoveState | None = None
+            old_value: str | None = None
+            new_value: str | None = None
+            relation_unchanged = False
+            if selected_state is not None:
+                new_relation = _relation_map_for_state(selected_state).get(key)
+                if new_relation is not None:
+                    direction_values = _direction_values_for_query_object(
+                        obj["id"],
+                        old_relation,
+                        new_relation,
+                    )
+                    if direction_values is not None:
+                        old_value, new_value = direction_values
+                        relation_unchanged = old_value == new_value
+                        if attachment_remapped or not relation_unchanged:
+                            agent_state = selected_state
+
+            if agent_state is None:
+                fallback_unchanged: tuple[_SelectedObjectMoveState, str, str] | None = None
+                for candidate_state in _fallback_states():
+                    new_relation = _relation_map_for_state(candidate_state).get(key)
+                    if new_relation is None:
+                        continue
+                    direction_values = _direction_values_for_query_object(
+                        obj["id"],
+                        old_relation,
+                        new_relation,
+                    )
+                    if direction_values is None:
+                        continue
+                    candidate_old_value, candidate_new_value = direction_values
+                    candidate_unchanged = candidate_old_value == candidate_new_value
+                    if candidate_unchanged:
+                        if attachment_remapped and fallback_unchanged is None:
+                            fallback_unchanged = (
+                                candidate_state,
+                                candidate_old_value,
+                                candidate_new_value,
+                            )
+                        continue
+                    agent_state = candidate_state
+                    old_value = candidate_old_value
+                    new_value = candidate_new_value
+                    relation_unchanged = False
+                    break
+
+                if agent_state is None and fallback_unchanged is not None:
+                    agent_state, old_value, new_value = fallback_unchanged
+                    relation_unchanged = True
+
+            if agent_state is not None and old_value is not None and new_value is not None:
+                delta = agent_state.delta
+                direction_desc = _delta_to_description(delta, camera_pose)
+                distance_desc = f"{np.linalg.norm(delta):.1f}m"
                 tpl_list = templates.get(
-                    "L2_object_move_occlusion",
-                    _default_templates()["L2_object_move_occlusion"],
+                    "L2_object_move_agent",
+                    _default_templates()["L2_object_move_agent"],
                 )
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
@@ -4457,49 +4624,134 @@ def generate_l2_object_move(
                     direction=direction_desc,
                     direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
                     distance=distance_desc,
-                    obj_b=_the(obj["label"]),
-                    obj_target=_the(obj["label"]),
+                    obj_b=_the(obj_b_label),
+                    obj_c=_the(obj_c_label),
                 )
-                question_text = _with_occlusion_definition(question_text)
-                options, answer = generate_options(
-                    query_new_status,
-                    L1_OCCLUSION_STATES,
-                    n_options=3,
-                )
+                options, answer = generate_options(new_value, ALL_DIRECTIONS)
                 obj_questions.append({
                     "level": "L2",
-                    "type": "object_move_occlusion",
+                    "type": "object_move_agent",
                     "question": question_text,
                     "options": options,
                     "answer": answer,
-                    "correct_value": query_new_status,
-                    "old_correct_value": query_old_status,
-                    "new_correct_value": query_new_status,
-                    "old_visibility": query_old_status,
-                    "new_visibility": query_new_status,
-                    "old_visibility_source": query_old_source,
-                    "new_visibility_source": query_new_source,
-                    "old_visibility_resolution": query_old_reason_code,
-                    "new_visibility_resolution": query_new_reason_code,
-                    "old_visibility_metrics": _l1_occlusion_metrics_payload(query_old_metrics),
-                    "new_visibility_metrics": _l1_occlusion_metrics_payload(query_new_metrics),
+                    "correct_value": new_value,
+                    "old_correct_value": old_value,
+                    "new_correct_value": new_value,
                     "moved_obj_id": move_source_id,
                     "moved_obj_label": move_source["label"],
-                    "target_obj_id": obj["id"],
-                    "target_obj_label": obj["label"],
                     "query_obj_id": obj["id"],
                     "query_obj_label": obj["label"],
                     "attachment_remapped": attachment_remapped,
-                    "obj_b_id": obj["id"],
-                    "obj_b_label": obj["label"],
+                    "obj_b_id": relation_obj_b_id,
+                    "obj_b_label": obj_b_label,
+                    "obj_c_id": relation_obj_c_id,
+                    "obj_c_label": obj_c_label,
                     "mentioned_objects": [
                         _mention("moved_object", move_source["label"], move_source_id),
-                        _mention("target_object", obj["label"], obj["id"]),
+                        _mention("query_object", obj["label"], obj["id"]),
+                        _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
+                        _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
                     ],
                     "delta": delta.tolist(),
-                    "relation_unchanged": False,
+                    "relation_unchanged": relation_unchanged,
                     "has_attachment_chain": has_attachment_chain,
                 })
+
+        occlusion_state: _SelectedObjectMoveState | None = None
+        occlusion_visibility: tuple[
+            str | None,
+            str,
+            str,
+            _L1OcclusionMetrics,
+            str | None,
+            str,
+            str,
+            _L1OcclusionMetrics,
+        ] | None = None
+        if occlusion_enabled and compare_backend is not None:
+            if selected_state is not None:
+                visibility = _visibility_for_state(selected_state)
+                if visibility[0] is not None and visibility[4] is not None and visibility[0] != visibility[4]:
+                    occlusion_state = selected_state
+                    occlusion_visibility = visibility
+            if occlusion_state is None:
+                for candidate_state in _fallback_states():
+                    visibility = _visibility_for_state(candidate_state)
+                    if visibility[0] is None or visibility[4] is None or visibility[0] == visibility[4]:
+                        continue
+                    occlusion_state = candidate_state
+                    occlusion_visibility = visibility
+                    break
+
+        if occlusion_state is not None and occlusion_visibility is not None:
+            (
+                query_old_status,
+                query_old_source,
+                query_old_reason_code,
+                query_old_metrics,
+                query_new_status,
+                query_new_source,
+                query_new_reason_code,
+                query_new_metrics,
+            ) = occlusion_visibility
+            assert query_old_status is not None
+            assert query_new_status is not None
+            delta = occlusion_state.delta
+            direction_desc = _delta_to_description(delta, camera_pose)
+            distance_desc = f"{np.linalg.norm(delta):.1f}m"
+            tpl_list = templates.get(
+                "L2_object_move_occlusion",
+                _default_templates()["L2_object_move_occlusion"],
+            )
+            tpl = random.choice(tpl_list)
+            question_text = tpl.format(
+                obj_a=_the(move_source["label"]),
+                direction=direction_desc,
+                direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
+                distance=distance_desc,
+                obj_b=_the(obj["label"]),
+                obj_target=_the(obj["label"]),
+            )
+            question_text = _with_occlusion_definition(question_text)
+            options, answer = generate_options(
+                query_new_status,
+                L1_OCCLUSION_STATES,
+                n_options=3,
+            )
+            obj_questions.append({
+                "level": "L2",
+                "type": "object_move_occlusion",
+                "question": question_text,
+                "options": options,
+                "answer": answer,
+                "correct_value": query_new_status,
+                "old_correct_value": query_old_status,
+                "new_correct_value": query_new_status,
+                "old_visibility": query_old_status,
+                "new_visibility": query_new_status,
+                "old_visibility_source": query_old_source,
+                "new_visibility_source": query_new_source,
+                "old_visibility_resolution": query_old_reason_code,
+                "new_visibility_resolution": query_new_reason_code,
+                "old_visibility_metrics": _l1_occlusion_metrics_payload(query_old_metrics),
+                "new_visibility_metrics": _l1_occlusion_metrics_payload(query_new_metrics),
+                "moved_obj_id": move_source_id,
+                "moved_obj_label": move_source["label"],
+                "target_obj_id": obj["id"],
+                "target_obj_label": obj["label"],
+                "query_obj_id": obj["id"],
+                "query_obj_label": obj["label"],
+                "attachment_remapped": attachment_remapped,
+                "obj_b_id": obj["id"],
+                "obj_b_label": obj["label"],
+                "mentioned_objects": [
+                    _mention("moved_object", move_source["label"], move_source_id),
+                    _mention("target_object", obj["label"], obj["id"]),
+                ],
+                "delta": delta.tolist(),
+                "relation_unchanged": False,
+                "has_attachment_chain": has_attachment_chain,
+            })
 
         obj_questions.extend(
             _generate_l2_distance_questions_for_object(

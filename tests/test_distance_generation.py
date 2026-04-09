@@ -270,6 +270,18 @@ class DistanceMovementSearchTests(unittest.TestCase):
                     "distance_bin_id": "very_close",
                     "near_boundary": False,
                 },
+                {
+                    "distance_m": 0.15,
+                    "distance_bin": "very close (<1.0m)",
+                    "distance_bin_id": "very_close",
+                    "near_boundary": False,
+                },
+                {
+                    "distance_m": 0.35,
+                    "distance_bin": "very close (<1.0m)",
+                    "distance_bin_id": "very_close",
+                    "near_boundary": False,
+                },
             ],
         ):
             delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
@@ -290,6 +302,53 @@ class DistanceMovementSearchTests(unittest.TestCase):
         self.assertEqual(old_label, "very close (<1.0m)")
         self.assertEqual(new_label, "very close (<1.0m)")
         self.assertTrue(relation_unchanged)
+
+    def test_find_stable_distance_move_can_use_valid_object_move_candidates_after_axis_search_fails(self) -> None:
+        objects = [
+            make_object(1, "box", (0.0, 0.0, 0.0)),
+            make_object(2, "chair", (2.35, 0.0, 0.0)),
+        ]
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "moderate (2.0-3.3m)",
+            "distance_bin_id": "moderate",
+            "distance_m": 2.15,
+            "distance_m_raw": 2.15,
+        }
+        valid_states = [
+            (np.array([0.7, 0.7, 0.0], dtype=np.float64), objects, {1}),
+        ]
+
+        with patch("src.qa_generator._iter_distance_move_deltas", return_value=[]), patch(
+            "src.qa_generator._iter_valid_object_move_states",
+            return_value=valid_states,
+        ), patch(
+            "src.qa_generator.compute_distance_details",
+            return_value={
+                "distance_m": 1.8,
+                "distance_bin": "close (1.0-2.0m)",
+                "distance_bin_id": "close",
+                "near_boundary": False,
+            },
+        ):
+            delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                relation=relation,
+                room_bounds={
+                    "bbox_min": [-3.0, -3.0, -1.0],
+                    "bbox_max": [3.0, 3.0, 1.0],
+                },
+            )
+
+        self.assertIsNotNone(delta)
+        assert delta is not None
+        self.assertEqual(delta.tolist(), [0.7, 0.7, 0.0])
+        self.assertEqual(old_label, "moderate (2.0-3.3m)")
+        self.assertEqual(new_label, "close (1.0-2.0m)")
+        self.assertFalse(relation_unchanged)
 
     def test_generate_l2_object_move_uses_distance_specific_search_when_generic_move_is_missing(self) -> None:
         mover = make_object(1, "box", (0.0, 0.0, 0.0))

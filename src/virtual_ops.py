@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 # L2.1  Object movement (with attachment-chain propagation)
 # ---------------------------------------------------------------------------
 
+_DIAGONAL_UNIT = 1.0 / np.sqrt(2.0)
+
 MOVEMENT_CANDIDATES = [
     # Varied distances across all horizontal axes for movement diversity.
     # Order is fixed so virtual operations remain reproducible.
@@ -61,6 +63,18 @@ MOVEMENT_CANDIDATES = [
     np.array([-2.5, 0.0, 0.0]),
     np.array([0.0, 2.5, 0.0]),
     np.array([0.0, -2.5, 0.0]),
+    np.array([3.0, 0.0, 0.0]),
+    np.array([-3.0, 0.0, 0.0]),
+    np.array([0.0, 3.0, 0.0]),
+    np.array([0.0, -3.0, 0.0]),
+    *[
+        np.array(
+            [dx * magnitude * _DIAGONAL_UNIT, dy * magnitude * _DIAGONAL_UNIT, 0.0],
+            dtype=np.float64,
+        )
+        for magnitude in (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
+        for dx, dy in ((1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0))
+    ],
 ]
 
 ORBIT_ROTATION_CANDIDATES = [
