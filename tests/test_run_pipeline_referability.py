@@ -79,6 +79,191 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         warning_mock.assert_called_once()
         self.assertIn("placeholder API key", warning_mock.call_args.args[0])
 
+    def test_question_presence_prompt_uses_crop_index_only(self) -> None:
+        prompt = run_pipeline_module._question_presence_prompt(
+            "Where is the chair relative to the table?",
+            [
+                {"label": "chair", "obj_id": 1, "roles": ["target"]},
+                {"label": "table", "obj_id": 2, "roles": ["reference"]},
+            ],
+        )
+        prompt_lower = prompt.lower()
+
+        self.assertNotIn("obj_id", prompt_lower)
+        self.assertIn("judge each crop_index independently", prompt_lower)
+        self.assertIn('"crop_index": 1', prompt)
+        self.assertIn('"crop_index": 2', prompt)
+        self.assertLess(prompt.index('"crop_index": 1'), prompt.index('"crop_index": 2'))
+
+    def test_question_presence_reviewer_maps_crop_index_back_to_internal_obj_id(self) -> None:
+        raw_text = json.dumps(
+            {
+                "objects": [
+                    {"crop_index": 2, "status": "absent", "reason": "blocked by another object"}
+                ]
+            },
+            ensure_ascii=False,
+        )
+        fake_response = Mock(
+            choices=[Mock(message=Mock(content=raw_text))]
+        )
+        _, review_fn = run_pipeline_module._make_question_presence_reviewer(Mock(), "fake-model")
+
+        with patch.object(
+            run_pipeline_module,
+            "_call_question_review_vlm",
+            return_value=fake_response,
+        ):
+            review = review_fn(
+                {"image_b64": "full-frame", "mime": "image/jpeg", "image_name": "000123.jpg"},
+                {"question": "Is the chair left of the table?"},
+                [
+                    {
+                        "label": "chair",
+                        "obj_id": 11,
+                        "roles": ["target"],
+                        "roi_bounds_px": [1, 2, 30, 40],
+                        "crop_image_b64": "crop-1",
+                        "crop_mime": "image/jpeg",
+                    },
+                    {
+                        "label": "table",
+                        "obj_id": 22,
+                        "roles": ["reference"],
+                        "roi_bounds_px": [5, 6, 50, 60],
+                        "crop_image_b64": "crop-2",
+                        "crop_mime": "image/jpeg",
+                    },
+                ],
+            )
+
+        self.assertEqual(review["raw_response"], raw_text)
+        self.assertEqual(review["object_reviews"][0]["obj_id"], 11)
+        self.assertEqual(review["object_reviews"][0]["reason"], "missing_obj_id_in_vlm_response")
+        self.assertEqual(review["object_reviews"][1]["obj_id"], 22)
+        self.assertEqual(review["object_reviews"][1]["status"], "absent")
+        self.assertEqual(review["object_reviews"][1]["reason"], "blocked by another object")
+
+    def test_question_presence_reviewer_accepts_legacy_obj_id_response(self) -> None:
+        raw_text = json.dumps(
+            {
+                "objects": [
+                    {"obj_id": 22, "status": "present", "reason": "clearly visible"}
+                ]
+            },
+            ensure_ascii=False,
+        )
+        fake_response = Mock(
+            choices=[Mock(message=Mock(content=raw_text))]
+        )
+        _, review_fn = run_pipeline_module._make_question_presence_reviewer(Mock(), "fake-model")
+
+        with patch.object(
+            run_pipeline_module,
+            "_call_question_review_vlm",
+            return_value=fake_response,
+        ):
+            review = review_fn(
+                {"image_b64": "full-frame", "mime": "image/jpeg", "image_name": "000123.jpg"},
+                {"question": "Is the chair left of the table?"},
+                [
+                    {
+                        "label": "chair",
+                        "obj_id": 11,
+                        "roles": ["target"],
+                        "roi_bounds_px": [1, 2, 30, 40],
+                        "crop_image_b64": "crop-1",
+                        "crop_mime": "image/jpeg",
+                    },
+                    {
+                        "label": "table",
+                        "obj_id": 22,
+                        "roles": ["reference"],
+                        "roi_bounds_px": [5, 6, 50, 60],
+                        "crop_image_b64": "crop-2",
+                        "crop_mime": "image/jpeg",
+                    },
+                ],
+            )
+
+        self.assertEqual(review["object_reviews"][0]["reason"], "missing_obj_id_in_vlm_response")
+        self.assertEqual(review["object_reviews"][1]["obj_id"], 22)
+        self.assertEqual(review["object_reviews"][1]["status"], "present")
+        self.assertEqual(review["object_reviews"][1]["reason"], "clearly visible")
+
+    def test_review_question_object_presence_keeps_missing_obj_id_target_out_of_vlm(self) -> None:
+        answer_review_fn = Mock()
+        review_fn = Mock(
+            return_value={
+                "object_reviews": [
+                    run_pipeline_module._build_presence_review_entry(
+                        {
+                            "label": "table",
+                            "obj_id": 2,
+                            "roles": ["reference"],
+                            "roi_bounds_px": [10, 20, 40, 60],
+                        },
+                        status="present",
+                        reason="clear crop",
+                    )
+                ],
+                "raw_response": '{"objects":[{"crop_index":1,"status":"present","reason":"clear crop"}]}',
+            }
+        )
+
+        reviewed = run_pipeline_module._review_question_object_presence(
+            review_fn,
+            answer_review_fn,
+            question_index=0,
+            question={
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "question": "Is the chair left of the table?",
+                "mentioned_objects": [
+                    {"role": "target", "label": "chair", "obj_id": None},
+                    {"role": "reference", "label": "table", "obj_id": 2},
+                ],
+            },
+            data_root=Path("."),
+            frame_context_by_key={
+                ("scene0000_00", "000123.jpg"): {
+                    "image_path": Path("unused.jpg"),
+                    "image_exists": True,
+                    "has_projection_context": True,
+                    "image_b64": "full-frame",
+                    "mime": "image/jpeg",
+                    "objects_by_id": {2: make_object(2, "table")},
+                    "crop_by_obj_id": {
+                        2: {
+                            "valid": True,
+                            "image_b64": "crop-2",
+                            "mime": "image/jpeg",
+                            "roi_bounds_px": [10, 20, 40, 60],
+                        }
+                    },
+                }
+            },
+        )
+
+        review_fn.assert_called_once()
+        answer_review_fn.assert_not_called()
+        sent_targets = review_fn.call_args.args[2]
+        self.assertEqual(len(sent_targets), 1)
+        self.assertEqual(sent_targets[0]["obj_id"], 2)
+        self.assertEqual(sent_targets[0]["label"], "table")
+
+        object_reviews = reviewed["question_presence_review"]["object_reviews"]
+        self.assertEqual(len(object_reviews), 2)
+        missing_obj_review = next(
+            item for item in object_reviews if item.get("obj_id") is None
+        )
+        resolved_review = next(
+            item for item in object_reviews if item.get("obj_id") == 2
+        )
+        self.assertEqual(missing_obj_review["status"], "unsure")
+        self.assertEqual(missing_obj_review["reason"], "missing_obj_id")
+        self.assertEqual(resolved_review["status"], "present")
+
     def test_build_question_referability_audit_drops_ambiguous_nonreferable_label(self) -> None:
         audit = run_pipeline_module._build_question_referability_audit(
             {

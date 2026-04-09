@@ -661,7 +661,6 @@ def _question_presence_prompt(
         [
             {
                 "crop_index": idx + 1,
-                "obj_id": int(target["obj_id"]),
                 "label": str(target.get("label", "")).strip(),
                 "roles": list(target.get("roles", [])),
             }
@@ -673,15 +672,17 @@ def _question_presence_prompt(
         "You are auditing whether specific object instances mentioned in a visual question are clearly visible "
         "and uniquely identifiable in the frame.\n"
         "You will receive the full scene image first, followed by one crop for each target instance.\n"
+        "Each crop appears in the same order as the Targets list, so crop_index 1 refers to the first crop after "
+        "the full image.\n"
         "Use the crop as the primary evidence and the full image only as context.\n"
-        "Judge each obj_id independently.\n"
+        "Judge each crop_index independently.\n"
         "Return present only when the exact instance is clearly visible, belongs to the given label, and can be "
         "uniquely identified as a standalone instance in the frame.\n"
         "If the crop is too partial, blurry, heavily occluded, confusing among multiple same-label instances, or "
         "might only show a component/substructure of a larger object, return unsure instead of present.\n"
         "If the instance does not appear in the image, return absent.\n"
         "Return strict JSON only with this schema:\n"
-        '{"objects":[{"obj_id":42,"status":"present","reason":"short reason"}]}\n'
+        '{"objects":[{"crop_index":1,"status":"present","reason":"short reason"}]}\n'
         f"Question: {question_text}\n"
         f"Targets: {targets_json}"
     )
@@ -906,19 +907,25 @@ def _make_question_presence_reviewer(client, model_name: str):
             for item in objects:
                 if not isinstance(item, dict):
                     continue
-                obj_id = _coerce_object_id(item.get("obj_id"))
-                if obj_id is None or obj_id not in target_by_obj_id:
+                target = None
+                crop_index = _coerce_object_id(item.get("crop_index"))
+                if crop_index is not None and 1 <= crop_index <= len(targets):
+                    target = targets[crop_index - 1]
+                else:
+                    obj_id = _coerce_object_id(item.get("obj_id"))
+                    if obj_id is not None:
+                        target = target_by_obj_id.get(obj_id)
+                if target is None:
                     continue
                 status = _normalize_question_presence_status(item.get("status")) or "unsure"
-                target = target_by_obj_id[obj_id]
-                mapped_reviews[obj_id] = {
-                    "label": str(target.get("label", "")).strip(),
-                    "obj_id": obj_id,
-                    "roles": list(target.get("roles", [])),
-                    "status": status,
-                    "reason": str(item.get("reason", "")).strip(),
-                    "roi_bounds_px": target.get("roi_bounds_px"),
-                }
+                target_obj_id = _coerce_object_id(target.get("obj_id"))
+                if target_obj_id is None:
+                    continue
+                mapped_reviews[target_obj_id] = _build_presence_review_entry(
+                    target,
+                    status=status,
+                    reason=str(item.get("reason", "")).strip(),
+                )
 
         object_reviews: list[dict[str, object]] = []
         for target in targets:
