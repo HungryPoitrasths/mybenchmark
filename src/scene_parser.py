@@ -46,6 +46,24 @@ LABEL_NORMALIZE: dict[str, str] = {
     "mailboxes": "mailbox",
     "suitcases": "suitcase",
     "cloth": "clothing",
+    "bookshelves": "bookshelf",
+    "wardrobes": "wardrobe",
+    "washing machines": "washing machine",
+    "clothes dryers": "clothes dryer",
+    # Synonym -> canonical
+    "couch": "sofa",
+    "nightstand": "night stand",
+    "tv": "television",
+    "backpack": "bag",
+    "garbage bin": "trash can",
+    "compost bin": "trash can",
+    "keyboard piano": "piano",
+    "folded ladder": "ladder",
+    "stepladder": "ladder",
+    # Wardrobe-family aliases -> canonical
+    "wardrobe closet": "wardrobe",
+    "wardrobe cabinet": "wardrobe",
+    "closet wardrobe": "wardrobe",
     # Sub-category -> canonical
     "kitchen cabinet": "cabinet",
     "kitchen cabinets": "cabinet",
@@ -72,6 +90,8 @@ LABEL_NORMALIZE: dict[str, str] = {
 # Runtime label map loaded from scannetv2-labels.combined.tsv (raw_category -> nyu40class).
 # Populated by load_scannet_label_map(); empty dict = fall back to LABEL_NORMALIZE only.
 _SCANNET_LABEL_MAP: dict[str, str] = {}
+_DEFAULT_SCANNET_LABEL_MAP_PATH = Path(__file__).resolve().parent.parent / "scannetv2-labels.combined.tsv"
+_SCANNET_LABEL_MAP_LOAD_ATTEMPTED = False
 # Concrete object categories that ScanNet collapses into nyu40 "otherprop"
 # but that are still useful, referable objects for this benchmark.
 _OTHERPROP_ALLOWLIST: set[str] = {
@@ -99,6 +119,17 @@ _OTHERPROP_ALLOWLIST: set[str] = {
     "vacuum cleaner",
     "fire extinguisher",
 }
+_OTHERFURNITURE_ALLOWLIST: set[str] = {
+    "radiator",
+    "trash can",
+    "washing machine",
+    "clothes dryer",
+    "piano",
+    "wardrobe",
+    "ladder",
+    "water cooler",
+    "ironing board",
+}
 
 
 def load_scannet_label_map(tsv_path: str | Path) -> None:
@@ -109,7 +140,9 @@ def load_scannet_label_map(tsv_path: str | Path) -> None:
     """
     import csv
     global _SCANNET_LABEL_MAP
+    global _SCANNET_LABEL_MAP_LOAD_ATTEMPTED
     tsv_path = Path(tsv_path)
+    _SCANNET_LABEL_MAP_LOAD_ATTEMPTED = True
     if not tsv_path.exists():
         logger.warning("ScanNet label map not found: %s - using built-in rules only", tsv_path)
         return
@@ -126,17 +159,33 @@ def load_scannet_label_map(tsv_path: str | Path) -> None:
     logger.info("Loaded %d label mappings from %s", len(mapping), tsv_path.name)
 
 
+def _ensure_default_scannet_label_map_loaded() -> None:
+    global _SCANNET_LABEL_MAP_LOAD_ATTEMPTED
+    if _SCANNET_LABEL_MAP or _SCANNET_LABEL_MAP_LOAD_ATTEMPTED:
+        return
+    _SCANNET_LABEL_MAP_LOAD_ATTEMPTED = True
+    if not _DEFAULT_SCANNET_LABEL_MAP_PATH.exists():
+        return
+    load_scannet_label_map(_DEFAULT_SCANNET_LABEL_MAP_PATH)
+
+
 def normalize_label(label: str) -> str:
     """Return the canonical form of *label* (lowercase, mapped)."""
     low = label.strip().lower()
     builtin = LABEL_NORMALIZE.get(low, low)
+    _ensure_default_scannet_label_map_loaded()
+    candidate = builtin
     if _SCANNET_LABEL_MAP:
         mapped = _SCANNET_LABEL_MAP.get(low)
         if mapped == "otherprop" and (low in _OTHERPROP_ALLOWLIST or builtin in _OTHERPROP_ALLOWLIST):
-            return builtin
-        if mapped:
-            return mapped
-    return builtin
+            candidate = builtin
+        elif mapped == "otherfurniture" and (
+            low in _OTHERFURNITURE_ALLOWLIST or builtin in _OTHERFURNITURE_ALLOWLIST
+        ):
+            candidate = builtin
+        elif mapped:
+            candidate = mapped
+    return LABEL_NORMALIZE.get(candidate, candidate)
 
 # Hard blacklist shared across parsing, question generation, and filtering.
 # Keep the effective blacklist closed under both built-in normalization and
