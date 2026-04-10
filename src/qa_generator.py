@@ -974,14 +974,14 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (rewritten — 方案B) ---
         "L3_coordinate_rotation_agent": [
-            "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
-            "If the room layout had been rotated {angle} degrees clockwise (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}?",
-            "Imagine the room was originally built rotated {angle} degrees clockwise (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?",
+            "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
+            "If the room layout had been rotated {angle} degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}?",
+            "Imagine the room was originally built rotated {angle} degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?",
         ],
 
         # --- Object-centric ---
         "L3_coordinate_rotation_object_centric": [
-            "Suppose this room had originally been oriented {angle} degrees clockwise (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be?",
+            "Suppose this room had originally been oriented {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be?",
         ],
 
         # --- Allocentric ---
