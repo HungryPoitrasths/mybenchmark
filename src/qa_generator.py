@@ -952,10 +952,10 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L2_object_rotate_object_centric": [
-            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face}, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?",
+            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?",
         ],
         "L2_object_move_object_centric": [
-            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face}, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?",
+            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?",
         ],
 
         # --- Allocentric ---
