@@ -6,9 +6,9 @@ with 3D axis-aligned bounding boxes.
 ScanNet file layout (inside each scene directory)::
 
     <scene_id>_vh_clean_2.ply                   # reconstructed mesh
-    <scene_id>_vh_clean_2.0.010000.segs.json    # vertex → segment mapping
-    <scene_id>_vh_clean.aggregation.json        # segment → instance + label
-    <scene_id>.txt                              # metadata (axisAlignment, …)
+    <scene_id>_vh_clean_2.0.010000.segs.json    # vertex -> segment mapping
+    <scene_id>_vh_clean.aggregation.json        # segment -> instance + label
+    <scene_id>.txt                              # metadata (axisAlignment, etc.)
 """
 
 from __future__ import annotations
@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 MIN_OBJECTS = 3
 
 # ---------------------------------------------------------------------------
-#  Label normalisation — applied before dedup / blacklist filtering.
+#  Label normalisation - applied before dedup / blacklist filtering.
 #  Maps plural forms, synonyms, and sub-categories to canonical labels so
 #  that the unique-label filter catches true duplicates.
 # ---------------------------------------------------------------------------
 LABEL_NORMALIZE: dict[str, str] = {
-    # Plural → singular
+    # Plural -> singular
     "books": "book",
     "doors": "door",
     "curtains": "curtain",
@@ -44,8 +44,9 @@ LABEL_NORMALIZE: dict[str, str] = {
     "papers": "paper",
     "pipes": "pipe",
     "mailboxes": "mailbox",
+    "suitcases": "suitcase",
     "cloth": "clothing",
-    # Sub-category → canonical
+    # Sub-category -> canonical
     "kitchen cabinet": "cabinet",
     "kitchen cabinets": "cabinet",
     "bathroom cabinet": "cabinet",
@@ -63,17 +64,45 @@ LABEL_NORMALIZE: dict[str, str] = {
     "coffee table": "table",
     "dining table": "table",
     "mini fridge": "refrigerator",
+    "potted plant": "plant",
     "shower wall": "wall",
     "ceiling fan": "fan",
 }
 
-# Runtime label map loaded from scannetv2-labels.combined.tsv (raw_category → nyu40class).
+# Runtime label map loaded from scannetv2-labels.combined.tsv (raw_category -> nyu40class).
 # Populated by load_scannet_label_map(); empty dict = fall back to LABEL_NORMALIZE only.
 _SCANNET_LABEL_MAP: dict[str, str] = {}
+# Concrete object categories that ScanNet collapses into nyu40 "otherprop"
+# but that are still useful, referable objects for this benchmark.
+_OTHERPROP_ALLOWLIST: set[str] = {
+    "backpack",
+    "plant",
+    "potted plant",
+    "stool",
+    "computer tower",
+    "keyboard",
+    "microwave",
+    "suitcase",
+    "suitcases",
+    "luggage",
+    "laptop",
+    "printer",
+    "copier",
+    "clock",
+    "basket",
+    "laundry basket",
+    "laundry hamper",
+    "bicycle",
+    "guitar",
+    "speaker",
+    "subwoofer",
+    "vacuum cleaner",
+    "fire extinguisher",
+}
 
 
 def load_scannet_label_map(tsv_path: str | Path) -> None:
-    """Load raw_category → nyu40class mapping from scannetv2-labels.combined.tsv.
+    """Load raw_category -> nyu40class mapping from scannetv2-labels.combined.tsv.
 
     Populates the module-level _SCANNET_LABEL_MAP used by normalize_label().
     Call this once at startup before parsing any scenes.
@@ -82,7 +111,7 @@ def load_scannet_label_map(tsv_path: str | Path) -> None:
     global _SCANNET_LABEL_MAP
     tsv_path = Path(tsv_path)
     if not tsv_path.exists():
-        logger.warning("ScanNet label map not found: %s — using built-in rules only", tsv_path)
+        logger.warning("ScanNet label map not found: %s - using built-in rules only", tsv_path)
         return
     mapping: dict[str, str] = {}
     with open(tsv_path, "r", encoding="utf-8") as f:
@@ -98,20 +127,16 @@ def load_scannet_label_map(tsv_path: str | Path) -> None:
 
 
 def normalize_label(label: str) -> str:
-    """Return the canonical form of *label* (lowercase, mapped).
-
-    Priority:
-      1. scannetv2-labels.combined.tsv (raw_category → nyu40class) if loaded
-      2. Built-in LABEL_NORMALIZE rules
-      3. Lowercase of the original label
-    """
+    """Return the canonical form of *label* (lowercase, mapped)."""
     low = label.strip().lower()
-    # When the ScanNet TSV is loaded it remains the source of truth; built-in
-    # normalization only fills gaps for categories absent from the TSV.
+    builtin = LABEL_NORMALIZE.get(low, low)
     if _SCANNET_LABEL_MAP:
-        return _SCANNET_LABEL_MAP.get(low, LABEL_NORMALIZE.get(low, low))
-    return LABEL_NORMALIZE.get(low, low)
-
+        mapped = _SCANNET_LABEL_MAP.get(low)
+        if mapped == "otherprop" and (low in _OTHERPROP_ALLOWLIST or builtin in _OTHERPROP_ALLOWLIST):
+            return builtin
+        if mapped:
+            return mapped
+    return builtin
 
 # Hard blacklist shared across parsing, question generation, and filtering.
 # Keep the effective blacklist closed under both built-in normalization and
@@ -127,7 +152,7 @@ _BASE_EXCLUDED_LABELS = {
     # Generic / uninformative
     "", "object", "otherfurniture", "otherprop", "otherstructure",
     "unknown", "misc", "stuff",
-    # Reflective / transparent — depth sensor unreliable
+    # Reflective / transparent - depth sensor unreliable
     "mirror", "glass", "monitor", "tv", "television",
     # Ambiguous / vague
     "case", "tube", "board", "sign", "frame", "paper", "lotion",
@@ -191,7 +216,7 @@ class InstanceMeshData:
 
 
 def _apply_axis_alignment(vertices: np.ndarray, M: np.ndarray) -> np.ndarray:
-    """Apply a 4×4 axis-alignment matrix to an (N, 3) vertex array."""
+    """Apply a 4x4 axis-alignment matrix to an (N, 3) vertex array."""
     R = M[:3, :3]
     t = M[:3, 3]
     return (R @ vertices.T).T + t
@@ -786,7 +811,7 @@ def parse_scene(
 
     if len(objects) < MIN_OBJECTS:
         logger.info(
-            "Scene %s has only %d objects (< %d) — skipping",
+            "Scene %s has only %d objects (< %d) - skipping",
             scene_id, len(objects), MIN_OBJECTS,
         )
         return None
@@ -834,3 +859,4 @@ def parse_all_scenes(
 
     logger.info("Parsed %d / %d scenes successfully", len(scenes), len(scene_dirs))
     return scenes
+
