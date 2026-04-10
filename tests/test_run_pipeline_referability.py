@@ -839,5 +839,239 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     write_frame_debug=True,
                 )
 
+    def test_run_pipeline_respects_max_scene_and_frame_limits_with_referability_cache(self) -> None:
+        root = make_case_dir("pipeline_cache_limits")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_ids = ["scene0000_00", "scene0001_00"]
+        scene_frames = {
+            "scene0000_00": ["000001.jpg", "000002.jpg"],
+            "scene0001_00": ["000003.jpg", "000004.jpg"],
+        }
+
+        for scene_id in scene_ids:
+            scene_dir = data_root / scene_id
+            (scene_dir / "pose").mkdir(parents=True)
+            (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        referability_cache = {
+            "version": "13.0",
+            "frames": {
+                scene_id: {
+                    image_name: {
+                        "frame_usable": True,
+                        "candidate_visible_object_ids": [1, 2],
+                        "crop_label_statuses": {"chair": "unique", "table": "unique"},
+                        "crop_label_counts": {"chair": 1, "table": 1},
+                        "crop_referable_object_ids": [1, 2],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {},
+                        "full_frame_label_counts": {},
+                        "referable_object_ids": [1, 2],
+                        "label_statuses": {"chair": "unique", "table": "unique"},
+                        "label_counts": {"chair": 1, "table": 1},
+                        "candidate_labels": ["chair", "table"],
+                        "label_to_object_ids": {"chair": [1], "table": [2]},
+                    }
+                    for image_name in image_names
+                }
+                for scene_id, image_names in scene_frames.items()
+            },
+        }
+
+        scenes = {
+            scene_id: {
+                "scene_id": scene_id,
+                "objects": [
+                    make_object(1, "chair"),
+                    make_object(2, "table"),
+                ],
+                "attachment_edges": [
+                    {"parent_id": 2, "child_id": 1, "type": "attachment"},
+                ],
+                "room_bounds": None,
+                "wall_objects": [],
+            }
+            for scene_id in scene_ids
+        }
+        generate_calls: list[str] = []
+
+        def fake_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            return scenes[scene_dir.name]
+
+        def fake_load_scannet_poses(scene_dir: Path, axis_alignment=None):
+            return {
+                image_name: make_camera_pose(image_name)
+                for image_name in scene_frames[scene_dir.name]
+            }
+
+        def fake_generate_all_questions(**kwargs):
+            generate_calls.append(kwargs["camera_pose"].image_name)
+            return [
+                {
+                    "question": f"Is {kwargs['camera_pose'].image_name} valid?",
+                    "answer": "A",
+                    "options": ["yes", "no"],
+                    "type": "attachment",
+                    "level": "L1",
+                }
+            ]
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", side_effect=fake_parse_scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", side_effect=fake_load_scannet_poses),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.90},
+                },
+            ),
+            patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=1,
+                max_frames=1,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        self.assertEqual(generate_calls, ["000001.jpg"])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["scene_id"], "scene0000_00")
+        self.assertEqual(questions[0]["image_name"], "000001.jpg")
+
+    def test_run_pipeline_finalizes_frame_debug_after_scene_level_flush(self) -> None:
+        root = make_case_dir("pipeline_frame_debug_finalize")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        referability_cache = {
+            "version": "13.0",
+            "frames": {
+                scene_id: {
+                    image_name: {
+                        "frame_usable": True,
+                        "candidate_visible_object_ids": [1, 2],
+                        "crop_label_statuses": {"lamp": "unique", "table": "unique"},
+                        "crop_label_counts": {"lamp": 1, "table": 1},
+                        "crop_referable_object_ids": [1, 2],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {},
+                        "full_frame_label_counts": {},
+                        "referable_object_ids": [1, 2],
+                        "label_statuses": {"lamp": "unique", "table": "unique"},
+                        "label_counts": {"lamp": 1, "table": 1},
+                        "candidate_labels": ["lamp", "table"],
+                        "label_to_object_ids": {"lamp": [1], "table": [2]},
+                    }
+                }
+            },
+        }
+
+        scene = {
+            "scene_id": scene_id,
+            "objects": [
+                make_object(1, "lamp"),
+                make_object(2, "table"),
+            ],
+            "attachment_edges": [
+                {"parent_id": 2, "child_id": 1, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.92},
+                    2: {"bbox_in_frame_ratio": 0.88},
+                },
+            ),
+            patch.object(
+                run_pipeline_module,
+                "generate_all_questions",
+                return_value=[
+                    {
+                        "question": "Is the lamp on the table?",
+                        "answer": "A",
+                        "options": ["yes", "no"],
+                        "type": "attachment",
+                        "level": "L1",
+                        "mentioned_objects": [
+                            {"role": "target", "label": "lamp", "obj_id": 1},
+                            {"role": "reference", "label": "table", "obj_id": 2},
+                        ],
+                    }
+                ],
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=True,
+            )
+
+        self.assertEqual(len(questions), 1)
+        debug_path = output_dir / "frame_debug" / f"{scene_id}.json"
+        with open(debug_path, "r", encoding="utf-8") as f:
+            debug_record = json.load(f)
+
+        self.assertEqual(len(debug_record["frames"]), 1)
+        frame_record = debug_record["frames"][0]
+        self.assertEqual(len(frame_record["generated_questions"]), 1)
+        self.assertEqual(len(frame_record["final_questions"]), 1)
+        self.assertEqual(frame_record["final_question_count"], 1)
+        self.assertEqual(debug_record["summary"]["generated_question_count"], 1)
+        self.assertEqual(debug_record["summary"]["final_question_count"], 1)
+
 if __name__ == "__main__":
     unittest.main()

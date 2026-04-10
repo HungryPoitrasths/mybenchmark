@@ -470,12 +470,26 @@ def _instance_surface_sample_metadata(
     )
 
 
+_DISTANCE_GEOMETRY_CACHE_TOKEN_KEY = "_distance_geometry_cache_token"
+
+
+def _distance_geometry_cache_token(
+    instance_mesh_data: InstanceMeshData,
+) -> tuple[int, int, int]:
+    return (
+        id(instance_mesh_data),
+        len(getattr(instance_mesh_data, "vertices", [])),
+        len(getattr(instance_mesh_data, "faces", [])),
+    )
+
+
 def _clear_distance_geometry_fields(obj: dict[str, Any]) -> None:
     for key in (
         DISTANCE_SURFACE_POINTS_KEY,
         DISTANCE_SURFACE_TRIANGLE_IDS_KEY,
         DISTANCE_SURFACE_BARYCENTRICS_KEY,
         DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
+        _DISTANCE_GEOMETRY_CACHE_TOKEN_KEY,
     ):
         obj.pop(key, None)
 
@@ -490,10 +504,15 @@ def enrich_objects_with_distance_geometry(
             _clear_distance_geometry_fields(obj)
         return
 
+    cache_token = _distance_geometry_cache_token(instance_mesh_data)
+    if objects and all(obj.get(_DISTANCE_GEOMETRY_CACHE_TOKEN_KEY) == cache_token for obj in objects):
+        return
+
     vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
     faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)
     for obj in objects:
         _clear_distance_geometry_fields(obj)
+        obj[_DISTANCE_GEOMETRY_CACHE_TOKEN_KEY] = cache_token
         obj_id = int(obj["id"])
         surface_points = _instance_surface_samples(instance_mesh_data, obj_id)
         if len(surface_points) == 0:
@@ -6680,6 +6699,16 @@ def generate_all_questions(
             )
             return questions
 
+        if trace_recorder is None:
+            for question in questions:
+                trace_id = question.get("trace_question_id")
+                if not trace_id:
+                    trace_counter += 1
+                    trace_id = f"{trace_id_prefix}_{trace_counter:04d}"
+                    question["trace_question_id"] = trace_id
+                question["_trace_source"] = generator_name
+            return questions
+
         question_ids: list[str] = []
         snapshots: list[dict[str, Any]] = []
         for question in questions:
@@ -6714,6 +6743,8 @@ def generate_all_questions(
             return questions
 
         kept_questions = random.sample(questions, cap)
+        if trace_recorder is None:
+            return kept_questions
         kept_ids = {str(question.get("trace_question_id")) for question in kept_questions}
         removed_ids = [
             str(question.get("trace_question_id"))
@@ -6738,6 +6769,8 @@ def generate_all_questions(
         *,
         l1_occlusion_subject_ids: set[int],
     ) -> None:
+        if trace_recorder is None:
+            return
         visible_set = (
             _normalize_object_id_set(visible_object_ids, "visible_object_ids")
             if visible_object_ids is not None else {int(obj["id"]) for obj in original_objects}
@@ -7579,18 +7612,19 @@ def generate_all_questions(
             id_to_object,
         )
 
-    _emit_generation_trace(
-        trace_recorder,
-        {
-            "event": "generation_complete",
-            "stage": "qa_generation",
-            "count": len(all_questions),
-            "question_ids": [
-                str(question.get("trace_question_id"))
-                for question in all_questions
-                if question.get("trace_question_id")
-            ],
-        },
-    )
+    if trace_recorder is not None:
+        _emit_generation_trace(
+            trace_recorder,
+            {
+                "event": "generation_complete",
+                "stage": "qa_generation",
+                "count": len(all_questions),
+                "question_ids": [
+                    str(question.get("trace_question_id"))
+                    for question in all_questions
+                    if question.get("trace_question_id")
+                ],
+            },
+        )
     logger.info("Generated %d questions total", len(all_questions))
     return all_questions

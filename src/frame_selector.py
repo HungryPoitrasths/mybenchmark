@@ -435,7 +435,7 @@ def build_selector_visibility_audit_from_meta(
     }
 
 
-def build_selector_visibility_audit(
+def _build_selector_visibility_meta(
     obj: dict[str, Any],
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
@@ -443,8 +443,8 @@ def build_selector_visibility_audit(
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 6.0,
+    include_roi_metrics: bool = False,
 ) -> dict[str, Any]:
-    """Project one object and explain selector visibility gating."""
     center = np.array(obj["center"], dtype=np.float64)
     uv, depth = project_to_image(center, pose, intrinsics)
 
@@ -455,11 +455,34 @@ def build_selector_visibility_audit(
         "projected_area_px": 0.0,
     }
     depth_in_range = bool(min_depth < depth <= max_depth)
-    if depth_in_range and not is_in_image(uv, intrinsics, margin=margin):
+    center_in_image_margin = is_in_image(uv, intrinsics, margin=margin)
+    if depth_in_range and (include_roi_metrics or not center_in_image_margin):
         roi_info = _project_object_roi(obj, pose, intrinsics)
         meta["bbox_in_frame_ratio"] = float(roi_info["bbox_in_frame_ratio"])
         meta["projected_area_px"] = float(roi_info["projected_area_px"])
+    return meta
 
+
+def build_selector_visibility_audit(
+    obj: dict[str, Any],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    *,
+    margin: int = 80,
+    min_depth: float = 0.3,
+    max_depth: float = 6.0,
+    include_roi_metrics: bool = False,
+) -> dict[str, Any]:
+    """Project one object and explain selector visibility gating."""
+    meta = _build_selector_visibility_meta(
+        obj,
+        pose,
+        intrinsics,
+        margin=margin,
+        min_depth=min_depth,
+        max_depth=max_depth,
+        include_roi_metrics=include_roi_metrics,
+    )
     return build_selector_visibility_audit_from_meta(
         meta,
         intrinsics,
@@ -476,7 +499,8 @@ def get_visible_objects(
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 6.0,
-) -> list[dict]:
+    return_audits: bool = False,
+) -> list[dict] | tuple[list[dict], dict[int, dict[str, Any]]]:
     """Return objects whose projected footprint is meaningfully visible.
 
     The old centre-only rule was too strict for attachment/support relations:
@@ -496,6 +520,7 @@ def get_visible_objects(
                excluding the next room.
     """
     visible = []
+    visibility_audits_by_obj_id: dict[int, dict[str, Any]] = {}
     for obj in objects:
         audit = build_selector_visibility_audit(
             obj,
@@ -504,9 +529,14 @@ def get_visible_objects(
             margin=margin,
             min_depth=min_depth,
             max_depth=max_depth,
+            include_roi_metrics=return_audits,
         )
         if audit["selector_passed"]:
             visible.append(obj)
+            if return_audits:
+                visibility_audits_by_obj_id[int(obj["id"])] = audit
+    if return_audits:
+        return visible, visibility_audits_by_obj_id
     return visible
 
 
@@ -527,13 +557,25 @@ def _count_attachment_objects(visible: list[dict], attachment_ids: set[int]) -> 
 
 def _count_well_cropped_visible_objects(
     visible: list[dict],
-    pose: CameraPose,
-    intrinsics: CameraIntrinsics,
+    pose: CameraPose | None = None,
+    intrinsics: CameraIntrinsics | None = None,
+    *,
+    visibility_audits_by_obj_id: dict[int, dict[str, Any]] | None = None,
 ) -> int:
     count = 0
     for obj in visible:
-        roi_info = _project_object_roi(obj, pose, intrinsics)
-        if float(roi_info["bbox_in_frame_ratio"]) >= FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN:
+        audit = (visibility_audits_by_obj_id or {}).get(int(obj["id"]))
+        if audit is not None:
+            bbox_in_frame_ratio = float(audit.get("bbox_in_frame_ratio", 0.0) or 0.0)
+        else:
+            if pose is None or intrinsics is None:
+                raise ValueError(
+                    "_count_well_cropped_visible_objects requires either precomputed audits "
+                    "or both pose and intrinsics"
+                )
+            roi_info = _project_object_roi(obj, pose, intrinsics)
+            bbox_in_frame_ratio = float(roi_info["bbox_in_frame_ratio"])
+        if bbox_in_frame_ratio >= FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN:
             count += 1
     return count
 
@@ -605,9 +647,6 @@ def select_frames(
     for i, (image_name, pose) in enumerate(poses.items()):
         if i % FRAME_STRIDE != 0:
             continue
-        visible = get_visible_objects(objects, pose, intrinsics)
-        if len(visible) < MIN_VISIBLE_OBJECTS:
-            continue
 
         # Image quality gate — reject blurry / dark / overexposed frames
         image_path = color_dir / image_name
@@ -619,8 +658,20 @@ def select_frames(
             n_quality_rejected += 1
             continue
 
+        visible, visible_audits = get_visible_objects(
+            objects,
+            pose,
+            intrinsics,
+            return_audits=True,
+        )
+        if len(visible) < MIN_VISIBLE_OBJECTS:
+            continue
+
         n_attachment = _count_attachment_objects(visible, attachment_ids)
-        crop_ge_60_count = _count_well_cropped_visible_objects(visible, pose, intrinsics)
+        crop_ge_60_count = _count_well_cropped_visible_objects(
+            visible,
+            visibility_audits_by_obj_id=visible_audits,
+        )
         base_score, score = _frame_candidate_score(
             n_visible=len(visible),
             n_attachment=n_attachment,

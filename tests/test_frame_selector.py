@@ -69,6 +69,25 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(count, 2)
 
+    def test_count_well_cropped_visible_objects_reuses_precomputed_audits(self) -> None:
+        visible = [make_object(1, "cup"), make_object(2, "table")]
+        audits = {
+            1: {"bbox_in_frame_ratio": 0.60},
+            2: {"bbox_in_frame_ratio": 0.59},
+        }
+
+        with patch.object(
+            frame_selector,
+            "_project_object_roi",
+            side_effect=AssertionError("should use cached audit ratios"),
+        ):
+            count = frame_selector._count_well_cropped_visible_objects(
+                visible,
+                visibility_audits_by_obj_id=audits,
+            )
+
+        self.assertEqual(count, 1)
+
     def test_select_frames_adds_crop_bonus_to_score(self) -> None:
         root = make_case_dir("frame_selector")
         self.addCleanup(shutil.rmtree, root, True)
@@ -90,7 +109,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "load_scannet_poses",
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
-            patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[(objects, {}), (objects, {})]),
             patch.object(frame_selector, "passes_image_quality", return_value=True),
             patch.object(frame_selector, "_count_attachment_objects", return_value=0),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[0, 2]),
@@ -102,6 +121,37 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(results[0]["base_score"], 3)
         self.assertEqual(results[0]["crop_ge_60_count"], 2)
         self.assertEqual(results[0]["score"], 23)
+
+    def test_select_frames_checks_image_quality_before_visibility(self) -> None:
+        root = make_case_dir("frame_selector_quality_first")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_name = "000000.jpg"
+        (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name)},
+            ),
+            patch.object(frame_selector, "passes_image_quality", return_value=False),
+            patch.object(
+                frame_selector,
+                "get_visible_objects",
+                side_effect=AssertionError("visibility should not run on rejected frames"),
+            ),
+        ):
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=1)
+
+        self.assertEqual(results, [])
 
 
 if __name__ == "__main__":

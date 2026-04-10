@@ -1,9 +1,11 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
 from src.qa_generator import (
+    enrich_objects_with_distance_geometry,
     _ensure_question_mentions,
     _enforce_in_frame_mentions,
     _cap_question_groups,
@@ -51,6 +53,90 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
+    def test_enrich_objects_with_distance_geometry_skips_repeat_work_for_same_mesh(self) -> None:
+        objects = [make_object(1, "chair")]
+        instance_mesh_data = SimpleNamespace(
+            vertices=np.zeros((1, 3), dtype=np.float64),
+            faces=np.zeros((1, 3), dtype=np.int64),
+        )
+        surface_points = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
+        triangle_ids = np.array([0], dtype=np.int64)
+        barycentrics = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+
+        with (
+            patch("src.qa_generator._instance_surface_samples", return_value=surface_points) as samples_mock,
+            patch(
+                "src.qa_generator._instance_surface_sample_metadata",
+                return_value=(triangle_ids, barycentrics),
+            ) as metadata_mock,
+        ):
+            enrich_objects_with_distance_geometry(objects, instance_mesh_data)
+            enrich_objects_with_distance_geometry(objects, instance_mesh_data)
+
+        self.assertEqual(samples_mock.call_count, 1)
+        self.assertEqual(metadata_mock.call_count, 1)
+
+    def test_generate_all_questions_skips_trace_snapshots_without_trace_recorder(self) -> None:
+        objects = [
+            make_object(1, "cup"),
+            make_object(2, "table"),
+            make_object(3, "lamp"),
+        ]
+        generated_question = {
+            "level": "L2",
+            "type": "object_move_agent",
+            "question": "If the table moves, where is the cup relative to the lamp?",
+            "options": ["left", "right", "front", "back"],
+            "answer": "A",
+            "correct_value": "left",
+            "moved_obj_id": 2,
+            "moved_obj_label": "table",
+            "query_obj_id": 1,
+            "query_obj_label": "cup",
+            "obj_c_id": 3,
+            "obj_c_label": "lamp",
+            "mentioned_objects": [
+                {"role": "moved_object", "obj_id": 2, "label": "table"},
+                {"role": "query_object", "obj_id": 1, "label": "cup"},
+                {"role": "reference_object", "obj_id": 3, "label": "lamp"},
+            ],
+        }
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move", return_value=[generated_question]),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l3_attachment_chain", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+            patch(
+                "src.qa_generator.json.dumps",
+                side_effect=AssertionError("trace snapshot should be skipped"),
+            ),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                support_chain_graph={},
+                support_chain_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3],
+                referable_object_ids=[1, 2, 3],
+                attachment_edges=[],
+            )
+
+        self.assertIn("trace_question_id", generated_question)
+        self.assertEqual(generated_question.get("_trace_source"), "generate_l2_object_move")
+
     def test_ensure_question_mentions_includes_obj_c_id(self) -> None:
         question = {
             "question": "If the table moves, where is the cup relative to the lamp?",
