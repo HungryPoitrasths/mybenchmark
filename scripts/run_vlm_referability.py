@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.frame_selector import (
+    build_selector_visibility_audit_from_meta,
     compute_frame_object_visibility,
     refine_visible_ids_with_depth,
     select_frames,
@@ -421,6 +422,52 @@ def _refine_candidate_visible_object_ids(
         logger.warning("Depth refine failed: %s", exc)
         return selector_ids, "projection_fallback"
     return sorted({int(obj_id) for obj_id in refined}), "depth_refined"
+
+
+def _build_visibility_audit_by_object_id(
+    scene_objects: list[dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    visibility_by_obj_id: dict[int, dict[str, Any]],
+    color_intrinsics: CameraIntrinsics,
+    selector_visible_object_ids: list[int],
+    candidate_visible_object_ids: list[int],
+    candidate_visibility_source: str,
+) -> dict[str, dict[str, Any]]:
+    selector_set = {int(obj_id) for obj_id in selector_visible_object_ids}
+    candidate_set = {int(obj_id) for obj_id in candidate_visible_object_ids}
+    audit_by_obj_id: dict[str, dict[str, Any]] = {}
+
+    for obj in scene_objects:
+        obj_id = int(obj.get("id", -1))
+        if obj_id < 0:
+            continue
+        resolved = objects_by_id.get(obj_id, obj)
+        meta = visibility_by_obj_id.get(obj_id, {})
+        selector_audit = build_selector_visibility_audit_from_meta(
+            meta,
+            color_intrinsics,
+        )
+        candidate_considered = obj_id in selector_set
+        candidate_passed = obj_id in candidate_set
+        candidate_rejection_reasons: list[str] = []
+        if not candidate_considered:
+            candidate_rejection_reasons.append("not_in_selector_pool")
+        elif not candidate_passed:
+            if candidate_visibility_source == "depth_refined":
+                candidate_rejection_reasons.append("depth_refined_not_visible")
+            else:
+                candidate_rejection_reasons.append("not_applicable")
+
+        audit_by_obj_id[str(obj_id)] = {
+            "obj_id": obj_id,
+            "label": str(resolved.get("label", "")).strip().lower(),
+            **selector_audit,
+            "candidate_considered": bool(candidate_considered),
+            "candidate_passed": bool(candidate_passed),
+            "candidate_rejection_reasons": candidate_rejection_reasons,
+        }
+
+    return audit_by_obj_id
 
 
 def _count_labels_for_object_ids(
@@ -981,6 +1028,25 @@ def _compute_frame_referability_entry(
         if frame_selection_score is not None
         else _frame_selection_score(selector_score_value, normalized_frame_info)
     )
+    visibility_by_obj_id = compute_frame_object_visibility(
+        scene_objects,
+        camera_pose,
+        color_intrinsics,
+        image_path=image_path,
+        depth_image=depth_image,
+        depth_intrinsics=depth_intrinsics,
+        strict_mode=False,
+    )
+    visibility_audit_by_object_id = _build_visibility_audit_by_object_id(
+        scene_objects,
+        objects_by_id,
+        visibility_by_obj_id,
+        color_intrinsics,
+        selector_visible_object_ids,
+        candidate_visible_object_ids,
+        candidate_visibility_source,
+    )
+
     object_reviews: dict[int, dict[str, Any]] = {}
     crop_label_statuses: dict[str, str] = {}
     crop_label_counts: dict[str, int] = {}
@@ -993,15 +1059,6 @@ def _compute_frame_referability_entry(
     referable_object_ids: list[int] = []
 
     if normalized_frame_info["frame_usable"]:
-        visibility_by_obj_id = compute_frame_object_visibility(
-            scene_objects,
-            camera_pose,
-            color_intrinsics,
-            image_path=image_path,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-            strict_mode=False,
-        )
         image_b64: str | None = None
         for obj_id in candidate_visible_object_ids:
             obj = objects_by_id.get(int(obj_id))
@@ -1104,6 +1161,7 @@ def _compute_frame_referability_entry(
             str(label): [int(obj_id) for obj_id in obj_ids]
             for label, obj_ids in sorted(label_to_object_ids.items())
         },
+        "visibility_audit_by_object_id": visibility_audit_by_object_id,
         "object_reviews": {
             str(obj_id): review
             for obj_id, review in sorted(object_reviews.items())
@@ -1137,6 +1195,7 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
         "label_to_object_ids",
         "selector_visible_object_ids",
         "selector_visible_label_counts",
+        "visibility_audit_by_object_id",
         "object_reviews",
         "crop_label_statuses",
         "crop_label_counts",

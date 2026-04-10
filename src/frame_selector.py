@@ -378,6 +378,97 @@ FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.60
 FRAME_CROP_BONUS_WEIGHT = 10
 
 
+def build_selector_visibility_audit_from_meta(
+    meta: dict[str, Any],
+    intrinsics: CameraIntrinsics,
+    *,
+    margin: int = 80,
+    min_depth: float = 0.3,
+    max_depth: float = 6.0,
+) -> dict[str, Any]:
+    """Explain whether an object passes selector visibility gating."""
+    center_uv_px = meta.get("center_uv_px")
+    uv = None
+    if isinstance(center_uv_px, (list, tuple)) and len(center_uv_px) == 2:
+        try:
+            uv = np.array([float(center_uv_px[0]), float(center_uv_px[1])], dtype=np.float64)
+        except (TypeError, ValueError):
+            uv = None
+
+    depth_m = float(meta.get("depth_m", 0.0) or 0.0)
+    depth_in_range = bool(min_depth < depth_m <= max_depth)
+    center_in_image_margin = is_in_image(uv, intrinsics, margin=margin)
+    bbox_in_frame_ratio = float(meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
+    projected_area_px = float(meta.get("projected_area_px", 0.0) or 0.0)
+
+    decision = "rejected"
+    selector_passed = False
+    rejection_reasons: list[str] = []
+
+    if not depth_in_range:
+        rejection_reasons.append("depth_out_of_range")
+    elif center_in_image_margin:
+        decision = "selected_center"
+        selector_passed = True
+    elif (
+        bbox_in_frame_ratio >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
+        and projected_area_px >= VISIBLE_PROJECTED_AREA_MIN
+    ):
+        decision = "selected_roi_fallback"
+        selector_passed = True
+    else:
+        rejection_reasons.append("center_not_in_margin")
+        if bbox_in_frame_ratio < VISIBLE_BBOX_IN_FRAME_RATIO_MIN:
+            rejection_reasons.append("bbox_in_frame_ratio_below_threshold")
+        if projected_area_px < VISIBLE_PROJECTED_AREA_MIN:
+            rejection_reasons.append("projected_area_below_threshold")
+
+    return {
+        "center_depth_m": depth_m,
+        "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
+        "center_in_image_margin80": bool(center_in_image_margin),
+        "bbox_in_frame_ratio": bbox_in_frame_ratio,
+        "projected_area_px": projected_area_px,
+        "selector_passed": selector_passed,
+        "selector_decision": decision,
+        "selector_rejection_reasons": rejection_reasons,
+    }
+
+
+def build_selector_visibility_audit(
+    obj: dict[str, Any],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    *,
+    margin: int = 80,
+    min_depth: float = 0.3,
+    max_depth: float = 6.0,
+) -> dict[str, Any]:
+    """Project one object and explain selector visibility gating."""
+    center = np.array(obj["center"], dtype=np.float64)
+    uv, depth = project_to_image(center, pose, intrinsics)
+
+    meta: dict[str, Any] = {
+        "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
+        "depth_m": float(depth),
+        "bbox_in_frame_ratio": 0.0,
+        "projected_area_px": 0.0,
+    }
+    depth_in_range = bool(min_depth < depth <= max_depth)
+    if depth_in_range and not is_in_image(uv, intrinsics, margin=margin):
+        roi_info = _project_object_roi(obj, pose, intrinsics)
+        meta["bbox_in_frame_ratio"] = float(roi_info["bbox_in_frame_ratio"])
+        meta["projected_area_px"] = float(roi_info["projected_area_px"])
+
+    return build_selector_visibility_audit_from_meta(
+        meta,
+        intrinsics,
+        margin=margin,
+        min_depth=min_depth,
+        max_depth=max_depth,
+    )
+
+
 def get_visible_objects(
     objects: list[dict],
     pose: CameraPose,
@@ -406,20 +497,15 @@ def get_visible_objects(
     """
     visible = []
     for obj in objects:
-        center = np.array(obj["center"])
-        uv, depth = project_to_image(center, pose, intrinsics)
-        if not (min_depth < depth <= max_depth):
-            continue
-
-        if is_in_image(uv, intrinsics, margin=margin):
-            visible.append(obj)
-            continue
-
-        roi_info = _project_object_roi(obj, pose, intrinsics)
-        if (
-            roi_info["bbox_in_frame_ratio"] >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
-            and roi_info["projected_area_px"] >= VISIBLE_PROJECTED_AREA_MIN
-        ):
+        audit = build_selector_visibility_audit(
+            obj,
+            pose,
+            intrinsics,
+            margin=margin,
+            min_depth=min_depth,
+            max_depth=max_depth,
+        )
+        if audit["selector_passed"]:
             visible.append(obj)
     return visible
 
