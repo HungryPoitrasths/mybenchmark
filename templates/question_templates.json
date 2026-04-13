@@ -1,8 +1,8 @@
 {
   "L1_direction_agent": [
-    "From the camera's viewpoint, {obj_a} is in which direction relative to {obj_b}?",
-    "Looking at the scene from the camera's perspective, where is {obj_a} positioned relative to {obj_b}?",
-    "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}?"
+    "From the camera's viewpoint, {obj_a} is in which direction relative to {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)",
+    "Looking at the scene from the camera's perspective, where is {obj_a} positioned relative to {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)",
+    "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)"
   ],
   "L1_occlusion": [
     "What is the occlusion status of {obj_a} in the current view? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
@@ -19,9 +19,9 @@
     "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?"
   ],
   "L2_object_move_agent": [
-    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
-    "From the camera's perspective, if we move {obj_a} {direction_with_camera_hint} by {distance}, where is {obj_b} relative to {obj_c}?",
-    "From the camera's perspective, suppose {obj_a} is shifted {direction_with_camera_hint} by {distance}. After this change, what is the spatial relation of {obj_b} with respect to {obj_c}?"
+    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}? (Use {obj_c} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)",
+    "From the camera's perspective, if we move {obj_a} {direction_with_camera_hint} by {distance}, where is {obj_b} relative to {obj_c}? (Use {obj_c} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)",
+    "From the camera's perspective, suppose {obj_a} is shifted {direction_with_camera_hint} by {distance}. After this change, what is the spatial relation of {obj_b} with respect to {obj_c}? (Use {obj_c} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)"
   ],
   "L2_object_move_distance": [
     "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?",
@@ -68,9 +68,9 @@
     "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?"
   ],
   "L3_coordinate_rotation_agent": [
-    "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
-    "If the room layout had been rotated {angle} degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}?",
-    "Imagine the room was originally built rotated {angle} degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?"
+    "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)",
+    "If the room layout had been rotated {angle} degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)",
+    "Imagine the room was originally built rotated {angle} degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right.)"
   ],
   "L3_coordinate_rotation_object_centric": [
     "Suppose this room had originally been oriented {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be?"

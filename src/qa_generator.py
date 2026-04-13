@@ -172,6 +172,16 @@ OCCLUSION_DEFINITION_NOTE = (
     "Here, 'occluded' means blocked by another object; being partly outside "
     "the image frame does not count as occlusion."
 )
+CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B = (
+    "(Use {obj_b} as the reference origin and align the axes with the camera "
+    "coordinate frame: front means farther from the camera, back means toward "
+    "the camera, and left/right follow the image left/right.)"
+)
+CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C = (
+    "(Use {obj_c} as the reference origin and align the axes with the camera "
+    "coordinate frame: front means farther from the camera, back means toward "
+    "the camera, and left/right follow the image left/right.)"
+)
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.1
 DISTANCE_MOVE_SEARCH_MAX_M = 3.0
@@ -899,9 +909,9 @@ def _default_templates() -> dict:
 
         # --- Ego-centric ---
         "L1_direction_agent": [
-            "From the camera's viewpoint, {obj_a} is in which direction relative to {obj_b}?",
-            "Looking at the scene from the camera's perspective, where is {obj_a} positioned relative to {obj_b}?",
-            "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}?",
+            f"From the camera's viewpoint, {{obj_a}} is in which direction relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"Looking at the scene from the camera's perspective, where is {{obj_a}} positioned relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"From the current camera perspective, what is the spatial relationship of {{obj_a}} to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
         ],
         "L1_distance": [
             "What is the approximate shortest distance between {obj_a} and {obj_b}, measured from their closest points?",
@@ -929,8 +939,8 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (existing) ---
         "L2_object_move_agent": [
-            "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}?",
-            "From the camera's perspective, if we move {obj_a} {direction_with_camera_hint} by {distance}, where is {obj_b} relative to {obj_c}?",
+            f"From the camera's perspective, imagine moving {{obj_a}} {{direction_with_camera_hint}} by {{distance}}. After this change, what is the relative position of {{obj_b}} to {{obj_c}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C}",
+            f"From the camera's perspective, if we move {{obj_a}} {{direction_with_camera_hint}} by {{distance}}, where is {{obj_b}} relative to {{obj_c}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C}",
         ],
         "L2_object_move_distance": [
             "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?",
@@ -974,9 +984,9 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (rewritten — 方案B) ---
         "L3_coordinate_rotation_agent": [
-            "Suppose this room had originally been designed with its orientation rotated {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {obj_a} relative to {obj_b}?",
-            "If the room layout had been rotated {angle} degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {obj_a} be relative to {obj_b}?",
-            "Imagine the room was originally built rotated {angle} degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {obj_a} from {obj_b}?",
+            f"Suppose this room had originally been designed with its orientation rotated {{angle}} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {{obj_a}} relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"If the room layout had been rotated {{angle}} degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {{obj_a}} be relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"Imagine the room was originally built rotated {{angle}} degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {{obj_a}} from {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
         ],
 
         # --- Object-centric ---
