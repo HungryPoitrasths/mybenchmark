@@ -316,11 +316,13 @@ def _render_instance_meshray_mask(
     color_intrinsics: Any,
     ray_caster: Any,
     instance_mesh_data: Any,
+    mask_stride: int = 4,
     hit_epsilon: float = 0.05,
 ) -> dict[str, Any]:
     target_tri_ids = _instance_triangle_id_set(instance_mesh_data, int(obj_id))
     height = int(color_intrinsics.height)
     width = int(color_intrinsics.width)
+    stride = max(1, int(mask_stride))
     empty_mask = np.zeros((height, width), dtype=bool)
     if not target_tri_ids:
         return {
@@ -329,6 +331,7 @@ def _render_instance_meshray_mask(
             "query_bbox": None,
             "query_pixel_count": 0,
             "visible_pixel_count": 0,
+            "mask_stride": stride,
         }
 
     vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
@@ -348,6 +351,7 @@ def _render_instance_meshray_mask(
             "query_bbox": None,
             "query_pixel_count": 0,
             "visible_pixel_count": 0,
+            "mask_stride": stride,
         }
 
     valid_uv = projected_uv[valid_vertex_mask]
@@ -362,14 +366,16 @@ def _render_instance_meshray_mask(
             "query_bbox": None,
             "query_pixel_count": 0,
             "visible_pixel_count": 0,
+            "mask_stride": stride,
         }
 
     grid_x, grid_y = np.meshgrid(
-        np.arange(x0, x1, dtype=np.float64) + 0.5,
-        np.arange(y0, y1, dtype=np.float64) + 0.5,
+        np.arange(x0, x1, stride, dtype=np.float64) + 0.5,
+        np.arange(y0, y1, stride, dtype=np.float64) + 0.5,
     )
     flat_us = grid_x.reshape(-1)
     flat_vs = grid_y.reshape(-1)
+    sample_width = int(grid_x.shape[1])
     directions = _pixel_rays_world(flat_us, flat_vs, camera_pose, color_intrinsics)
     origins = np.broadcast_to(
         np.asarray(camera_pose.position, dtype=np.float64),
@@ -410,9 +416,13 @@ def _render_instance_meshray_mask(
             continue
         if abs(float(any_dist) - float(target_dist)) > float(hit_epsilon):
             continue
-        local_y = int(ray_idx) // max(1, (x1 - x0))
-        local_x = int(ray_idx) % max(1, (x1 - x0))
-        mask[y0 + local_y, x0 + local_x] = True
+        local_y = int(ray_idx) // max(1, sample_width)
+        local_x = int(ray_idx) % max(1, sample_width)
+        block_x0 = x0 + (local_x * stride)
+        block_y0 = y0 + (local_y * stride)
+        block_x1 = min(x1, block_x0 + stride)
+        block_y1 = min(y1, block_y0 + stride)
+        mask[block_y0:block_y1, block_x0:block_x1] = True
         visible_pixel_count += 1
 
     return {
@@ -421,6 +431,7 @@ def _render_instance_meshray_mask(
         "query_bbox": [x0, y0, x1, y1],
         "query_pixel_count": int(len(flat_us)),
         "visible_pixel_count": int(visible_pixel_count),
+        "mask_stride": stride,
     }
 
 
@@ -487,6 +498,7 @@ def _build_meshray_visual_items(
     ray_caster: Any,
     instance_mesh_data_getter: Any,
     output_dir: Path,
+    mask_stride: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[int, np.ndarray], dict[int, dict[str, Any]]]:
     items: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
@@ -512,6 +524,7 @@ def _build_meshray_visual_items(
             color_intrinsics=color_intrinsics,
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT),
+            mask_stride=mask_stride,
         )
         mask = np.asarray(rendered["mask"], dtype=bool)
         if not np.any(mask):
@@ -542,6 +555,7 @@ def _build_meshray_visual_items(
                 "query_bbox": rendered.get("query_bbox"),
                 "query_pixel_count": int(rendered.get("query_pixel_count", 0) or 0),
                 "visible_pixel_count": int(rendered.get("visible_pixel_count", 0) or 0),
+                "mask_stride": int(rendered.get("mask_stride", mask_stride) or mask_stride),
                 "topology_status": str(
                     topology_quality_by_obj_id.get(int(obj_id), {}).get("status", "")
                 ).strip().lower(),
@@ -609,6 +623,12 @@ def main() -> None:
         help="Directory for overlay images and summary JSON",
     )
     parser.add_argument("--label_map", type=str, default=None)
+    parser.add_argument(
+        "--mask_stride",
+        type=int,
+        default=4,
+        help="Meshray mask sampling stride in pixels; larger is faster but coarser",
+    )
     args = parser.parse_args()
 
     if args.label_map:
@@ -824,6 +844,7 @@ def main() -> None:
             ray_caster=ray_caster,
             instance_mesh_data_getter=instance_mesh_data_getter,
             output_dir=label_output_dir,
+            mask_stride=int(args.mask_stride),
         )
 
         api_overlay = _overlay_mask_items(image, api_items)
@@ -849,6 +870,7 @@ def main() -> None:
             "candidate_visible_object_ids": candidate_visible_object_ids,
             "visible_matching_object_ids": visible_matching_object_ids,
             "anchor_candidate_object_ids": anchor_candidate_object_ids,
+            "mask_stride": int(args.mask_stride),
             "segmentation_error": segmentation_error,
             "raw_detection_count": len(raw_detections),
             "filtered_detection_count": len(filtered_detections),
