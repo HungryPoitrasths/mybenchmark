@@ -7,6 +7,7 @@ from unittest.mock import patch
 import numpy as np
 
 import src.frame_selector as frame_selector
+from src.scene_parser import InstanceMeshData
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 
 TEST_TMP_ROOT = Path(__file__).resolve().parent / "_tmp"
@@ -49,6 +50,42 @@ def make_object(obj_id: int, label: str) -> dict:
 
 
 class FrameSelectorTests(unittest.TestCase):
+    def test_project_object_mask_stats_skips_pathological_full_mask_extent(self) -> None:
+        intrinsics = make_camera_intrinsics()
+        pose = make_camera_pose("000000.jpg")
+        obj = {
+            "id": 1,
+            "label": "picture",
+            "center": [333.0, 333.0, 0.051],
+            "bbox_min": [0.0, 0.0, 0.051],
+            "bbox_max": [1000.0, 1000.0, 0.051],
+        }
+        instance_mesh_data = InstanceMeshData(
+            vertices=np.array(
+                [
+                    [0.0, 0.0, 0.051],
+                    [1000.0, 0.0, 0.051],
+                    [0.0, 1000.0, 0.051],
+                ],
+                dtype=np.float64,
+            ),
+            faces=np.array([[0, 1, 2]], dtype=np.int64),
+            triangle_ids_by_instance={1: np.array([0], dtype=np.int64)},
+            boundary_triangle_ids_by_instance={},
+            surface_points_by_instance={},
+        )
+
+        stats = frame_selector._project_object_mask_stats(
+            obj,
+            pose,
+            intrinsics,
+            instance_mesh_data,
+        )
+
+        self.assertEqual(stats["zbuffer_mask_in_frame_ratio"], 0.0)
+        self.assertEqual(stats["zbuffer_full_mask_area_px"], 0.0)
+        self.assertGreaterEqual(stats["zbuffer_mask_area_px"], 0.0)
+
     def test_count_well_cropped_visible_objects_uses_60_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 

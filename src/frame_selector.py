@@ -106,6 +106,9 @@ STRICT_PROJECTED_AREA_MIN = 800.0
 STRICT_IN_FRAME_RATIO_MIN = 0.6
 STRICT_EDGE_MARGIN_MIN = 12.0
 STRICT_LOCAL_SHARPNESS_MIN = 45.0
+PROJECTED_MASK_NEAR_CLIP_M = 0.05
+PROJECTED_MASK_MAX_DIM_MULTIPLIER = 8
+PROJECTED_MASK_MAX_AREA_MULTIPLIER = 16
 
 
 def _instance_triangle_id_array(
@@ -245,8 +248,8 @@ def _project_object_mask_stats(
     projected_uv, projected_depths = _project_vertices_to_image(local_vertices, pose, intrinsics)
 
     valid_face_mask = (
-        np.all(projected_depths[local_faces] > 1e-6, axis=1)
-        & ~np.any(np.isnan(projected_uv[local_faces]), axis=(1, 2))
+        np.all(projected_depths[local_faces] > PROJECTED_MASK_NEAR_CLIP_M, axis=1)
+        & np.all(np.isfinite(projected_uv[local_faces]), axis=(1, 2))
     )
     if not np.any(valid_face_mask):
         return {
@@ -257,6 +260,19 @@ def _project_object_mask_stats(
 
     valid_faces = local_faces[valid_face_mask]
     face_uv = projected_uv[valid_faces]
+    image_width = max(1, int(intrinsics.width))
+    image_height = max(1, int(intrinsics.height))
+    in_frame_mask = _rasterize_projected_triangles(
+        projected_uv,
+        projected_depths,
+        valid_faces,
+        width=image_width,
+        height=image_height,
+        x_offset=0,
+        y_offset=0,
+    )
+    in_frame_area_px = int(in_frame_mask.sum())
+
     xs = face_uv[..., 0]
     ys = face_uv[..., 1]
     full_x_min = int(np.floor(float(np.min(xs))))
@@ -265,6 +281,29 @@ def _project_object_mask_stats(
     full_y_max = int(np.ceil(float(np.max(ys))))
     full_width = max(1, full_x_max - full_x_min + 1)
     full_height = max(1, full_y_max - full_y_min + 1)
+    max_full_width = max(1, image_width * PROJECTED_MASK_MAX_DIM_MULTIPLIER)
+    max_full_height = max(1, image_height * PROJECTED_MASK_MAX_DIM_MULTIPLIER)
+    max_full_area = max(1, image_width * image_height * PROJECTED_MASK_MAX_AREA_MULTIPLIER)
+    full_area_budget = full_width * full_height
+
+    if (
+        full_width > max_full_width
+        or full_height > max_full_height
+        or full_area_budget > max_full_area
+    ):
+        logger.warning(
+            "Skipping pathological projected full mask for obj_id=%s: roi=%dx%d, image=%dx%d",
+            obj_id,
+            full_width,
+            full_height,
+            image_width,
+            image_height,
+        )
+        return {
+            "zbuffer_mask_in_frame_ratio": 0.0,
+            "zbuffer_mask_area_px": float(in_frame_area_px),
+            "zbuffer_full_mask_area_px": 0.0,
+        }
 
     full_mask = _rasterize_projected_triangles(
         projected_uv,
@@ -275,17 +314,7 @@ def _project_object_mask_stats(
         x_offset=full_x_min,
         y_offset=full_y_min,
     )
-    in_frame_mask = _rasterize_projected_triangles(
-        projected_uv,
-        projected_depths,
-        valid_faces,
-        width=int(intrinsics.width),
-        height=int(intrinsics.height),
-        x_offset=0,
-        y_offset=0,
-    )
     full_area_px = int(full_mask.sum())
-    in_frame_area_px = int(in_frame_mask.sum())
     return {
         "zbuffer_mask_in_frame_ratio": (
             float(in_frame_area_px / full_area_px) if full_area_px > 0 else 0.0
