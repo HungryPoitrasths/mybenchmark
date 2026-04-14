@@ -50,6 +50,52 @@ def make_object(obj_id: int, label: str) -> dict:
 
 
 class FrameSelectorTests(unittest.TestCase):
+    def test_selector_visibility_audit_accepts_zbuffer_roi_fallback_at_20_percent(self) -> None:
+        audit = frame_selector.build_selector_visibility_audit_from_meta(
+            {
+                "center_uv_px": [10.0, 10.0],
+                "depth_m": 2.0,
+                "bbox_in_frame_ratio": 0.05,
+                "zbuffer_mask_in_frame_ratio": 0.20,
+                "projected_area_px": 400.0,
+            },
+            make_camera_intrinsics(),
+        )
+
+        self.assertTrue(audit["selector_passed"])
+        self.assertEqual(audit["selector_decision"], "selected_roi_fallback")
+        self.assertEqual(audit["selector_roi_ratio_source"], "zbuffer_mask")
+
+    def test_selector_visibility_audit_keeps_projected_area_gate_for_roi_fallback(self) -> None:
+        audit = frame_selector.build_selector_visibility_audit_from_meta(
+            {
+                "center_uv_px": [10.0, 10.0],
+                "depth_m": 2.0,
+                "bbox_in_frame_ratio": 0.90,
+                "zbuffer_mask_in_frame_ratio": 0.35,
+                "projected_area_px": 399.0,
+            },
+            make_camera_intrinsics(),
+        )
+
+        self.assertFalse(audit["selector_passed"])
+        self.assertIn("projected_area_below_threshold", audit["selector_rejection_reasons"])
+
+    def test_selector_visibility_audit_accepts_depth_up_to_8m(self) -> None:
+        audit = frame_selector.build_selector_visibility_audit_from_meta(
+            {
+                "center_uv_px": [320.0, 240.0],
+                "depth_m": 7.5,
+                "bbox_in_frame_ratio": 0.0,
+                "zbuffer_mask_in_frame_ratio": 0.0,
+                "projected_area_px": 0.0,
+            },
+            make_camera_intrinsics(),
+        )
+
+        self.assertTrue(audit["selector_passed"])
+        self.assertEqual(audit["selector_decision"], "selected_center")
+
     def test_project_object_mask_stats_skips_pathological_full_mask_extent(self) -> None:
         intrinsics = make_camera_intrinsics()
         pose = make_camera_pose("000000.jpg")

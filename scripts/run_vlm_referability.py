@@ -62,7 +62,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "14.0"
+REFERABILITY_CACHE_VERSION = "17.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -1339,12 +1339,30 @@ def _build_object_review_entry(
         "projected_area_px": crop_entry.get("projected_area_px"),
         "bbox_in_frame_ratio": crop_entry.get("bbox_in_frame_ratio"),
         "edge_margin_px": crop_entry.get("edge_margin_px"),
+        "topology_status": None,
+        "topology_reason_codes": [],
+        "mesh_mask_status": None,
+        "mesh_mask_reason_codes": [],
+        "mesh_mask_iou": None,
+        "mesh_mask_under_coverage": None,
+        "mesh_mask_over_coverage": None,
+        "mesh_mask_area_ratio": None,
+        "mesh_mask_depth_bad_ratio": None,
         "ray_visibility_review": {
             "applied": False,
             "decision": "not_applicable",
             "reason": "not_crop_unique",
             "stage1": None,
             "stage2": None,
+        },
+        "mesh_quality_review": {
+            "applied": False,
+            "decision": "not_applicable",
+            "reason": "not_crop_unique",
+            "detection_prompt_variants": [],
+            "raw_detection_count": 0,
+            "candidate_detection_count": 0,
+            "matched_detection": None,
         },
     }
 
@@ -1621,6 +1639,232 @@ def _apply_crop_unique_mesh_ray_review(
         }
 
 
+def _bounds_to_mask(
+    bounds: object,
+    *,
+    image_shape: tuple[int, ...],
+) -> np.ndarray | None:
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+        return None
+    try:
+        u_min, u_max, v_min, v_max = [int(value) for value in bounds]
+    except (TypeError, ValueError):
+        return None
+    height = int(image_shape[0]) if len(image_shape) >= 1 else 0
+    width = int(image_shape[1]) if len(image_shape) >= 2 else 0
+    if width <= 0 or height <= 0:
+        return None
+    u_min = max(0, min(width, u_min))
+    u_max = max(0, min(width, u_max))
+    v_min = max(0, min(height, v_min))
+    v_max = max(0, min(height, v_max))
+    if u_max <= u_min or v_max <= v_min:
+        return None
+    mask = np.zeros((height, width), dtype=bool)
+    mask[v_min:v_max, u_min:u_max] = True
+    return mask
+
+
+def _select_best_detection_for_object_review(
+    *,
+    detections: list[dict[str, Any]],
+    review: dict[str, Any],
+    image_shape: tuple[int, ...],
+) -> dict[str, Any] | None:
+    focus_masks = [
+        mask
+        for mask in (
+            _bounds_to_mask(review.get("roi_bounds_px"), image_shape=image_shape),
+            _bounds_to_mask(review.get("crop_bounds_px"), image_shape=image_shape),
+        )
+        if isinstance(mask, np.ndarray)
+    ]
+    best_detection: dict[str, Any] | None = None
+    best_key: tuple[float, float, float, int] | None = None
+
+    for detection in detections:
+        detection_mask = detection.get("mask")
+        if not isinstance(detection_mask, np.ndarray):
+            continue
+        detection_mask_bool = np.asarray(detection_mask, dtype=bool)
+        detection_area = int(detection_mask_bool.sum())
+        if detection_area <= 0:
+            continue
+        max_overlap_ratio = 0.0
+        max_iou = 0.0
+        for focus_mask in focus_masks:
+            intersection = int(np.logical_and(detection_mask_bool, focus_mask).sum())
+            if intersection <= 0:
+                continue
+            union = int(np.logical_or(detection_mask_bool, focus_mask).sum())
+            max_overlap_ratio = max(max_overlap_ratio, float(intersection / detection_area))
+            max_iou = max(max_iou, float(intersection / union) if union > 0 else 0.0)
+        ranking_key = (
+            max_overlap_ratio,
+            max_iou,
+            float(detection.get("score", 0.0) or 0.0),
+            detection_area,
+        )
+        if best_key is None or ranking_key > best_key:
+            best_key = ranking_key
+            best_detection = detection
+
+    if best_detection is None:
+        return None
+    if focus_masks and best_key is not None and best_key[0] <= 0.0 and best_key[1] <= 0.0:
+        return None
+    return best_detection
+
+
+def _apply_crop_unique_mesh_quality_review(
+    *,
+    crop_unique_label_object_ids: dict[str, int],
+    object_reviews: dict[int, dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    image_path: Path,
+    image_shape: tuple[int, ...],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    depth_image: np.ndarray | None,
+    depth_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None,
+    topology_quality_by_obj_id: dict[int, dict[str, Any]],
+    mesh_mask_quality_by_obj_id: dict[int, dict[str, Any]],
+    client: object | None,
+) -> dict[str, str]:
+    if not crop_unique_label_object_ids:
+        return {}
+    if not callable(instance_mesh_data_getter):
+        raise RuntimeError("mesh-quality referability validation requires lazy instance mesh data loaders")
+
+    instance_mesh_data = instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT)
+    detection_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+    failed_label_reasons: dict[str, str] = {}
+
+    for label, obj_id in sorted(crop_unique_label_object_ids.items()):
+        review = object_reviews.get(int(obj_id))
+        obj = objects_by_id.get(int(obj_id))
+        if not isinstance(review, dict) or not isinstance(obj, dict):
+            failed_label_reasons[str(label)] = "missing_object_review"
+            continue
+
+        alias_variants = _normalize_alias_variants(
+            list(obj.get("alias_variants", []) or []) + [obj.get("label", label)]
+        )
+        review["mesh_quality_review"] = {
+            "applied": True,
+            "decision": "drop",
+            "reason": "pending",
+            "detection_prompt_variants": list(alias_variants),
+            "raw_detection_count": 0,
+            "candidate_detection_count": 0,
+            "matched_detection": None,
+        }
+
+        topology_quality = _compute_topology_quality_for_object(
+            obj_id=int(obj_id),
+            instance_mesh_data=instance_mesh_data,
+        )
+        topology_quality_by_obj_id[int(obj_id)] = topology_quality
+        review["topology_status"] = str(topology_quality.get("status", "")).strip().lower() or None
+        review["topology_reason_codes"] = list(topology_quality.get("reason_codes", []))
+
+        if str(topology_quality.get("status", "")).strip().lower() == "fail":
+            review["mesh_quality_review"]["reason"] = "topology_fail"
+            failed_label_reasons[str(label)] = "topology_fail"
+            continue
+
+        cache_key = tuple(alias_variants)
+        cached = detection_cache.get(cache_key)
+        if cached is None:
+            try:
+                raw_detections = _call_dinox_joint_detection(
+                    client=client,
+                    image_path=image_path,
+                    alias_variants=alias_variants,
+                    image_shape=image_shape,
+                )
+                candidate_detections = _dedupe_detections_by_mask_iou(
+                    [
+                        detection
+                        for detection in raw_detections
+                        if int(detection.get("area_px", 0) or 0) >= SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX
+                        and float(detection.get("score", 0.0) or 0.0) >= SEGMENTATION_EXTREME_NOISE_MIN_SCORE
+                    ]
+                )
+                cached = {
+                    "error": None,
+                    "raw_detections": raw_detections,
+                    "candidate_detections": candidate_detections,
+                }
+            except Exception as exc:
+                logger.warning(
+                    "DINO-X mesh-quality check failed for %s/%s label=%s: %s",
+                    image_path.parent.name,
+                    image_path.name,
+                    label,
+                    exc,
+                )
+                cached = {
+                    "error": str(exc),
+                    "raw_detections": [],
+                    "candidate_detections": [],
+                }
+            detection_cache[cache_key] = cached
+
+        raw_detections = list(cached.get("raw_detections", []))
+        candidate_detections = list(cached.get("candidate_detections", []))
+        review["mesh_quality_review"]["raw_detection_count"] = len(raw_detections)
+        review["mesh_quality_review"]["candidate_detection_count"] = len(candidate_detections)
+
+        if cached.get("error") is not None:
+            review["mesh_quality_review"]["reason"] = "segmentation_api_failed"
+            failed_label_reasons[str(label)] = "segmentation_api_failed"
+            continue
+
+        matched_detection = _select_best_detection_for_object_review(
+            detections=candidate_detections,
+            review=review,
+            image_shape=image_shape,
+        )
+        if matched_detection is None:
+            review["mesh_quality_review"]["reason"] = (
+                "no_detection_overlap" if candidate_detections else "no_detection_mask"
+            )
+            failed_label_reasons[str(label)] = str(review["mesh_quality_review"]["reason"])
+            continue
+
+        review["mesh_quality_review"]["matched_detection"] = _serialize_detection(matched_detection)
+        mesh_quality = _compute_mesh_mask_quality_for_object(
+            obj_id=int(obj_id),
+            detection_mask=np.asarray(matched_detection["mask"], dtype=bool),
+            topology_status=str(topology_quality.get("status", "")),
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            instance_mesh_data=instance_mesh_data,
+        )
+        mesh_mask_quality_by_obj_id[int(obj_id)] = mesh_quality
+        review["mesh_mask_status"] = str(mesh_quality.get("status", "")).strip().lower() or None
+        review["mesh_mask_reason_codes"] = list(mesh_quality.get("reason_codes", []))
+        review["mesh_mask_iou"] = mesh_quality.get("iou")
+        review["mesh_mask_under_coverage"] = mesh_quality.get("under_coverage")
+        review["mesh_mask_over_coverage"] = mesh_quality.get("over_coverage")
+        review["mesh_mask_area_ratio"] = mesh_quality.get("area_ratio")
+        review["mesh_mask_depth_bad_ratio"] = mesh_quality.get("depth_bad_ratio")
+
+        if str(mesh_quality.get("status", "")).strip().lower() == "fail":
+            review["mesh_quality_review"]["reason"] = "mesh_mask_mismatch"
+            failed_label_reasons[str(label)] = "mesh_mask_mismatch"
+            continue
+
+        review["mesh_quality_review"]["decision"] = "pass"
+        review["mesh_quality_review"]["reason"] = "mesh_mask_match"
+
+    return failed_label_reasons
+
+
 def _resolve_scene_mesh_path(scene_dir: Path) -> Path:
     mesh_path = scene_dir / f"{scene_dir.name}_vh_clean.ply"
     if mesh_path.exists():
@@ -1757,8 +2001,6 @@ def _compute_frame_referability_entry(
     ray_caster_getter: Callable[[], Any] | None = None,
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> dict[str, Any]:
-    _ = str(model_name or "")
-    _ = ray_caster_getter
     selector_visible_object_ids = sorted(
         int(obj_id)
         for obj_id in selector_visible_object_ids
@@ -1775,12 +2017,10 @@ def _compute_frame_referability_entry(
         depth_image,
         depth_intrinsics,
     )
-    candidate_labels, _candidate_label_to_object_ids = _build_frame_label_candidates(
+    candidate_labels, label_to_object_ids = _build_frame_label_candidates(
         candidate_visible_object_ids,
         objects_by_id,
     )
-    alias_group_index = _build_scene_alias_group_index(scene_objects)
-    label_to_object_ids = _build_compat_label_to_object_ids(scene_objects, alias_group_index)
 
     normalized_frame_info = (
         _normalize_frame_review(frame_info)
@@ -1812,181 +2052,118 @@ def _compute_frame_referability_entry(
         candidate_visibility_source,
     )
 
-    instance_mesh_data = None
-    if callable(instance_mesh_data_getter):
-        instance_mesh_data = instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT)
-
-    topology_quality_by_obj_id: dict[int, dict[str, Any]] = {}
-    for obj in scene_objects:
-        obj_id = int(obj.get("id", -1))
-        if obj_id < 0:
-            continue
-        topology_quality_by_obj_id[obj_id] = _compute_topology_quality_for_object(
-            obj_id=obj_id,
-            instance_mesh_data=instance_mesh_data,
-        )
-
-    candidate_visible_set = {int(obj_id) for obj_id in candidate_visible_object_ids}
-    frame_anchor_candidate_ids_by_alias_group: dict[str, list[int]] = {}
-    frame_anchor_candidate_count_by_alias_group: dict[str, int] = {}
-    alias_group_statuses: dict[str, str] = {}
-    referability_reason_by_alias_group: dict[str, str] = {}
-    alias_group_reviews: list[dict[str, Any]] = []
-    mesh_mask_quality_by_obj_id: dict[int, dict[str, Any]] = {}
-    referable_object_ids: list[int] = []
-
-    if normalized_frame_info["frame_usable"]:
-        strong_detection_min_area = _strong_detection_min_area(tuple(image.shape))
-        for alias_group, group_meta in alias_group_index.items():
-            try:
-                raw_detections = _call_dinox_joint_detection(
-                    client=client,
-                    image_path=image_path,
-                    alias_variants=list(group_meta.get("alias_variants", [])),
-                    image_shape=tuple(image.shape),
-                )
-                segmentation_error = None
-            except Exception as exc:
-                logger.warning(
-                    "DINO-X segmentation failed for %s/%s alias_group=%s: %s",
-                    image_path.parent.name,
-                    image_path.name,
-                    alias_group,
-                    exc,
-                )
-                raw_detections = []
-                segmentation_error = str(exc)
-
-            stage1_detections = [
-                detection
-                for detection in raw_detections
-                if int(detection.get("area_px", 0) or 0) >= SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX
-                and float(detection.get("score", 0.0) or 0.0) >= SEGMENTATION_EXTREME_NOISE_MIN_SCORE
-            ]
-            deduped_detections = _dedupe_detections_by_mask_iou(stage1_detections)
-
-            anchor_candidate_ids = sorted(
-                int(obj_id)
-                for obj_id in group_meta.get("object_ids", [])
-                if int(obj_id) in candidate_visible_set
-                and _safe_float(
-                    visibility_by_obj_id.get(int(obj_id), {}).get("projected_area_px"),
-                    default=0.0,
-                )
-                >= QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
-                and str(topology_quality_by_obj_id.get(int(obj_id), {}).get("status", "")).strip().lower() != "fail"
-            )
-            frame_anchor_candidate_ids_by_alias_group[alias_group] = anchor_candidate_ids
-            frame_anchor_candidate_count_by_alias_group[alias_group] = len(anchor_candidate_ids)
-
-            status = LABEL_STATUS_UNSURE
-            reason = "segmentation_pipeline_unresolved"
-            unique_detection_summary: dict[str, Any] | None = None
-
-            if segmentation_error is not None:
-                status = LABEL_STATUS_UNSURE
-                reason = "segmentation_api_failed"
-            elif len(deduped_detections) == 0:
-                status = LABEL_STATUS_ABSENT
-                reason = "no_visible_instance_detected"
-            elif len(deduped_detections) >= 2:
-                status = LABEL_STATUS_MULTIPLE
-                reason = "multiple_visible_instances"
-            else:
-                unique_detection = deduped_detections[0]
-                unique_detection_summary = _serialize_detection(unique_detection)
-                if (
-                    int(unique_detection.get("area_px", 0) or 0) < strong_detection_min_area
-                    or float(unique_detection.get("score", 0.0) or 0.0) < SEGMENTATION_STRONG_MIN_SCORE
-                ):
-                    status = LABEL_STATUS_UNSURE
-                    reason = "unique_instance_too_small_or_low_confidence"
-                else:
-                    for anchor_obj_id in anchor_candidate_ids:
-                        if anchor_obj_id not in mesh_mask_quality_by_obj_id:
-                            mesh_mask_quality_by_obj_id[anchor_obj_id] = _compute_mesh_mask_quality_for_object(
-                                obj_id=int(anchor_obj_id),
-                                detection_mask=np.asarray(unique_detection["mask"], dtype=bool),
-                                topology_status=str(
-                                    topology_quality_by_obj_id.get(int(anchor_obj_id), {}).get("status", ""),
-                                ),
-                                camera_pose=camera_pose,
-                                color_intrinsics=color_intrinsics,
-                                depth_image=depth_image,
-                                depth_intrinsics=depth_intrinsics,
-                                instance_mesh_data=instance_mesh_data,
-                            )
-
-                    if len(anchor_candidate_ids) == 0:
-                        status = LABEL_STATUS_UNSURE
-                        reason = "no_3d_anchor_found"
-                    elif len(anchor_candidate_ids) >= 2:
-                        status = LABEL_STATUS_MULTIPLE
-                        reason = "multiple_3d_anchors_found"
-                    else:
-                        anchor_obj_id = int(anchor_candidate_ids[0])
-                        mesh_quality = mesh_mask_quality_by_obj_id.get(anchor_obj_id, {})
-                        if str(mesh_quality.get("status", "")).strip().lower() == "pass":
-                            status = LABEL_STATUS_UNIQUE
-                            reason = "referable"
-                            referable_object_ids.append(anchor_obj_id)
-                        else:
-                            status = LABEL_STATUS_UNSURE
-                            reason = "mesh_mask_mismatch"
-
-            alias_group_statuses[alias_group] = status
-            referability_reason_by_alias_group[alias_group] = reason
-            alias_group_reviews.append(
-                {
-                    "alias_group": alias_group,
-                    "canonical_labels": list(group_meta.get("canonical_labels", [])),
-                    "alias_variants": list(group_meta.get("alias_variants", [])),
-                    "scene_total_count": len(group_meta.get("object_ids", [])),
-                    "stage1_raw_detection_count": len(raw_detections),
-                    "stage1_filtered_detection_count": len(stage1_detections),
-                    "stage1_deduped_detection_count": len(deduped_detections),
-                    "stage1_raw_detections": [_serialize_detection(detection) for detection in raw_detections],
-                    "stage1_deduped_detections": [_serialize_detection(detection) for detection in deduped_detections],
-                    "unique_detection": unique_detection_summary,
-                    "strong_detection_min_area_px": int(strong_detection_min_area),
-                    "strong_detection_min_score": float(SEGMENTATION_STRONG_MIN_SCORE),
-                    "anchor_candidate_ids": list(anchor_candidate_ids),
-                    "anchor_candidate_count": len(anchor_candidate_ids),
-                    "status": status,
-                    "reason": reason,
-                    "segmentation_error": segmentation_error,
-                }
-            )
-
-    label_statuses: dict[str, str] = {}
-    for obj in scene_objects:
-        label = str(obj.get("label", "")).strip().lower()
-        alias_group = str(obj.get("alias_group", "")).strip().lower()
-        if not label or not alias_group:
-            continue
-        label_statuses[label] = alias_group_statuses.get(alias_group, LABEL_STATUS_UNSURE)
-    label_statuses = dict(sorted(label_statuses.items()))
-    label_counts = _label_counts_from_statuses(label_statuses)
-    crop_label_statuses = dict(label_statuses)
-    crop_label_counts = dict(label_counts)
-    crop_referable_object_ids = sorted(set(int(obj_id) for obj_id in referable_object_ids))
+    object_reviews: dict[int, dict[str, Any]] = {}
+    crop_label_statuses: dict[str, str] = {}
+    crop_label_counts: dict[str, int] = {}
+    crop_referable_object_ids: list[int] = []
     full_frame_label_reviews: list[dict[str, Any]] = []
     full_frame_label_statuses: dict[str, str] = {}
     full_frame_label_counts: dict[str, int] = {}
-    object_reviews = _build_object_review_records(
-        scene_objects=scene_objects,
-        visibility_by_obj_id=visibility_by_obj_id,
-        candidate_visible_object_ids=candidate_visible_object_ids,
-        topology_quality_by_obj_id=topology_quality_by_obj_id,
-        anchor_candidate_ids_by_alias_group=frame_anchor_candidate_ids_by_alias_group,
-        mesh_mask_quality_by_obj_id=mesh_mask_quality_by_obj_id,
-    )
-    visibility_probe_object_ids = sorted(
-        int(obj.get("id"))
-        for obj in scene_objects
-        if int(obj.get("id", -1)) in topology_quality_by_obj_id
-        and int(topology_quality_by_obj_id[int(obj.get("id"))].get("triangle_count", 0) or 0) > 0
-    )
+    label_statuses: dict[str, str] = {}
+    label_counts: dict[str, int] = {}
+    referable_object_ids: list[int] = []
+    alias_group_statuses: dict[str, str] = {}
+    referability_reason_by_alias_group: dict[str, str] = {}
+    frame_anchor_candidate_ids_by_alias_group: dict[str, list[int]] = {}
+    frame_anchor_candidate_count_by_alias_group: dict[str, int] = {}
+    alias_group_reviews: list[dict[str, Any]] = []
+    topology_quality_by_obj_id: dict[int, dict[str, Any]] = {}
+    mesh_mask_quality_by_obj_id: dict[int, dict[str, Any]] = {}
+    visibility_probe_object_ids: list[int] = []
+
+    if normalized_frame_info["frame_usable"]:
+        image_b64: str | None = None
+        for obj_id in candidate_visible_object_ids:
+            obj = objects_by_id.get(int(obj_id))
+            if obj is None:
+                continue
+            label = str(obj.get("label", "")).strip().lower()
+            crop_entry = _build_object_review_crop(image, visibility_by_obj_id.get(int(obj_id)))
+            review = _build_object_review_entry(
+                obj_id=int(obj_id),
+                label=label,
+                crop_entry=crop_entry,
+            )
+            if crop_entry.get("local_outcome") == LOCAL_OUTCOME_REVIEWED:
+                if image_b64 is None:
+                    image_b64 = _image_to_base64(image)
+                status, raw_response = _object_review_decision(
+                    client,
+                    model_name,
+                    image_b64,
+                    str(crop_entry.get("image_b64", "") or ""),
+                    label,
+                )
+                review["vlm_status"] = status
+                review["raw_response"] = raw_response or None
+            object_reviews[int(obj_id)] = review
+
+        crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = (
+            _aggregate_crop_label_reviews(
+                label_to_object_ids,
+                object_reviews,
+            )
+        )
+        _apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids=crop_unique_label_object_ids,
+            object_reviews=object_reviews,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster_getter=ray_caster_getter,
+            instance_mesh_data_getter=instance_mesh_data_getter,
+        )
+        crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = (
+            _aggregate_crop_label_reviews(
+                label_to_object_ids,
+                object_reviews,
+            )
+        )
+        label_statuses = dict(crop_label_statuses)
+
+        if crop_unique_label_object_ids:
+            if image_b64 is None:
+                image_b64 = _image_to_base64(image)
+            for label, obj_id in sorted(crop_unique_label_object_ids.items()):
+                status, raw_response = _full_frame_label_review_decision(
+                    client,
+                    model_name,
+                    str(image_b64 or ""),
+                    label,
+                )
+                status = _normalize_full_frame_label_status(status) or LABEL_STATUS_UNSURE
+                full_frame_label_reviews.append(
+                    {
+                        "label": str(label),
+                        "status": status,
+                        "crop_status": crop_label_statuses.get(label),
+                        "crop_clear_count": crop_label_counts.get(label),
+                        "crop_referable_object_id": int(obj_id),
+                        "raw_response": raw_response or None,
+                    }
+                )
+                full_frame_label_statuses[str(label)] = status
+
+        full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
+        full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
+        label_statuses = dict(sorted(label_statuses.items()))
+        label_counts = _label_counts_from_statuses(label_statuses)
+        referable_object_ids = sorted(set(int(obj_id) for obj_id in crop_referable_object_ids))
+
+        alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
+        for obj in scene_objects:
+            alias_group = str(obj.get("alias_group", "")).strip().lower()
+            label = str(obj.get("label", "")).strip().lower()
+            if not alias_group or label not in label_statuses:
+                continue
+            alias_group_to_statuses[alias_group].add(label_statuses[label])
+        alias_group_statuses = {
+            alias_group: (next(iter(statuses)) if len(statuses) == 1 else LABEL_STATUS_UNSURE)
+            for alias_group, statuses in sorted(alias_group_to_statuses.items())
+        }
+        referability_reason_by_alias_group = {
+            alias_group: "derived_from_crop_vlm"
+            for alias_group in alias_group_statuses
+        }
 
     return {
         "frame_usable": normalized_frame_info["frame_usable"],
@@ -2037,7 +2214,10 @@ def _compute_frame_referability_entry(
             str(obj_id): payload
             for obj_id, payload in sorted(mesh_mask_quality_by_obj_id.items())
         },
-        "object_reviews": dict(sorted(object_reviews.items())),
+        "object_reviews": {
+            str(obj_id): review
+            for obj_id, review in sorted(object_reviews.items())
+        },
         "crop_label_statuses": dict(sorted(crop_label_statuses.items())),
         "crop_label_counts": dict(sorted(crop_label_counts.items())),
         "crop_referable_object_ids": sorted(set(int(obj_id) for obj_id in crop_referable_object_ids)),
@@ -2215,7 +2395,7 @@ def main():
         "version": REFERABILITY_CACHE_VERSION,
         "model": model_name,
         "alias_config_version": ALIAS_CONFIG_VERSION,
-        "referability_backend": "dinox_joint_mask_then_3d_anchor",
+        "referability_backend": "crop_vlm_with_mesh_ray",
         "label_batch_size": 1,
         "frames": {},
     }
@@ -2232,7 +2412,7 @@ def main():
             cache = loaded
             logger.info("Resuming from %s", output_path)
     cache["alias_config_version"] = ALIAS_CONFIG_VERSION
-    cache["referability_backend"] = "dinox_joint_mask_then_3d_anchor"
+    cache["referability_backend"] = "crop_vlm_with_mesh_ray"
     cache["label_batch_size"] = 1
 
     data_root = Path(args.data_root)

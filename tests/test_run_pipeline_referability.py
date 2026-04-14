@@ -50,6 +50,353 @@ def make_case_dir(prefix: str) -> Path:
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_apply_question_dinox_audit_records_all_unique_mentioned_labels(self) -> None:
+        chair_mask = np.zeros((20, 30), dtype=bool)
+        chair_mask[2:10, 3:11] = True
+        table_mask = np.zeros((20, 30), dtype=bool)
+        table_mask[5:18, 12:25] = True
+        questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "mentioned_objects": [
+                    {"role": "target", "label": "chair", "obj_id": 1},
+                    {"role": "reference", "label": "table", "obj_id": 2},
+                    {"role": "distractor", "label": "chair", "obj_id": 3},
+                ],
+            }
+        ]
+
+        with (
+            patch.object(
+                run_pipeline_module.cv2,
+                "imread",
+                return_value=np.zeros((20, 30, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_call_question_dinox_detection",
+                side_effect=[
+                    [
+                        {
+                            "bbox": [3.0, 2.0, 11.0, 10.0],
+                            "mask": chair_mask,
+                            "score": 0.95,
+                            "area_px": int(chair_mask.sum()),
+                            "category": "chair",
+                        }
+                    ],
+                    [
+                        {
+                            "bbox": [12.0, 5.0, 25.0, 18.0],
+                            "mask": table_mask,
+                            "score": 0.85,
+                            "area_px": int(table_mask.sum()),
+                            "category": "table",
+                        }
+                    ],
+                ],
+            ) as detection_mock,
+        ):
+            audited = run_pipeline_module._apply_question_dinox_audit(
+                questions=questions,
+                data_root=Path("data"),
+            )
+
+        self.assertEqual(detection_mock.call_count, 2)
+        audit = audited[0]["question_dinox_audit"]
+        self.assertEqual(audit["status"], "ok")
+        self.assertEqual(len(audit["labels"]), 2)
+        chair_entry = next(item for item in audit["labels"] if item["label"] == "chair")
+        self.assertEqual(chair_entry["roles"], ["distractor", "target"])
+        self.assertEqual(chair_entry["mentioned_object_ids"], [1, 3])
+        self.assertEqual(chair_entry["raw_detection_count"], 1)
+        self.assertEqual(chair_entry["loose_detection_count"], 1)
+        self.assertEqual(chair_entry["raw_detections"][0]["mask_bounds_px"], [3, 11, 2, 10])
+
+    def test_apply_question_dinox_audit_reuses_cached_frame_label_results(self) -> None:
+        questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "mentioned_objects": [
+                    {"role": "target", "label": "chair", "obj_id": 1},
+                ],
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "mentioned_objects": [
+                    {"role": "reference", "label": "chair", "obj_id": 2},
+                ],
+            },
+        ]
+        mask = np.zeros((20, 30), dtype=bool)
+        mask[1:6, 4:10] = True
+
+        with (
+            patch.object(
+                run_pipeline_module.cv2,
+                "imread",
+                return_value=np.zeros((20, 30, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_call_question_dinox_detection",
+                return_value=[
+                    {
+                        "bbox": [4.0, 1.0, 10.0, 6.0],
+                        "mask": mask,
+                        "score": 0.90,
+                        "area_px": int(mask.sum()),
+                        "category": "chair",
+                    }
+                ],
+            ) as detection_mock,
+        ):
+            audited = run_pipeline_module._apply_question_dinox_audit(
+                questions=questions,
+                data_root=Path("data"),
+            )
+
+        self.assertEqual(detection_mock.call_count, 1)
+        self.assertEqual(audited[0]["question_dinox_audit"]["labels"][0]["raw_detection_count"], 1)
+        self.assertEqual(audited[1]["question_dinox_audit"]["labels"][0]["raw_detection_count"], 1)
+
+    def test_apply_question_post_generation_audit_flags_mesh_mismatch_for_review(self) -> None:
+        mask = np.zeros((20, 30), dtype=bool)
+        mask[2:10, 3:11] = True
+        questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "mentioned_objects": [
+                    {"role": "target", "label": "chair", "obj_id": 1},
+                ],
+            }
+        ]
+        frame_context = {
+            ("scene0000_00", "000123.jpg"): {
+                "scene_dir": Path("data/scene0000_00"),
+                "image_path": Path("data/scene0000_00/color/000123.jpg"),
+                "objects_by_id": {1: make_object(1, "chair")},
+                "pose": make_camera_pose("000123.jpg"),
+                "color_intrinsics": make_camera_intrinsics(),
+                "visibility_by_obj_id": {
+                    1: {
+                        "roi_bounds_px": [3, 11, 2, 10],
+                        "projected_area_px": 900.0,
+                        "bbox_in_frame_ratio": 0.9,
+                    }
+                },
+                "crop_by_obj_id": {
+                    1: {
+                        "valid": True,
+                        "reason": "",
+                        "roi_bounds_px": [3, 11, 2, 10],
+                        "crop_bounds_px": [1, 13, 0, 12],
+                        "projected_area_px": 900.0,
+                        "bbox_in_frame_ratio": 0.9,
+                    }
+                },
+                "has_projection_context": True,
+            }
+        }
+
+        with (
+            patch.object(
+                run_pipeline_module,
+                "_prebuild_question_review_frame_contexts",
+                return_value=frame_context,
+            ),
+            patch.object(
+                run_pipeline_module.cv2,
+                "imread",
+                return_value=np.zeros((20, 30, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_call_question_dinox_detection",
+                return_value=[
+                    {
+                        "bbox": [3.0, 2.0, 11.0, 10.0],
+                        "mask": mask,
+                        "score": 0.95,
+                        "area_px": int(mask.sum()),
+                        "category": "chair",
+                    }
+                ],
+            ),
+            patch.object(
+                run_pipeline_module,
+                "load_instance_mesh_data",
+                return_value=object(),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "load_scannet_depth_intrinsics",
+                return_value=None,
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_compute_topology_quality_for_object",
+                return_value={"status": "pass", "reason_codes": []},
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_strong_detection_min_area",
+                return_value=1,
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_compute_mesh_mask_quality_for_object",
+                return_value={
+                    "status": "fail",
+                    "reason_codes": ["low_iou", "high_under_coverage"],
+                    "iou": 0.2,
+                    "under_coverage": 0.6,
+                    "over_coverage": 0.1,
+                    "area_ratio": 1.2,
+                    "depth_bad_ratio": None,
+                },
+            ),
+        ):
+            audited = run_pipeline_module._apply_question_post_generation_audit(
+                questions=questions,
+                data_root=Path("data"),
+                output_dir=Path("output"),
+            )
+
+        post_review = audited[0]["question_post_generation_review"]
+        self.assertEqual(post_review["decision"], "manual_review")
+        self.assertIn("mesh_low_iou:chair#1", post_review["reason_codes"])
+        self.assertIn("mesh_high_under_coverage:chair#1", post_review["reason_codes"])
+        mesh_review = audited[0]["question_mesh_audit"]["objects"][0]
+        self.assertEqual(mesh_review["decision"], "manual_review")
+        self.assertEqual(mesh_review["reason"], "mesh_mask_mismatch")
+        self.assertEqual(mesh_review["mesh_mask_reason_codes"], ["low_iou", "high_under_coverage"])
+
+    def test_apply_question_post_generation_audit_flags_multiple_dinox_detections_for_review(self) -> None:
+        mask_a = np.zeros((20, 30), dtype=bool)
+        mask_a[2:10, 3:11] = True
+        mask_b = np.zeros((20, 30), dtype=bool)
+        mask_b[2:10, 15:23] = True
+        questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "mentioned_objects": [
+                    {"role": "target", "label": "chair", "obj_id": 1},
+                ],
+            }
+        ]
+        frame_context = {
+            ("scene0000_00", "000123.jpg"): {
+                "scene_dir": Path("data/scene0000_00"),
+                "image_path": Path("data/scene0000_00/color/000123.jpg"),
+                "objects_by_id": {1: make_object(1, "chair")},
+                "pose": make_camera_pose("000123.jpg"),
+                "color_intrinsics": make_camera_intrinsics(),
+                "visibility_by_obj_id": {
+                    1: {
+                        "roi_bounds_px": [3, 11, 2, 10],
+                        "projected_area_px": 900.0,
+                        "bbox_in_frame_ratio": 0.9,
+                    }
+                },
+                "crop_by_obj_id": {
+                    1: {
+                        "valid": True,
+                        "reason": "",
+                        "roi_bounds_px": [3, 11, 2, 10],
+                        "crop_bounds_px": [1, 13, 0, 12],
+                        "projected_area_px": 900.0,
+                        "bbox_in_frame_ratio": 0.9,
+                    }
+                },
+                "has_projection_context": True,
+            }
+        }
+
+        with (
+            patch.object(
+                run_pipeline_module,
+                "_prebuild_question_review_frame_contexts",
+                return_value=frame_context,
+            ),
+            patch.object(
+                run_pipeline_module.cv2,
+                "imread",
+                return_value=np.zeros((20, 30, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_call_question_dinox_detection",
+                return_value=[
+                    {
+                        "bbox": [3.0, 2.0, 11.0, 10.0],
+                        "mask": mask_a,
+                        "score": 0.95,
+                        "area_px": int(mask_a.sum()),
+                        "category": "chair",
+                    },
+                    {
+                        "bbox": [15.0, 2.0, 23.0, 10.0],
+                        "mask": mask_b,
+                        "score": 0.96,
+                        "area_px": int(mask_b.sum()),
+                        "category": "chair",
+                    },
+                ],
+            ),
+            patch.object(
+                run_pipeline_module,
+                "load_instance_mesh_data",
+                return_value=object(),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "load_scannet_depth_intrinsics",
+                return_value=None,
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_compute_topology_quality_for_object",
+                return_value={"status": "pass", "reason_codes": []},
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_strong_detection_min_area",
+                return_value=1,
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_compute_mesh_mask_quality_for_object",
+                return_value={
+                    "status": "pass",
+                    "reason_codes": [],
+                    "iou": 0.9,
+                    "under_coverage": 0.1,
+                    "over_coverage": 0.1,
+                    "area_ratio": 1.0,
+                    "depth_bad_ratio": None,
+                },
+            ),
+        ):
+            audited = run_pipeline_module._apply_question_post_generation_audit(
+                questions=questions,
+                data_root=Path("data"),
+                output_dir=Path("output"),
+            )
+
+        post_review = audited[0]["question_post_generation_review"]
+        self.assertEqual(post_review["decision"], "manual_review")
+        self.assertIn("dinox_multiple_strong_detections:chair", post_review["reason_codes"])
+        label_review = audited[0]["question_dinox_audit"]["labels"][0]
+        self.assertEqual(label_review["decision"], "manual_review")
+        self.assertEqual(label_review["strong_detection_count"], 2)
+        self.assertEqual(label_review["matched_object_ids"], [1])
+
     def test_build_frame_debug_entry_records_occlusion_eligible_object_ids(self) -> None:
         objects = [make_object(1, "lamp"), make_object(2, "table")]
         entry = run_pipeline_module._build_frame_debug_entry(
@@ -478,7 +825,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 14.0"):
+        with self.assertRaisesRegex(ValueError, "expected 17.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
@@ -503,7 +850,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "14.0",
+            "version": "17.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -634,7 +981,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "14.0",
+            "version": "17.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -749,7 +1096,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "14.0",
+            "version": "17.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -856,7 +1203,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "14.0",
+            "version": "17.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -972,7 +1319,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "14.0",
+            "version": "17.0",
             "frames": {
                 scene_id: {
                     image_name: {

@@ -576,6 +576,9 @@ def _format_referability_mention(item: dict[str, object]) -> str:
 def _is_manual_review_question(question: dict) -> bool:
     if str(question.get("manual_review_reason", "")).strip():
         return True
+    post_review = question.get("question_post_generation_review")
+    if isinstance(post_review, dict) and post_review.get("decision") == "manual_review":
+        return True
     presence_review = question.get("question_presence_review")
     if isinstance(presence_review, dict) and presence_review.get("decision") == "manual_review":
         return True
@@ -663,6 +666,39 @@ def _build_review_notes_html(
         if reason:
             lines.append(f"reason: {reason}")
         blocks.append(_render_review_block("Answer Review", lines))
+
+    post_generation_review = question.get("question_post_generation_review")
+    if isinstance(post_generation_review, dict):
+        lines = [
+            f"decision: {str(post_generation_review.get('decision', '-')).strip() or '-'}",
+            f"reason codes: {_stringify_review_value(post_generation_review.get('reason_codes'))}",
+            f"flagged labels: {_stringify_review_value(post_generation_review.get('flagged_labels'))}",
+            f"flagged object ids: {_stringify_review_value(post_generation_review.get('flagged_object_ids'))}",
+        ]
+        for item in post_generation_review.get("dinox_label_reviews", []):
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip() or "-"
+            decision = str(item.get("decision", "-")).strip() or "-"
+            reasons = _stringify_review_value(item.get("reason_codes"))
+            strong_count = _stringify_review_value(item.get("strong_detection_count"))
+            matched_ids = _stringify_review_value(item.get("matched_object_ids"))
+            lines.append(
+                f"DINO-X {label}: decision={decision}, strong={strong_count}, matched={matched_ids}, reasons={reasons}"
+            )
+        for item in post_generation_review.get("mesh_object_reviews", []):
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label", "")).strip() or "-"
+            obj_id = _stringify_review_value(item.get("obj_id"))
+            decision = str(item.get("decision", "-")).strip() or "-"
+            reasons = _stringify_review_value(item.get("reason_codes"))
+            topology = _stringify_review_value(item.get("topology_status"))
+            mesh_status = _stringify_review_value(item.get("mesh_mask_status"))
+            lines.append(
+                f"Mesh {label}#{obj_id}: decision={decision}, topology={topology}, mesh={mesh_status}, reasons={reasons}"
+            )
+        blocks.append(_render_review_block("Post-Generation Audit", lines))
 
     referability_audit = question.get("question_referability_audit")
     if include_referability_audit and isinstance(referability_audit, dict):

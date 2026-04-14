@@ -147,6 +147,60 @@ def make_mesh_quality(obj_id: int, status: str = "pass", *, reason_codes: list[s
     }
 
 
+def make_instance_mesh_data(
+    *,
+    obj_id: int,
+    sample_count: int = 8,
+    point: np.ndarray | None = None,
+):
+    base_point = (
+        np.asarray(point, dtype=np.float64)
+        if point is not None
+        else np.array([0.0, 0.0, 2.0], dtype=np.float64)
+    )
+    surface_points = np.tile(base_point[None, :], (int(sample_count), 1))
+    triangle_ids = np.zeros(int(sample_count), dtype=np.int64)
+    barycentrics = np.tile(
+        np.array([[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64),
+        (int(sample_count), 1),
+    )
+    return SimpleNamespace(
+        vertices=np.array(
+            [
+                [0.0, 0.0, 2.0],
+                [0.5, 0.0, 2.0],
+                [0.0, 0.5, 2.0],
+            ],
+            dtype=np.float64,
+        ),
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        triangle_ids_by_instance={int(obj_id): np.array([0], dtype=np.int64)},
+        boundary_triangle_ids_by_instance={},
+        surface_points_by_instance={int(obj_id): surface_points},
+        surface_triangle_ids_by_instance={int(obj_id): triangle_ids},
+        surface_barycentrics_by_instance={int(obj_id): barycentrics},
+    )
+
+
+class _SequenceVisibilityCaster:
+    def __init__(self, responses: list[tuple[int, int]]) -> None:
+        self._responses = [tuple((int(visible), int(valid))) for visible, valid in responses]
+
+    def mesh_visibility_stats(
+        self,
+        camera_pos,
+        target_points,
+        target_tri_ids,
+        **kwargs,
+    ):
+        _ = np.asarray(camera_pos, dtype=np.float64)
+        _ = np.asarray(target_points, dtype=np.float64)
+        _ = set(int(tri_id) for tri_id in target_tri_ids)
+        if not self._responses:
+            raise AssertionError("mesh_visibility_stats called more times than expected")
+        return self._responses.pop(0)
+
+
 class RunVlmReferabilityTests(unittest.TestCase):
     def test_topology_warn_triggers_when_any_warn_condition_is_met(self) -> None:
         quality = referability_module._compute_topology_quality_for_object(
@@ -192,89 +246,97 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("low_iou", quality["reason_codes"])
         self.assertIn("high_under_coverage", quality["reason_codes"])
 
-    def test_alias_group_backfills_label_statuses_and_object_ids(self) -> None:
-        scene_objects = [
-            make_object(
-                12,
-                "night stand",
-                alias_group="bedside_table_family",
-                alias_variants=["night stand", "nightstand", "bedside table"],
-            ),
-            make_object(
-                34,
-                "bedside table",
-                alias_group="bedside_table_family",
-                alias_variants=["night stand", "nightstand", "bedside table"],
-            ),
-        ]
-        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
-        visibility = {12: make_visibility_meta(), 34: make_visibility_meta()}
+    def test_build_object_review_crop_excludes_small_projection_but_does_not_gate_on_in_frame_ratio(self) -> None:
+        tiny_crop = referability_module._build_object_review_crop(
+            np.zeros((120, 120, 3), dtype=np.uint8),
+            make_visibility_meta(projected_area_px=399.0, bbox_in_frame_ratio=0.1),
+        )
+        valid_crop = referability_module._build_object_review_crop(
+            np.zeros((120, 120, 3), dtype=np.uint8),
+            make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.1),
+        )
 
-        with (
-            patch.object(
-                referability_module,
-                "_refine_candidate_visible_object_ids",
-                return_value=([12, 34], "depth_refined"),
-            ),
-            patch.object(
-                referability_module,
-                "compute_frame_object_visibility",
-                return_value=visibility,
-            ),
-            patch.object(
-                referability_module,
-                "_compute_topology_quality_for_object",
-                side_effect=lambda **kwargs: make_topology_quality(kwargs["obj_id"], "pass"),
-            ),
-            patch.object(
-                referability_module,
-                "_call_dinox_joint_detection",
-                return_value=[
-                    make_detection(bbox=(5, 5, 35, 35), score=0.95, category="night stand"),
-                    make_detection(bbox=(60, 5, 90, 35), score=0.92, category="bedside table"),
-                ],
-            ),
-        ):
-            frame_entry = referability_module._compute_frame_referability_entry(
-                client=object(),
-                model_name="unused",
-                scene_objects=scene_objects,
-                objects_by_id=objects_by_id,
-                image=np.zeros((120, 120, 3), dtype=np.uint8),
-                image_path=Path("frame.jpg"),
-                camera_pose=make_camera_pose(),
-                color_intrinsics=make_camera_intrinsics(),
-                depth_image=None,
-                depth_intrinsics=None,
-                selector_visible_object_ids=[12, 34],
-                frame_info={"clarity_score": 80, "frame_usable": True, "reason": "ok"},
-                frame_selection_score=1,
-            )
+        self.assertEqual(tiny_crop["local_outcome"], "excluded")
+        self.assertEqual(tiny_crop["reason"], "projected_area_too_small")
+        self.assertTrue(valid_crop["valid"])
+        self.assertEqual(valid_crop["local_outcome"], "reviewed")
+
+    def test_aggregate_label_reviews_uses_strict_policy(self) -> None:
+        label_to_ids = {
+            "chair": [1, 2],
+            "lamp": [3, 4],
+            "plant": [5, 6],
+            "table": [7],
+            "sofa": [8, 9],
+        }
+        object_reviews = {
+            1: {"obj_id": 1, "local_outcome": "reviewed", "vlm_status": "clear"},
+            2: {"obj_id": 2, "local_outcome": "out_of_frame", "vlm_status": None},
+            3: {"obj_id": 3, "local_outcome": "reviewed", "vlm_status": "clear"},
+            4: {"obj_id": 4, "local_outcome": "reviewed", "vlm_status": "clear"},
+            5: {"obj_id": 5, "local_outcome": "reviewed", "vlm_status": "absent"},
+            6: {"obj_id": 6, "local_outcome": "excluded", "vlm_status": None},
+            7: {"obj_id": 7, "local_outcome": "reviewed", "vlm_status": "unsure"},
+            8: {"obj_id": 8, "local_outcome": "reviewed", "vlm_status": "clear"},
+            9: {"obj_id": 9, "local_outcome": "reviewed", "vlm_status": "unsure"},
+        }
+
+        label_statuses, label_counts, referable_ids = referability_module._aggregate_label_reviews(
+            label_to_ids,
+            object_reviews,
+        )
 
         self.assertEqual(
-            frame_entry["label_statuses"],
+            label_statuses,
             {
-                "bedside table": "multiple",
-                "night stand": "multiple",
+                "chair": "unique",
+                "lamp": "multiple",
+                "plant": "absent",
+                "sofa": "unsure",
+                "table": "unsure",
             },
         )
-        self.assertEqual(frame_entry["label_to_object_ids"]["night stand"], [12, 34])
-        self.assertEqual(frame_entry["label_to_object_ids"]["bedside table"], [12, 34])
         self.assertEqual(
-            frame_entry["referability_reason_by_alias_group"]["bedside_table_family"],
-            "multiple_visible_instances",
+            label_counts,
+            {
+                "chair": 1,
+                "lamp": 2,
+                "plant": 0,
+                "sofa": 1,
+                "table": 0,
+            },
         )
+        self.assertEqual(referable_ids, [1])
 
-    def test_stage1_only_filters_extreme_noise(self) -> None:
-        scene_objects = [make_object(1, "chair")]
-        objects_by_id = {1: scene_objects[0]}
-        visibility = {1: make_visibility_meta()}
+    def test_compute_frame_referability_entry_builds_crop_vlm_reviews(self) -> None:
+        scene_objects = [
+            make_object(1, "chair"),
+            make_object(2, "chair"),
+            make_object(3, "lamp"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+            2: {"projected_area_px": 0.0},
+            3: make_visibility_meta(projected_area_px=900.0),
+        }
 
         with (
             patch.object(
                 referability_module,
+                "_frame_decision",
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
+                return_value=([1, 2, 3], "depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -283,98 +345,86 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_compute_topology_quality_for_object",
-                side_effect=lambda **kwargs: make_topology_quality(kwargs["obj_id"], "pass"),
+                "_object_review_decision",
+                side_effect=[("clear", '{"status":"clear"}'), ("absent", '{"status":"absent"}')],
+            ) as review_mock,
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+                return_value=("unique", '{"status":"unique"}'),
+            ) as full_frame_mock,
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_ray_review",
+                side_effect=lambda **_kwargs: None,
             ),
             patch.object(
                 referability_module,
-                "_call_dinox_joint_detection",
-                return_value=[
-                    make_detection(bbox=(5, 5, 35, 35), score=0.95, category="chair"),
-                    make_detection(bbox=(50, 5, 62, 15), score=0.20, category="chair"),
-                ],
+                "_apply_crop_unique_mesh_quality_review",
+                return_value={},
             ),
         ):
             frame_entry = referability_module._compute_frame_referability_entry(
                 client=object(),
-                model_name="unused",
+                model_name="fake-vlm",
                 scene_objects=scene_objects,
                 objects_by_id=objects_by_id,
                 image=np.zeros((120, 120, 3), dtype=np.uint8),
-                image_path=Path("frame.jpg"),
+                image_path=Path("image.jpg"),
                 camera_pose=make_camera_pose(),
                 color_intrinsics=make_camera_intrinsics(),
                 depth_image=None,
                 depth_intrinsics=None,
-                selector_visible_object_ids=[1],
-                frame_info={"clarity_score": 80, "frame_usable": True, "reason": "ok"},
-                frame_selection_score=1,
+                selector_visible_object_ids=[1, 2, 3],
             )
 
-        self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple"})
-        self.assertEqual(
-            frame_entry["referability_reason_by_alias_group"]["chair_family"],
-            "multiple_visible_instances",
+        self.assertEqual(frame_entry["frame_usable"], True)
+        self.assertEqual(frame_entry["frame_quality_score"], 82)
+        self.assertEqual(frame_entry["candidate_visibility_source"], "depth_refined")
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique", "lamp": "absent"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 1, "lamp": 0})
+        self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["full_frame_label_counts"], {"chair": 1})
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "unique", "lamp": "absent"})
+        self.assertEqual(frame_entry["label_counts"], {"chair": 1, "lamp": 0})
+        self.assertEqual(frame_entry["referable_object_ids"], [1])
+        self.assertEqual(frame_entry["full_frame_label_reviews"][0]["crop_referable_object_id"], 1)
+        self.assertEqual(frame_entry["object_reviews"]["1"]["vlm_status"], "clear")
+        self.assertEqual(frame_entry["object_reviews"]["2"]["local_outcome"], "out_of_frame")
+        self.assertEqual(frame_entry["object_reviews"]["3"]["vlm_status"], "absent")
+        self.assertEqual(frame_entry["referability_reason_by_alias_group"]["chair_family"], "derived_from_crop_vlm")
+        self.assertEqual(review_mock.call_count, 2)
+        full_frame_mock.assert_called_once_with(
+            unittest.mock.ANY,
+            "fake-vlm",
+            unittest.mock.ANY,
+            "chair",
         )
 
-    def test_no_3d_anchor_found_is_reported_separately(self) -> None:
-        scene_objects = [make_object(1, "chair")]
-        objects_by_id = {1: scene_objects[0]}
-        visibility = {1: make_visibility_meta()}
-
-        with (
-            patch.object(
-                referability_module,
-                "_refine_candidate_visible_object_ids",
-                return_value=([], "depth_refined"),
-            ),
-            patch.object(
-                referability_module,
-                "compute_frame_object_visibility",
-                return_value=visibility,
-            ),
-            patch.object(
-                referability_module,
-                "_compute_topology_quality_for_object",
-                side_effect=lambda **kwargs: make_topology_quality(kwargs["obj_id"], "pass"),
-            ),
-            patch.object(
-                referability_module,
-                "_call_dinox_joint_detection",
-                return_value=[make_detection(bbox=(5, 5, 35, 35), score=0.95, category="chair")],
-            ),
-        ):
-            frame_entry = referability_module._compute_frame_referability_entry(
-                client=object(),
-                model_name="unused",
-                scene_objects=scene_objects,
-                objects_by_id=objects_by_id,
-                image=np.zeros((120, 120, 3), dtype=np.uint8),
-                image_path=Path("frame.jpg"),
-                camera_pose=make_camera_pose(),
-                color_intrinsics=make_camera_intrinsics(),
-                depth_image=None,
-                depth_intrinsics=None,
-                selector_visible_object_ids=[1],
-                frame_info={"clarity_score": 80, "frame_usable": True, "reason": "ok"},
-                frame_selection_score=1,
-            )
-
-        self.assertEqual(frame_entry["label_statuses"], {"chair": "unsure"})
-        self.assertEqual(
-            frame_entry["referability_reason_by_alias_group"]["chair_family"],
-            "no_3d_anchor_found",
-        )
-
-    def test_multiple_3d_anchors_found_is_reported_separately(self) -> None:
+    def test_compute_frame_referability_entry_keeps_crop_unique_label_when_full_frame_is_multiple(self) -> None:
         scene_objects = [
             make_object(1, "chair"),
             make_object(2, "chair"),
         ]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
-        visibility = {1: make_visibility_meta(), 2: make_visibility_meta()}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+            2: {"projected_area_px": 0.0},
+        }
 
         with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
@@ -387,158 +437,182 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_compute_topology_quality_for_object",
-                side_effect=lambda **kwargs: make_topology_quality(kwargs["obj_id"], "pass"),
+                "_object_review_decision",
+                return_value=("clear", '{"status":"clear"}'),
             ),
             patch.object(
                 referability_module,
-                "_compute_mesh_mask_quality_for_object",
-                side_effect=lambda **kwargs: make_mesh_quality(kwargs["obj_id"], "pass"),
+                "_full_frame_label_review_decision",
+                return_value=("multiple", '{"status":"multiple"}'),
             ),
             patch.object(
                 referability_module,
-                "_call_dinox_joint_detection",
-                return_value=[make_detection(bbox=(5, 5, 35, 35), score=0.95, category="chair")],
+                "_apply_crop_unique_mesh_ray_review",
+                side_effect=lambda **_kwargs: None,
+            ),
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_quality_review",
+                return_value={},
             ),
         ):
             frame_entry = referability_module._compute_frame_referability_entry(
                 client=object(),
-                model_name="unused",
+                model_name="fake-vlm",
                 scene_objects=scene_objects,
                 objects_by_id=objects_by_id,
                 image=np.zeros((120, 120, 3), dtype=np.uint8),
-                image_path=Path("frame.jpg"),
+                image_path=Path("image.jpg"),
                 camera_pose=make_camera_pose(),
                 color_intrinsics=make_camera_intrinsics(),
                 depth_image=None,
                 depth_intrinsics=None,
                 selector_visible_object_ids=[1, 2],
-                frame_info={"clarity_score": 80, "frame_usable": True, "reason": "ok"},
-                frame_selection_score=1,
             )
 
-        self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple"})
-        self.assertEqual(
-            frame_entry["referability_reason_by_alias_group"]["chair_family"],
-            "multiple_3d_anchors_found",
-        )
-
-    def test_mesh_quality_failure_blocks_unique_referability(self) -> None:
-        scene_objects = [make_object(1, "chair")]
-        objects_by_id = {1: scene_objects[0]}
-        visibility = {1: make_visibility_meta()}
-
-        with (
-            patch.object(
-                referability_module,
-                "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
-            ),
-            patch.object(
-                referability_module,
-                "compute_frame_object_visibility",
-                return_value=visibility,
-            ),
-            patch.object(
-                referability_module,
-                "_compute_topology_quality_for_object",
-                side_effect=lambda **kwargs: make_topology_quality(kwargs["obj_id"], "pass"),
-            ),
-            patch.object(
-                referability_module,
-                "_compute_mesh_mask_quality_for_object",
-                side_effect=lambda **kwargs: make_mesh_quality(
-                    kwargs["obj_id"],
-                    "fail",
-                    reason_codes=["low_iou", "high_under_coverage"],
-                ),
-            ),
-            patch.object(
-                referability_module,
-                "_call_dinox_joint_detection",
-                return_value=[make_detection(bbox=(5, 5, 35, 35), score=0.95, category="chair")],
-            ),
-        ):
-            frame_entry = referability_module._compute_frame_referability_entry(
-                client=object(),
-                model_name="unused",
-                scene_objects=scene_objects,
-                objects_by_id=objects_by_id,
-                image=np.zeros((120, 120, 3), dtype=np.uint8),
-                image_path=Path("frame.jpg"),
-                camera_pose=make_camera_pose(),
-                color_intrinsics=make_camera_intrinsics(),
-                depth_image=None,
-                depth_intrinsics=None,
-                selector_visible_object_ids=[1],
-                frame_info={"clarity_score": 80, "frame_usable": True, "reason": "ok"},
-                frame_selection_score=1,
-            )
-
-        self.assertEqual(frame_entry["label_statuses"], {"chair": "unsure"})
-        self.assertEqual(
-            frame_entry["referability_reason_by_alias_group"]["chair_family"],
-            "mesh_mask_mismatch",
-        )
-        self.assertEqual(
-            frame_entry["mesh_mask_quality_by_obj_id"]["1"]["reason_codes"],
-            ["low_iou", "high_under_coverage"],
-        )
-
-    def test_unique_detection_with_single_good_anchor_is_referable(self) -> None:
-        scene_objects = [make_object(1, "chair")]
-        objects_by_id = {1: scene_objects[0]}
-        visibility = {1: make_visibility_meta()}
-
-        with (
-            patch.object(
-                referability_module,
-                "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
-            ),
-            patch.object(
-                referability_module,
-                "compute_frame_object_visibility",
-                return_value=visibility,
-            ),
-            patch.object(
-                referability_module,
-                "_compute_topology_quality_for_object",
-                side_effect=lambda **kwargs: make_topology_quality(kwargs["obj_id"], "pass"),
-            ),
-            patch.object(
-                referability_module,
-                "_compute_mesh_mask_quality_for_object",
-                side_effect=lambda **kwargs: make_mesh_quality(kwargs["obj_id"], "pass"),
-            ),
-            patch.object(
-                referability_module,
-                "_call_dinox_joint_detection",
-                return_value=[make_detection(bbox=(5, 5, 35, 35), score=0.95, category="chair")],
-            ),
-        ):
-            frame_entry = referability_module._compute_frame_referability_entry(
-                client=object(),
-                model_name="unused",
-                scene_objects=scene_objects,
-                objects_by_id=objects_by_id,
-                image=np.zeros((120, 120, 3), dtype=np.uint8),
-                image_path=Path("frame.jpg"),
-                camera_pose=make_camera_pose(),
-                color_intrinsics=make_camera_intrinsics(),
-                depth_image=None,
-                depth_intrinsics=None,
-                selector_visible_object_ids=[1],
-                frame_info={"clarity_score": 80, "frame_usable": True, "reason": "ok"},
-                frame_selection_score=1,
-            )
-
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "multiple"})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["label_counts"], {"chair": 1})
         self.assertEqual(frame_entry["referable_object_ids"], [1])
-        self.assertEqual(
-            frame_entry["referability_reason_by_alias_group"]["chair_family"],
-            "referable",
+
+    def test_apply_crop_unique_mesh_ray_review_passes_after_stage2_visible_evidence(self) -> None:
+        object_reviews = {
+            1: {
+                "obj_id": 1,
+                "label": "chair",
+                "local_outcome": "reviewed",
+                "local_reason": "",
+                "vlm_status": "clear",
+                "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
+            }
+        }
+        caster = _SequenceVisibilityCaster([(0, 4), (2, 4)])
+        instance_mesh_data = make_instance_mesh_data(obj_id=1, sample_count=8)
+
+        referability_module._apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids={"chair": 1},
+            object_reviews=object_reviews,
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: instance_mesh_data,
         )
+
+        review = object_reviews[1]["ray_visibility_review"]
+        self.assertEqual(review["decision"], "pass")
+        self.assertEqual(review["reason"], "stage2_visible_evidence")
+        self.assertEqual(review["stage1"]["base_sample_count"], 64)
+        self.assertEqual(review["stage1"]["visible_count"], 0)
+        self.assertEqual(review["stage2"]["base_sample_count"], 512)
+        self.assertEqual(review["stage2"]["visible_count"], 2)
+
+    def test_apply_crop_unique_mesh_ray_review_drops_when_stage2_finds_no_visible_rays(self) -> None:
+        object_reviews = {
+            1: {
+                "obj_id": 1,
+                "label": "chair",
+                "local_outcome": "reviewed",
+                "local_reason": "",
+                "vlm_status": "clear",
+                "raw_response": '{"status":"clear"}',
+                "ray_visibility_review": {
+                    "applied": False,
+                    "decision": "not_applicable",
+                    "reason": "not_crop_unique",
+                    "stage1": None,
+                    "stage2": None,
+                },
+            }
+        }
+        caster = _SequenceVisibilityCaster([(0, 3), (0, 6)])
+        instance_mesh_data = make_instance_mesh_data(obj_id=1, sample_count=8)
+
+        referability_module._apply_crop_unique_mesh_ray_review(
+            crop_unique_label_object_ids={"chair": 1},
+            object_reviews=object_reviews,
+            camera_pose=make_camera_pose(),
+            color_intrinsics=make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: instance_mesh_data,
+        )
+
+        review = object_reviews[1]["ray_visibility_review"]
+        self.assertEqual(review["decision"], "drop")
+        self.assertEqual(review["reason"], "fully_occluded_after_stage2")
+        self.assertEqual(review["stage2"]["valid_count"], 6)
+        self.assertEqual(review["stage2"]["visible_count"], 0)
+
+    def test_apply_crop_unique_mesh_quality_review_drops_unique_object_on_mesh_mismatch(self) -> None:
+        crop_entry = {
+            "local_outcome": "reviewed",
+            "reason": "",
+            "roi_bounds_px": [20, 60, 20, 60],
+            "crop_bounds_px": [16, 64, 16, 64],
+            "projected_area_px": 900.0,
+            "bbox_in_frame_ratio": 0.9,
+            "edge_margin_px": 10.0,
+        }
+        object_reviews = {
+            1: referability_module._build_object_review_entry(
+                obj_id=1,
+                label="chair",
+                crop_entry=crop_entry,
+            )
+        }
+        objects_by_id = {1: make_object(1, "chair")}
+        topology_quality_by_obj_id: dict[int, dict] = {}
+        mesh_mask_quality_by_obj_id: dict[int, dict] = {}
+
+        with (
+            patch.object(
+                referability_module,
+                "_compute_topology_quality_for_object",
+                return_value=make_topology_quality(1, "pass"),
+            ),
+            patch.object(
+                referability_module,
+                "_call_dinox_joint_detection",
+                return_value=[make_detection(bbox=(22, 22, 58, 58), score=0.95, category="chair")],
+            ),
+            patch.object(
+                referability_module,
+                "_compute_mesh_mask_quality_for_object",
+                return_value=make_mesh_quality(1, "fail", reason_codes=["low_iou", "high_under_coverage"]),
+            ),
+        ):
+            failed = referability_module._apply_crop_unique_mesh_quality_review(
+                crop_unique_label_object_ids={"chair": 1},
+                object_reviews=object_reviews,
+                objects_by_id=objects_by_id,
+                image_path=Path("image.jpg"),
+                image_shape=(120, 120, 3),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1),
+                topology_quality_by_obj_id=topology_quality_by_obj_id,
+                mesh_mask_quality_by_obj_id=mesh_mask_quality_by_obj_id,
+                client=object(),
+            )
+
+        self.assertEqual(failed, {"chair": "mesh_mask_mismatch"})
+        self.assertEqual(topology_quality_by_obj_id[1]["status"], "pass")
+        self.assertEqual(mesh_mask_quality_by_obj_id[1]["status"], "fail")
+        review = object_reviews[1]
+        self.assertEqual(review["topology_status"], "pass")
+        self.assertEqual(review["mesh_mask_status"], "fail")
+        self.assertEqual(review["mesh_quality_review"]["decision"], "drop")
+        self.assertEqual(review["mesh_quality_review"]["reason"], "mesh_mask_mismatch")
+        self.assertIsNotNone(review["mesh_quality_review"]["matched_detection"])
 
 
 if __name__ == "__main__":

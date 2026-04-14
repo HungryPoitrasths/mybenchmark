@@ -370,6 +370,42 @@ class MakeViewerTests(unittest.TestCase):
         self.assertIn("flagged object ids: 42", notes)
         self.assertIn("cabinet#42 [reference, target]: unsure (invalid_crop)", notes)
 
+    def test_question_review_notes_renders_post_generation_audit(self) -> None:
+        notes = question_review_notes(
+            {
+                "question_post_generation_review": {
+                    "decision": "manual_review",
+                    "reason_codes": ["dinox_multiple_strong_detections:chair", "mesh_low_iou:chair#1"],
+                    "flagged_labels": ["chair"],
+                    "flagged_object_ids": [1],
+                    "dinox_label_reviews": [
+                        {
+                            "label": "chair",
+                            "decision": "manual_review",
+                            "strong_detection_count": 2,
+                            "matched_object_ids": [1],
+                            "reason_codes": ["dinox_multiple_strong_detections"],
+                        }
+                    ],
+                    "mesh_object_reviews": [
+                        {
+                            "label": "chair",
+                            "obj_id": 1,
+                            "decision": "manual_review",
+                            "topology_status": "pass",
+                            "mesh_mask_status": "fail",
+                            "reason_codes": ["mesh_low_iou"],
+                        }
+                    ],
+                }
+            }
+        )
+
+        self.assertIn("Post-Generation Audit", notes)
+        self.assertIn("reason codes: dinox_multiple_strong_detections:chair, mesh_low_iou:chair#1", notes)
+        self.assertIn("DINO-X chair: decision=manual_review, strong=2, matched=1", notes)
+        self.assertIn("Mesh chair#1: decision=manual_review, topology=pass, mesh=fail, reasons=mesh_low_iou", notes)
+
 
 if __name__ == "__main__":
     unittest.main()

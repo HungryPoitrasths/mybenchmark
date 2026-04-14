@@ -60,6 +60,16 @@ from src.utils.colmap_loader import (
 )
 from src.utils.depth_occlusion import load_depth_image
 from src.utils import RayCaster
+from scripts.run_vlm_referability import (
+    SEGMENTATION_EXTREME_NOISE_MIN_SCORE as QUESTION_DINOX_LOOSE_MIN_SCORE,
+    SEGMENTATION_STRONG_MIN_SCORE as QUESTION_DINOX_STRONG_MIN_SCORE,
+    _call_dinox_joint_detection as _referability_call_dinox_joint_detection,
+    _compute_mesh_mask_quality_for_object,
+    _compute_topology_quality_for_object,
+    _dedupe_detections_by_mask_iou,
+    _select_best_detection_for_object_review,
+    _strong_detection_min_area,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -67,7 +77,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
-EXPECTED_REFERABILITY_CACHE_VERSION = "14.0"
+EXPECTED_REFERABILITY_CACHE_VERSION = "17.0"
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -84,6 +94,620 @@ QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
 # Other question types now apply their own per-qtype mention thresholds.
 QUESTION_MENTION_MIN_IN_FRAME_RATIO = 0.60
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
+
+
+def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
+    if not isinstance(mask, np.ndarray):
+        return None
+    mask_bool = np.asarray(mask, dtype=bool)
+    ys, xs = np.where(mask_bool)
+    if xs.size <= 0 or ys.size <= 0:
+        return None
+    return [
+        int(xs.min()),
+        int(xs.max()) + 1,
+        int(ys.min()),
+        int(ys.max()) + 1,
+    ]
+
+
+def _serialize_question_dinox_detection(detection: dict[str, object]) -> dict[str, object]:
+    bbox = detection.get("bbox")
+    return {
+        "bbox": [float(value) for value in bbox] if isinstance(bbox, list) else None,
+        "score": float(detection.get("score", 0.0) or 0.0),
+        "area_px": int(detection.get("area_px", 0) or 0),
+        "category": str(detection.get("category", "")).strip().lower(),
+        "mask_bounds_px": _question_dinox_mask_bounds(detection.get("mask")),
+    }
+
+
+def _call_question_dinox_detection(
+    *,
+    image_path: Path,
+    label: str,
+    image_shape: tuple[int, ...],
+) -> list[dict[str, object]]:
+    return _referability_call_dinox_joint_detection(
+        client=None,
+        image_path=image_path,
+        alias_variants=[str(label).strip().lower()],
+        image_shape=image_shape,
+    )
+
+
+def _collect_question_dinox_label_targets(question: dict[str, object]) -> list[dict[str, object]]:
+    grouped: dict[str, dict[str, object]] = {}
+    for mention in _shared_collect_question_mentions(question, {}):
+        if not isinstance(mention, dict):
+            continue
+        label = str(mention.get("label", "")).strip().lower()
+        role = str(mention.get("role", "")).strip().lower()
+        obj_id = _shared_coerce_object_id(mention.get("obj_id"))
+        key = label if label else "__missing__"
+        entry = grouped.setdefault(
+            key,
+            {
+                "label": label,
+                "roles": set(),
+                "mentioned_object_ids": set(),
+            },
+        )
+        if role:
+            entry["roles"].add(role)
+        if obj_id is not None:
+            entry["mentioned_object_ids"].add(int(obj_id))
+    return [
+        {
+            "label": str(entry["label"]),
+            "roles": sorted(str(role) for role in entry["roles"]),
+            "mentioned_object_ids": sorted(int(obj_id) for obj_id in entry["mentioned_object_ids"]),
+        }
+        for entry in grouped.values()
+    ]
+
+
+def _copy_question_dinox_cache_entry(entry: dict[str, object]) -> dict[str, object]:
+    return {
+        "status": str(entry.get("status", "")),
+        "label": str(entry.get("label", "")),
+        "reason": entry.get("reason"),
+        "prompt_variants": list(entry.get("prompt_variants", []) or []),
+        "raw_detection_count": int(entry.get("raw_detection_count", 0) or 0),
+        "loose_detection_count": int(entry.get("loose_detection_count", 0) or 0),
+        "strong_detection_count": int(entry.get("strong_detection_count", 0) or 0),
+        "raw_detections": [dict(item) for item in entry.get("raw_detections", []) if isinstance(item, dict)],
+    }
+
+
+def _get_question_dinox_cache_entry(
+    *,
+    scene_id: str,
+    image_name: str,
+    label: str,
+    data_root: Path,
+    detection_cache: dict[tuple[str, str, str], dict[str, object]],
+    image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+) -> dict[str, object]:
+    cache_key = (scene_id, image_name, label)
+    cached = detection_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    image_cache_key = (scene_id, image_name)
+    if not scene_id or not image_name:
+        cached = {
+            "status": "error",
+            "label": label,
+            "reason": "missing_scene_or_image_name",
+            "prompt_variants": [label] if label else [],
+            "raw_detection_count": 0,
+            "loose_detection_count": 0,
+            "strong_detection_count": 0,
+            "raw_detections": [],
+            "detections": [],
+            "candidate_detections": [],
+            "strong_detections": [],
+            "image_shape": None,
+        }
+        detection_cache[cache_key] = cached
+        return cached
+
+    image_shape = image_shape_cache.get(image_cache_key)
+    if image_cache_key not in image_shape_cache:
+        image_path = data_root / scene_id / "color" / image_name
+        image = cv2.imread(str(image_path))
+        image_shape = None if image is None else tuple(image.shape)
+        image_shape_cache[image_cache_key] = image_shape
+    image_path = data_root / scene_id / "color" / image_name
+    if image_shape is None:
+        cached = {
+            "status": "error",
+            "label": label,
+            "reason": "image_unavailable",
+            "prompt_variants": [label] if label else [],
+            "raw_detection_count": 0,
+            "loose_detection_count": 0,
+            "strong_detection_count": 0,
+            "raw_detections": [],
+            "detections": [],
+            "candidate_detections": [],
+            "strong_detections": [],
+            "image_shape": None,
+        }
+        detection_cache[cache_key] = cached
+        return cached
+
+    try:
+        detections = _call_question_dinox_detection(
+            image_path=image_path,
+            label=label,
+            image_shape=image_shape,
+        )
+        candidate_detections = _dedupe_detections_by_mask_iou(
+            [
+                detection
+                for detection in detections
+                if float(detection.get("score", 0.0) or 0.0) >= QUESTION_DINOX_LOOSE_MIN_SCORE
+            ]
+        )
+        strong_min_area = _strong_detection_min_area(image_shape)
+        strong_detections = [
+            detection
+            for detection in candidate_detections
+            if int(detection.get("area_px", 0) or 0) >= strong_min_area
+            and float(detection.get("score", 0.0) or 0.0) >= QUESTION_DINOX_STRONG_MIN_SCORE
+        ]
+        cached = {
+            "status": "ok",
+            "label": label,
+            "reason": None,
+            "prompt_variants": [label] if label else [],
+            "raw_detection_count": len(detections),
+            "loose_detection_count": len(candidate_detections),
+            "strong_detection_count": len(strong_detections),
+            "raw_detections": [
+                _serialize_question_dinox_detection(detection)
+                for detection in detections
+            ],
+            "detections": detections,
+            "candidate_detections": candidate_detections,
+            "strong_detections": strong_detections,
+            "image_shape": image_shape,
+        }
+    except Exception as exc:
+        cached = {
+            "status": "error",
+            "label": label,
+            "reason": str(exc),
+            "prompt_variants": [label] if label else [],
+            "raw_detection_count": 0,
+            "loose_detection_count": 0,
+            "strong_detection_count": 0,
+            "raw_detections": [],
+            "detections": [],
+            "candidate_detections": [],
+            "strong_detections": [],
+            "image_shape": image_shape,
+        }
+
+    detection_cache[cache_key] = cached
+    return cached
+
+
+def _apply_question_dinox_audit(
+    *,
+    questions: list[dict[str, object]],
+    data_root: Path,
+) -> list[dict[str, object]]:
+    detection_cache: dict[tuple[str, str, str], dict[str, object]] = {}
+    image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None] = {}
+
+    for question in questions:
+        label_targets = _collect_question_dinox_label_targets(question)
+        label_audits: list[dict[str, object]] = []
+        scene_id = str(question.get("scene_id", "")).strip()
+        image_name = str(question.get("image_name", "")).strip()
+        image_cache_key = (scene_id, image_name)
+
+        for target in label_targets:
+            label = str(target.get("label", "")).strip().lower()
+            roles = list(target.get("roles", []))
+            mentioned_object_ids = list(target.get("mentioned_object_ids", []))
+
+            if not label:
+                label_audits.append(
+                    {
+                        "status": "skipped",
+                        "label": "",
+                        "reason": "missing_label",
+                        "roles": roles,
+                        "mentioned_object_ids": mentioned_object_ids,
+                        "raw_detection_count": 0,
+                        "loose_detection_count": 0,
+                        "raw_detections": [],
+                    }
+                )
+                continue
+
+            if label in EXCLUDED_LABELS:
+                label_audits.append(
+                    {
+                        "status": "skipped",
+                        "label": label,
+                        "reason": "excluded_label",
+                        "roles": roles,
+                        "mentioned_object_ids": mentioned_object_ids,
+                        "raw_detection_count": 0,
+                        "loose_detection_count": 0,
+                        "raw_detections": [],
+                    }
+                )
+                continue
+
+            cached = _get_question_dinox_cache_entry(
+                scene_id=scene_id,
+                image_name=image_name,
+                label=label,
+                data_root=data_root,
+                detection_cache=detection_cache,
+                image_shape_cache=image_shape_cache,
+            )
+
+            label_audit = _copy_question_dinox_cache_entry(cached)
+            label_audit["roles"] = roles
+            label_audit["mentioned_object_ids"] = mentioned_object_ids
+            label_audits.append(label_audit)
+
+        if not label_audits:
+            overall_status = "skipped"
+        elif any(str(item.get("status", "")).strip().lower() == "error" for item in label_audits):
+            overall_status = "error"
+        elif any(str(item.get("status", "")).strip().lower() == "ok" for item in label_audits):
+            overall_status = "ok"
+        else:
+            overall_status = "skipped"
+
+        question["question_dinox_audit"] = {
+            "status": overall_status,
+            "labels": label_audits,
+        }
+
+    return questions
+
+
+def _post_audit_review_stub(frame_context: dict[str, object], obj_id: int) -> dict[str, object]:
+    crop_entry = {}
+    crop_by_obj_id = frame_context.get("crop_by_obj_id", {})
+    if isinstance(crop_by_obj_id, dict):
+        crop_entry = crop_by_obj_id.get(int(obj_id), {}) or {}
+    visibility_meta = {}
+    visibility_by_obj_id = frame_context.get("visibility_by_obj_id", {})
+    if isinstance(visibility_by_obj_id, dict):
+        visibility_meta = visibility_by_obj_id.get(int(obj_id), {}) or {}
+    return {
+        "roi_bounds_px": crop_entry.get("roi_bounds_px") or visibility_meta.get("roi_bounds_px"),
+        "crop_bounds_px": crop_entry.get("crop_bounds_px"),
+    }
+
+
+def _apply_question_post_generation_audit(
+    *,
+    questions: list[dict[str, object]],
+    data_root: Path,
+    output_dir: Path,
+) -> list[dict[str, object]]:
+    detection_cache: dict[tuple[str, str, str], dict[str, object]] = {}
+    image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None] = {}
+    frame_context_by_key = _prebuild_question_review_frame_contexts(
+        questions=questions,
+        data_root=data_root,
+        output_dir=output_dir,
+    )
+    scene_mesh_cache: dict[str, object] = {}
+    scene_depth_intrinsics_cache: dict[str, object] = {}
+    topology_cache: dict[tuple[str, int], dict[str, object]] = {}
+
+    for question in questions:
+        scene_id = str(question.get("scene_id", "")).strip()
+        image_name = str(question.get("image_name", "")).strip()
+        frame_context = frame_context_by_key.get((scene_id, image_name), {})
+        objects_by_id = (
+            dict(frame_context.get("objects_by_id", {}))
+            if isinstance(frame_context, dict) else {}
+        )
+
+        label_targets = _collect_question_dinox_label_targets(question)
+        label_audits: list[dict[str, object]] = []
+        dinox_reason_codes: list[str] = []
+        flagged_labels: list[str] = []
+        flagged_object_ids: list[int] = []
+
+        for target in label_targets:
+            label = str(target.get("label", "")).strip().lower()
+            roles = list(target.get("roles", []))
+            mentioned_object_ids = list(target.get("mentioned_object_ids", []))
+
+            if not label:
+                label_audits.append(
+                    {
+                        "status": "skipped",
+                        "label": "",
+                        "decision": "skipped",
+                        "reason": "missing_label",
+                        "reason_codes": ["missing_label"],
+                        "roles": roles,
+                        "mentioned_object_ids": mentioned_object_ids,
+                        "matched_object_ids": [],
+                        "raw_detection_count": 0,
+                        "loose_detection_count": 0,
+                        "strong_detection_count": 0,
+                        "raw_detections": [],
+                    }
+                )
+                continue
+
+            if label in EXCLUDED_LABELS:
+                label_audits.append(
+                    {
+                        "status": "skipped",
+                        "label": label,
+                        "decision": "skipped",
+                        "reason": "excluded_label",
+                        "reason_codes": ["excluded_label"],
+                        "roles": roles,
+                        "mentioned_object_ids": mentioned_object_ids,
+                        "matched_object_ids": [],
+                        "raw_detection_count": 0,
+                        "loose_detection_count": 0,
+                        "strong_detection_count": 0,
+                        "raw_detections": [],
+                    }
+                )
+                continue
+
+            cached = _get_question_dinox_cache_entry(
+                scene_id=scene_id,
+                image_name=image_name,
+                label=label,
+                data_root=data_root,
+                detection_cache=detection_cache,
+                image_shape_cache=image_shape_cache,
+            )
+            strong_detections = [
+                detection for detection in cached.get("strong_detections", [])
+                if isinstance(detection, dict)
+            ]
+            matched_object_ids: list[int] = []
+            for obj_id in mentioned_object_ids:
+                review_stub = _post_audit_review_stub(frame_context, int(obj_id))
+                if any(
+                    _select_best_detection_for_object_review(
+                        detections=[detection],
+                        review=review_stub,
+                        image_shape=tuple(cached.get("image_shape") or ()),
+                    ) is not None
+                    for detection in strong_detections
+                ):
+                    matched_object_ids.append(int(obj_id))
+
+            reason_codes: list[str] = []
+            if str(cached.get("status", "")).strip().lower() != "ok":
+                reason_codes.append("dinox_error")
+            elif mentioned_object_ids:
+                strong_count = int(cached.get("strong_detection_count", 0) or 0)
+                if strong_count <= 0:
+                    reason_codes.append("dinox_no_strong_detection")
+                elif strong_count >= 2:
+                    reason_codes.append("dinox_multiple_strong_detections")
+                if strong_count > 0 and not matched_object_ids:
+                    reason_codes.append("dinox_detection_misses_target")
+
+            decision = "manual_review" if reason_codes else "pass"
+            if decision == "manual_review":
+                dinox_reason_codes.extend(f"{code}:{label}" for code in reason_codes)
+                if label not in flagged_labels:
+                    flagged_labels.append(label)
+                for obj_id in mentioned_object_ids:
+                    if int(obj_id) not in flagged_object_ids:
+                        flagged_object_ids.append(int(obj_id))
+
+            label_audit = _copy_question_dinox_cache_entry(cached)
+            label_audit["decision"] = decision
+            label_audit["reason_codes"] = reason_codes
+            label_audit["roles"] = roles
+            label_audit["mentioned_object_ids"] = mentioned_object_ids
+            label_audit["matched_object_ids"] = matched_object_ids
+            label_audits.append(label_audit)
+
+        if not label_audits:
+            question["question_dinox_audit"] = {
+                "status": "skipped",
+                "labels": [],
+            }
+        elif any(str(item.get("status", "")).strip().lower() == "error" for item in label_audits):
+            question["question_dinox_audit"] = {
+                "status": "error",
+                "labels": label_audits,
+            }
+        else:
+            question["question_dinox_audit"] = {
+                "status": "ok",
+                "labels": label_audits,
+            }
+
+        mesh_object_reviews: list[dict[str, object]] = []
+        mesh_reason_codes: list[str] = []
+        seen_mesh_obj_ids: set[int] = set()
+        scene_dir = frame_context.get("scene_dir") if isinstance(frame_context, dict) else None
+        pose = frame_context.get("pose") if isinstance(frame_context, dict) else None
+        color_intrinsics = frame_context.get("color_intrinsics") if isinstance(frame_context, dict) else None
+        has_projection_context = bool(frame_context.get("has_projection_context", False)) if isinstance(frame_context, dict) else False
+
+        if scene_id and scene_id not in scene_depth_intrinsics_cache:
+            if isinstance(scene_dir, Path):
+                try:
+                    scene_depth_intrinsics_cache[scene_id] = load_scannet_depth_intrinsics(scene_dir)
+                except Exception:
+                    scene_depth_intrinsics_cache[scene_id] = None
+            else:
+                scene_depth_intrinsics_cache[scene_id] = None
+
+        if scene_id and scene_id not in scene_mesh_cache:
+            if isinstance(scene_dir, Path):
+                try:
+                    scene_mesh_cache[scene_id] = load_instance_mesh_data(
+                        scene_dir,
+                        instance_ids=sorted(int(obj_id) for obj_id in objects_by_id.keys()),
+                        n_surface_samples=1,
+                    )
+                except Exception as exc:
+                    logger.warning("Question post-generation mesh load failed for %s: %s", scene_id, exc)
+                    scene_mesh_cache[scene_id] = None
+            else:
+                scene_mesh_cache[scene_id] = None
+
+        instance_mesh_data = scene_mesh_cache.get(scene_id)
+        depth_intrinsics = scene_depth_intrinsics_cache.get(scene_id)
+
+        for mention in _iter_question_referability_mentions(question, objects_by_id):
+            obj_id = _coerce_object_id(mention.get("obj_id"))
+            label = str(mention.get("label", "")).strip().lower()
+            roles = _dedupe_strings(
+                [str(role).strip() for role in mention.get("observed_roles", []) if str(role).strip()]
+                or [str(mention.get("role", "")).strip()]
+            )
+            if obj_id is None or obj_id in seen_mesh_obj_ids or label in EXCLUDED_LABELS:
+                continue
+            seen_mesh_obj_ids.add(int(obj_id))
+
+            crop_entry = {}
+            crop_by_obj_id = frame_context.get("crop_by_obj_id", {})
+            if isinstance(crop_by_obj_id, dict):
+                crop_entry = crop_by_obj_id.get(int(obj_id), {}) or {}
+            mesh_review: dict[str, object] = {
+                "label": label,
+                "obj_id": int(obj_id),
+                "roles": roles,
+                "decision": "manual_review",
+                "reason": "",
+                "reason_codes": [],
+                "topology_status": None,
+                "topology_reason_codes": [],
+                "mesh_mask_status": None,
+                "mesh_mask_reason_codes": [],
+                "mesh_mask_iou": None,
+                "mesh_mask_under_coverage": None,
+                "mesh_mask_over_coverage": None,
+                "mesh_mask_area_ratio": None,
+                "mesh_mask_depth_bad_ratio": None,
+                "matched_detection": None,
+            }
+
+            if not has_projection_context or pose is None or color_intrinsics is None:
+                mesh_review["reason"] = "missing_projection_context"
+                mesh_review["reason_codes"] = ["missing_projection_context"]
+            elif not isinstance(instance_mesh_data, object) or instance_mesh_data is None:
+                mesh_review["reason"] = "missing_instance_mesh_data"
+                mesh_review["reason_codes"] = ["missing_instance_mesh_data"]
+            elif not bool(crop_entry.get("valid", False)):
+                mesh_review["reason"] = str(crop_entry.get("reason", "")).strip() or "invalid_crop"
+                mesh_review["reason_codes"] = [str(mesh_review["reason"])]
+            else:
+                topology_key = (scene_id, int(obj_id))
+                topology_quality = topology_cache.get(topology_key)
+                if topology_quality is None:
+                    topology_quality = _compute_topology_quality_for_object(
+                        obj_id=int(obj_id),
+                        instance_mesh_data=instance_mesh_data,
+                    )
+                    topology_cache[topology_key] = topology_quality
+                mesh_review["topology_status"] = str(topology_quality.get("status", "")).strip().lower() or None
+                mesh_review["topology_reason_codes"] = list(topology_quality.get("reason_codes", []))
+
+                if str(topology_quality.get("status", "")).strip().lower() == "fail":
+                    mesh_review["reason"] = "topology_fail"
+                    mesh_review["reason_codes"] = ["topology_fail"]
+                else:
+                    cached = _get_question_dinox_cache_entry(
+                        scene_id=scene_id,
+                        image_name=image_name,
+                        label=label,
+                        data_root=data_root,
+                        detection_cache=detection_cache,
+                        image_shape_cache=image_shape_cache,
+                    )
+                    if str(cached.get("status", "")).strip().lower() != "ok":
+                        mesh_review["reason"] = "dinox_error"
+                        mesh_review["reason_codes"] = ["dinox_error"]
+                    else:
+                        matched_detection = _select_best_detection_for_object_review(
+                            detections=list(cached.get("candidate_detections", [])),
+                            review=_post_audit_review_stub(frame_context, int(obj_id)),
+                            image_shape=tuple(cached.get("image_shape") or ()),
+                        )
+                        if matched_detection is None:
+                            mesh_review["reason"] = (
+                                "no_detection_overlap"
+                                if list(cached.get("candidate_detections", []))
+                                else "no_detection_mask"
+                            )
+                            mesh_review["reason_codes"] = [str(mesh_review["reason"])]
+                        else:
+                            mesh_review["matched_detection"] = _serialize_question_dinox_detection(matched_detection)
+                            mesh_quality = _compute_mesh_mask_quality_for_object(
+                                obj_id=int(obj_id),
+                                detection_mask=np.asarray(matched_detection.get("mask"), dtype=bool),
+                                topology_status=str(topology_quality.get("status", "")),
+                                camera_pose=pose,
+                                color_intrinsics=color_intrinsics,
+                                depth_image=None,
+                                depth_intrinsics=depth_intrinsics,
+                                instance_mesh_data=instance_mesh_data,
+                            )
+                            mesh_review["mesh_mask_status"] = str(mesh_quality.get("status", "")).strip().lower() or None
+                            mesh_review["mesh_mask_reason_codes"] = list(mesh_quality.get("reason_codes", []))
+                            mesh_review["mesh_mask_iou"] = mesh_quality.get("iou")
+                            mesh_review["mesh_mask_under_coverage"] = mesh_quality.get("under_coverage")
+                            mesh_review["mesh_mask_over_coverage"] = mesh_quality.get("over_coverage")
+                            mesh_review["mesh_mask_area_ratio"] = mesh_quality.get("area_ratio")
+                            mesh_review["mesh_mask_depth_bad_ratio"] = mesh_quality.get("depth_bad_ratio")
+                            if str(mesh_quality.get("status", "")).strip().lower() == "fail":
+                                mesh_review["reason"] = "mesh_mask_mismatch"
+                                mesh_review["reason_codes"] = [f"mesh_{code}" for code in mesh_quality.get("reason_codes", [])]
+                            else:
+                                mesh_review["decision"] = "pass"
+                                mesh_review["reason"] = "mesh_mask_match"
+                                mesh_review["reason_codes"] = []
+
+            if mesh_review["decision"] != "pass":
+                mesh_reason_codes.extend(
+                    f"{code}:{label}#{int(obj_id)}"
+                    for code in mesh_review.get("reason_codes", [])
+                )
+                if label and label not in flagged_labels:
+                    flagged_labels.append(label)
+                if int(obj_id) not in flagged_object_ids:
+                    flagged_object_ids.append(int(obj_id))
+            mesh_object_reviews.append(mesh_review)
+
+        question["question_mesh_audit"] = {
+            "status": "ok" if mesh_object_reviews else "skipped",
+            "objects": mesh_object_reviews,
+        }
+
+        combined_reason_codes = _dedupe_strings(dinox_reason_codes + mesh_reason_codes)
+        post_review = {
+            "decision": "manual_review" if combined_reason_codes else "pass",
+            "reason_codes": combined_reason_codes,
+            "flagged_labels": flagged_labels,
+            "flagged_object_ids": flagged_object_ids,
+            "dinox_label_reviews": label_audits,
+            "mesh_object_reviews": mesh_object_reviews,
+        }
+        question["question_post_generation_review"] = post_review
+
+    return questions
 
 
 def _load_referability_cache(path: Path) -> dict | None:
@@ -539,11 +1163,14 @@ def _build_question_review_frame_context(
     return {
         "scene_id": scene_id,
         "image_name": image_name,
+        "scene_dir": scene_context.get("scene_dir"),
         "image_path": image_path,
         "image_exists": image_exists,
         "image_b64": image_b64,
         "mime": mime,
         "objects_by_id": objects_by_id,
+        "pose": pose,
+        "color_intrinsics": color_intrinsics,
         "visibility_by_obj_id": visibility_by_obj_id,
         "crop_by_obj_id": crop_by_obj_id,
         "has_projection_context": has_projection_context,
@@ -1064,6 +1691,17 @@ def _manual_review_reason_from_answer_review(review: dict[str, object]) -> str:
     return "VLM answer review marked this question for manual review."
 
 
+def _manual_review_reason_from_post_generation_review(review: dict[str, object]) -> str:
+    reason_codes = [
+        str(code).strip()
+        for code in review.get("reason_codes", [])
+        if str(code).strip()
+    ] if isinstance(review.get("reason_codes", []), list) else []
+    if reason_codes:
+        return "Post-generation audit flagged: " + ", ".join(reason_codes)
+    return "Post-generation audit marked this question for manual review."
+
+
 def _combine_manual_review_reasons(reasons: list[str]) -> str:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -1107,6 +1745,12 @@ def _review_question_object_presence(
     reviewed_question = dict(question)
     reviewed_question["benchmark_index"] = int(question_index)
     review_reasons: list[str] = []
+    existing_post_review = reviewed_question.get("question_post_generation_review")
+    if isinstance(existing_post_review, dict) and existing_post_review.get("decision") == "manual_review":
+        review_reasons.append(_manual_review_reason_from_post_generation_review(existing_post_review))
+    existing_manual_reason = str(reviewed_question.get("manual_review_reason", "")).strip()
+    if existing_manual_reason:
+        review_reasons.append(existing_manual_reason)
 
     scene_id = str(question.get("scene_id", "")).strip()
     image_name = str(question.get("image_name", "")).strip()
@@ -1320,15 +1964,24 @@ def _run_question_presence_review(
         if isinstance(question.get("question_presence_review"), dict)
         and question["question_presence_review"].get("decision") == "manual_review"
     )
+    post_generation_issue_count = sum(
+        1
+        for question in reviewed_questions
+        if isinstance(question.get("question_post_generation_review"), dict)
+        and question["question_post_generation_review"].get("decision") == "manual_review"
+    )
     flagged_questions = [
         question for question in reviewed_questions
         if (
+            isinstance(question.get("question_post_generation_review"), dict)
+            and question["question_post_generation_review"].get("decision") == "manual_review"
+        ) or (
             isinstance(question.get("question_presence_review"), dict)
             and question["question_presence_review"].get("decision") == "manual_review"
         ) or (
             isinstance(question.get("question_answer_review"), dict)
             and question["question_answer_review"].get("decision") == "manual_review"
-        )
+        ) or bool(str(question.get("manual_review_reason", "")).strip())
     ]
     answer_review_question_count = sum(
         1 for question in reviewed_questions if _should_review_question_answer(question)
@@ -1347,6 +2000,7 @@ def _run_question_presence_review(
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
         "referability_issue_count": referability_issue_count,
+        "post_generation_issue_count": post_generation_issue_count,
         "answer_review_question_count": answer_review_question_count,
         "answer_mismatch_count": answer_mismatch_count,
         "questions": reviewed_questions,
@@ -1358,6 +2012,7 @@ def _run_question_presence_review(
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
         "referability_issue_count": referability_issue_count,
+        "post_generation_issue_count": post_generation_issue_count,
         "answer_review_question_count": answer_review_question_count,
         "answer_mismatch_count": answer_mismatch_count,
         "questions": flagged_questions,
@@ -1394,6 +2049,7 @@ def _run_question_presence_review(
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
         "referability_issue_count": referability_issue_count,
+        "post_generation_issue_count": post_generation_issue_count,
         "answer_review_question_count": answer_review_question_count,
         "answer_mismatch_count": answer_mismatch_count,
         "review_json_path": review_json_path,
@@ -2190,6 +2846,11 @@ def run_pipeline(
             raw_question_count,
         )
         final_questions = full_quality_pipeline(all_questions)
+        final_questions = _apply_question_post_generation_audit(
+            questions=final_questions,
+            data_root=Path(data_root),
+            output_dir=output_dir,
+        )
         all_questions = []
 
         by_scene: dict[str, list] = defaultdict(list)
@@ -2472,6 +3133,11 @@ def run_pipeline(
         len(all_questions),
     )
     final_questions = full_quality_pipeline(all_questions)
+    final_questions = _apply_question_post_generation_audit(
+        questions=final_questions,
+        data_root=Path(data_root),
+        output_dir=output_dir,
+    )
 
     by_scene: dict[str, list] = defaultdict(list)
     final_by_scene_frame: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))

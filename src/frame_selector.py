@@ -415,7 +415,7 @@ def compute_frame_object_visibility(
     instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
-    max_depth: float = 6.0,
+    max_depth: float = 8.0,
     strict_mode: bool = False,
 ) -> dict[int, dict[str, Any]]:
     """Compute per-object visibility metadata for a single frame."""
@@ -600,7 +600,7 @@ def refine_visible_ids_with_depth(
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
-VISIBLE_ZBUFFER_MASK_IN_FRAME_RATIO_MIN = 0.30
+VISIBLE_ZBUFFER_MASK_IN_FRAME_RATIO_MIN = 0.20
 VISIBLE_PROJECTED_AREA_MIN = 400.0
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.60
 FRAME_CROP_BONUS_WEIGHT = 10
@@ -612,7 +612,7 @@ def build_selector_visibility_audit_from_meta(
     *,
     margin: int = 80,
     min_depth: float = 0.3,
-    max_depth: float = 6.0,
+    max_depth: float = 8.0,
 ) -> dict[str, Any]:
     """Explain whether an object passes selector visibility gating."""
     center_uv_px = meta.get("center_uv_px")
@@ -691,7 +691,7 @@ def _build_selector_visibility_meta(
     instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
-    max_depth: float = 6.0,
+    max_depth: float = 8.0,
     include_roi_metrics: bool = False,
 ) -> dict[str, Any]:
     center = np.array(obj["center"], dtype=np.float64)
@@ -729,7 +729,7 @@ def build_selector_visibility_audit(
     instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
-    max_depth: float = 6.0,
+    max_depth: float = 8.0,
     include_roi_metrics: bool = False,
 ) -> dict[str, Any]:
     """Project one object and explain selector visibility gating."""
@@ -759,7 +759,7 @@ def get_visible_objects(
     instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
-    max_depth: float = 6.0,
+    max_depth: float = 8.0,
     return_audits: bool = False,
 ) -> list[dict] | tuple[list[dict], dict[int, dict[str, Any]]]:
     """Return objects whose projected footprint is meaningfully visible.
