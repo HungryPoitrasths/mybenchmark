@@ -50,13 +50,14 @@ def make_object(obj_id: int, label: str) -> dict:
 
 
 class FrameSelectorTests(unittest.TestCase):
-    def test_selector_visibility_audit_accepts_zbuffer_roi_fallback_at_20_percent(self) -> None:
+    def test_selector_visibility_audit_accepts_zbuffer_roi_fallback_at_400px(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
             {
                 "center_uv_px": [10.0, 10.0],
                 "depth_m": 2.0,
                 "bbox_in_frame_ratio": 0.05,
-                "zbuffer_mask_in_frame_ratio": 0.20,
+                "zbuffer_mask_area_px": 400.0,
+                "has_zbuffer_mask_area": True,
                 "projected_area_px": 400.0,
             },
             make_camera_intrinsics(),
@@ -64,16 +65,33 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertTrue(audit["selector_passed"])
         self.assertEqual(audit["selector_decision"], "selected_roi_fallback")
-        self.assertEqual(audit["selector_roi_ratio_source"], "zbuffer_mask")
+        self.assertEqual(audit["selector_roi_ratio_source"], "zbuffer_mask_area")
 
-    def test_selector_visibility_audit_keeps_projected_area_gate_for_roi_fallback(self) -> None:
+    def test_selector_visibility_audit_rejects_zbuffer_roi_fallback_below_400px(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
             {
                 "center_uv_px": [10.0, 10.0],
                 "depth_m": 2.0,
                 "bbox_in_frame_ratio": 0.90,
-                "zbuffer_mask_in_frame_ratio": 0.35,
-                "projected_area_px": 399.0,
+                "zbuffer_mask_area_px": 399.0,
+                "has_zbuffer_mask_area": True,
+                "projected_area_px": 9999.0,
+            },
+            make_camera_intrinsics(),
+        )
+
+        self.assertFalse(audit["selector_passed"])
+        self.assertIn("zbuffer_mask_area_below_threshold", audit["selector_rejection_reasons"])
+
+    def test_selector_visibility_audit_requires_projected_area_when_zbuffer_area_exists(self) -> None:
+        audit = frame_selector.build_selector_visibility_audit_from_meta(
+            {
+                "center_uv_px": [10.0, 10.0],
+                "depth_m": 2.0,
+                "bbox_in_frame_ratio": 0.01,
+                "zbuffer_mask_area_px": 400.0,
+                "has_zbuffer_mask_area": True,
+                "projected_area_px": 1.0,
             },
             make_camera_intrinsics(),
         )
@@ -81,13 +99,29 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertFalse(audit["selector_passed"])
         self.assertIn("projected_area_below_threshold", audit["selector_rejection_reasons"])
 
+    def test_selector_visibility_audit_falls_back_to_bbox_projection_without_mesh_mask(self) -> None:
+        audit = frame_selector.build_selector_visibility_audit_from_meta(
+            {
+                "center_uv_px": [10.0, 10.0],
+                "depth_m": 2.0,
+                "bbox_in_frame_ratio": 0.35,
+                "projected_area_px": 400.0,
+            },
+            make_camera_intrinsics(),
+        )
+
+        self.assertTrue(audit["selector_passed"])
+        self.assertEqual(audit["selector_decision"], "selected_roi_fallback")
+        self.assertEqual(audit["selector_roi_ratio_source"], "bbox_projection")
+
     def test_selector_visibility_audit_accepts_depth_up_to_8m(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
             {
                 "center_uv_px": [320.0, 240.0],
                 "depth_m": 7.5,
                 "bbox_in_frame_ratio": 0.0,
-                "zbuffer_mask_in_frame_ratio": 0.0,
+                "zbuffer_mask_area_px": 0.0,
+                "has_zbuffer_mask_area": True,
                 "projected_area_px": 0.0,
             },
             make_camera_intrinsics(),
@@ -96,7 +130,37 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertTrue(audit["selector_passed"])
         self.assertEqual(audit["selector_decision"], "selected_center")
 
-    def test_project_object_mask_stats_skips_pathological_full_mask_extent(self) -> None:
+    def test_build_selector_visibility_meta_skips_mask_projection_below_projected_area_threshold(self) -> None:
+        obj = make_object(1, "cup")
+
+        with (
+            patch.object(
+                frame_selector,
+                "_project_object_roi",
+                return_value={
+                    "bbox_in_frame_ratio": 0.9,
+                    "projected_area_px": 399.0,
+                    "roi_bounds": (0, 20, 0, 20),
+                },
+            ),
+            patch.object(
+                frame_selector,
+                "_project_object_mask_stats",
+                side_effect=AssertionError("mask stats should not run below projected area threshold"),
+            ),
+        ):
+            meta = frame_selector._build_selector_visibility_meta(
+                obj,
+                make_camera_pose("000000.jpg"),
+                make_camera_intrinsics(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertEqual(meta["projected_area_px"], 399.0)
+        self.assertEqual(meta["zbuffer_mask_area_px"], 0.0)
+        self.assertFalse(meta["has_zbuffer_mask_area"])
+
+    def test_project_object_mask_stats_only_reports_in_frame_area(self) -> None:
         intrinsics = make_camera_intrinsics()
         pose = make_camera_pose("000000.jpg")
         obj = {
