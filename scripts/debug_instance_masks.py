@@ -20,15 +20,18 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.run_vlm_referability import (
     QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
     REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+    REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
     SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX,
     SEGMENTATION_EXTREME_NOISE_MIN_SCORE,
     _build_scene_alias_group_index,
     _call_dinox_joint_detection,
     _compute_topology_quality_for_object,
     _dedupe_detections_by_mask_iou,
+    _evaluate_crop_unique_mesh_ray_stage,
+    _instance_triangle_id_set,
+    _make_lazy_mesh_ray_resource_getters,
     _mask_iou,
     _normalize_alias_variants,
-    _rasterize_instance_depth_map,
     _refine_candidate_visible_object_ids,
     _serialize_detection,
 )
@@ -266,7 +269,213 @@ def _build_api_visual_items(
     return items, summary_rows
 
 
-def _build_zbuffer_visual_items(
+def _project_vertices_to_image(
+    vertices: np.ndarray,
+    camera_pose: Any,
+    intrinsics: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    world_vertices = np.asarray(vertices, dtype=np.float64)
+    camera_vertices = (
+        world_vertices @ np.asarray(camera_pose.rotation, dtype=np.float64).T
+        + np.asarray(camera_pose.translation, dtype=np.float64)
+    )
+    depths = camera_vertices[:, 2]
+    uv = np.full((len(world_vertices), 2), np.nan, dtype=np.float64)
+    positive_depth = depths > 1e-6
+    if np.any(positive_depth):
+        uv[positive_depth, 0] = (
+            intrinsics.fx * camera_vertices[positive_depth, 0] / depths[positive_depth]
+        ) + intrinsics.cx
+        uv[positive_depth, 1] = (
+            intrinsics.fy * camera_vertices[positive_depth, 1] / depths[positive_depth]
+        ) + intrinsics.cy
+    return uv, depths
+
+
+def _pixel_rays_world(
+    us: np.ndarray,
+    vs: np.ndarray,
+    camera_pose: Any,
+    intrinsics: Any,
+) -> np.ndarray:
+    ray_dirs_cam = np.stack(
+        [
+            (us - intrinsics.cx) / intrinsics.fx,
+            (vs - intrinsics.cy) / intrinsics.fy,
+            np.ones_like(us, dtype=np.float64),
+        ],
+        axis=1,
+    )
+    return ray_dirs_cam @ np.asarray(camera_pose.rotation, dtype=np.float64)
+
+
+def _render_instance_meshray_mask(
+    *,
+    obj_id: int,
+    camera_pose: Any,
+    color_intrinsics: Any,
+    ray_caster: Any,
+    instance_mesh_data: Any,
+    hit_epsilon: float = 0.05,
+) -> dict[str, Any]:
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, int(obj_id))
+    height = int(color_intrinsics.height)
+    width = int(color_intrinsics.width)
+    empty_mask = np.zeros((height, width), dtype=bool)
+    if not target_tri_ids:
+        return {
+            "mask": empty_mask,
+            "triangle_count": 0,
+            "query_bbox": None,
+            "query_pixel_count": 0,
+            "visible_pixel_count": 0,
+        }
+
+    vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+    faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)
+    triangle_ids = sorted(int(tid) for tid in target_tri_ids)
+    tri_vertex_ids = np.unique(faces[np.asarray(triangle_ids, dtype=np.int64)].reshape(-1))
+    projected_uv, projected_depths = _project_vertices_to_image(
+        vertices[tri_vertex_ids],
+        camera_pose,
+        color_intrinsics,
+    )
+    valid_vertex_mask = np.isfinite(projected_uv[:, 0]) & np.isfinite(projected_uv[:, 1]) & (projected_depths > 1e-6)
+    if not np.any(valid_vertex_mask):
+        return {
+            "mask": empty_mask,
+            "triangle_count": len(triangle_ids),
+            "query_bbox": None,
+            "query_pixel_count": 0,
+            "visible_pixel_count": 0,
+        }
+
+    valid_uv = projected_uv[valid_vertex_mask]
+    x0 = max(0, int(np.floor(float(np.min(valid_uv[:, 0])))))
+    x1 = min(width, int(np.ceil(float(np.max(valid_uv[:, 0])))) + 1)
+    y0 = max(0, int(np.floor(float(np.min(valid_uv[:, 1])))))
+    y1 = min(height, int(np.ceil(float(np.max(valid_uv[:, 1])))) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return {
+            "mask": empty_mask,
+            "triangle_count": len(triangle_ids),
+            "query_bbox": None,
+            "query_pixel_count": 0,
+            "visible_pixel_count": 0,
+        }
+
+    grid_x, grid_y = np.meshgrid(
+        np.arange(x0, x1, dtype=np.float64) + 0.5,
+        np.arange(y0, y1, dtype=np.float64) + 0.5,
+    )
+    flat_us = grid_x.reshape(-1)
+    flat_vs = grid_y.reshape(-1)
+    directions = _pixel_rays_world(flat_us, flat_vs, camera_pose, color_intrinsics)
+    origins = np.broadcast_to(
+        np.asarray(camera_pose.position, dtype=np.float64),
+        directions.shape,
+    ).copy()
+    first_target = ray_caster.first_hits_for_triangles(
+        origins=origins,
+        directions=directions,
+        target_tri_ids=target_tri_ids,
+    )
+
+    if hasattr(ray_caster, "_first_non_ignored_hits"):
+        first_any, _has_any_hit, forced_blocked = ray_caster._first_non_ignored_hits(
+            origins=origins,
+            directions=directions,
+            ignored_tri_ids=None,
+        )
+    else:
+        first_any = {}
+        forced_blocked = np.zeros(len(origins), dtype=bool)
+        for ray_idx, direction in enumerate(directions):
+            hit = ray_caster.first_visible_hit(origins[ray_idx], direction)
+            if hit is not None:
+                _hit_point, tri_id, dist = hit
+                first_any[ray_idx] = (int(tri_id), float(dist))
+
+    mask = np.zeros((height, width), dtype=bool)
+    visible_pixel_count = 0
+    for ray_idx, target_hit in first_target.items():
+        if forced_blocked[ray_idx]:
+            continue
+        any_hit = first_any.get(int(ray_idx))
+        if any_hit is None:
+            continue
+        any_tri_id, any_dist = any_hit
+        _target_point, _target_tri_id, target_dist = target_hit
+        if any_tri_id not in target_tri_ids:
+            continue
+        if abs(float(any_dist) - float(target_dist)) > float(hit_epsilon):
+            continue
+        local_y = int(ray_idx) // max(1, (x1 - x0))
+        local_x = int(ray_idx) % max(1, (x1 - x0))
+        mask[y0 + local_y, x0 + local_x] = True
+        visible_pixel_count += 1
+
+    return {
+        "mask": mask,
+        "triangle_count": len(triangle_ids),
+        "query_bbox": [x0, y0, x1, y1],
+        "query_pixel_count": int(len(flat_us)),
+        "visible_pixel_count": int(visible_pixel_count),
+    }
+
+
+def _evaluate_meshray_review(
+    *,
+    obj_id: int,
+    camera_pose: Any,
+    color_intrinsics: Any,
+    ray_caster: Any,
+    instance_mesh_data_getter: Any,
+) -> dict[str, Any]:
+    stage1 = _evaluate_crop_unique_mesh_ray_stage(
+        obj_id=int(obj_id),
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT),
+        base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+    )
+    if int(stage1.get("visible_count", 0) or 0) > 0:
+        return {
+            "applied": True,
+            "decision": "pass",
+            "reason": "stage1_visible_evidence",
+            "stage1": stage1,
+            "stage2": None,
+        }
+
+    stage2 = _evaluate_crop_unique_mesh_ray_stage(
+        obj_id=int(obj_id),
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT),
+        base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
+    )
+    if int(stage2.get("visible_count", 0) or 0) > 0:
+        decision = "pass"
+        reason = "stage2_visible_evidence"
+    elif int(stage2.get("valid_count", 0) or 0) <= 0:
+        decision = "drop"
+        reason = "no_valid_rays_after_stage2"
+    else:
+        decision = "drop"
+        reason = "fully_occluded_after_stage2"
+    return {
+        "applied": True,
+        "decision": decision,
+        "reason": reason,
+        "stage1": stage1,
+        "stage2": stage2,
+    }
+
+
+def _build_meshray_visual_items(
     *,
     requested_label: str,
     obj_ids: list[int],
@@ -275,35 +484,52 @@ def _build_zbuffer_visual_items(
     topology_quality_by_obj_id: dict[int, dict[str, Any]],
     camera_pose: Any,
     color_intrinsics: Any,
-    instance_mesh_data: Any,
+    ray_caster: Any,
+    instance_mesh_data_getter: Any,
     output_dir: Path,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[int, np.ndarray]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[int, np.ndarray], dict[int, dict[str, Any]]]:
     items: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
     rendered_masks: dict[int, np.ndarray] = {}
-    for idx, obj_id in enumerate(obj_ids, start=1):
-        rendered = _rasterize_instance_depth_map(
+    visibility_reviews: dict[int, dict[str, Any]] = {}
+    visible_index = 0
+
+    for obj_id in obj_ids:
+        review = _evaluate_meshray_review(
             obj_id=int(obj_id),
             camera_pose=camera_pose,
-            intrinsics=color_intrinsics,
-            instance_mesh_data=instance_mesh_data,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data_getter=instance_mesh_data_getter,
+        )
+        visibility_reviews[int(obj_id)] = review
+        if str(review.get("decision", "")).strip().lower() != "pass":
+            continue
+
+        rendered = _render_instance_meshray_mask(
+            obj_id=int(obj_id),
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT),
         )
         mask = np.asarray(rendered["mask"], dtype=bool)
         if not np.any(mask):
             continue
 
+        visible_index += 1
         rendered_masks[int(obj_id)] = mask
-        color = _ZBUFFER_COLORS[(idx - 1) % len(_ZBUFFER_COLORS)]
+        color = _ZBUFFER_COLORS[(visible_index - 1) % len(_ZBUFFER_COLORS)]
         bbox = _mask_bbox(mask)
         items.append(
             {
                 "mask": mask,
                 "bbox": bbox,
-                "text": f"Z {requested_label} obj#{obj_id}",
+                "text": f"MR {requested_label} obj#{obj_id}",
                 "color": color,
             }
         )
-        mask_path = output_dir / f"{_safe_name(requested_label)}_zbuffer_obj_{obj_id}.png"
+        mask_path = output_dir / f"{_safe_name(requested_label)}_meshray_obj_{obj_id}.png"
         _write_mask_png(mask, mask_path)
         visibility_meta = visibility_by_obj_id.get(int(obj_id), {})
         summary_rows.append(
@@ -313,15 +539,22 @@ def _build_zbuffer_visual_items(
                 "area_px": int(mask.sum()),
                 "mask_bbox": bbox,
                 "triangle_count": int(rendered.get("triangle_count", 0) or 0),
+                "query_bbox": rendered.get("query_bbox"),
+                "query_pixel_count": int(rendered.get("query_pixel_count", 0) or 0),
+                "visible_pixel_count": int(rendered.get("visible_pixel_count", 0) or 0),
                 "topology_status": str(
                     topology_quality_by_obj_id.get(int(obj_id), {}).get("status", "")
                 ).strip().lower(),
                 "projected_area_px": float(visibility_meta.get("projected_area_px", 0.0) or 0.0),
                 "bbox_in_frame_ratio": float(visibility_meta.get("bbox_in_frame_ratio", 0.0) or 0.0),
+                "zbuffer_mask_in_frame_ratio": float(
+                    visibility_meta.get("zbuffer_mask_in_frame_ratio", 0.0) or 0.0
+                ),
+                "mesh_ray_visibility_review": review,
                 "mask_path": str(mask_path),
             }
         )
-    return items, summary_rows, rendered_masks
+    return items, summary_rows, rendered_masks, visibility_reviews
 
 
 def _compute_iou_rows(
@@ -353,7 +586,7 @@ def _compute_iou_rows(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Visualize API masks and z-buffer masks for one ScanNet frame")
+    parser = argparse.ArgumentParser(description="Visualize API masks and mesh-ray-filtered projected masks for one ScanNet frame")
     parser.add_argument(
         "--data_root",
         type=str,
@@ -427,11 +660,23 @@ def main() -> None:
         if obj.get("id") is not None
     }
     alias_group_index = _build_scene_alias_group_index(scene_objects)
+    instance_mesh_data = load_instance_mesh_data(
+        scene_dir,
+        instance_ids=list(objects_by_id.keys()),
+        n_surface_samples=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+    )
+    ray_caster_getter, instance_mesh_data_getter = _make_lazy_mesh_ray_resource_getters(
+        scene_dir=scene_dir,
+        scene_objects=scene_objects,
+        axis_alignment=axis_alignment,
+    )
+    ray_caster = ray_caster_getter()
 
     selector_visible_objects = get_visible_objects(
         scene_objects,
         camera_pose,
         color_intrinsics,
+        instance_mesh_data=instance_mesh_data,
     )
     selector_visible_object_ids = sorted(
         int(obj.get("id"))
@@ -454,13 +699,8 @@ def main() -> None:
         image_path=image_path,
         depth_image=depth_image,
         depth_intrinsics=depth_intrinsics,
+        instance_mesh_data=instance_mesh_data,
         strict_mode=False,
-    )
-
-    instance_mesh_data = load_instance_mesh_data(
-        scene_dir,
-        instance_ids=list(objects_by_id.keys()),
-        n_surface_samples=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
     )
     topology_quality_by_obj_id = {
         int(obj_id): _compute_topology_quality_for_object(
@@ -548,7 +788,7 @@ def main() -> None:
             _write_mask_png(np.asarray(detection.get("mask"), dtype=bool), mask_path)
             api_rows[idx - 1]["mask_path"] = str(mask_path)
 
-        zbuffer_items, zbuffer_rows, rendered_masks = _build_zbuffer_visual_items(
+        meshray_items, meshray_rows, rendered_masks, meshray_reviews = _build_meshray_visual_items(
             requested_label=requested_label,
             obj_ids=visible_matching_object_ids,
             objects_by_id=objects_by_id,
@@ -556,19 +796,20 @@ def main() -> None:
             topology_quality_by_obj_id=topology_quality_by_obj_id,
             camera_pose=camera_pose,
             color_intrinsics=color_intrinsics,
-            instance_mesh_data=instance_mesh_data,
+            ray_caster=ray_caster,
+            instance_mesh_data_getter=instance_mesh_data_getter,
             output_dir=label_output_dir,
         )
 
         api_overlay = _overlay_mask_items(image, api_items)
-        zbuffer_overlay = _overlay_mask_items(image, zbuffer_items)
-        combined_overlay = _overlay_mask_items(api_overlay, zbuffer_items, alpha=0.28)
+        meshray_overlay = _overlay_mask_items(image, meshray_items)
+        combined_overlay = _overlay_mask_items(api_overlay, meshray_items, alpha=0.28)
 
         api_overlay_path = label_output_dir / f"{label_key}_api_overlay.jpg"
-        zbuffer_overlay_path = label_output_dir / f"{label_key}_zbuffer_overlay.jpg"
+        meshray_overlay_path = label_output_dir / f"{label_key}_meshray_overlay.jpg"
         combined_overlay_path = label_output_dir / f"{label_key}_combined_overlay.jpg"
         cv2.imwrite(str(api_overlay_path), api_overlay)
-        cv2.imwrite(str(zbuffer_overlay_path), zbuffer_overlay)
+        cv2.imwrite(str(meshray_overlay_path), meshray_overlay)
         cv2.imwrite(str(combined_overlay_path), combined_overlay)
 
         iou_rows = _compute_iou_rows(deduped_detections, rendered_masks)
@@ -585,10 +826,15 @@ def main() -> None:
             "filtered_detection_count": len(filtered_detections),
             "deduped_detection_count": len(deduped_detections),
             "api_detections": api_rows,
-            "zbuffer_objects": zbuffer_rows,
-            "detection_to_zbuffer_iou": iou_rows,
+            "meshray_candidate_object_ids": visible_matching_object_ids,
+            "meshray_visibility_reviews_by_obj_id": {
+                str(obj_id): review
+                for obj_id, review in sorted(meshray_reviews.items())
+            },
+            "meshray_objects": meshray_rows,
+            "detection_to_meshray_iou": iou_rows,
             "api_overlay_path": str(api_overlay_path),
-            "zbuffer_overlay_path": str(zbuffer_overlay_path),
+            "meshray_overlay_path": str(meshray_overlay_path),
             "combined_overlay_path": str(combined_overlay_path),
         }
 

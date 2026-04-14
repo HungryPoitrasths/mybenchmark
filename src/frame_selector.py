@@ -16,6 +16,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .scene_parser import InstanceMeshData, load_instance_mesh_data
 from .utils.colmap_loader import (
     CameraIntrinsics,
     CameraPose,
@@ -107,6 +108,193 @@ STRICT_EDGE_MARGIN_MIN = 12.0
 STRICT_LOCAL_SHARPNESS_MIN = 45.0
 
 
+def _instance_triangle_id_array(
+    instance_mesh_data: InstanceMeshData | None,
+    obj_id: int,
+) -> np.ndarray:
+    if instance_mesh_data is None:
+        return np.empty((0,), dtype=np.int64)
+
+    triangle_ids_by_instance = getattr(instance_mesh_data, "triangle_ids_by_instance", {}) or {}
+    boundary_triangle_ids_by_instance = getattr(
+        instance_mesh_data,
+        "boundary_triangle_ids_by_instance",
+        {},
+    ) or {}
+    tri_parts = [
+        np.asarray(arr, dtype=np.int64)
+        for arr in (
+            triangle_ids_by_instance.get(int(obj_id)),
+            boundary_triangle_ids_by_instance.get(int(obj_id)),
+        )
+        if arr is not None and len(arr) > 0
+    ]
+    if not tri_parts:
+        return np.empty((0,), dtype=np.int64)
+    return np.unique(np.concatenate(tri_parts).astype(np.int64))
+
+
+def _project_vertices_to_image(
+    vertices: np.ndarray,
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+) -> tuple[np.ndarray, np.ndarray]:
+    world_vertices = np.asarray(vertices, dtype=np.float64)
+    camera_vertices = (
+        world_vertices @ np.asarray(pose.rotation, dtype=np.float64).T
+        + np.asarray(pose.translation, dtype=np.float64)
+    )
+    depths = camera_vertices[:, 2]
+    uv = np.full((len(world_vertices), 2), np.nan, dtype=np.float64)
+    positive_depth = depths > 1e-6
+    if np.any(positive_depth):
+        uv[positive_depth, 0] = (
+            intrinsics.fx * camera_vertices[positive_depth, 0] / depths[positive_depth]
+        ) + intrinsics.cx
+        uv[positive_depth, 1] = (
+            intrinsics.fy * camera_vertices[positive_depth, 1] / depths[positive_depth]
+        ) + intrinsics.cy
+    return uv, depths
+
+
+def _rasterize_projected_triangles(
+    projected_uv: np.ndarray,
+    projected_depths: np.ndarray,
+    faces: np.ndarray,
+    *,
+    width: int,
+    height: int,
+    x_offset: int = 0,
+    y_offset: int = 0,
+) -> np.ndarray:
+    depth_buffer = np.full((int(height), int(width)), np.inf, dtype=np.float32)
+
+    for tri_indices in np.asarray(faces, dtype=np.int64):
+        tri_depths = projected_depths[tri_indices]
+        if np.any(tri_depths <= 1e-6):
+            continue
+
+        tri_uv = np.asarray(projected_uv[tri_indices], dtype=np.float64).copy()
+        if np.any(np.isnan(tri_uv)):
+            continue
+
+        tri_uv[:, 0] -= float(x_offset)
+        tri_uv[:, 1] -= float(y_offset)
+
+        xs = tri_uv[:, 0]
+        ys = tri_uv[:, 1]
+        if float(np.max(xs)) < 0 or float(np.max(ys)) < 0:
+            continue
+        if float(np.min(xs)) >= width or float(np.min(ys)) >= height:
+            continue
+
+        x_min = max(int(np.floor(float(np.min(xs)))), 0)
+        x_max = min(int(np.ceil(float(np.max(xs)))), width - 1)
+        y_min = max(int(np.floor(float(np.min(ys)))), 0)
+        y_max = min(int(np.ceil(float(np.max(ys)))), height - 1)
+        if x_max < x_min or y_max < y_min:
+            continue
+
+        x0, y0 = tri_uv[0]
+        x1, y1 = tri_uv[1]
+        x2, y2 = tri_uv[2]
+        denominator = ((y1 - y2) * (x0 - x2)) + ((x2 - x1) * (y0 - y2))
+        if abs(float(denominator)) < 1e-12:
+            continue
+
+        grid_x, grid_y = np.meshgrid(
+            np.arange(x_min, x_max + 1, dtype=np.float64) + 0.5,
+            np.arange(y_min, y_max + 1, dtype=np.float64) + 0.5,
+        )
+        w0 = (((y1 - y2) * (grid_x - x2)) + ((x2 - x1) * (grid_y - y2))) / denominator
+        w1 = (((y2 - y0) * (grid_x - x2)) + ((x0 - x2) * (grid_y - y2))) / denominator
+        w2 = 1.0 - w0 - w1
+        inside = (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6)
+        if not np.any(inside):
+            continue
+
+        tri_depth_map = (w0 * tri_depths[0]) + (w1 * tri_depths[1]) + (w2 * tri_depths[2])
+        target_slice = depth_buffer[y_min:y_max + 1, x_min:x_max + 1]
+        update_mask = inside & (tri_depth_map < target_slice)
+        if np.any(update_mask):
+            target_slice[update_mask] = tri_depth_map[update_mask].astype(np.float32)
+
+    return np.isfinite(depth_buffer)
+
+
+def _project_object_mask_stats(
+    obj: dict[str, Any],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    instance_mesh_data: InstanceMeshData | None,
+) -> dict[str, float]:
+    obj_id = int(obj.get("id", -1))
+    triangle_ids = _instance_triangle_id_array(instance_mesh_data, obj_id)
+    if len(triangle_ids) == 0:
+        return {
+            "zbuffer_mask_in_frame_ratio": 0.0,
+            "zbuffer_mask_area_px": 0.0,
+            "zbuffer_full_mask_area_px": 0.0,
+        }
+
+    vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+    faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)[triangle_ids]
+    unique_vertex_ids, inverse = np.unique(faces.reshape(-1), return_inverse=True)
+    local_faces = inverse.reshape((-1, 3)).astype(np.int64)
+    local_vertices = vertices[unique_vertex_ids]
+    projected_uv, projected_depths = _project_vertices_to_image(local_vertices, pose, intrinsics)
+
+    valid_face_mask = (
+        np.all(projected_depths[local_faces] > 1e-6, axis=1)
+        & ~np.any(np.isnan(projected_uv[local_faces]), axis=(1, 2))
+    )
+    if not np.any(valid_face_mask):
+        return {
+            "zbuffer_mask_in_frame_ratio": 0.0,
+            "zbuffer_mask_area_px": 0.0,
+            "zbuffer_full_mask_area_px": 0.0,
+        }
+
+    valid_faces = local_faces[valid_face_mask]
+    face_uv = projected_uv[valid_faces]
+    xs = face_uv[..., 0]
+    ys = face_uv[..., 1]
+    full_x_min = int(np.floor(float(np.min(xs))))
+    full_x_max = int(np.ceil(float(np.max(xs))))
+    full_y_min = int(np.floor(float(np.min(ys))))
+    full_y_max = int(np.ceil(float(np.max(ys))))
+    full_width = max(1, full_x_max - full_x_min + 1)
+    full_height = max(1, full_y_max - full_y_min + 1)
+
+    full_mask = _rasterize_projected_triangles(
+        projected_uv,
+        projected_depths,
+        valid_faces,
+        width=full_width,
+        height=full_height,
+        x_offset=full_x_min,
+        y_offset=full_y_min,
+    )
+    in_frame_mask = _rasterize_projected_triangles(
+        projected_uv,
+        projected_depths,
+        valid_faces,
+        width=int(intrinsics.width),
+        height=int(intrinsics.height),
+        x_offset=0,
+        y_offset=0,
+    )
+    full_area_px = int(full_mask.sum())
+    in_frame_area_px = int(in_frame_mask.sum())
+    return {
+        "zbuffer_mask_in_frame_ratio": (
+            float(in_frame_area_px / full_area_px) if full_area_px > 0 else 0.0
+        ),
+        "zbuffer_mask_area_px": float(in_frame_area_px),
+        "zbuffer_full_mask_area_px": float(full_area_px),
+    }
+
+
 def _project_object_roi(
     obj: dict,
     pose: CameraPose,
@@ -195,6 +383,7 @@ def compute_frame_object_visibility(
     image_path: Path | None = None,
     depth_image=None,
     depth_intrinsics: CameraIntrinsics | None = None,
+    instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 6.0,
@@ -219,6 +408,12 @@ def compute_frame_object_visibility(
         )
 
         roi_info = _project_object_roi(obj, pose, color_intrinsics)
+        mask_info = _project_object_mask_stats(
+            obj,
+            pose,
+            color_intrinsics,
+            instance_mesh_data,
+        )
         roi_sharpness = _compute_roi_sharpness(gray, roi_info["roi_bounds"])
 
         occlusion_status = "unknown"
@@ -250,6 +445,9 @@ def compute_frame_object_visibility(
             "valid_projection_count": int(roi_info["valid_projection_count"]),
             "projected_area_px": float(roi_info["projected_area_px"]),
             "bbox_in_frame_ratio": float(roi_info["bbox_in_frame_ratio"]),
+            "zbuffer_mask_in_frame_ratio": float(mask_info["zbuffer_mask_in_frame_ratio"]),
+            "zbuffer_mask_area_px": float(mask_info["zbuffer_mask_area_px"]),
+            "zbuffer_full_mask_area_px": float(mask_info["zbuffer_full_mask_area_px"]),
             "edge_margin_px": float(roi_info["edge_margin_px"]),
             "roi_bounds_px": (
                 [int(v) for v in roi_info["roi_bounds"]]
@@ -373,6 +571,7 @@ def refine_visible_ids_with_depth(
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
+VISIBLE_ZBUFFER_MASK_IN_FRAME_RATIO_MIN = 0.30
 VISIBLE_PROJECTED_AREA_MIN = 400.0
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.60
 FRAME_CROP_BONUS_WEIGHT = 10
@@ -399,7 +598,18 @@ def build_selector_visibility_audit_from_meta(
     depth_in_range = bool(min_depth < depth_m <= max_depth)
     center_in_image_margin = is_in_image(uv, intrinsics, margin=margin)
     bbox_in_frame_ratio = float(meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
+    zbuffer_mask_in_frame_ratio = float(meta.get("zbuffer_mask_in_frame_ratio", 0.0) or 0.0)
     projected_area_px = float(meta.get("projected_area_px", 0.0) or 0.0)
+    ratio_source = (
+        "zbuffer_mask"
+        if "zbuffer_mask_in_frame_ratio" in meta
+        else "bbox_projection"
+    )
+    effective_in_frame_ratio = (
+        zbuffer_mask_in_frame_ratio
+        if ratio_source == "zbuffer_mask"
+        else bbox_in_frame_ratio
+    )
 
     decision = "rejected"
     selector_passed = False
@@ -411,14 +621,21 @@ def build_selector_visibility_audit_from_meta(
         decision = "selected_center"
         selector_passed = True
     elif (
-        bbox_in_frame_ratio >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
+        effective_in_frame_ratio >= (
+            VISIBLE_ZBUFFER_MASK_IN_FRAME_RATIO_MIN
+            if ratio_source == "zbuffer_mask"
+            else VISIBLE_BBOX_IN_FRAME_RATIO_MIN
+        )
         and projected_area_px >= VISIBLE_PROJECTED_AREA_MIN
     ):
         decision = "selected_roi_fallback"
         selector_passed = True
     else:
         rejection_reasons.append("center_not_in_margin")
-        if bbox_in_frame_ratio < VISIBLE_BBOX_IN_FRAME_RATIO_MIN:
+        if ratio_source == "zbuffer_mask":
+            if zbuffer_mask_in_frame_ratio < VISIBLE_ZBUFFER_MASK_IN_FRAME_RATIO_MIN:
+                rejection_reasons.append("zbuffer_mask_in_frame_ratio_below_threshold")
+        elif bbox_in_frame_ratio < VISIBLE_BBOX_IN_FRAME_RATIO_MIN:
             rejection_reasons.append("bbox_in_frame_ratio_below_threshold")
         if projected_area_px < VISIBLE_PROJECTED_AREA_MIN:
             rejection_reasons.append("projected_area_below_threshold")
@@ -428,6 +645,8 @@ def build_selector_visibility_audit_from_meta(
         "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
         "center_in_image_margin80": bool(center_in_image_margin),
         "bbox_in_frame_ratio": bbox_in_frame_ratio,
+        "zbuffer_mask_in_frame_ratio": zbuffer_mask_in_frame_ratio,
+        "selector_roi_ratio_source": ratio_source,
         "projected_area_px": projected_area_px,
         "selector_passed": selector_passed,
         "selector_decision": decision,
@@ -440,6 +659,7 @@ def _build_selector_visibility_meta(
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
     *,
+    instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 6.0,
@@ -452,6 +672,7 @@ def _build_selector_visibility_meta(
         "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
         "depth_m": float(depth),
         "bbox_in_frame_ratio": 0.0,
+        "zbuffer_mask_in_frame_ratio": 0.0,
         "projected_area_px": 0.0,
     }
     depth_in_range = bool(min_depth < depth <= max_depth)
@@ -460,6 +681,14 @@ def _build_selector_visibility_meta(
         roi_info = _project_object_roi(obj, pose, intrinsics)
         meta["bbox_in_frame_ratio"] = float(roi_info["bbox_in_frame_ratio"])
         meta["projected_area_px"] = float(roi_info["projected_area_px"])
+        if instance_mesh_data is not None:
+            mask_info = _project_object_mask_stats(
+                obj,
+                pose,
+                intrinsics,
+                instance_mesh_data,
+            )
+            meta["zbuffer_mask_in_frame_ratio"] = float(mask_info["zbuffer_mask_in_frame_ratio"])
     return meta
 
 
@@ -468,6 +697,7 @@ def build_selector_visibility_audit(
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
     *,
+    instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 6.0,
@@ -478,6 +708,7 @@ def build_selector_visibility_audit(
         obj,
         pose,
         intrinsics,
+        instance_mesh_data=instance_mesh_data,
         margin=margin,
         min_depth=min_depth,
         max_depth=max_depth,
@@ -496,6 +727,7 @@ def get_visible_objects(
     objects: list[dict],
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
+    instance_mesh_data: InstanceMeshData | None = None,
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 6.0,
@@ -526,6 +758,7 @@ def get_visible_objects(
             obj,
             pose,
             intrinsics,
+            instance_mesh_data=instance_mesh_data,
             margin=margin,
             min_depth=min_depth,
             max_depth=max_depth,
@@ -624,6 +857,19 @@ def select_frames(
     intrinsics = load_scannet_intrinsics(scene_path)
     axis_align = load_axis_alignment(scene_path)
     poses      = load_scannet_poses(scene_path, axis_alignment=axis_align)
+    instance_mesh_data: InstanceMeshData | None = None
+    try:
+        instance_mesh_data = load_instance_mesh_data(
+            scene_path,
+            instance_ids=[int(obj["id"]) for obj in objects if obj.get("id") is not None],
+            n_surface_samples=1,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Instance mesh preload failed for %s; selector falls back to bbox ratio: %s",
+            scene_path.name,
+            exc,
+        )
 
     if not poses:
         logger.warning("No valid poses found for %s", scene_path.name)
@@ -662,6 +908,7 @@ def select_frames(
             objects,
             pose,
             intrinsics,
+            instance_mesh_data=instance_mesh_data,
             return_audits=True,
         )
         if len(visible) < MIN_VISIBLE_OBJECTS:
