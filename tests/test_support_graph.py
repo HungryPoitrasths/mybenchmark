@@ -3,7 +3,9 @@ from unittest.mock import patch
 
 from src.support_graph import (
     _attachment_candidate,
+    _affixed_to_metrics,
     _contained_in_metrics,
+    _resting_on_soft_surface_metrics,
     _supported_by_metrics,
     build_attachment_graph,
     compute_bottom_footprint_overlap_metrics,
@@ -26,6 +28,7 @@ def make_object(
     bbox_max: tuple[float, float, float],
     *,
     bottom_hull_xy: list[list[float]] | None = None,
+    bottom_surface_candidates: list[dict] | None = None,
     top_hull_xy: list[list[float]] | None = None,
     top_surface_candidates: list[dict] | None = None,
 ) -> dict:
@@ -42,6 +45,7 @@ def make_object(
         "bbox_max": list(bbox_max),
         "support_geom": {
             "bottom_hull_xy": bottom_hull_xy or [],
+            "bottom_surface_candidates": bottom_surface_candidates or [],
             "top_hull_xy": top_hull_xy or [],
             "top_surface_candidates": top_surface_candidates or [],
         },
@@ -126,6 +130,326 @@ class SupportGraphHeuristicTests(unittest.TestCase):
 
         self.assertIsNotNone(_supported_by_metrics(child_small_penetration, parent))
         self.assertIsNone(_supported_by_metrics(child_far_below, parent))
+
+    def test_supported_by_uses_child_bottom_surface_candidates_to_ignore_low_outlier(self) -> None:
+        parent = make_object(
+            10,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.2, 0.2, 0.94),
+            (0.7, 0.7, 1.08),
+            bottom_hull_xy=_rect(0.2, 0.2, 0.32, 0.32),
+            bottom_surface_candidates=[
+                {
+                    "z": 0.94,
+                    "hull_xy": _rect(0.2, 0.2, 0.32, 0.32),
+                    "area": 0.0144,
+                    "score": 0.10,
+                },
+                {
+                    "z": 1.0,
+                    "hull_xy": _rect(0.2, 0.2, 0.7, 0.7),
+                    "area": 0.25,
+                    "score": 0.95,
+                },
+            ],
+        )
+
+        metrics = _supported_by_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertAlmostEqual(metrics["evidence"]["geometry_contact"]["contact_z_child"], 1.0)
+        self.assertAlmostEqual(metrics["evidence"]["geometry_contact"]["signed_z_gap"], 0.0)
+
+    def test_supported_by_shallow_penetration_requires_strong_overlap(self) -> None:
+        parent = make_object(
+            10,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child_pass = make_object(
+            1,
+            "book",
+            (0.1, 0.1, 0.96),
+            (0.7, 0.7, 1.08),
+            bottom_surface_candidates=[{
+                "z": 0.96,
+                "hull_xy": _rect(0.1, 0.1, 0.7, 0.7),
+                "area": 0.36,
+                "score": 0.9,
+            }],
+        )
+        child_fail = make_object(
+            2,
+            "book",
+            (0.75, 0.75, 0.96),
+            (1.35, 1.35, 1.08),
+            bottom_surface_candidates=[{
+                "z": 0.96,
+                "hull_xy": _rect(0.75, 0.75, 1.35, 1.35),
+                "area": 0.36,
+                "score": 0.9,
+            }],
+        )
+
+        self.assertIsNotNone(_supported_by_metrics(child_pass, parent))
+        self.assertIsNone(_supported_by_metrics(child_fail, parent))
+
+    def test_supported_by_rigid_prior_boosts_book_on_table_confidence(self) -> None:
+        parent_table = make_object(
+            10,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        parent_box = make_object(
+            11,
+            "box",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.2, 0.2, 1.0),
+            (0.7, 0.7, 1.08),
+            bottom_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.2, 0.2, 0.7, 0.7),
+                "area": 0.25,
+                "score": 0.95,
+            }],
+        )
+
+        table_metrics = _supported_by_metrics(child, parent_table)
+        box_metrics = _supported_by_metrics(child, parent_box)
+
+        self.assertIsNotNone(table_metrics)
+        self.assertIsNotNone(box_metrics)
+        self.assertGreater(table_metrics["confidence"], box_metrics["confidence"])
+
+    def test_resting_on_soft_surface_exact_prior_boosts_pillow_on_sofa_confidence(self) -> None:
+        parent_sofa = make_object(
+            10,
+            "sofa",
+            (0.0, 0.0, 0.0),
+            (1.2, 1.2, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.2, 1.2),
+                "area": 1.44,
+                "score": 1.0,
+            }],
+        )
+        parent_bench = make_object(
+            11,
+            "bench",
+            (0.0, 0.0, 0.0),
+            (1.2, 1.2, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.2, 1.2),
+                "area": 1.44,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "pillow",
+            (0.2, 0.2, 1.0),
+            (0.8, 0.8, 1.15),
+            bottom_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.2, 0.2, 0.8, 0.8),
+                "area": 0.36,
+                "score": 0.95,
+            }],
+        )
+
+        sofa_metrics = _resting_on_soft_surface_metrics(child, parent_sofa)
+        bench_metrics = _resting_on_soft_surface_metrics(child, parent_bench)
+
+        self.assertIsNotNone(sofa_metrics)
+        self.assertIsNotNone(bench_metrics)
+        self.assertGreater(sofa_metrics["confidence"], bench_metrics["confidence"])
+
+    def test_resting_on_soft_surface_marks_pillow_on_ottoman_as_exact_prior(self) -> None:
+        parent = make_object(
+            10,
+            "ottoman",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 0.8),
+            top_surface_candidates=[{
+                "z": 0.8,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "pillow",
+            (0.2, 0.2, 0.8),
+            (0.8, 0.8, 0.95),
+            bottom_surface_candidates=[{
+                "z": 0.8,
+                "hull_xy": _rect(0.2, 0.2, 0.8, 0.8),
+                "area": 0.36,
+                "score": 0.95,
+            }],
+        )
+
+        metrics = _resting_on_soft_surface_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["evidence"]["semantic_prior"]["score"], 1.0)
+
+    def test_contained_in_exact_prior_boosts_book_in_cabinet_confidence(self) -> None:
+        parent = make_object(
+            10,
+            "cabinet",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_hull_xy=_rect(0.0, 0.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        book = make_object(
+            1,
+            "book",
+            (0.2, 0.2, 0.2),
+            (0.8, 0.8, 0.8),
+            bottom_surface_candidates=[{
+                "z": 0.2,
+                "hull_xy": _rect(0.2, 0.2, 0.8, 0.8),
+                "area": 0.36,
+                "score": 0.95,
+            }],
+        )
+        apple = make_object(
+            2,
+            "apple",
+            (0.2, 0.2, 0.2),
+            (0.8, 0.8, 0.8),
+            bottom_surface_candidates=[{
+                "z": 0.2,
+                "hull_xy": _rect(0.2, 0.2, 0.8, 0.8),
+                "area": 0.36,
+                "score": 0.95,
+            }],
+        )
+
+        book_metrics = _contained_in_metrics(book, parent)
+        apple_metrics = _contained_in_metrics(apple, parent)
+
+        self.assertIsNotNone(book_metrics)
+        self.assertIsNotNone(apple_metrics)
+        self.assertGreater(book_metrics["confidence"], apple_metrics["confidence"])
+
+    def test_contained_in_marks_towel_in_laundry_basket_as_exact_prior(self) -> None:
+        parent = make_object(
+            10,
+            "laundry basket",
+            (0.0, 0.0, 0.0),
+            (1.2, 1.2, 1.0),
+            top_hull_xy=_rect(0.0, 0.0, 1.2, 1.2),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.2, 1.2),
+                "area": 1.44,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "towel",
+            (0.2, 0.2, 0.2),
+            (0.8, 0.8, 0.8),
+            bottom_surface_candidates=[{
+                "z": 0.2,
+                "hull_xy": _rect(0.2, 0.2, 0.8, 0.8),
+                "area": 0.36,
+                "score": 0.95,
+            }],
+        )
+
+        metrics = _contained_in_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["evidence"]["semantic_prior"]["score"], 1.0)
+
+    def test_affixed_to_detects_drawer_attached_to_cabinet(self) -> None:
+        parent = make_object(
+            10,
+            "cabinet",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+        )
+        child = make_object(
+            1,
+            "drawer",
+            (0.05, 0.05, 0.10),
+            (0.95, 0.95, 0.95),
+        )
+
+        metrics = _affixed_to_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["type"], "affixed_to")
+        self.assertGreaterEqual(metrics["confidence"], 0.55)
+
+    def test_affixed_to_marks_drawer_attached_to_dresser_as_exact_prior(self) -> None:
+        parent = make_object(
+            10,
+            "dresser",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+        )
+        child = make_object(
+            1,
+            "drawer",
+            (0.05, 0.05, 0.10),
+            (0.95, 0.95, 0.95),
+        )
+
+        metrics = _affixed_to_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["evidence"]["semantic_prior"]["score"], 1.0)
 
     def test_supported_by_enclosed_bbox_fallback_detects_boxed_in_book_on_table(self) -> None:
         parent = make_object(

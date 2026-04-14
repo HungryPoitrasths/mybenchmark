@@ -23,20 +23,96 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
 
         self.assertEqual(scene_parser.normalize_label("couch"), "sofa")
         self.assertEqual(scene_parser.normalize_label("nightstand"), "night stand")
+        self.assertEqual(scene_parser.normalize_label("bedside table"), "night stand")
+        self.assertEqual(scene_parser.normalize_label("bedside cabinet"), "night stand")
+        self.assertEqual(scene_parser.normalize_label("bedside stand"), "night stand")
         self.assertEqual(scene_parser.normalize_label("tv"), "television")
         self.assertEqual(scene_parser.normalize_label("books"), "book")
         self.assertEqual(scene_parser.normalize_label("backpack"), "bag")
+        self.assertEqual(scene_parser.normalize_label("mug"), "cup")
+        self.assertEqual(scene_parser.normalize_label("coffee mug"), "cup")
+        self.assertEqual(scene_parser.normalize_label("fridge"), "refrigerator")
+        self.assertEqual(scene_parser.normalize_label("refridgerator"), "refrigerator")
         self.assertEqual(scene_parser.normalize_label("washing machines"), "washing machine")
+        self.assertEqual(scene_parser.normalize_label("washer"), "washing machine")
         self.assertEqual(scene_parser.normalize_label("clothes dryers"), "clothes dryer")
+        self.assertEqual(scene_parser.normalize_label("laundry dryer"), "clothes dryer")
         self.assertEqual(scene_parser.normalize_label("keyboard piano"), "piano")
         self.assertEqual(scene_parser.normalize_label("folded ladder"), "ladder")
         self.assertEqual(scene_parser.normalize_label("stepladder"), "ladder")
+        self.assertEqual(scene_parser.normalize_label("footstool"), "ottoman")
         self.assertEqual(scene_parser.normalize_label("water cooler"), "water cooler")
         self.assertEqual(scene_parser.normalize_label("ironing board"), "ironing board")
+        self.assertEqual(scene_parser.normalize_label("waste bin"), "trash can")
+        self.assertEqual(scene_parser.normalize_label("wastebasket"), "trash can")
         self.assertEqual(scene_parser.normalize_label("compost bin"), "trash can")
+        self.assertEqual(scene_parser.normalize_label("paper towel"), "towel")
+        self.assertEqual(scene_parser.normalize_label("paper towel roll"), "towel")
+        self.assertEqual(scene_parser.normalize_label("washcloth"), "towel")
+        self.assertEqual(scene_parser.normalize_label("hamper"), "laundry basket")
+        self.assertEqual(scene_parser.normalize_label("laundry hamper"), "laundry basket")
+        self.assertEqual(scene_parser.normalize_label("laundry bag"), "laundry basket")
+        self.assertEqual(scene_parser.normalize_label("container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic storage bin"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("food container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("tupperware"), "storage container")
         self.assertEqual(scene_parser.normalize_label("wardrobe closet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("wardrobe cabinet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("closet wardrobe"), "wardrobe")
+
+    def test_normalize_label_keeps_selected_otherprop_labels_specific(self) -> None:
+        scene_parser._SCANNET_LABEL_MAP = {
+            "cup": "otherprop",
+            "mug": "otherprop",
+            "coffee mug": "otherprop",
+            "bottle": "otherprop",
+            "plate": "otherprop",
+            "bowl": "otherprop",
+            "bin": "otherprop",
+            "storage container": "otherprop",
+            "container": "otherprop",
+            "plastic container": "otherprop",
+            "plastic containers": "otherprop",
+            "plastic storage bin": "otherprop",
+            "food container": "otherprop",
+            "tupperware": "otherprop",
+            "towel": "otherprop",
+            "paper towel": "otherprop",
+            "paper towel roll": "otherprop",
+            "washcloth": "otherprop",
+            "laundry basket": "otherprop",
+            "laundry hamper": "otherprop",
+            "laundry bag": "otherprop",
+            "hamper": "otherprop",
+        }
+        scene_parser._SCANNET_LABEL_MAP_LOAD_ATTEMPTED = True
+        scene_parser._refresh_excluded_labels()
+
+        self.assertEqual(scene_parser.normalize_label("cup"), "cup")
+        self.assertEqual(scene_parser.normalize_label("mug"), "cup")
+        self.assertEqual(scene_parser.normalize_label("coffee mug"), "cup")
+        self.assertEqual(scene_parser.normalize_label("bottle"), "bottle")
+        self.assertEqual(scene_parser.normalize_label("plate"), "plate")
+        self.assertEqual(scene_parser.normalize_label("bowl"), "bowl")
+        self.assertEqual(scene_parser.normalize_label("bin"), "bin")
+        self.assertEqual(scene_parser.normalize_label("storage container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic storage bin"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("food container"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("tupperware"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("towel"), "towel")
+        self.assertEqual(scene_parser.normalize_label("paper towel"), "towel")
+        self.assertEqual(scene_parser.normalize_label("paper towel roll"), "towel")
+        self.assertEqual(scene_parser.normalize_label("washcloth"), "towel")
+        self.assertEqual(scene_parser.normalize_label("laundry basket"), "laundry basket")
+        self.assertEqual(scene_parser.normalize_label("laundry hamper"), "laundry basket")
+        self.assertEqual(scene_parser.normalize_label("laundry bag"), "laundry basket")
+        self.assertEqual(scene_parser.normalize_label("hamper"), "laundry basket")
+
     def test_normalize_label_keeps_selected_otherfurniture_labels_specific(self) -> None:
         scene_parser._SCANNET_LABEL_MAP = {
             "radiator": "otherfurniture",
@@ -57,6 +133,11 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
             "wardrobe closet": "otherfurniture",
             "wardrobe cabinet": "otherfurniture",
             "closet wardrobe": "otherfurniture",
+            "bench": "otherfurniture",
+            "ottoman": "otherfurniture",
+            "footstool": "otherfurniture",
+            "drawer": "otherfurniture",
+            "tv stand": "otherfurniture",
         }
         scene_parser._SCANNET_LABEL_MAP_LOAD_ATTEMPTED = True
         scene_parser._refresh_excluded_labels()
@@ -79,6 +160,11 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("wardrobe closet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("wardrobe cabinet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("closet wardrobe"), "wardrobe")
+        self.assertEqual(scene_parser.normalize_label("bench"), "bench")
+        self.assertEqual(scene_parser.normalize_label("ottoman"), "ottoman")
+        self.assertEqual(scene_parser.normalize_label("footstool"), "ottoman")
+        self.assertEqual(scene_parser.normalize_label("drawer"), "drawer")
+        self.assertEqual(scene_parser.normalize_label("tv stand"), "tv stand")
 
     def test_alias_metadata_groups_bedside_table_family(self) -> None:
         alias = resolve_alias_metadata(

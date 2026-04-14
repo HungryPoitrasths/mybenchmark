@@ -101,21 +101,25 @@ def _translate_support_geom_in_place(obj: dict, delta_position: np.ndarray) -> N
     if not isinstance(support_geom, dict):
         return
 
-    delta_xy = np.asarray(delta_position, dtype=float)[:2]
+    delta = np.asarray(delta_position, dtype=float)
+    delta_xy = delta[:2]
     for key in ("bottom_hull_xy", "top_hull_xy"):
         points = np.asarray(support_geom.get(key, []), dtype=float)
         if points.ndim == 2 and points.shape[1] == 2 and len(points) > 0:
             support_geom[key] = (points + delta_xy).tolist()
 
-    candidates = support_geom.get("top_surface_candidates", [])
-    if not isinstance(candidates, list):
-        return
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
+    for candidate_key in ("bottom_surface_candidates", "top_surface_candidates"):
+        candidates = support_geom.get(candidate_key, [])
+        if not isinstance(candidates, list):
             continue
-        hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
-        if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
-            candidate["hull_xy"] = (hull_xy + delta_xy).tolist()
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
+            if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
+                candidate["hull_xy"] = (hull_xy + delta_xy).tolist()
+            if "z" in candidate:
+                candidate["z"] = float(candidate["z"]) + float(delta[2])
 
 
 def _translate_distance_surface_geometry_in_place(obj: dict, delta_position: np.ndarray) -> None:
@@ -169,15 +173,16 @@ def _rotate_support_geom_in_place(obj: dict, rotation: np.ndarray, pivot: np.nda
         if points.ndim == 2 and points.shape[1] == 2 and len(points) > 0:
             support_geom[key] = _rotate_points_xy(points, rotation, pivot_xy).tolist()
 
-    candidates = support_geom.get("top_surface_candidates", [])
-    if not isinstance(candidates, list):
-        return
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
+    for candidate_key in ("bottom_surface_candidates", "top_surface_candidates"):
+        candidates = support_geom.get(candidate_key, [])
+        if not isinstance(candidates, list):
             continue
-        hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
-        if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
-            candidate["hull_xy"] = _rotate_points_xy(hull_xy, rotation, pivot_xy).tolist()
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            hull_xy = np.asarray(candidate.get("hull_xy", []), dtype=float)
+            if hull_xy.ndim == 2 and hull_xy.shape[1] == 2 and len(hull_xy) > 0:
+                candidate["hull_xy"] = _rotate_points_xy(hull_xy, rotation, pivot_xy).tolist()
 
 
 def _rotate_distance_surface_geometry_in_place(obj: dict, rotation: np.ndarray, pivot: np.ndarray) -> None:

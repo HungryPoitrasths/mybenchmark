@@ -168,6 +168,46 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
             np.array([[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], dtype=np.float64),
         )
 
+    def test_apply_movement_translates_support_surface_candidates_xy_and_z(self) -> None:
+        obj = make_object(
+            1,
+            (0.0, 0.0, 0.5),
+            (-0.2, -0.2, 0.0),
+            (0.2, 0.2, 1.0),
+            label="mover",
+        )
+        obj["support_geom"] = {
+            "bottom_hull_xy": [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]],
+            "top_hull_xy": [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]],
+            "bottom_surface_candidates": [{
+                "z": 0.0,
+                "hull_xy": [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]],
+                "area": 0.16,
+                "score": 0.8,
+            }],
+            "top_surface_candidates": [{
+                "z": 1.0,
+                "hull_xy": [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]],
+                "area": 0.16,
+                "score": 0.9,
+            }],
+        }
+
+        moved = apply_movement(
+            [obj],
+            attachment_graph={},
+            target_obj_id=1,
+            delta_position=np.array([0.5, -0.25, 0.75], dtype=np.float64),
+        )
+
+        moved_support = moved[0]["support_geom"]
+        np.testing.assert_allclose(
+            moved_support["bottom_surface_candidates"][0]["hull_xy"],
+            np.array([[0.3, -0.45], [0.7, -0.45], [0.7, -0.05], [0.3, -0.05]], dtype=np.float64),
+        )
+        self.assertAlmostEqual(moved_support["bottom_surface_candidates"][0]["z"], 0.75)
+        self.assertAlmostEqual(moved_support["top_surface_candidates"][0]["z"], 1.75)
+
     def test_apply_coordinate_rotation_rotates_runtime_distance_surface_geometry(self) -> None:
         obj = make_object(
             1,

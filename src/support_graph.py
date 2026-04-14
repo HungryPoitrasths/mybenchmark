@@ -21,6 +21,9 @@ HULL_CHILD_COVERAGE_MIN = 0.20
 SOFT_HULL_CHILD_COVERAGE_MIN = 0.12
 SOFT_FALLBACK_CHILD_COVERAGE_MIN = 0.18
 GEOM_EPS = 1e-8
+SURFACE_PENETRATION_MAX = 0.05
+SURFACE_PENETRATION_HULL_COVERAGE_MIN = 0.50
+SURFACE_PENETRATION_AABB_COVERAGE_MIN = 0.60
 ENCLOSED_SUPPORT_CHILD_COVERAGE_MIN = 0.85
 ENCLOSED_SUPPORT_BOTTOM_LIFT_MIN = 0.50
 ENCLOSED_SUPPORT_PARENT_TOP_GAP_MAX = 0.20
@@ -60,8 +63,14 @@ SOFT_CHILD_LABELS = {
 }
 SOFT_SURFACE_PRIORS = {
     ("pillow", "bed"),
+    ("pillow", "sofa"),
+    ("pillow", "chair"),
+    ("pillow", "ottoman"),
     ("cushion", "sofa"),
     ("cushion", "chair"),
+    ("cushion", "bench"),
+    ("cushion", "ottoman"),
+    ("sheet", "bed"),
     ("towel", "bed"),
 }
 
@@ -71,6 +80,7 @@ CONTAINER_PARENT_LABELS = {
     "box",
     "storage container",
     "basket",
+    "laundry basket",
     "bowl",
     "bin",
     "trash can",
@@ -82,7 +92,17 @@ CONTAINMENT_PRIORS = {
     ("fruit", "bowl"),
     ("clothing", "drawer"),
     ("book", "drawer"),
+    ("book", "cabinet"),
+    ("book", "box"),
+    ("apple", "basket"),
+    ("fruit", "basket"),
     ("toy", "box"),
+    ("toy", "basket"),
+    ("toy", "bin"),
+    ("towel", "laundry basket"),
+    ("bottle", "refrigerator"),
+    ("cup", "sink"),
+    ("plate", "sink"),
 }
 
 AFFIXED_PRIORS = {
@@ -91,8 +111,38 @@ AFFIXED_PRIORS = {
     ("television", "tv stand"),
     ("tv", "tv stand"),
     ("handle", "cabinet"),
+    ("handle", "drawer"),
     ("knob", "cabinet"),
+    ("knob", "drawer"),
+    ("drawer", "cabinet"),
+    ("drawer", "desk"),
+    ("drawer", "dresser"),
+    ("drawer", "night stand"),
+    ("drawer", "wardrobe"),
+    ("handle", "dresser"),
+    ("knob", "dresser"),
+    ("sink", "counter"),
     ("lamp", "wall"),
+}
+
+RIGID_SUPPORT_PRIORS = {
+    ("book", "table"),
+    ("book", "desk"),
+    ("book", "night stand"),
+    ("laptop", "desk"),
+    ("keyboard", "desk"),
+    ("mouse", "desk"),
+    ("cup", "table"),
+    ("cup", "desk"),
+    ("bottle", "table"),
+    ("bottle", "desk"),
+    ("plate", "table"),
+    ("plate", "counter"),
+    ("bowl", "table"),
+    ("bowl", "counter"),
+    ("printer", "cabinet"),
+    ("printer", "desk"),
+    ("microwave", "counter"),
 }
 
 ATTACHMENT_MIN_CONFIDENCE = {
@@ -236,6 +286,12 @@ def _bottom_support_polygon(obj: dict) -> tuple[np.ndarray, str]:
     hull = _support_face_polygon(obj, "bottom_hull_xy")
     if len(hull) >= 3:
         return hull, "bottom_hull_xy"
+    support_geom = obj.get("support_geom") or {}
+    raw_candidates = support_geom.get("bottom_surface_candidates") or []
+    if raw_candidates:
+        candidates = _bottom_surface_candidates(obj)
+        best = max(candidates, key=lambda item: (float(item["area"]), float(item["score"])))
+        return np.asarray(best["hull_xy"], dtype=float), "bottom_surface_candidates"
     return _bbox_xy_polygon(obj), "bbox"
 
 
@@ -275,9 +331,15 @@ def _point_in_convex_polygon(point: np.ndarray, poly: np.ndarray) -> bool:
     return True
 
 
-def _top_surface_candidates(obj: dict) -> list[dict[str, Any]]:
+def _surface_candidates_from_support_geom(
+    obj: dict,
+    *,
+    candidate_key: str,
+    legacy_face_key: str,
+    default_z: float,
+) -> list[dict[str, Any]]:
     support_geom = obj.get("support_geom") or {}
-    raw_candidates = support_geom.get("top_surface_candidates") or []
+    raw_candidates = support_geom.get(candidate_key) or []
     candidates: list[dict[str, Any]] = []
     for raw in raw_candidates:
         if not isinstance(raw, dict):
@@ -289,7 +351,7 @@ def _top_surface_candidates(obj: dict) -> list[dict[str, Any]]:
         if area <= GEOM_EPS:
             continue
         candidates.append({
-            "z": float(raw.get("z", obj["bbox_max"][2])),
+            "z": float(raw.get("z", default_z)),
             "hull_xy": hull,
             "area": area,
             "score": float(raw.get("score", 0.0)),
@@ -298,15 +360,42 @@ def _top_surface_candidates(obj: dict) -> list[dict[str, Any]]:
     if candidates:
         return candidates
 
-    legacy_hull = _support_face_polygon(obj, "top_hull_xy")
+    legacy_hull = _support_face_polygon(obj, legacy_face_key)
     if len(legacy_hull) >= 3:
         return [{
-            "z": float(obj["bbox_max"][2]),
+            "z": float(default_z),
             "hull_xy": legacy_hull,
             "area": _polygon_area(legacy_hull),
             "score": 0.0,
         }]
     return []
+
+
+def _top_surface_candidates(obj: dict) -> list[dict[str, Any]]:
+    return _surface_candidates_from_support_geom(
+        obj,
+        candidate_key="top_surface_candidates",
+        legacy_face_key="top_hull_xy",
+        default_z=float(obj["bbox_max"][2]),
+    )
+
+
+def _bottom_surface_candidates(obj: dict) -> list[dict[str, Any]]:
+    candidates = _surface_candidates_from_support_geom(
+        obj,
+        candidate_key="bottom_surface_candidates",
+        legacy_face_key="bottom_hull_xy",
+        default_z=float(obj["bbox_min"][2]),
+    )
+    if candidates:
+        return candidates
+    bbox_poly = _bbox_xy_polygon(obj)
+    return [{
+        "z": float(obj["bbox_min"][2]),
+        "hull_xy": bbox_poly,
+        "area": _polygon_area(bbox_poly),
+        "score": 0.0,
+    }]
 
 
 def _largest_top_surface_polygon(obj: dict) -> tuple[np.ndarray, str]:
@@ -352,77 +441,102 @@ def _surface_attachment_metrics(
     if aabb_child_coverage < AABB_CHILD_COVERAGE_MIN:
         return None
 
-    child_hull = _support_face_polygon(obj_a, "bottom_hull_xy")
-    child_hull_area = _polygon_area(child_hull)
     z_tol = _vertical_tolerance(obj_a, obj_b, z_threshold) * gap_scale
     under_tol = min(0.02, 0.5 * z_tol)
+    penetration_tol = min(SURFACE_PENETRATION_MAX, under_tol + 0.03)
     best: dict[str, float | bool] | None = None
 
-    for surface in _top_surface_candidates(obj_b):
-        signed_gap = float(obj_a["bbox_min"][2]) - float(surface["z"])
-        if signed_gap < -under_tol or signed_gap > z_tol:
-            continue
-        gap = abs(signed_gap)
+    for child_surface in _bottom_surface_candidates(obj_a):
+        child_hull = np.asarray(child_surface["hull_xy"], dtype=float)
+        child_hull_area = _polygon_area(child_hull)
 
-        parent_hull = np.asarray(surface["hull_xy"], dtype=float)
-        parent_hull_area = _polygon_area(parent_hull)
-        hull_overlap_area = 0.0
-        hull_child_coverage = 0.0
-        used_hull = False
+        for surface in _top_surface_candidates(obj_b):
+            signed_gap = float(child_surface["z"]) - float(surface["z"])
+            if signed_gap > z_tol:
+                continue
 
-        if child_hull_area > GEOM_EPS and parent_hull_area > GEOM_EPS:
-            used_hull = True
-            hull_overlap_area = _convex_intersection_area(child_hull, parent_hull)
-            hull_child_coverage = (
-                hull_overlap_area / child_hull_area
-                if child_hull_area > GEOM_EPS else 0.0
+            penetration_depth = float(max(-signed_gap, 0.0))
+            if penetration_depth > penetration_tol:
+                continue
+
+            gap = abs(signed_gap)
+            parent_hull = np.asarray(surface["hull_xy"], dtype=float)
+            parent_hull_area = _polygon_area(parent_hull)
+            hull_overlap_area = 0.0
+            hull_child_coverage = 0.0
+            used_hull = False
+
+            if child_hull_area > GEOM_EPS and parent_hull_area > GEOM_EPS:
+                used_hull = True
+                hull_overlap_area = _convex_intersection_area(child_hull, parent_hull)
+                hull_child_coverage = (
+                    hull_overlap_area / child_hull_area
+                    if child_hull_area > GEOM_EPS else 0.0
+                )
+                confirmed = hull_child_coverage >= hull_coverage_min
+                strong_penetration_overlap = (
+                    hull_child_coverage >= max(SURFACE_PENETRATION_HULL_COVERAGE_MIN, hull_coverage_min)
+                    and aabb_child_coverage >= max(SURFACE_PENETRATION_AABB_COVERAGE_MIN, fallback_coverage_min)
+                )
+            else:
+                # Without usable hull geometry we require a stricter AABB overlap,
+                # because the approximation is less precise than polygon contact.
+                confirmed = aabb_child_coverage >= fallback_coverage_min
+                strong_penetration_overlap = (
+                    aabb_child_coverage >= max(SURFACE_PENETRATION_AABB_COVERAGE_MIN, fallback_coverage_min)
+                )
+
+            if not confirmed:
+                continue
+
+            if signed_gap < -under_tol and not strong_penetration_overlap:
+                continue
+
+            metrics = {
+                "gap": float(gap),
+                "signed_gap": float(signed_gap),
+                "z_tol": float(z_tol),
+                "under_tol": float(under_tol),
+                "penetration_tolerance": float(penetration_tol),
+                "penetration_depth": float(penetration_depth),
+                "contact_z_parent": float(surface["z"]),
+                "contact_z_child": float(child_surface["z"]),
+                "aabb_overlap_area": float(overlap_area),
+                "aabb_child_coverage": float(aabb_child_coverage),
+                "hull_overlap_area": float(hull_overlap_area),
+                "hull_child_coverage": float(hull_child_coverage),
+                "coverage_score": float(hull_child_coverage if used_hull else aabb_child_coverage),
+                "overlap_score": float(hull_overlap_area if used_hull else overlap_area),
+                "used_hull": bool(used_hull),
+                "surface_area": float(surface["area"]),
+                "surface_score": float(surface["score"]),
+                "child_surface_area": float(child_surface["area"]),
+                "child_surface_score": float(child_surface["score"]),
+            }
+            if best is None:
+                best = metrics
+                continue
+
+            current_key = (
+                float(best["coverage_score"]),
+                -float(best["gap"]),
+                float(best["overlap_score"]),
+                float(best.get("child_surface_score", 0.0)),
+                float(best["surface_score"]),
+                float(best.get("child_surface_area", 0.0)),
+                float(best["surface_area"]),
             )
-            confirmed = hull_child_coverage >= hull_coverage_min
-        else:
-            # Without usable hull geometry we require a stricter AABB overlap,
-            # because the approximation is less precise than polygon contact.
-            confirmed = aabb_child_coverage >= fallback_coverage_min
-
-        if not confirmed:
-            continue
-
-        metrics = {
-            "gap": float(gap),
-            "signed_gap": float(signed_gap),
-            "z_tol": float(z_tol),
-            "under_tol": float(under_tol),
-            "contact_z_parent": float(surface["z"]),
-            "contact_z_child": float(obj_a["bbox_min"][2]),
-            "aabb_overlap_area": float(overlap_area),
-            "aabb_child_coverage": float(aabb_child_coverage),
-            "hull_overlap_area": float(hull_overlap_area),
-            "hull_child_coverage": float(hull_child_coverage),
-            "coverage_score": float(hull_child_coverage if used_hull else aabb_child_coverage),
-            "overlap_score": float(hull_overlap_area if used_hull else overlap_area),
-            "used_hull": used_hull,
-            "surface_area": float(surface["area"]),
-            "surface_score": float(surface["score"]),
-        }
-        if best is None:
-            best = metrics
-            continue
-
-        current_key = (
-            float(best["coverage_score"]),
-            -float(best["gap"]),
-            float(best["overlap_score"]),
-            float(best["surface_area"]),
-            float(best["surface_score"]),
-        )
-        new_key = (
-            float(metrics["coverage_score"]),
-            -float(metrics["gap"]),
-            float(metrics["overlap_score"]),
-            float(metrics["surface_area"]),
-            float(metrics["surface_score"]),
-        )
-        if new_key > current_key:
-            best = metrics
+            new_key = (
+                float(metrics["coverage_score"]),
+                -float(metrics["gap"]),
+                float(metrics["overlap_score"]),
+                float(metrics.get("child_surface_score", 0.0)),
+                float(metrics["surface_score"]),
+                float(metrics.get("child_surface_area", 0.0)),
+                float(metrics["surface_area"]),
+            )
+            if new_key > current_key:
+                best = metrics
 
     return best
 
@@ -452,6 +566,12 @@ def _containment_prior(parent_label: str, child_label: str) -> float:
     return 0.0
 
 
+def _rigid_support_prior(parent_label: str, child_label: str) -> float:
+    if (child_label, parent_label) in RIGID_SUPPORT_PRIORS:
+        return 1.0
+    return 0.0
+
+
 def _enclosed_support_fallback_metrics(
     obj_a: dict,
     obj_b: dict,
@@ -464,7 +584,24 @@ def _enclosed_support_fallback_metrics(
     if _containment_prior(parent_label, child_label) > 0.0:
         return None
 
-    child_hull, child_source = _bottom_support_polygon(obj_a)
+    support_geom = obj_a.get("support_geom") or {}
+    raw_bottom_candidates = support_geom.get("bottom_surface_candidates") or []
+    child_candidates = _bottom_surface_candidates(obj_a)
+    child_surface = max(
+        child_candidates,
+        key=lambda item: (
+            float(item["area"]),
+            float(item["score"]),
+            -float(item["z"]),
+        ),
+    )
+    child_hull = np.asarray(child_surface["hull_xy"], dtype=float)
+    if raw_bottom_candidates:
+        child_source = "bottom_surface_candidates"
+    elif len(_support_face_polygon(obj_a, "bottom_hull_xy")) >= 3:
+        child_source = "bottom_hull_xy"
+    else:
+        child_source = "bbox"
     child_area = _polygon_area(child_hull)
     if child_area <= GEOM_EPS:
         return None
@@ -479,15 +616,15 @@ def _enclosed_support_fallback_metrics(
     if not _point_in_convex_polygon(child_center[:2], parent_bbox_poly):
         return None
 
-    child_min = np.asarray(obj_a["bbox_min"], dtype=float)
+    child_bottom_z = float(child_surface["z"])
     parent_min = np.asarray(obj_b["bbox_min"], dtype=float)
     parent_max = np.asarray(obj_b["bbox_max"], dtype=float)
 
-    bottom_lift = float(child_min[2] - parent_min[2])
+    bottom_lift = float(child_bottom_z - parent_min[2])
     if bottom_lift < ENCLOSED_SUPPORT_BOTTOM_LIFT_MIN:
         return None
 
-    signed_gap = float(child_min[2] - parent_max[2])
+    signed_gap = float(child_bottom_z - parent_max[2])
     if signed_gap > ENCLOSED_SUPPORT_TOP_OVERSHOOT_MAX:
         return None
 
@@ -495,7 +632,7 @@ def _enclosed_support_fallback_metrics(
         ENCLOSED_SUPPORT_PARENT_TOP_GAP_MAX,
         _vertical_tolerance(obj_a, obj_b, z_threshold),
     ))
-    bbox_top_gap = float(max(parent_max[2] - child_min[2], 0.0))
+    bbox_top_gap = float(max(parent_max[2] - child_bottom_z, 0.0))
     if bbox_top_gap > upper_band_gap_max:
         return None
 
@@ -507,7 +644,7 @@ def _enclosed_support_fallback_metrics(
         "z_tol": float(ENCLOSED_SUPPORT_TOP_OVERSHOOT_MAX),
         "under_tol": float(upper_band_gap_max),
         "contact_z_parent": float(parent_max[2]),
-        "contact_z_child": float(child_min[2]),
+        "contact_z_child": float(child_bottom_z),
         "aabb_overlap_area": float(overlap_area),
         "aabb_child_coverage": float(xy_coverage),
         "hull_overlap_area": float(overlap_area),
@@ -555,6 +692,10 @@ def _surface_evidence(
         geometry_contact["bbox_top_gap"] = float(metrics["bbox_top_gap"])
     if "uses_parent_bbox_xy" in metrics:
         geometry_contact["uses_parent_bbox_xy"] = bool(metrics["uses_parent_bbox_xy"])
+    if "penetration_depth" in metrics:
+        geometry_contact["penetration_depth"] = float(metrics["penetration_depth"])
+    if "penetration_tolerance" in metrics:
+        geometry_contact["penetration_tolerance"] = float(metrics["penetration_tolerance"])
 
     return {
         "geometry_contact": geometry_contact,
@@ -578,6 +719,9 @@ def _supported_by_metrics(
     obj_b: dict,
     z_threshold: float | None = None,
 ) -> dict[str, Any] | None:
+    child_label = _label(obj_a)
+    parent_label = _label(obj_b)
+    prior = _rigid_support_prior(parent_label, child_label)
     metrics = _support_metrics(obj_a, obj_b, z_threshold)
     if metrics is None:
         metrics = _enclosed_support_fallback_metrics(obj_a, obj_b, z_threshold)
@@ -597,18 +741,20 @@ def _supported_by_metrics(
         # so passing pairs receive the full lift contribution.
         lift_score = 1.0
         confidence = float(min(np.clip(
-            0.55 * float(metrics["coverage_score"]) +
-            0.35 * gap_score +
-            0.10 * lift_score,
+            0.50 * float(metrics["coverage_score"]) +
+            0.30 * gap_score +
+            0.10 * lift_score +
+            0.10 * prior,
             0.0,
             1.0,
         ), ENCLOSED_SUPPORT_CONFIDENCE_MAX))
     else:
         gap_score = float(np.clip(1.0 - float(metrics["gap"]) / max(float(metrics["z_tol"]), GEOM_EPS), 0.0, 1.0))
         confidence = float(np.clip(
-            0.60 * float(metrics["coverage_score"]) +
-            0.25 * gap_score +
-            0.15 * float(metrics["aabb_child_coverage"]),
+            0.55 * float(metrics["coverage_score"]) +
+            0.20 * gap_score +
+            0.15 * float(metrics["aabb_child_coverage"]) +
+            0.10 * prior,
             0.0,
             1.0,
         ))
@@ -616,7 +762,7 @@ def _supported_by_metrics(
     return {
         "type": "supported_by",
         "confidence": confidence,
-        "evidence": _surface_evidence(obj_a, obj_b, metrics),
+        "evidence": _surface_evidence(obj_a, obj_b, metrics, semantic_score=prior),
     }
 
 
