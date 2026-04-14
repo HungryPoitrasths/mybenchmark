@@ -660,55 +660,45 @@ def main() -> None:
         if obj.get("id") is not None
     }
     alias_group_index = _build_scene_alias_group_index(scene_objects)
+    label_match_info_by_requested = {
+        requested_label: _resolve_requested_label(
+            requested_label,
+            alias_group_index,
+            objects_by_id,
+        )
+        for requested_label in requested_labels
+    }
+    relevant_object_ids = sorted(
+        {
+            int(obj_id)
+            for match_info in label_match_info_by_requested.values()
+            for obj_id in match_info.get("matched_object_ids", [])
+        }
+    )
     instance_mesh_data = load_instance_mesh_data(
         scene_dir,
-        instance_ids=list(objects_by_id.keys()),
+        instance_ids=relevant_object_ids,
         n_surface_samples=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
     )
-    ray_caster_getter, instance_mesh_data_getter = _make_lazy_mesh_ray_resource_getters(
+    ray_caster_getter, _unused_instance_mesh_data_getter = _make_lazy_mesh_ray_resource_getters(
         scene_dir=scene_dir,
         scene_objects=scene_objects,
         axis_alignment=axis_alignment,
     )
     ray_caster = ray_caster_getter()
-
-    selector_visible_objects = get_visible_objects(
-        scene_objects,
-        camera_pose,
-        color_intrinsics,
-        instance_mesh_data=instance_mesh_data,
-    )
-    selector_visible_object_ids = sorted(
-        int(obj.get("id"))
-        for obj in selector_visible_objects
-        if obj.get("id") is not None
-    )
-    candidate_visible_object_ids, candidate_visibility_source = _refine_candidate_visible_object_ids(
-        selector_visible_object_ids,
-        scene_objects,
-        camera_pose,
-        depth_image,
-        depth_intrinsics,
-    )
-    candidate_visible_set = {int(obj_id) for obj_id in candidate_visible_object_ids}
-
-    visibility_by_obj_id = compute_frame_object_visibility(
-        scene_objects,
-        camera_pose,
-        color_intrinsics,
-        image_path=image_path,
-        depth_image=depth_image,
-        depth_intrinsics=depth_intrinsics,
-        instance_mesh_data=instance_mesh_data,
-        strict_mode=False,
-    )
-    topology_quality_by_obj_id = {
-        int(obj_id): _compute_topology_quality_for_object(
-            obj_id=int(obj_id),
-            instance_mesh_data=instance_mesh_data,
-        )
-        for obj_id in sorted(objects_by_id)
+    mesh_data_cache: dict[int, Any] = {
+        REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT: instance_mesh_data,
     }
+
+    def instance_mesh_data_getter(base_sample_count: int) -> Any:
+        base_count = int(base_sample_count)
+        if base_count not in mesh_data_cache:
+            mesh_data_cache[base_count] = load_instance_mesh_data(
+                scene_dir,
+                instance_ids=relevant_object_ids,
+                n_surface_samples=base_count,
+            )
+        return mesh_data_cache[base_count]
 
     output_root = Path(args.output_dir) / str(args.scene_id) / Path(str(args.image_name)).stem
     output_root.mkdir(parents=True, exist_ok=True)
@@ -720,9 +710,7 @@ def main() -> None:
         "image_name": str(args.image_name),
         "image_path": str(image_path),
         "depth_path": str(depth_path) if depth_path.exists() else None,
-        "candidate_visibility_source": candidate_visibility_source,
-        "selector_visible_object_ids": selector_visible_object_ids,
-        "candidate_visible_object_ids": candidate_visible_object_ids,
+        "candidate_visibility_scope": "per_label",
         "original_path": str(original_path),
         "labels": {},
     }
@@ -732,12 +720,49 @@ def main() -> None:
         label_output_dir = output_root / label_key
         label_output_dir.mkdir(parents=True, exist_ok=True)
 
-        match_info = _resolve_requested_label(
-            requested_label,
-            alias_group_index,
-            objects_by_id,
-        )
+        match_info = label_match_info_by_requested[requested_label]
         matched_object_ids = [int(obj_id) for obj_id in match_info["matched_object_ids"]]
+        matched_objects = [
+            objects_by_id[int(obj_id)]
+            for obj_id in matched_object_ids
+            if int(obj_id) in objects_by_id
+        ]
+        selector_visible_objects = get_visible_objects(
+            matched_objects,
+            camera_pose,
+            color_intrinsics,
+            instance_mesh_data=instance_mesh_data,
+        )
+        selector_visible_object_ids = sorted(
+            int(obj.get("id"))
+            for obj in selector_visible_objects
+            if obj.get("id") is not None
+        )
+        candidate_visible_object_ids, candidate_visibility_source = _refine_candidate_visible_object_ids(
+            selector_visible_object_ids,
+            matched_objects,
+            camera_pose,
+            depth_image,
+            depth_intrinsics,
+        )
+        candidate_visible_set = {int(obj_id) for obj_id in candidate_visible_object_ids}
+        visibility_by_obj_id = compute_frame_object_visibility(
+            matched_objects,
+            camera_pose,
+            color_intrinsics,
+            image_path=image_path,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            instance_mesh_data=instance_mesh_data,
+            strict_mode=False,
+        )
+        topology_quality_by_obj_id = {
+            int(obj_id): _compute_topology_quality_for_object(
+                obj_id=int(obj_id),
+                instance_mesh_data=instance_mesh_data,
+            )
+            for obj_id in matched_object_ids
+        }
         visible_matching_object_ids = [
             int(obj_id)
             for obj_id in matched_object_ids
@@ -819,6 +844,9 @@ def main() -> None:
             "canonical_labels": match_info["canonical_labels"],
             "alias_variants": match_info["alias_variants"],
             "matched_object_ids": matched_object_ids,
+            "selector_visible_object_ids": selector_visible_object_ids,
+            "candidate_visibility_source": candidate_visibility_source,
+            "candidate_visible_object_ids": candidate_visible_object_ids,
             "visible_matching_object_ids": visible_matching_object_ids,
             "anchor_candidate_object_ids": anchor_candidate_object_ids,
             "segmentation_error": segmentation_error,
