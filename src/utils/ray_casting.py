@@ -153,17 +153,24 @@ class RayCaster:
         self._reliable_intersector = None
         self._warned_slow_mesh_visibility = False
         self._warned_retry_cap = False
-        # Build a ray-mesh intersector (uses embree if available, else slow fallback)
+        # Ask trimesh for its accelerated ray backend first. In newer trimesh
+        # releases ``ray_pyembree`` can be backed by ``embreex`` even when the
+        # legacy ``pyembree`` package is absent.
         try:
-            import pyembree  # noqa: F401
             import trimesh
+
             self.intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
             self.has_embree = True
             try:
                 self._reliable_intersector = trimesh.ray.ray_triangle.RayMeshIntersector(mesh)
             except Exception:
                 self._reliable_intersector = self.intersector
-        except (ImportError, AttributeError):
+        except Exception as exc:
+            logger.debug(
+                "Falling back to non-Embree ray intersector: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
             self.intersector = mesh.ray
             self._reliable_intersector = self.intersector
 
