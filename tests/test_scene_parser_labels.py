@@ -1,5 +1,6 @@
 import unittest
 
+from src.alias_groups import get_alias_group_risk_level, resolve_alias_metadata
 import src.scene_parser as scene_parser
 
 
@@ -78,6 +79,54 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("wardrobe closet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("wardrobe cabinet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("closet wardrobe"), "wardrobe")
+
+    def test_alias_metadata_groups_bedside_table_family(self) -> None:
+        alias = resolve_alias_metadata(
+            raw_label="nightstand",
+            canonical_label="night stand",
+        )
+
+        self.assertEqual(alias.alias_group, "bedside_table_family")
+        self.assertEqual(alias.alias_source, "explicit")
+        self.assertIn("night stand", alias.alias_variants)
+        self.assertIn("bedside table", alias.alias_variants)
+
+    def test_alias_metadata_falls_back_to_singleton_group(self) -> None:
+        alias = resolve_alias_metadata(
+            raw_label="ottoman stool",
+            canonical_label="ottoman stool",
+        )
+
+        self.assertEqual(alias.alias_group, "ottoman_stool_family")
+        self.assertEqual(alias.alias_source, "singleton_fallback")
+        self.assertEqual(alias.alias_variants, ("ottoman stool",))
+
+    def test_alias_metadata_uses_explicit_wardrobe_family(self) -> None:
+        alias = resolve_alias_metadata(
+            raw_label="wardrobe closet",
+            canonical_label="wardrobe",
+        )
+
+        self.assertEqual(alias.alias_group, "wardrobe_family")
+        self.assertEqual(alias.alias_source, "explicit")
+        self.assertIn("wardrobe closet", alias.alias_variants)
+        self.assertIn("wardrobe", alias.alias_variants)
+
+    def test_alias_metadata_keeps_raw_variant_for_explicit_group(self) -> None:
+        alias = resolve_alias_metadata(
+            raw_label="step ladder",
+            canonical_label="ladder",
+        )
+
+        self.assertEqual(alias.alias_group, "ladder_family")
+        self.assertEqual(alias.alias_source, "explicit")
+        self.assertIn("step ladder", alias.alias_variants)
+        self.assertIn("stepladder", alias.alias_variants)
+
+    def test_alias_group_risk_level_marks_review_needed_families(self) -> None:
+        self.assertEqual(get_alias_group_risk_level("chair_family"), "review_needed")
+        self.assertEqual(get_alias_group_risk_level("bedside_table_family"), "low_risk")
+        self.assertEqual(get_alias_group_risk_level("unknown_family"), "singleton")
 
 
 if __name__ == "__main__":

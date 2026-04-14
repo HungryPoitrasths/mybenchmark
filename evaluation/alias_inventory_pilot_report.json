@@ -1,0 +1,964 @@
+{
+  "alias_config_version": "2",
+  "cache_paths": [
+    "pilot_referability_cache_qwen3_vl_flash.json",
+    "pilot_referability_cache_qwen3_vl_flash2.json",
+    "pilot_referability_cache_qwen3_vl_flash3.json",
+    "pilot_referability_cache_qwen3_vl_flash4.json",
+    "pilot_referability_cache_qwen3_vl_flash5.json"
+  ],
+  "frame_count": 154,
+  "explicit_alias_groups_by_risk": {
+    "low_risk": [
+      {
+        "alias_group": "bedside_table_family",
+        "canonical_labels": [
+          "night stand",
+          "bedside table"
+        ],
+        "variants": [
+          "night stand",
+          "nightstand",
+          "bedside table",
+          "bedside cabinet",
+          "bedside stand"
+        ]
+      },
+      {
+        "alias_group": "bookshelf_family",
+        "canonical_labels": [
+          "bookshelf"
+        ],
+        "variants": [
+          "bookshelf",
+          "bookshelves",
+          "book shelf"
+        ]
+      },
+      {
+        "alias_group": "clothes_dryer_family",
+        "canonical_labels": [
+          "clothes dryer"
+        ],
+        "variants": [
+          "clothes dryer",
+          "clothes dryers",
+          "laundry dryer"
+        ]
+      },
+      {
+        "alias_group": "counter_family",
+        "canonical_labels": [
+          "counter"
+        ],
+        "variants": [
+          "counter",
+          "kitchen counter"
+        ]
+      },
+      {
+        "alias_group": "fan_family",
+        "canonical_labels": [
+          "fan"
+        ],
+        "variants": [
+          "fan",
+          "ceiling fan"
+        ]
+      },
+      {
+        "alias_group": "ladder_family",
+        "canonical_labels": [
+          "ladder"
+        ],
+        "variants": [
+          "ladder",
+          "folded ladder",
+          "stepladder",
+          "step ladder"
+        ]
+      },
+      {
+        "alias_group": "piano_family",
+        "canonical_labels": [
+          "piano"
+        ],
+        "variants": [
+          "piano",
+          "keyboard piano"
+        ]
+      },
+      {
+        "alias_group": "plant_family",
+        "canonical_labels": [
+          "plant"
+        ],
+        "variants": [
+          "plant",
+          "potted plant",
+          "house plant",
+          "houseplant"
+        ]
+      },
+      {
+        "alias_group": "refrigerator_family",
+        "canonical_labels": [
+          "refrigerator"
+        ],
+        "variants": [
+          "refrigerator",
+          "mini fridge",
+          "fridge"
+        ]
+      },
+      {
+        "alias_group": "sofa_family",
+        "canonical_labels": [
+          "sofa"
+        ],
+        "variants": [
+          "sofa",
+          "couch"
+        ]
+      },
+      {
+        "alias_group": "trash_can_family",
+        "canonical_labels": [
+          "trash can"
+        ],
+        "variants": [
+          "trash can",
+          "trash bin",
+          "garbage bin",
+          "waste bin",
+          "wastebasket",
+          "compost bin",
+          "recycling bin"
+        ]
+      },
+      {
+        "alias_group": "wardrobe_family",
+        "canonical_labels": [
+          "wardrobe"
+        ],
+        "variants": [
+          "wardrobe",
+          "wardrobes",
+          "wardrobe closet",
+          "wardrobe cabinet",
+          "closet wardrobe"
+        ]
+      },
+      {
+        "alias_group": "washing_machine_family",
+        "canonical_labels": [
+          "washing machine"
+        ],
+        "variants": [
+          "washing machine",
+          "washing machines",
+          "washer"
+        ]
+      }
+    ],
+    "review_needed": [
+      {
+        "alias_group": "bag_family",
+        "canonical_labels": [
+          "bag"
+        ],
+        "variants": [
+          "bag",
+          "backpack"
+        ]
+      },
+      {
+        "alias_group": "cabinet_family",
+        "canonical_labels": [
+          "cabinet"
+        ],
+        "variants": [
+          "cabinet",
+          "cabinets",
+          "kitchen cabinet",
+          "kitchen cabinets",
+          "bathroom cabinet",
+          "file cabinet"
+        ]
+      },
+      {
+        "alias_group": "chair_family",
+        "canonical_labels": [
+          "chair"
+        ],
+        "variants": [
+          "chair",
+          "armchair",
+          "office chair",
+          "dining chair",
+          "folding chair",
+          "sofa chair"
+        ]
+      },
+      {
+        "alias_group": "storage_container_family",
+        "canonical_labels": [
+          "storage container"
+        ],
+        "variants": [
+          "storage container",
+          "storage box",
+          "storage bin"
+        ]
+      },
+      {
+        "alias_group": "suitcase_family",
+        "canonical_labels": [
+          "suitcase"
+        ],
+        "variants": [
+          "suitcase",
+          "suitcases",
+          "luggage"
+        ]
+      },
+      {
+        "alias_group": "table_family",
+        "canonical_labels": [
+          "table"
+        ],
+        "variants": [
+          "table",
+          "coffee table",
+          "dining table"
+        ]
+      }
+    ]
+  },
+  "observed_labels": [
+    {
+      "canonical_label": "cabinet",
+      "alias_group": "cabinet_family",
+      "alias_source": "explicit",
+      "risk_level": "review_needed",
+      "frame_count": 76,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 29,
+        "unique": 22,
+        "unknown": 23
+      },
+      "raw_labels": {
+        "cabinet": 76
+      },
+      "scene_count": 9,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "chair",
+      "alias_group": "chair_family",
+      "alias_source": "explicit",
+      "risk_level": "review_needed",
+      "frame_count": 51,
+      "status_counts": {
+        "multiple": 20,
+        "unique": 17,
+        "unknown": 14
+      },
+      "raw_labels": {
+        "chair": 51
+      },
+      "scene_count": 9,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "pillow",
+      "alias_group": "pillow_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 50,
+      "status_counts": {
+        "multiple": 23,
+        "unique": 13,
+        "unknown": 14
+      },
+      "raw_labels": {
+        "pillow": 50
+      },
+      "scene_count": 8,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "bed",
+      "alias_group": "bed_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 45,
+      "status_counts": {
+        "multiple": 3,
+        "unique": 27,
+        "unknown": 15
+      },
+      "raw_labels": {
+        "bed": 45
+      },
+      "scene_count": 6,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "table",
+      "alias_group": "table_family",
+      "alias_source": "explicit",
+      "risk_level": "review_needed",
+      "frame_count": 41,
+      "status_counts": {
+        "absent": 7,
+        "multiple": 7,
+        "unique": 14,
+        "unknown": 12,
+        "unsure": 1
+      },
+      "raw_labels": {
+        "table": 41
+      },
+      "scene_count": 8,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "desk",
+      "alias_group": "desk_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 39,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 4,
+        "unique": 14,
+        "unknown": 17,
+        "unsure": 2
+      },
+      "raw_labels": {
+        "desk": 39
+      },
+      "scene_count": 7,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "night stand",
+      "alias_group": "bedside_table_family",
+      "alias_source": "explicit",
+      "risk_level": "low_risk",
+      "frame_count": 39,
+      "status_counts": {
+        "absent": 1,
+        "multiple": 6,
+        "unique": 17,
+        "unknown": 15
+      },
+      "raw_labels": {
+        "night stand": 39
+      },
+      "scene_count": 5,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "curtain",
+      "alias_group": "curtain_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 30,
+      "status_counts": {
+        "multiple": 7,
+        "unique": 13,
+        "unknown": 9,
+        "unsure": 1
+      },
+      "raw_labels": {
+        "curtain": 30
+      },
+      "scene_count": 6,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "sofa",
+      "alias_group": "sofa_family",
+      "alias_source": "explicit",
+      "risk_level": "low_risk",
+      "frame_count": 30,
+      "status_counts": {
+        "multiple": 5,
+        "unique": 21,
+        "unknown": 4
+      },
+      "raw_labels": {
+        "sofa": 30
+      },
+      "scene_count": 5,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "towel",
+      "alias_group": "towel_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 20,
+      "status_counts": {
+        "absent": 7,
+        "multiple": 2,
+        "unique": 3,
+        "unknown": 7,
+        "unsure": 1
+      },
+      "raw_labels": {
+        "towel": 20
+      },
+      "scene_count": 2,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "counter",
+      "alias_group": "counter_family",
+      "alias_source": "explicit",
+      "risk_level": "low_risk",
+      "frame_count": 19,
+      "status_counts": {
+        "multiple": 3,
+        "unique": 14,
+        "unknown": 2
+      },
+      "raw_labels": {
+        "counter": 19
+      },
+      "scene_count": 2,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "shelves",
+      "alias_group": "shelves_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 15,
+      "status_counts": {
+        "absent": 1,
+        "multiple": 4,
+        "unique": 2,
+        "unknown": 8
+      },
+      "raw_labels": {
+        "shelves": 15
+      },
+      "scene_count": 5,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "book",
+      "alias_group": "book_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 14,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 3,
+        "unique": 3,
+        "unknown": 6
+      },
+      "raw_labels": {
+        "books": 14
+      },
+      "scene_count": 4,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "picture",
+      "alias_group": "picture_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 12,
+      "status_counts": {
+        "multiple": 8,
+        "unique": 1,
+        "unknown": 3
+      },
+      "raw_labels": {
+        "picture": 12
+      },
+      "scene_count": 4,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "sink",
+      "alias_group": "sink_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 11,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 1,
+        "unique": 1,
+        "unknown": 5,
+        "unsure": 2
+      },
+      "raw_labels": {
+        "sink": 11
+      },
+      "scene_count": 3,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "bag",
+      "alias_group": "bag_family",
+      "alias_source": "explicit",
+      "risk_level": "review_needed",
+      "frame_count": 9,
+      "status_counts": {
+        "multiple": 3,
+        "unique": 3,
+        "unknown": 3
+      },
+      "raw_labels": {
+        "bag": 9
+      },
+      "scene_count": 3,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "box",
+      "alias_group": "box_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 7,
+      "status_counts": {
+        "multiple": 1,
+        "unknown": 6
+      },
+      "raw_labels": {
+        "box": 7
+      },
+      "scene_count": 3,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash2.json"
+      ]
+    },
+    {
+      "canonical_label": "stool",
+      "alias_group": "stool_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 4,
+      "status_counts": {
+        "multiple": 4
+      },
+      "raw_labels": {
+        "stool": 4
+      },
+      "scene_count": 2,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "guitar",
+      "alias_group": "guitar_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 1,
+      "status_counts": {
+        "unique": 1
+      },
+      "raw_labels": {
+        "guitar": 1
+      },
+      "scene_count": 1,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "laundry basket",
+      "alias_group": "laundry_basket_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 1,
+      "status_counts": {
+        "unique": 1
+      },
+      "raw_labels": {
+        "laundry basket": 1
+      },
+      "scene_count": 1,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    }
+  ],
+  "missing_explicit_alias_candidates": [
+    {
+      "canonical_label": "pillow",
+      "alias_group": "pillow_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 50,
+      "status_counts": {
+        "multiple": 23,
+        "unique": 13,
+        "unknown": 14
+      },
+      "raw_labels": {
+        "pillow": 50
+      },
+      "scene_count": 8,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "bed",
+      "alias_group": "bed_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 45,
+      "status_counts": {
+        "multiple": 3,
+        "unique": 27,
+        "unknown": 15
+      },
+      "raw_labels": {
+        "bed": 45
+      },
+      "scene_count": 6,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "desk",
+      "alias_group": "desk_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 39,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 4,
+        "unique": 14,
+        "unknown": 17,
+        "unsure": 2
+      },
+      "raw_labels": {
+        "desk": 39
+      },
+      "scene_count": 7,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "curtain",
+      "alias_group": "curtain_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 30,
+      "status_counts": {
+        "multiple": 7,
+        "unique": 13,
+        "unknown": 9,
+        "unsure": 1
+      },
+      "raw_labels": {
+        "curtain": 30
+      },
+      "scene_count": 6,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "towel",
+      "alias_group": "towel_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 20,
+      "status_counts": {
+        "absent": 7,
+        "multiple": 2,
+        "unique": 3,
+        "unknown": 7,
+        "unsure": 1
+      },
+      "raw_labels": {
+        "towel": 20
+      },
+      "scene_count": 2,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "shelves",
+      "alias_group": "shelves_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 15,
+      "status_counts": {
+        "absent": 1,
+        "multiple": 4,
+        "unique": 2,
+        "unknown": 8
+      },
+      "raw_labels": {
+        "shelves": 15
+      },
+      "scene_count": 5,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "book",
+      "alias_group": "book_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 14,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 3,
+        "unique": 3,
+        "unknown": 6
+      },
+      "raw_labels": {
+        "books": 14
+      },
+      "scene_count": 4,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "picture",
+      "alias_group": "picture_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 12,
+      "status_counts": {
+        "multiple": 8,
+        "unique": 1,
+        "unknown": 3
+      },
+      "raw_labels": {
+        "picture": 12
+      },
+      "scene_count": 4,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash3.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json",
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "sink",
+      "alias_group": "sink_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 11,
+      "status_counts": {
+        "absent": 2,
+        "multiple": 1,
+        "unique": 1,
+        "unknown": 5,
+        "unsure": 2
+      },
+      "raw_labels": {
+        "sink": 11
+      },
+      "scene_count": 3,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash.json",
+        "pilot_referability_cache_qwen3_vl_flash2.json",
+        "pilot_referability_cache_qwen3_vl_flash4.json"
+      ]
+    },
+    {
+      "canonical_label": "box",
+      "alias_group": "box_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 7,
+      "status_counts": {
+        "multiple": 1,
+        "unknown": 6
+      },
+      "raw_labels": {
+        "box": 7
+      },
+      "scene_count": 3,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash2.json"
+      ]
+    },
+    {
+      "canonical_label": "stool",
+      "alias_group": "stool_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 4,
+      "status_counts": {
+        "multiple": 4
+      },
+      "raw_labels": {
+        "stool": 4
+      },
+      "scene_count": 2,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "guitar",
+      "alias_group": "guitar_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 1,
+      "status_counts": {
+        "unique": 1
+      },
+      "raw_labels": {
+        "guitar": 1
+      },
+      "scene_count": 1,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    },
+    {
+      "canonical_label": "laundry basket",
+      "alias_group": "laundry_basket_family",
+      "alias_source": "singleton_fallback",
+      "risk_level": "singleton",
+      "frame_count": 1,
+      "status_counts": {
+        "unique": 1
+      },
+      "raw_labels": {
+        "laundry basket": 1
+      },
+      "scene_count": 1,
+      "cache_files": [
+        "pilot_referability_cache_qwen3_vl_flash5.json"
+      ]
+    }
+  ]
+}

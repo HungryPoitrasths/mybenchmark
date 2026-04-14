@@ -21,6 +21,7 @@ from typing import Any
 
 import numpy as np
 
+from .alias_groups import resolve_alias_metadata
 from .utils.colmap_loader import load_axis_alignment
 
 logger = logging.getLogger(__name__)
@@ -800,7 +801,12 @@ def parse_scene(
     objects: list[dict[str, Any]] = []
     for anno in anno_list:
         instance_id = anno.get("id", anno.get("objectId"))
-        label       = normalize_label(anno.get("label", "unknown"))
+        raw_label = str(anno.get("label", "unknown"))
+        label = normalize_label(raw_label)
+        alias_meta = resolve_alias_metadata(
+            raw_label=raw_label,
+            canonical_label=label,
+        )
         seg_ids     = set(anno.get("segments", []))
         if not seg_ids:
             continue
@@ -820,6 +826,11 @@ def parse_scene(
             {
                 "id":           int(instance_id),
                 "label":        str(label),
+                "raw_label":    raw_label,
+                "canonical_label": str(label),
+                "alias_group":  str(alias_meta.alias_group),
+                "alias_variants": list(alias_meta.alias_variants),
+                "alias_source": str(alias_meta.alias_source),
                 "center":       center.tolist(),
                 "bbox_min":     bbox_min.tolist(),
                 "bbox_max":     bbox_max.tolist(),
