@@ -693,7 +693,7 @@ MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
-VISIBLE_PROJECTED_AREA_MIN = 400.0
+VISIBLE_PROJECTED_AREA_MIN = 800.0
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.80
 FRAME_CROP_BONUS_WEIGHT = 10
 
@@ -803,22 +803,8 @@ def _build_selector_visibility_meta(
         roi_info = _project_object_roi(obj, pose, intrinsics)
         meta["bbox_in_frame_ratio"] = float(roi_info["bbox_in_frame_ratio"])
         meta["projected_area_px"] = float(roi_info["projected_area_px"])
-        if (
-            instance_mesh_data is not None
-            and meta["projected_area_px"] >= VISIBLE_PROJECTED_AREA_MIN
-        ):
-            mask_info = _project_object_mask_stats(
-                obj,
-                pose,
-                intrinsics,
-                instance_mesh_data,
-                projected_area_px=meta["projected_area_px"],
-                roi_bounds=roi_info["roi_bounds"],
-                area_threshold_px=VISIBLE_ZBUFFER_MASK_AREA_MIN,
-            )
-            meta["zbuffer_mask_in_frame_ratio"] = float(mask_info["zbuffer_mask_in_frame_ratio"])
-            meta["zbuffer_mask_area_px"] = float(mask_info["zbuffer_mask_area_px"])
-            meta["has_zbuffer_mask_area"] = True
+        # Frame selection stays projection-based. Later referability filtering
+        # applies mesh-ray visibility checks to the surviving candidates.
     return meta
 
 
@@ -1037,12 +1023,11 @@ def select_frames(
             n_quality_rejected += 1
             continue
 
-        visible, visible_audits = get_visible_objects(
+        visible = get_visible_objects(
             objects,
             pose,
             intrinsics,
             instance_mesh_data=instance_mesh_data,
-            return_audits=True,
         )
         if len(visible) < MIN_VISIBLE_OBJECTS:
             continue
@@ -1050,7 +1035,8 @@ def select_frames(
         n_attachment = _count_attachment_objects(visible, attachment_ids)
         crop_ge_80_count = _count_well_cropped_visible_objects(
             visible,
-            visibility_audits_by_obj_id=visible_audits,
+            pose,
+            intrinsics,
         )
         base_score, score = _frame_candidate_score(
             n_visible=len(visible),

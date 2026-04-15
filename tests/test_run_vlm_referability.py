@@ -258,14 +258,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("low_iou", quality["reason_codes"])
         self.assertIn("high_under_coverage", quality["reason_codes"])
 
-    def test_build_object_review_crop_excludes_small_projection_but_does_not_gate_on_in_frame_ratio(self) -> None:
+    def test_build_object_review_crop_requires_projected_area_of_at_least_800px(self) -> None:
         tiny_crop = referability_module._build_object_review_crop(
             np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=399.0, bbox_in_frame_ratio=0.1),
+            make_visibility_meta(projected_area_px=799.0, bbox_in_frame_ratio=0.1),
         )
         valid_crop = referability_module._build_object_review_crop(
             np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.1),
+            make_visibility_meta(projected_area_px=800.0, bbox_in_frame_ratio=0.1),
         )
 
         self.assertEqual(tiny_crop["local_outcome"], "excluded")
@@ -273,37 +273,16 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(valid_crop["valid"])
         self.assertEqual(valid_crop["local_outcome"], "reviewed")
 
-    def test_build_object_review_crop_excludes_small_zbuffer_mask_area(self) -> None:
-        tiny_crop = referability_module._build_object_review_crop(
+    def test_build_object_review_crop_does_not_gate_on_zbuffer_mask_area(self) -> None:
+        crop = referability_module._build_object_review_crop(
             np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=900.0, zbuffer_mask_area_px=799.0),
-        )
-        valid_crop = referability_module._build_object_review_crop(
-            np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=900.0, zbuffer_mask_area_px=800.0),
+            make_visibility_meta(projected_area_px=900.0, zbuffer_mask_area_px=1.0),
         )
 
-        self.assertEqual(tiny_crop["local_outcome"], "excluded")
-        self.assertEqual(tiny_crop["reason"], "zbuffer_mask_area_too_small")
-        self.assertTrue(valid_crop["valid"])
-        self.assertEqual(valid_crop["local_outcome"], "reviewed")
+        self.assertTrue(crop["valid"])
+        self.assertEqual(crop["local_outcome"], "reviewed")
 
-    def test_refine_candidate_visible_object_ids_prefers_mesh_ray(self) -> None:
-        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-            [1],
-            [make_object(1, "chair")],
-            make_camera_pose(),
-            make_camera_intrinsics(),
-            None,
-            None,
-            ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
-            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-        )
-
-        self.assertEqual(candidate_ids, [1])
-        self.assertEqual(source, "mesh_ray_refined")
-
-    def test_refine_candidate_visible_object_ids_falls_back_to_depth_when_mesh_ray_fails(self) -> None:
+    def test_refine_candidate_visible_object_ids_requires_both_mesh_ray_and_depth(self) -> None:
         with patch.object(
             referability_module,
             "refine_visible_ids_with_depth",
@@ -316,13 +295,48 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 make_camera_intrinsics(),
                 np.ones((4, 4), dtype=np.float32),
                 make_camera_intrinsics(),
-                ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
+                ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
                 instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
             )
 
         self.assertEqual(candidate_ids, [1])
-        self.assertEqual(source, "depth_refined")
+        self.assertEqual(source, "mesh_ray_depth_refined")
         depth_mock.assert_called_once()
+
+    def test_refine_candidate_visible_object_ids_drops_when_depth_rejects(self) -> None:
+        with patch.object(
+            referability_module,
+            "refine_visible_ids_with_depth",
+            return_value=[],
+        ):
+            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
+                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+            )
+
+        self.assertEqual(candidate_ids, [])
+        self.assertEqual(source, "mesh_ray_depth_refined")
+
+    def test_refine_candidate_visible_object_ids_falls_back_to_projection_when_mesh_ray_fails(self) -> None:
+        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+            [1],
+            [make_object(1, "chair")],
+            make_camera_pose(),
+            make_camera_intrinsics(),
+            np.ones((4, 4), dtype=np.float32),
+            make_camera_intrinsics(),
+            ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
+            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+        )
+
+        self.assertEqual(candidate_ids, [1])
+        self.assertEqual(source, "projection_fallback")
 
     def test_aggregate_label_reviews_uses_strict_policy(self) -> None:
         label_to_ids = {
@@ -399,7 +413,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1, 2, 3], "depth_refined"),
+                return_value=([1, 2, 3], "mesh_ray_depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -438,7 +452,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(frame_entry["frame_usable"], True)
         self.assertEqual(frame_entry["frame_quality_score"], 82)
-        self.assertEqual(frame_entry["candidate_visibility_source"], "depth_refined")
+        self.assertEqual(frame_entry["candidate_visibility_source"], "mesh_ray_depth_refined")
         self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique", "lamp": "absent"})
         self.assertEqual(frame_entry["crop_label_counts"], {"chair": 1, "lamp": 0})
         self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
@@ -486,7 +500,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1, 2], "depth_refined"),
+                return_value=([1, 2], "mesh_ray_depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -551,7 +565,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
+                return_value=([1], "mesh_ray_depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -595,11 +609,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["label_counts"], {"shelves": 0})
         self.assertEqual(frame_entry["referable_object_ids"], [])
 
-    def test_compute_frame_referability_entry_excludes_unique_object_below_zbuffer_area(self) -> None:
+    def test_compute_frame_referability_entry_excludes_unique_object_below_projected_area_threshold(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=900.0, zbuffer_mask_area_px=799.0),
+            1: make_visibility_meta(projected_area_px=799.0, zbuffer_mask_area_px=1.0),
         }
 
         with (
@@ -617,7 +631,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
+                return_value=([1], "mesh_ray_depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -657,7 +671,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["crop_referable_object_ids"], [])
         self.assertEqual(frame_entry["referable_object_ids"], [])
         self.assertEqual(frame_entry["object_reviews"]["1"]["local_outcome"], "excluded")
-        self.assertEqual(frame_entry["object_reviews"]["1"]["local_reason"], "zbuffer_mask_area_too_small")
+        self.assertEqual(frame_entry["object_reviews"]["1"]["local_reason"], "projected_area_too_small")
         review_mock.assert_not_called()
         full_frame_mock.assert_not_called()
 
@@ -690,7 +704,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
+                return_value=([1], "mesh_ray_depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -753,7 +767,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "depth_refined"),
+                return_value=([1], "mesh_ray_depth_refined"),
             ),
             patch.object(
                 referability_module,
@@ -869,7 +883,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
             "candidate_visible_object_ids": [1],
-            "candidate_visibility_source": "depth_refined",
+            "candidate_visibility_source": "mesh_ray_depth_refined",
             "candidate_labels": ["lamp"],
             "label_to_object_ids": {"lamp": [1]},
             "selector_visible_object_ids": [1],
@@ -920,7 +934,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
             "candidate_visible_object_ids": [1],
-            "candidate_visibility_source": "depth_refined",
+            "candidate_visibility_source": "mesh_ray_depth_refined",
             "candidate_labels": ["lamp"],
             "label_to_object_ids": {"lamp": [1]},
             "selector_visible_object_ids": [1],

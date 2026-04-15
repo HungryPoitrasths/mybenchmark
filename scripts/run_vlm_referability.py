@@ -66,14 +66,13 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "17.0"
+REFERABILITY_CACHE_VERSION = "18.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
-QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
-QUESTION_REVIEW_CROP_MIN_ZBUFFER_MASK_AREA_PX = 800.0
+QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
 REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.80
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
 SEGMENTATION_EXTREME_NOISE_MIN_SCORE = 0.10
@@ -657,6 +656,8 @@ def _refine_candidate_visible_object_ids(
     if (
         selector_ids
         and color_intrinsics is not None
+        and depth_image is not None
+        and depth_intrinsics is not None
         and callable(ray_caster_getter)
         and callable(instance_mesh_data_getter)
     ):
@@ -667,7 +668,7 @@ def _refine_candidate_visible_object_ids(
                     REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
                 )
                 stage2_instance_mesh_data: InstanceMeshData | None = None
-                refined: list[int] = []
+                mesh_ray_refined: list[int] = []
                 for obj_id in selector_ids:
                     stage1 = _evaluate_crop_unique_mesh_ray_stage(
                         obj_id=int(obj_id),
@@ -678,7 +679,7 @@ def _refine_candidate_visible_object_ids(
                         base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
                     )
                     if int(stage1.get("visible_count", 0)) > 0:
-                        refined.append(int(obj_id))
+                        mesh_ray_refined.append(int(obj_id))
                         continue
                     if stage2_instance_mesh_data is None:
                         stage2_instance_mesh_data = instance_mesh_data_getter(
@@ -693,24 +694,22 @@ def _refine_candidate_visible_object_ids(
                         base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
                     )
                     if int(stage2.get("visible_count", 0)) > 0:
-                        refined.append(int(obj_id))
-                return sorted({int(obj_id) for obj_id in refined}), "mesh_ray_refined"
+                        mesh_ray_refined.append(int(obj_id))
+                depth_refined = refine_visible_ids_with_depth(
+                    visible_object_ids=selector_ids,
+                    objects=objects,
+                    pose=camera_pose,
+                    depth_image=depth_image,
+                    depth_intrinsics=depth_intrinsics,
+                )
+                refined_intersection = sorted(
+                    set(int(obj_id) for obj_id in mesh_ray_refined)
+                    & set(int(obj_id) for obj_id in depth_refined)
+                )
+                return refined_intersection, "mesh_ray_depth_refined"
         except Exception as exc:
-            logger.warning("Mesh-ray refine failed: %s", exc)
-    if depth_image is None or depth_intrinsics is None:
-        return selector_ids, "projection_fallback"
-    try:
-        refined = refine_visible_ids_with_depth(
-            visible_object_ids=selector_ids,
-            objects=objects,
-            pose=camera_pose,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-        )
-    except Exception as exc:
-        logger.warning("Depth refine failed: %s", exc)
-        return selector_ids, "projection_fallback"
-    return sorted({int(obj_id) for obj_id in refined}), "depth_refined"
+            logger.warning("Mesh-ray/depth joint refine failed: %s", exc)
+    return selector_ids, "projection_fallback"
 
 
 def _build_visibility_audit_by_object_id(
@@ -742,10 +741,10 @@ def _build_visibility_audit_by_object_id(
         if not candidate_considered:
             candidate_rejection_reasons.append("not_in_selector_pool")
         elif not candidate_passed:
-            if candidate_visibility_source == "mesh_ray_refined":
-                candidate_rejection_reasons.append("mesh_ray_not_visible")
-            elif candidate_visibility_source == "depth_refined":
-                candidate_rejection_reasons.append("depth_refined_not_visible")
+            if candidate_visibility_source == "mesh_ray_depth_refined":
+                candidate_rejection_reasons.append("mesh_ray_or_depth_not_visible")
+            elif candidate_visibility_source == "projection_fallback":
+                candidate_rejection_reasons.append("projection_not_promoted")
             else:
                 candidate_rejection_reasons.append("not_applicable")
 
@@ -1591,14 +1590,6 @@ def _build_object_review_crop(
         result["local_outcome"] = LOCAL_OUTCOME_EXCLUDED
         result["reason"] = "projected_area_too_small"
         return result
-    if (
-        has_zbuffer_mask_area
-        and zbuffer_mask_area_px < QUESTION_REVIEW_CROP_MIN_ZBUFFER_MASK_AREA_PX
-    ):
-        result["local_outcome"] = LOCAL_OUTCOME_EXCLUDED
-        result["reason"] = "zbuffer_mask_area_too_small"
-        return result
-
     crop_image = image[crop_v_min:crop_v_max, crop_u_min:crop_u_max]
     if crop_image.size == 0:
         return result

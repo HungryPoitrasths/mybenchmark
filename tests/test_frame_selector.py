@@ -50,7 +50,7 @@ def make_object(obj_id: int, label: str) -> dict:
 
 
 class FrameSelectorTests(unittest.TestCase):
-    def test_selector_visibility_audit_accepts_zbuffer_roi_fallback_at_400px(self) -> None:
+    def test_selector_visibility_audit_accepts_zbuffer_roi_fallback_at_800px_projected_area(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
             {
                 "center_uv_px": [10.0, 10.0],
@@ -58,7 +58,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "bbox_in_frame_ratio": 0.05,
                 "zbuffer_mask_area_px": 400.0,
                 "has_zbuffer_mask_area": True,
-                "projected_area_px": 400.0,
+                "projected_area_px": 800.0,
             },
             make_camera_intrinsics(),
         )
@@ -67,7 +67,7 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(audit["selector_decision"], "selected_roi_fallback")
         self.assertEqual(audit["selector_roi_ratio_source"], "zbuffer_mask_area")
 
-    def test_selector_visibility_audit_rejects_zbuffer_roi_fallback_below_400px(self) -> None:
+    def test_selector_visibility_audit_rejects_zbuffer_roi_fallback_below_400px_mask_area(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
             {
                 "center_uv_px": [10.0, 10.0],
@@ -83,7 +83,7 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertFalse(audit["selector_passed"])
         self.assertIn("zbuffer_mask_area_below_threshold", audit["selector_rejection_reasons"])
 
-    def test_selector_visibility_audit_requires_projected_area_when_zbuffer_area_exists(self) -> None:
+    def test_selector_visibility_audit_requires_projected_area_at_800px_when_zbuffer_area_exists(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
             {
                 "center_uv_px": [10.0, 10.0],
@@ -91,7 +91,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "bbox_in_frame_ratio": 0.01,
                 "zbuffer_mask_area_px": 400.0,
                 "has_zbuffer_mask_area": True,
-                "projected_area_px": 1.0,
+                "projected_area_px": 799.0,
             },
             make_camera_intrinsics(),
         )
@@ -105,7 +105,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "center_uv_px": [10.0, 10.0],
                 "depth_m": 2.0,
                 "bbox_in_frame_ratio": 0.35,
-                "projected_area_px": 400.0,
+                "projected_area_px": 800.0,
             },
             make_camera_intrinsics(),
         )
@@ -139,7 +139,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "_project_object_roi",
                 return_value={
                     "bbox_in_frame_ratio": 0.9,
-                    "projected_area_px": 399.0,
+                    "projected_area_px": 799.0,
                     "roi_bounds": (0, 20, 0, 20),
                 },
             ),
@@ -156,7 +156,75 @@ class FrameSelectorTests(unittest.TestCase):
                 instance_mesh_data=object(),
             )
 
-        self.assertEqual(meta["projected_area_px"], 399.0)
+        self.assertEqual(meta["projected_area_px"], 799.0)
+        self.assertEqual(meta["zbuffer_mask_area_px"], 0.0)
+        self.assertFalse(meta["has_zbuffer_mask_area"])
+
+    def test_build_selector_visibility_meta_skips_mask_projection_for_center_visible_audits(self) -> None:
+        obj = make_object(0, "cup")
+
+        with (
+            patch.object(
+                frame_selector,
+                "_project_object_roi",
+                return_value={
+                    "bbox_in_frame_ratio": 0.9,
+                    "projected_area_px": 900.0,
+                    "roi_bounds": (0, 20, 0, 20),
+                },
+            ),
+            patch.object(
+                frame_selector,
+                "_project_object_mask_stats",
+                side_effect=AssertionError("mask stats should not run when center is already visible"),
+            ),
+        ):
+            meta = frame_selector._build_selector_visibility_meta(
+                obj,
+                make_camera_pose("000000.jpg"),
+                make_camera_intrinsics(),
+                instance_mesh_data=object(),
+                include_roi_metrics=True,
+            )
+
+        self.assertEqual(meta["bbox_in_frame_ratio"], 0.9)
+        self.assertEqual(meta["projected_area_px"], 900.0)
+        self.assertEqual(meta["zbuffer_mask_area_px"], 0.0)
+        self.assertFalse(meta["has_zbuffer_mask_area"])
+
+    def test_build_selector_visibility_meta_skips_mask_projection_for_roi_fallback_candidates(self) -> None:
+        obj = make_object(1, "cup")
+
+        with (
+            patch.object(
+                frame_selector,
+                "project_to_image",
+                return_value=(np.array([10.0, 10.0], dtype=np.float64), 2.0),
+            ),
+            patch.object(
+                frame_selector,
+                "_project_object_roi",
+                return_value={
+                    "bbox_in_frame_ratio": 0.9,
+                    "projected_area_px": 900.0,
+                    "roi_bounds": (0, 20, 0, 20),
+                },
+            ),
+            patch.object(
+                frame_selector,
+                "_project_object_mask_stats",
+                side_effect=AssertionError("selector visibility should not use zbuffer mask stats"),
+            ),
+        ):
+            meta = frame_selector._build_selector_visibility_meta(
+                obj,
+                make_camera_pose("000000.jpg"),
+                make_camera_intrinsics(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertEqual(meta["bbox_in_frame_ratio"], 0.9)
+        self.assertEqual(meta["projected_area_px"], 900.0)
         self.assertEqual(meta["zbuffer_mask_area_px"], 0.0)
         self.assertFalse(meta["has_zbuffer_mask_area"])
 
@@ -256,7 +324,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "load_scannet_poses",
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
-            patch.object(frame_selector, "get_visible_objects", side_effect=[(objects, {}), (objects, {})]),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
             patch.object(frame_selector, "passes_image_quality", return_value=True),
             patch.object(frame_selector, "_count_attachment_objects", return_value=0),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[0, 2]),
