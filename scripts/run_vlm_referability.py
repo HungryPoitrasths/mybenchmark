@@ -74,6 +74,7 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
 QUESTION_REVIEW_CROP_MIN_ZBUFFER_MASK_AREA_PX = 800.0
+REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.80
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
 SEGMENTATION_EXTREME_NOISE_MIN_SCORE = 0.10
 SEGMENTATION_STRONG_MIN_SCORE = 0.50
@@ -326,10 +327,46 @@ def _final_referable_object_ids(
     *,
     label_statuses: dict[str, str],
     crop_unique_label_object_ids: dict[str, int],
+    object_reviews: object = None,
+    visibility_audit_by_object_id: object = None,
 ) -> list[int]:
+    def _lookup_review(container: object, obj_id: int) -> dict[str, Any] | None:
+        if isinstance(container, dict):
+            review = container.get(str(obj_id))
+            if not isinstance(review, dict):
+                review = container.get(obj_id)
+            return review if isinstance(review, dict) else None
+        if isinstance(container, list):
+            for item in container:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    item_obj_id = int(item.get("obj_id"))
+                except (TypeError, ValueError):
+                    continue
+                if item_obj_id == int(obj_id):
+                    return item
+        return None
+
+    def _passes_geometry_gate(obj_id: int) -> bool:
+        for container in (object_reviews, visibility_audit_by_object_id):
+            review = _lookup_review(container, int(obj_id))
+            if review is None:
+                continue
+            try:
+                ratio = float(review.get("bbox_in_frame_ratio"))
+            except (TypeError, ValueError):
+                continue
+            return ratio >= REFERABLE_BBOX_IN_FRAME_RATIO_MIN
+        # Preserve compatibility for older/minimal cache entries that do not
+        # carry per-object bbox ratios, while enforcing the gate for new ones.
+        return True
+
     referable_object_ids: list[int] = []
     for label, obj_id in sorted(crop_unique_label_object_ids.items()):
         if str(label_statuses.get(label, "")).strip().lower() != LABEL_STATUS_UNIQUE:
+            continue
+        if not _passes_geometry_gate(int(obj_id)):
             continue
         referable_object_ids.append(int(obj_id))
     return sorted(set(referable_object_ids))
@@ -443,6 +480,8 @@ def _repair_final_referability_fields(entry: Any) -> dict[str, Any]:
     referable_object_ids = _final_referable_object_ids(
         label_statuses=label_statuses,
         crop_unique_label_object_ids=crop_unique_label_object_ids,
+        object_reviews=repaired.get("object_reviews"),
+        visibility_audit_by_object_id=repaired.get("visibility_audit_by_object_id"),
     )
 
     repaired.update(
@@ -2330,6 +2369,8 @@ def _compute_frame_referability_entry(
         referable_object_ids = _final_referable_object_ids(
             label_statuses=label_statuses,
             crop_unique_label_object_ids=crop_unique_label_object_ids,
+            object_reviews=object_reviews,
+            visibility_audit_by_object_id=visibility_audit_by_object_id,
         )
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)

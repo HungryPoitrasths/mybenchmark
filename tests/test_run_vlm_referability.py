@@ -729,6 +729,71 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIs(captured["instance_mesh_data"], sentinel_instance_mesh_data)
         self.assertEqual(frame_entry["referable_object_ids"], [1])
 
+    def test_compute_frame_referability_entry_applies_bbox_ratio_gate_to_final_referable_ids(self) -> None:
+        scene_objects = [make_object(1, "chair")]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.79),
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clarity_score": 82,
+                    "severely_out_of_focus": False,
+                    "usable_for_spatial_reasoning": True,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([1], "depth_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_object_review_decision",
+                return_value=("clear", '{"status":"clear"}'),
+            ),
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+                return_value=("unique", '{"status":"unique"}'),
+            ),
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_quality_review",
+                return_value={},
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1],
+            )
+
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["referable_object_ids"], [])
+
     def test_apply_crop_unique_mesh_quality_review_drops_unique_object_on_mesh_mismatch(self) -> None:
         crop_entry = {
             "local_outcome": "reviewed",

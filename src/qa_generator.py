@@ -6180,18 +6180,11 @@ def _canonical_question_type_for_mention_policy(question_type: Any) -> str:
 
 
 def _question_mention_policy(question_type: Any) -> tuple[str, float | None]:
-    canonical = _canonical_question_type_for_mention_policy(question_type)
-    if canonical in QUESTION_MENTION_VISIBLE_ONLY_TYPES:
-        return QUESTION_MENTION_POLICY_VISIBLE_ONLY, None
-    if canonical in QUESTION_MENTION_MIN_RATIO_050_TYPES:
-        return (
-            QUESTION_MENTION_POLICY_MIN_RATIO_050,
-            QUESTION_MENTION_MIN_IN_FRAME_RATIO_RELAXED,
-        )
-    return (
-        QUESTION_MENTION_POLICY_MIN_RATIO_060,
-        QUESTION_MENTION_MIN_IN_FRAME_RATIO_DEFAULT,
-    )
+    _ = _canonical_question_type_for_mention_policy(question_type)
+    # Referability now applies the hard bbox in-frame gate upstream. Downstream
+    # question filtering only needs to ensure that mentioned objects belong to
+    # the visible object pool for this frame.
+    return QUESTION_MENTION_POLICY_VISIBLE_ONLY, None
 
 
 def _ensure_question_mentions(
@@ -6657,11 +6650,11 @@ def generate_all_questions(
     unanswerable from the image and should never be included.
     referable_object_ids: if provided, restrict question generation to the
     object_id subset judged referable by the VLM for this frame.
-    occlusion_eligible_object_ids: if provided, L1 occlusion generation is
-    restricted to object ids whose projected bbox is sufficiently in-frame.
+    occlusion_eligible_object_ids: compatibility field retained for trace/debug
+    output. Downstream mention filtering now only requires mentions to be in
+    the visible object pool.
     mention_in_frame_ratio_by_obj_id: optional per-visible-object projected
-    bbox in-frame ratios used by the post-generation mentioned-object filter.
-    Static L1 occlusion questions whose answer is "not visible" are exempt.
+    bbox in-frame ratios retained for diagnostics and traces.
     label_statuses: if provided, use per-label VLM absent/unique/multiple/unsure
     decisions to guide L1 occlusion generation.
     label_counts: optional compatibility field derived from label_statuses.

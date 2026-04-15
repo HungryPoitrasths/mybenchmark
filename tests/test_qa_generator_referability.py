@@ -578,19 +578,19 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(len(kept), 1)
 
-    def test_generate_all_questions_drops_static_occlusion_target_below_in_frame_threshold(self) -> None:
-        objects = [make_object(3, "lamp")]
+    def test_generate_all_questions_keeps_visible_static_occlusion_target_without_ratio_gate(self) -> None:
+        objects = [make_object(3, "chair")]
         occlusion_question = {
             "level": "L1",
             "type": "occlusion",
-            "question": "Is the lamp occluded?",
+            "question": "Is the chair occluded?",
             "options": ["not occluded", "occluded", "not visible"],
             "answer": "B",
             "correct_value": "occluded",
             "obj_a_id": 3,
-            "obj_a_label": "lamp",
+            "obj_a_label": "chair",
             "mentioned_objects": [
-                {"role": "target", "label": "lamp", "obj_id": 3},
+                {"role": "target", "label": "chair", "obj_id": 3},
             ],
         }
 
@@ -621,12 +621,13 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 referable_object_ids=[3],
                 occlusion_eligible_object_ids=[],
                 mention_in_frame_ratio_by_obj_id={3: 0.59},
-                label_statuses={"lamp": "unique"},
-                label_to_object_ids={"lamp": [3]},
+                label_statuses={"chair": "unique"},
+                label_to_object_ids={"chair": [3]},
                 attachment_edges=[],
             )
 
-        self.assertEqual(questions, [])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["type"], "occlusion")
 
     def test_in_frame_filter_keeps_object_move_allocentric_when_mentions_are_visible(self) -> None:
         kept = _enforce_in_frame_mentions(
@@ -652,7 +653,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(len(kept), 1)
 
-    def test_in_frame_filter_requires_point_five_for_coordinate_rotation_agent(self) -> None:
+    def test_in_frame_filter_keeps_coordinate_rotation_agent_when_mentions_are_visible(self) -> None:
         question = {
             "level": "L3",
             "type": "coordinate_rotation_agent",
@@ -679,10 +680,10 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             mention_in_frame_ratio_by_obj_id={1: 0.50, 2: 0.50},
         )
 
-        self.assertEqual(kept_below, [])
+        self.assertEqual(len(kept_below), 1)
         self.assertEqual(len(kept_at_threshold), 1)
 
-    def test_in_frame_filter_requires_point_six_for_attachment_chain(self) -> None:
+    def test_in_frame_filter_keeps_attachment_chain_when_mentions_are_visible(self) -> None:
         kept = _enforce_in_frame_mentions(
             [
                 {
@@ -704,7 +705,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             mention_in_frame_ratio_by_obj_id={1: 0.95, 2: 0.60, 3: 0.59},
         )
 
-        self.assertEqual(kept, [])
+        self.assertEqual(len(kept), 1)
 
     def test_generate_all_questions_does_not_flag_explicit_role_with_matching_legacy_alias(self) -> None:
         objects = [make_object(1, "cup")]
@@ -845,7 +846,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(len(kept), 1)
 
-    def test_generate_all_questions_drops_direction_agent_question_below_relaxed_in_frame_threshold(self) -> None:
+    def test_generate_all_questions_keeps_direction_agent_question_without_ratio_gate(self) -> None:
         objects = [
             make_object(1, "cup"),
             make_object(2, "table"),
@@ -899,21 +900,22 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 attachment_edges=[],
             )
 
-        self.assertEqual(questions, [])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["type"], "direction_agent")
 
-    def test_generate_all_questions_drops_viewpoint_move_target_below_in_frame_threshold(self) -> None:
-        objects = [make_object(1, "lamp")]
+    def test_generate_all_questions_keeps_viewpoint_move_target_without_ratio_gate(self) -> None:
+        objects = [make_object(1, "chair")]
         viewpoint_question = {
             "level": "L2",
             "type": "viewpoint_move",
-            "question": "If the camera moves right, what is the occlusion status of the lamp?",
+            "question": "If the camera moves right, what is the occlusion status of the chair?",
             "options": ["not occluded", "occluded", "not visible"],
             "answer": "A",
             "correct_value": "not occluded",
             "obj_a_id": 1,
-            "obj_a_label": "lamp",
+            "obj_a_label": "chair",
             "mentioned_objects": [
-                {"role": "target", "label": "lamp", "obj_id": 1},
+                {"role": "target", "label": "chair", "obj_id": 1},
             ],
         }
 
@@ -944,32 +946,33 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 referable_object_ids=[1],
                 occlusion_eligible_object_ids=[],
                 mention_in_frame_ratio_by_obj_id={1: 0.59},
-                label_statuses={"lamp": "unique"},
-                label_to_object_ids={"lamp": [1]},
+                label_statuses={"chair": "unique"},
+                label_to_object_ids={"chair": [1]},
                 attachment_edges=[],
             )
 
-        self.assertEqual(questions, [])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["type"], "viewpoint_move")
 
-    def test_generate_all_questions_drops_object_remove_pair_below_in_frame_threshold(self) -> None:
+    def test_generate_all_questions_keeps_object_remove_pair_without_ratio_gate(self) -> None:
         objects = [
-            make_object(1, "lamp"),
+            make_object(1, "chair"),
             make_object(2, "table"),
         ]
         remove_question = {
             "level": "L2",
             "type": "object_remove",
-            "question": "If the table were removed, what would be the occlusion status of the lamp?",
+            "question": "If the table were removed, what would be the occlusion status of the chair?",
             "options": ["not occluded", "occluded", "not visible"],
             "answer": "A",
             "correct_value": "not occluded",
             "removed_obj_id": 2,
             "removed_obj_label": "table",
             "obj_b_id": 1,
-            "obj_b_label": "lamp",
+            "obj_b_label": "chair",
             "mentioned_objects": [
                 {"role": "removed_object", "label": "table", "obj_id": 2},
-                {"role": "remaining_object", "label": "lamp", "obj_id": 1},
+                {"role": "remaining_object", "label": "chair", "obj_id": 1},
             ],
         }
 
@@ -1000,12 +1003,13 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 referable_object_ids=[1, 2],
                 occlusion_eligible_object_ids=[],
                 mention_in_frame_ratio_by_obj_id={1: 0.95, 2: 0.59},
-                label_statuses={"lamp": "unique", "table": "unique"},
-                label_to_object_ids={"lamp": [1], "table": [2]},
+                label_statuses={"chair": "unique", "table": "unique"},
+                label_to_object_ids={"chair": [1], "table": [2]},
                 attachment_edges=[],
             )
 
-        self.assertEqual(questions, [])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["type"], "object_remove")
 
     def test_l1_occlusion_skips_multiple_status_without_unique_instance(self) -> None:
         questions = generate_l1_occlusion_questions(

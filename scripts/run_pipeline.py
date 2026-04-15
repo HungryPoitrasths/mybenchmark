@@ -76,6 +76,7 @@ from scripts.run_vlm_referability import (
     _compute_mesh_mask_quality_for_object,
     _compute_topology_quality_for_object,
     _dedupe_detections_by_mask_iou,
+    _repair_final_referability_fields,
     _select_best_detection_for_object_review,
     _strong_detection_min_area,
 )
@@ -99,9 +100,6 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
-# L1 occlusion generation uses a stricter in-frame gate than crop review.
-# Other question types now apply their own per-qtype mention thresholds.
-QUESTION_MENTION_MIN_IN_FRAME_RATIO = 0.60
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 REFERABLE_OCCLUSION_VETO_PROBE_RAY_COUNT = 64
 REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT = 16
@@ -748,8 +746,18 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
     frames = cache.get("frames", cache)
     scene_frames = frames.get(scene_id)
     if isinstance(scene_frames, dict):
-        return scene_frames.get(image_name)
-    return frames.get(f"{scene_id}/{image_name}")
+        entry = scene_frames.get(image_name)
+        if not isinstance(entry, dict):
+            return entry
+        repaired_entry = _repair_final_referability_fields(entry)
+        scene_frames[image_name] = repaired_entry
+        return repaired_entry
+    entry = frames.get(f"{scene_id}/{image_name}")
+    if not isinstance(entry, dict):
+        return entry
+    repaired_entry = _repair_final_referability_fields(entry)
+    frames[f"{scene_id}/{image_name}"] = repaired_entry
+    return repaired_entry
 
 
 def _resolve_vlm_api_key(*, purpose: str, missing_key_hint: str | None = None) -> str:
@@ -2222,17 +2230,10 @@ def _build_occlusion_eligible_object_ids(
     visible_object_ids: list[int],
     mention_in_frame_ratio_by_obj_id: dict[int, float] | None,
 ) -> list[int]:
-    """Return visible object ids whose projected bbox is sufficiently in-frame."""
+    """Return visible object ids without any downstream bbox-ratio re-gating."""
     visible_ids = _normalize_object_ids(visible_object_ids)
-    if not visible_ids:
-        return []
-
-    return [
-        int(obj_id)
-        for obj_id in visible_ids
-        if float((mention_in_frame_ratio_by_obj_id or {}).get(int(obj_id), 0.0) or 0.0)
-        >= QUESTION_MENTION_MIN_IN_FRAME_RATIO
-    ]
+    _ = mention_in_frame_ratio_by_obj_id
+    return visible_ids
 
 
 def _build_visible_object_projected_area_map(
