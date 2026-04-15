@@ -517,7 +517,7 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertIn("frame_rejected_by_vlm_frame_review", html_text)
         self.assertIn("out_of_focus", html_text)
 
-    def test_run_single_frame_trace_repairs_stale_cache_when_full_frame_marks_label_absent(self) -> None:
+    def test_run_single_frame_trace_rejects_stale_cache_when_full_frame_marks_label_absent(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
         absent_entry = make_referability_entry()
         absent_entry["crop_label_statuses"] = {"cup": "unique"}
@@ -546,19 +546,17 @@ class RunSingleFrameTraceTests(unittest.TestCase):
                 }
             },
         }
-        captured: dict[str, object] = {}
-
-        def fake_generate_all_questions(**kwargs):
-            captured["referable_object_ids"] = list(kwargs.get("referable_object_ids") or [])
-            captured["label_statuses"] = dict(kwargs.get("label_statuses") or {})
-            captured["label_counts"] = dict(kwargs.get("label_counts") or {})
-            return make_fake_questions()
-
         with ExitStack() as stack:
             for mocked in self._patch_common(scene_id, image_name):
                 stack.enter_context(mocked)
-            generator_mock = stack.enter_context(
-                patch.object(trace_module, "generate_all_questions", side_effect=fake_generate_all_questions)
+            stack.enter_context(
+                patch.object(
+                    trace_module,
+                    "generate_all_questions",
+                    side_effect=AssertionError(
+                        "should reject stale referability cache before question generation"
+                    ),
+                )
             )
             trace_doc = trace_module.run_single_frame_trace(
                 data_root=data_root,
@@ -569,15 +567,9 @@ class RunSingleFrameTraceTests(unittest.TestCase):
                 use_occlusion=False,
             )
 
-        self.assertEqual(trace_doc["status"], "completed")
-        generator_mock.assert_called_once()
-        self.assertEqual(captured["referable_object_ids"], [])
-        self.assertEqual(captured["label_statuses"], {"cup": "absent"})
-        self.assertEqual(captured["label_counts"], {"cup": 0})
-        self.assertEqual(
-            trace_doc["frame_context"]["pipeline_referable_object_ids_used_for_generation"],
-            [],
-        )
+        self.assertEqual(trace_doc["status"], "failed")
+        self.assertEqual(trace_doc["error"]["type"], "ValueError")
+        self.assertIn("inconsistent with cache version 19.0", trace_doc["error"]["message"])
 
     def test_run_single_frame_trace_records_detailed_near_duplicate_reason(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()

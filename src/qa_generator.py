@@ -2371,6 +2371,7 @@ def generate_l1_occlusion_questions(
                 normalized_statuses[label] = "unique"
             elif count > 1:
                 normalized_statuses[label] = "multiple"
+    has_referable_filter = referable_object_ids is not None
     referable_id_set = _normalize_object_id_set(
         referable_object_ids,
         "referable_object_ids_for_l1_occlusion",
@@ -2497,6 +2498,21 @@ def generate_l1_occlusion_questions(
                 continue
 
             candidates = label_to_objects.get(label, [])
+            referable_candidates = [
+                obj for obj in candidates
+                if int(obj["id"]) in referable_id_set
+            ] if has_referable_filter else []
+            if has_referable_filter:
+                if len(referable_candidates) == 1:
+                    _append_geometry_question(
+                        obj=referable_candidates[0],
+                        label=label,
+                        source="geometry_from_vlm_unique",
+                        vlm_status=status,
+                        vlm_count=count,
+                    )
+                continue
+
             if len(candidates) == 1:
                 _append_geometry_question(
                     obj=candidates[0],
@@ -2507,10 +2523,6 @@ def generate_l1_occlusion_questions(
                 )
                 continue
 
-            referable_candidates = [
-                obj for obj in candidates
-                if int(obj["id"]) in referable_id_set
-            ]
             if len(referable_candidates) == 1:
                 _append_geometry_question(
                     obj=referable_candidates[0],

@@ -1028,6 +1028,23 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(questions, [])
 
+    def test_l1_occlusion_skips_unique_status_when_only_candidate_is_not_referable(self) -> None:
+        questions = generate_l1_occlusion_questions(
+            objects=[make_object(1, "cabinet")],
+            camera_pose=make_camera_pose(),
+            color_intrinsics=None,
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend="depth",
+            ray_caster=None,
+            instance_mesh_data=None,
+            templates={},
+            label_statuses={"cabinet": "unique"},
+            referable_object_ids=[],
+        )
+
+        self.assertEqual(questions, [])
+
     def test_l2_generators_skip_attachment_remapped_nonreferable_move_source(self) -> None:
         referable_child = make_object(1, "cup")
         hidden_parent = make_object(2, "table")

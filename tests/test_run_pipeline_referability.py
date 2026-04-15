@@ -838,7 +838,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
         )
 
-    def test_run_pipeline_repairs_stale_cache_when_full_frame_marks_label_absent(self) -> None:
+    def test_run_pipeline_rejects_stale_cache_when_full_frame_marks_label_absent(self) -> None:
         root = make_case_dir("pipeline_l1_absent_candidate")
         self.addCleanup(shutil.rmtree, root, True)
         data_root = root / "data"
@@ -894,20 +894,6 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             "wall_objects": [],
         }
 
-        captured: dict[str, object] = {"called": False}
-
-        def fake_generate_all_questions(**kwargs):
-            captured["called"] = True
-            captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
-            captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
-            captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
-            captured["mention_in_frame_ratio_by_obj_id"] = dict(
-                kwargs.get("mention_in_frame_ratio_by_obj_id") or {}
-            )
-            captured["label_statuses"] = dict(kwargs["label_statuses"] or {})
-            captured["label_counts"] = dict(kwargs["label_counts"] or {})
-            return []
-
         with (
             patch.object(run_pipeline_module, "parse_scene", return_value=scene),
             patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
@@ -928,30 +914,28 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     1: {"bbox_in_frame_ratio": 0.95},
                 },
             ),
-            patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
+            patch.object(
+                run_pipeline_module,
+                "generate_all_questions",
+                side_effect=AssertionError(
+                    "should reject stale referability cache before question generation"
+                ),
+            ),
             patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
             patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
         ):
-            questions = run_pipeline_module.run_pipeline(
-                data_root=data_root,
-                output_dir=output_dir,
-                max_scenes=10,
-                max_frames=10,
-                use_occlusion=False,
-                referability_cache=referability_cache,
-                run_question_presence_review=False,
-                write_frame_debug=False,
-            )
-
-        self.assertTrue(captured["called"])
-        self.assertEqual(captured["visible_object_ids"], [1])
-        self.assertEqual(captured["referable_object_ids"], [])
-        self.assertEqual(captured["occlusion_eligible_object_ids"], [1])
-        self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95})
-        self.assertEqual(captured["label_statuses"], {"lamp": "absent"})
-        self.assertEqual(captured["label_counts"], {"lamp": 0})
-        self.assertEqual(questions, [])
+            with self.assertRaisesRegex(ValueError, "inconsistent with cache version 19.0"):
+                run_pipeline_module.run_pipeline(
+                    data_root=data_root,
+                    output_dir=output_dir,
+                    max_scenes=10,
+                    max_frames=10,
+                    use_occlusion=False,
+                    referability_cache=referability_cache,
+                    run_question_presence_review=False,
+                    write_frame_debug=False,
+                )
 
     def test_run_pipeline_requires_referability_cache(self) -> None:
         root = make_case_dir("pipeline_requires_cache")
@@ -1196,6 +1180,63 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1])
         self.assertEqual(questions, [])
+
+    def test_evaluate_referable_occlusion_veto_uses_valid_count_ratio_threshold(self) -> None:
+        obj = make_object(1, "cup")
+        sample_points = np.tile(np.array([[0.0, 0.0, 1.0]], dtype=np.float64), (8, 1))
+        sample_triangle_ids = np.zeros(8, dtype=np.int64)
+        sample_barycentrics = np.tile(
+            np.array([[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64),
+            (8, 1),
+        )
+        with (
+            patch.object(
+                run_pipeline_module,
+                "_resample_instance_surface_probe_points",
+                return_value=(sample_points, sample_triangle_ids, sample_barycentrics),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_in_frame_surface_sample_subset",
+                return_value=(
+                    100.0,
+                    1.0,
+                    sample_points,
+                    sample_triangle_ids,
+                    sample_barycentrics,
+                ),
+            ),
+            patch.object(run_pipeline_module, "_instance_triangle_id_set", return_value={0}),
+            patch.object(
+                run_pipeline_module,
+                "_mesh_visibility_counts_with_early_stop",
+                return_value={
+                    "visible_count": 1,
+                    "valid_count": 4,
+                    "processed_count": 8,
+                    "stopped_early": False,
+                    "stop_reason": "completed",
+                },
+            ),
+        ):
+            audit = run_pipeline_module._evaluate_referable_occlusion_veto_for_object(
+                obj=obj,
+                obj_id=1,
+                scene_id="scene0000_00",
+                image_name="000123.jpg",
+                projected_area_px=800.0,
+                camera_pose=make_camera_pose("000123.jpg"),
+                color_intrinsics=make_camera_intrinsics(),
+                ray_caster=object(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertEqual(audit["status"], "visible_enough")
+        self.assertTrue(audit["keep_for_generation"])
+        self.assertEqual(audit["dense_in_frame_sample_count"], 8)
+        self.assertEqual(audit["dense_valid_count"], 4)
+        self.assertAlmostEqual(float(audit["dense_visible_ratio"]), 0.25)
+        self.assertEqual(audit["dense_visible_ratio_denominator"], "valid_count")
 
     def test_run_pipeline_drops_questions_with_ambiguous_nonreferable_mentions(self) -> None:
         root = make_case_dir("pipeline_referability_backstop")

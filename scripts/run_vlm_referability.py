@@ -86,6 +86,7 @@ DINOX_MASK_THRESHOLD = 0.10
 DINOX_IOU_THRESHOLD = 0.80
 REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
+REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 FRAME_SELECTION_CANDIDATE_MULTIPLIER = 3
 FRAME_USABLE_BONUS = 100000
 
@@ -445,24 +446,23 @@ def _infer_crop_unique_label_object_ids(
     return dict(sorted(crop_unique_label_object_ids.items()))
 
 
-def _repair_final_referability_fields(entry: Any) -> dict[str, Any]:
+def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
     if not isinstance(entry, dict):
         return {}
 
-    repaired = dict(entry)
-    label_to_object_ids = _shared_normalize_label_to_object_ids(repaired.get("label_to_object_ids"))
+    label_to_object_ids = _shared_normalize_label_to_object_ids(entry.get("label_to_object_ids"))
     selector_visible_label_counts = _normalize_cached_label_counts(
-        repaired.get("selector_visible_label_counts")
+        entry.get("selector_visible_label_counts")
     )
     crop_label_statuses = _normalize_cached_label_statuses(
-        repaired.get("crop_label_statuses"),
-        counts=repaired.get("crop_label_counts"),
+        entry.get("crop_label_statuses"),
+        counts=entry.get("crop_label_counts"),
     )
     crop_label_counts = _label_counts_from_statuses(crop_label_statuses)
-    crop_referable_object_ids = _normalize_cached_object_ids(repaired.get("crop_referable_object_ids"))
+    crop_referable_object_ids = _normalize_cached_object_ids(entry.get("crop_referable_object_ids"))
     full_frame_label_statuses = _normalize_cached_label_statuses(
-        repaired.get("full_frame_label_statuses"),
-        counts=repaired.get("full_frame_label_counts"),
+        entry.get("full_frame_label_statuses"),
+        counts=entry.get("full_frame_label_counts"),
     )
     full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
     crop_unique_label_object_ids = _infer_crop_unique_label_object_ids(
@@ -479,26 +479,86 @@ def _repair_final_referability_fields(entry: Any) -> dict[str, Any]:
     referable_object_ids = _final_referable_object_ids(
         label_statuses=label_statuses,
         crop_unique_label_object_ids=crop_unique_label_object_ids,
-        object_reviews=repaired.get("object_reviews"),
-        visibility_audit_by_object_id=repaired.get("visibility_audit_by_object_id"),
+        object_reviews=entry.get("object_reviews"),
+        visibility_audit_by_object_id=entry.get("visibility_audit_by_object_id"),
     )
 
-    repaired.update(
-        {
-            "label_to_object_ids": label_to_object_ids,
-            "selector_visible_label_counts": selector_visible_label_counts,
-            "crop_label_statuses": crop_label_statuses,
-            "crop_label_counts": crop_label_counts,
-            "crop_referable_object_ids": crop_referable_object_ids,
-            "full_frame_label_statuses": full_frame_label_statuses,
-            "full_frame_label_counts": full_frame_label_counts,
-            "label_statuses": label_statuses,
-            "label_counts": label_counts,
-            "referable_object_ids": referable_object_ids,
-            "vlm_unique_object_ids": list(referable_object_ids),
-        }
-    )
+    return {
+        "label_to_object_ids": label_to_object_ids,
+        "selector_visible_label_counts": selector_visible_label_counts,
+        "crop_label_statuses": crop_label_statuses,
+        "crop_label_counts": crop_label_counts,
+        "crop_referable_object_ids": crop_referable_object_ids,
+        "full_frame_label_statuses": full_frame_label_statuses,
+        "full_frame_label_counts": full_frame_label_counts,
+        "label_statuses": label_statuses,
+        "label_counts": label_counts,
+        "referable_object_ids": referable_object_ids,
+        "vlm_unique_object_ids": list(referable_object_ids),
+    }
+
+
+def _repair_final_referability_fields(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+
+    repaired = dict(entry)
+    repaired.update(_derive_final_referability_fields(entry))
     return repaired
+
+
+def _frame_entry_has_consistent_final_fields(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if not entry.get("frame_usable", True):
+        return True
+    required_keys = {
+        "label_to_object_ids",
+        "crop_label_statuses",
+        "crop_label_counts",
+        "crop_referable_object_ids",
+        "full_frame_label_statuses",
+        "full_frame_label_counts",
+        "label_statuses",
+        "label_counts",
+        "referable_object_ids",
+    }
+    if not required_keys.issubset(entry.keys()):
+        return False
+
+    normalized_entry = {
+        "label_to_object_ids": _shared_normalize_label_to_object_ids(entry.get("label_to_object_ids")),
+        "crop_label_statuses": _normalize_cached_label_statuses(
+            entry.get("crop_label_statuses"),
+            counts=entry.get("crop_label_counts"),
+        ),
+        "crop_label_counts": _normalize_cached_label_counts(entry.get("crop_label_counts")),
+        "crop_referable_object_ids": _normalize_cached_object_ids(entry.get("crop_referable_object_ids")),
+        "full_frame_label_statuses": _normalize_cached_label_statuses(
+            entry.get("full_frame_label_statuses"),
+            counts=entry.get("full_frame_label_counts"),
+        ),
+        "full_frame_label_counts": _normalize_cached_label_counts(entry.get("full_frame_label_counts")),
+        "label_statuses": _normalize_cached_label_statuses(
+            entry.get("label_statuses"),
+            counts=entry.get("label_counts"),
+        ),
+        "label_counts": _normalize_cached_label_counts(entry.get("label_counts")),
+        "referable_object_ids": _normalize_cached_object_ids(entry.get("referable_object_ids")),
+    }
+    if "selector_visible_label_counts" in entry:
+        normalized_entry["selector_visible_label_counts"] = _normalize_cached_label_counts(
+            entry.get("selector_visible_label_counts")
+        )
+    if "vlm_unique_object_ids" in entry:
+        normalized_entry["vlm_unique_object_ids"] = _normalize_cached_object_ids(
+            entry.get("vlm_unique_object_ids")
+        )
+    expected_entry = _derive_final_referability_fields(entry)
+    for key, actual_value in normalized_entry.items():
+        if expected_entry.get(key) != actual_value:
+            return False
+    return True
 
 
 def _coerce_bool(value: object, *, default: bool) -> bool:
@@ -668,6 +728,19 @@ def _refine_candidate_visible_object_ids(
         and callable(instance_mesh_data_getter)
     ):
         try:
+            # Depth filtering is much cheaper than mesh-ray visibility. Run it
+            # first and only spend mesh-ray work on objects that already pass
+            # the depth gate. The final decision still requires both backends.
+            depth_refined = refine_visible_ids_with_depth(
+                visible_object_ids=selector_ids,
+                objects=objects,
+                pose=camera_pose,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+            )
+            if not depth_refined:
+                return [], "mesh_ray_depth_refined"
+
             ray_caster = ray_caster_getter()
             if ray_caster is not None:
                 stage1_instance_mesh_data = instance_mesh_data_getter(
@@ -675,7 +748,7 @@ def _refine_candidate_visible_object_ids(
                 )
                 stage2_instance_mesh_data: InstanceMeshData | None = None
                 mesh_ray_refined: list[int] = []
-                for obj_id in selector_ids:
+                for obj_id in depth_refined:
                     stage1 = _evaluate_crop_unique_mesh_ray_stage(
                         obj_id=int(obj_id),
                         camera_pose=camera_pose,
@@ -684,7 +757,7 @@ def _refine_candidate_visible_object_ids(
                         instance_mesh_data=stage1_instance_mesh_data,
                         base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
                     )
-                    if int(stage1.get("visible_count", 0)) > 0:
+                    if _ray_visibility_stage_passes(stage1):
                         mesh_ray_refined.append(int(obj_id))
                         continue
                     if stage2_instance_mesh_data is None:
@@ -699,15 +772,8 @@ def _refine_candidate_visible_object_ids(
                         instance_mesh_data=stage2_instance_mesh_data,
                         base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
                     )
-                    if int(stage2.get("visible_count", 0)) > 0:
+                    if _ray_visibility_stage_passes(stage2):
                         mesh_ray_refined.append(int(obj_id))
-                depth_refined = refine_visible_ids_with_depth(
-                    visible_object_ids=selector_ids,
-                    objects=objects,
-                    pose=camera_pose,
-                    depth_image=depth_image,
-                    depth_intrinsics=depth_intrinsics,
-                )
                 refined_intersection = sorted(
                     set(int(obj_id) for obj_id in mesh_ray_refined)
                     & set(int(obj_id) for obj_id in depth_refined)
@@ -1810,6 +1876,20 @@ def _build_ray_visibility_stage_result(
     }
 
 
+def _ray_visibility_stage_passes(
+    stage_result: dict[str, Any] | None,
+    *,
+    min_visible_ratio: float = REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN,
+) -> bool:
+    if not isinstance(stage_result, dict):
+        return False
+    valid_count = int(stage_result.get("valid_count", 0) or 0)
+    if valid_count <= 0:
+        return False
+    visible_ratio = float(stage_result.get("visible_ratio", 0.0) or 0.0)
+    return visible_ratio >= float(min_visible_ratio)
+
+
 def _evaluate_crop_unique_mesh_ray_stage(
     *,
     obj_id: int,
@@ -2473,40 +2553,7 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
     }
     if not required_keys.issubset(entry.keys()):
         return False
-
-    normalized_entry = {
-        "label_to_object_ids": _shared_normalize_label_to_object_ids(entry.get("label_to_object_ids")),
-        "selector_visible_label_counts": _normalize_cached_label_counts(
-            entry.get("selector_visible_label_counts")
-        ),
-        "crop_label_statuses": _normalize_cached_label_statuses(
-            entry.get("crop_label_statuses"),
-            counts=entry.get("crop_label_counts"),
-        ),
-        "crop_label_counts": _normalize_cached_label_counts(entry.get("crop_label_counts")),
-        "crop_referable_object_ids": _normalize_cached_object_ids(entry.get("crop_referable_object_ids")),
-        "full_frame_label_statuses": _normalize_cached_label_statuses(
-            entry.get("full_frame_label_statuses"),
-            counts=entry.get("full_frame_label_counts"),
-        ),
-        "full_frame_label_counts": _normalize_cached_label_counts(entry.get("full_frame_label_counts")),
-        "label_statuses": _normalize_cached_label_statuses(
-            entry.get("label_statuses"),
-            counts=entry.get("label_counts"),
-        ),
-        "label_counts": _normalize_cached_label_counts(entry.get("label_counts")),
-        "referable_object_ids": _normalize_cached_object_ids(entry.get("referable_object_ids")),
-    }
-    repaired_entry = _repair_final_referability_fields(entry)
-    for key, normalized_value in normalized_entry.items():
-        if repaired_entry.get(key) != normalized_value:
-            return False
-    if "vlm_unique_object_ids" in entry:
-        if repaired_entry.get("vlm_unique_object_ids") != _normalize_cached_object_ids(
-            entry.get("vlm_unique_object_ids")
-        ):
-            return False
-    return True
+    return _frame_entry_has_consistent_final_fields(entry)
 
 
 def _select_and_rerank_frames(

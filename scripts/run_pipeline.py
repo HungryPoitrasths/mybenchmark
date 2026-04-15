@@ -46,8 +46,6 @@ from src.support_graph import (
     has_nontrivial_attachment,
 )
 from src.qa_generator import (
-    _bbox_probe_visibility_counts,
-    _camera_facing_bbox_probe_points,
     _in_frame_surface_sample_subset,
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
@@ -76,7 +74,7 @@ from scripts.run_vlm_referability import (
     _compute_mesh_mask_quality_for_object,
     _compute_topology_quality_for_object,
     _dedupe_detections_by_mask_iou,
-    _repair_final_referability_fields,
+    _frame_entry_has_consistent_final_fields,
     _select_best_detection_for_object_review,
     _strong_detection_min_area,
 )
@@ -101,12 +99,10 @@ QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
-REFERABLE_OCCLUSION_VETO_PROBE_RAY_COUNT = 64
-REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT = 16
 REFERABLE_OCCLUSION_VETO_DENSE_BASE_SAMPLE_COUNT = 512
 REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX = 400.0
 REFERABLE_OCCLUSION_VETO_DENSE_MAX_SAMPLE_COUNT = 4096
-REFERABLE_OCCLUSION_VETO_LOW_VISIBLE_MAX_RATIO = 0.10
+REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO = 0.25
 REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE = 64
 
 
@@ -749,15 +745,21 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
         entry = scene_frames.get(image_name)
         if not isinstance(entry, dict):
             return entry
-        repaired_entry = _repair_final_referability_fields(entry)
-        scene_frames[image_name] = repaired_entry
-        return repaired_entry
+        if not _frame_entry_has_consistent_final_fields(entry):
+            raise ValueError(
+                f"Referability cache entry for {scene_id}/{image_name} is inconsistent with cache version "
+                f"{EXPECTED_REFERABILITY_CACHE_VERSION}. Regenerate the referability cache instead of repairing it at read time."
+            )
+        return entry
     entry = frames.get(f"{scene_id}/{image_name}")
     if not isinstance(entry, dict):
         return entry
-    repaired_entry = _repair_final_referability_fields(entry)
-    frames[f"{scene_id}/{image_name}"] = repaired_entry
-    return repaired_entry
+    if not _frame_entry_has_consistent_final_fields(entry):
+        raise ValueError(
+            f"Referability cache entry for {scene_id}/{image_name} is inconsistent with cache version "
+            f"{EXPECTED_REFERABILITY_CACHE_VERSION}. Regenerate the referability cache instead of repairing it at read time."
+        )
+    return entry
 
 
 def _resolve_vlm_api_key(*, purpose: str, missing_key_hint: str | None = None) -> str:
@@ -2371,7 +2373,7 @@ def _mesh_visibility_counts_with_early_stop(
     sample_barycentrics: np.ndarray,
     vertices: np.ndarray,
     faces: np.ndarray,
-    min_visible_needed: int,
+    min_visible_ratio: float,
 ) -> dict[str, object]:
     total_points = int(len(target_points))
     if total_points <= 0 or not target_tri_ids:
@@ -2405,15 +2407,23 @@ def _mesh_visibility_counts_with_early_stop(
         valid_count += int(chunk_valid)
         processed_count = int(end_idx)
 
-        if visible_count >= int(min_visible_needed):
-            stopped_early = True
-            stop_reason = "visible_enough"
-            break
-
         remaining_count = total_points - processed_count
-        if visible_count + remaining_count < int(min_visible_needed):
+        max_final_valid_count = valid_count + remaining_count
+        best_case_visible_ratio = (
+            float((visible_count + remaining_count) / max_final_valid_count)
+            if max_final_valid_count > 0 else 0.0
+        )
+        worst_case_visible_ratio = (
+            float(visible_count / max_final_valid_count)
+            if max_final_valid_count > 0 else 0.0
+        )
+        if valid_count > 0 and worst_case_visible_ratio >= float(min_visible_ratio):
             stopped_early = True
-            stop_reason = "cannot_reach_threshold"
+            stop_reason = "ratio_guaranteed_pass"
+            break
+        if best_case_visible_ratio < float(min_visible_ratio):
+            stopped_early = True
+            stop_reason = "cannot_reach_ratio_threshold"
             break
 
     return {
@@ -2444,14 +2454,15 @@ def _evaluate_referable_occlusion_veto_for_object(
         "keep_for_generation": True,
         "probe_visible_count": 0,
         "probe_valid_count": 0,
-        "probe_visible_enough_threshold": REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT,
+        "probe_visible_enough_threshold": 0,
         "dense_sample_budget": 0,
         "dense_in_frame_sample_count": 0,
         "dense_visible_count": 0,
         "dense_valid_count": 0,
         "dense_processed_count": 0,
         "dense_visible_ratio": None,
-        "dense_min_visible_count": 0,
+        "dense_visible_ratio_threshold": REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO,
+        "dense_visible_ratio_denominator": "valid_count",
         "dense_stop_reason": "not_run",
         "reason": "missing_occlusion_resources",
     }
@@ -2467,29 +2478,6 @@ def _evaluate_referable_occlusion_veto_for_object(
         return audit
 
     camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
-    probe_points = _camera_facing_bbox_probe_points(
-        bbox_min=bbox_min,
-        bbox_max=bbox_max,
-        camera_pos=camera_pos,
-        n_samples=REFERABLE_OCCLUSION_VETO_PROBE_RAY_COUNT,
-    )
-    try:
-        probe_visible_count, probe_valid_count = _bbox_probe_visibility_counts(
-            ray_caster=ray_caster,
-            camera_pos=camera_pos,
-            probe_points=probe_points,
-        )
-    except Exception:
-        audit["reason"] = "probe_visibility_error"
-        return audit
-    audit["probe_visible_count"] = int(probe_visible_count)
-    audit["probe_valid_count"] = int(probe_valid_count)
-    if probe_visible_count >= REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT:
-        audit["status"] = "visible_enough"
-        audit["keep_for_generation"] = True
-        audit["reason"] = "probe_visible_enough"
-        return audit
-
     sample_budget = _referable_occlusion_veto_dense_sample_budget(projected_area_px)
     audit["dense_sample_budget"] = int(sample_budget)
     sample_points, sample_triangle_ids, sample_barycentrics = _resample_instance_surface_probe_points(
@@ -2526,15 +2514,6 @@ def _evaluate_referable_occlusion_veto_for_object(
         audit["reason"] = "missing_target_triangles"
         return audit
 
-    min_visible_needed = int(
-        max(
-            1,
-            np.floor(
-                REFERABLE_OCCLUSION_VETO_LOW_VISIBLE_MAX_RATIO * dense_in_frame_count
-            ) + 1,
-        )
-    )
-    audit["dense_min_visible_count"] = min_visible_needed
     try:
         dense_counts = _mesh_visibility_counts_with_early_stop(
             ray_caster=ray_caster,
@@ -2551,7 +2530,7 @@ def _evaluate_referable_occlusion_veto_for_object(
                 getattr(instance_mesh_data, "faces", np.empty((0, 3), dtype=np.int64)),
                 dtype=np.int64,
             ),
-            min_visible_needed=min_visible_needed,
+            min_visible_ratio=REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO,
         )
     except Exception:
         audit["reason"] = "dense_visibility_error"
@@ -2560,8 +2539,8 @@ def _evaluate_referable_occlusion_veto_for_object(
     valid_count = int(dense_counts["valid_count"])
     processed_count = int(dense_counts["processed_count"])
     visible_ratio = (
-        float(visible_count / dense_in_frame_count)
-        if dense_in_frame_count > 0 else 0.0
+        float(visible_count / valid_count)
+        if valid_count > 0 else 0.0
     )
     audit["dense_visible_count"] = visible_count
     audit["dense_valid_count"] = valid_count
@@ -2569,11 +2548,11 @@ def _evaluate_referable_occlusion_veto_for_object(
     audit["dense_visible_ratio"] = visible_ratio
     audit["dense_stop_reason"] = str(dense_counts["stop_reason"])
 
-    if visible_count <= 0:
+    if visible_count <= 0 or valid_count <= 0:
         audit["status"] = "not_visible"
         audit["keep_for_generation"] = False
         audit["reason"] = "dense_visible_ratio_zero"
-    elif visible_ratio <= REFERABLE_OCCLUSION_VETO_LOW_VISIBLE_MAX_RATIO:
+    elif visible_ratio < REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO:
         audit["status"] = "low_visible"
         audit["keep_for_generation"] = False
         audit["reason"] = "dense_visible_ratio_below_threshold"

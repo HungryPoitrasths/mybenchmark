@@ -323,6 +323,50 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(candidate_ids, [])
         self.assertEqual(source, "mesh_ray_depth_refined")
 
+    def test_refine_candidate_visible_object_ids_uses_stage2_when_stage1_ratio_is_too_low(self) -> None:
+        caster = _SequenceVisibilityCaster([(1, 20), (2, 8)])
+        with patch.object(
+            referability_module,
+            "refine_visible_ids_with_depth",
+            return_value=[1],
+        ):
+            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: caster,
+                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+            )
+
+        self.assertEqual(candidate_ids, [1])
+        self.assertEqual(source, "mesh_ray_depth_refined")
+        self.assertEqual(caster._responses, [])
+
+    def test_refine_candidate_visible_object_ids_drops_when_stage2_ratio_is_too_low(self) -> None:
+        caster = _SequenceVisibilityCaster([(1, 20), (1, 20)])
+        with patch.object(
+            referability_module,
+            "refine_visible_ids_with_depth",
+            return_value=[1],
+        ):
+            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: caster,
+                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+            )
+
+        self.assertEqual(candidate_ids, [])
+        self.assertEqual(source, "mesh_ray_depth_refined")
+        self.assertEqual(caster._responses, [])
+
     def test_refine_candidate_visible_object_ids_falls_back_to_projection_when_mesh_ray_fails(self) -> None:
         candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
             [1],
@@ -993,12 +1037,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "referable_object_ids": [1],
         }
 
+        consistent_entry = dict(stale_entry)
+        consistent_entry["label_statuses"] = {"lamp": "absent"}
+        consistent_entry["label_counts"] = {"lamp": 0}
+        consistent_entry["referable_object_ids"] = []
+        consistent_entry["vlm_unique_object_ids"] = []
+
         self.assertFalse(referability_module._frame_entry_has_debug_fields(stale_entry))
-        self.assertTrue(
-            referability_module._frame_entry_has_debug_fields(
-                referability_module._repair_final_referability_fields(stale_entry)
-            )
-        )
+        self.assertTrue(referability_module._frame_entry_has_debug_fields(consistent_entry))
 
     def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
         frame_candidates = [
