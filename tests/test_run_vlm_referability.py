@@ -385,6 +385,39 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(referable_ids, [1])
 
+    def test_normalize_frame_review_uses_clear_output_for_frame_gate(self) -> None:
+        normalized = referability_module._normalize_frame_review(
+            {
+                "clear": False,
+                "clarity_score": 28,
+                "reason": "obviously blurry overall",
+            }
+        )
+
+        self.assertEqual(
+            normalized,
+            {
+                "clear": False,
+                "clarity_score": 28,
+                "frame_usable": False,
+                "reason": "obviously blurry overall",
+            },
+        )
+
+    def test_normalize_frame_review_accepts_legacy_frame_quality_fields(self) -> None:
+        normalized = referability_module._normalize_frame_review(
+            {
+                "clarity_score": 82,
+                "severely_out_of_focus": False,
+                "usable_for_spatial_reasoning": True,
+                "reason": "clear enough",
+            }
+        )
+
+        self.assertEqual(normalized["clear"], True)
+        self.assertEqual(normalized["frame_usable"], True)
+        self.assertEqual(normalized["clarity_score"], 82)
+
     def test_compute_frame_referability_entry_builds_crop_vlm_reviews(self) -> None:
         scene_objects = [
             make_object(1, "chair"),
@@ -403,9 +436,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
+                    "clear": True,
                     "clarity_score": 82,
-                    "severely_out_of_focus": False,
-                    "usable_for_spatial_reasoning": True,
                     "frame_usable": True,
                     "reason": "clear enough",
                 },
@@ -451,6 +483,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(frame_entry["frame_usable"], True)
+        self.assertEqual(frame_entry["frame_quality_clear"], True)
         self.assertEqual(frame_entry["frame_quality_score"], 82)
         self.assertEqual(frame_entry["candidate_visibility_source"], "mesh_ray_depth_refined")
         self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique", "lamp": "absent"})
@@ -490,9 +523,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
+                    "clear": True,
                     "clarity_score": 82,
-                    "severely_out_of_focus": False,
-                    "usable_for_spatial_reasoning": True,
                     "frame_usable": True,
                     "reason": "clear enough",
                 },
@@ -555,9 +587,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
+                    "clear": True,
                     "clarity_score": 82,
-                    "severely_out_of_focus": False,
-                    "usable_for_spatial_reasoning": True,
                     "frame_usable": True,
                     "reason": "clear enough",
                 },
@@ -621,9 +652,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
+                    "clear": True,
                     "clarity_score": 82,
-                    "severely_out_of_focus": False,
-                    "usable_for_spatial_reasoning": True,
                     "frame_usable": True,
                     "reason": "clear enough",
                 },
@@ -694,9 +724,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
+                    "clear": True,
                     "clarity_score": 82,
-                    "severely_out_of_focus": False,
-                    "usable_for_spatial_reasoning": True,
                     "frame_usable": True,
                     "reason": "clear enough",
                 },
@@ -757,9 +786,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
+                    "clear": True,
                     "clarity_score": 82,
-                    "severely_out_of_focus": False,
-                    "usable_for_spatial_reasoning": True,
                     "frame_usable": True,
                     "reason": "clear enough",
                 },
@@ -877,9 +905,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
     def test_repair_final_referability_fields_recomputes_stale_final_fields(self) -> None:
         stale_entry = {
             "frame_usable": True,
+            "frame_quality_clear": True,
             "frame_quality_score": 82,
-            "frame_quality_severely_out_of_focus": False,
-            "frame_quality_usable_for_spatial_reasoning": True,
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
             "candidate_visible_object_ids": [1],
@@ -928,9 +955,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
     def test_frame_entry_has_debug_fields_rejects_stale_final_field_mismatch(self) -> None:
         stale_entry = {
             "frame_usable": True,
+            "frame_quality_clear": True,
             "frame_quality_score": 82,
-            "frame_quality_severely_out_of_focus": False,
-            "frame_quality_usable_for_spatial_reasoning": True,
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
             "candidate_visible_object_ids": [1],
@@ -982,23 +1008,20 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ]
         frame_decisions = [
             {
+                "clear": False,
                 "clarity_score": 99,
-                "severely_out_of_focus": True,
-                "usable_for_spatial_reasoning": False,
                 "frame_usable": False,
-                "reason": "severely blurred",
+                "reason": "overall blurry",
             },
             {
+                "clear": True,
                 "clarity_score": 10,
-                "severely_out_of_focus": False,
-                "usable_for_spatial_reasoning": True,
                 "frame_usable": True,
-                "reason": "usable enough",
+                "reason": "barely clear but acceptable",
             },
             {
+                "clear": True,
                 "clarity_score": 95,
-                "severely_out_of_focus": False,
-                "usable_for_spatial_reasoning": True,
                 "frame_usable": True,
                 "reason": "sharp",
             },

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""VLM-based frame-quality and per-object referability prefilter.
+"""VLM-based frame-clarity and per-object referability prefilter.
 
 This script runs *before* QA generation. For each selected frame it asks a VLM:
-  1. how clear the full frame is and whether it is severely out of focus;
+  1. whether the full frame looks clear overall to a human viewer;
   2. for each projected candidate object, whether its crop is clear, absent,
      or unsure for the expected label;
   3. for labels that survive crop review as uniquely grounded, whether the
@@ -66,7 +66,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "18.0"
+REFERABILITY_CACHE_VERSION = "19.0"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -184,14 +184,15 @@ def _call_vlm_json(
 
 def _frame_prompt() -> str:
     return (
-        "You are given one original indoor scene image. "
-        "Evaluate the full-frame image clarity first. "
-        "Slight softness is acceptable; only mark severely_out_of_focus=true when the image has obvious global defocus blur, autofocus failure, or severe blur that makes object boundaries hard to read. "
-        "Then decide whether the frame is still usable for spatial-reasoning questions. "
-        "A frame can be usable even if it is slightly soft, as long as the scene layout and object extents remain readable. "
+        "You are judging only the perceived visual clarity of this image as a human viewer would. "
+        "Look at the full image and decide whether it appears clear overall at normal viewing size. "
+        "Ignore scene semantics, downstream task usefulness, and object categories. "
+        "Focus only on whether the image looks visually clear or blurry overall. "
+        "Slight softness is acceptable. "
+        "Mark clear=true if a human would naturally consider the image clear overall. "
+        "Mark clear=false if the image has obvious blur, defocus, motion blur, or strong softness that makes the scene look unclear overall. "
         "Return a clarity_score from 0 to 100, where higher means clearer and sharper. "
-        "Prioritize image clarity over scene semantics when assigning the score. "
-        'Answer with strict JSON only: {"clarity_score": 78, "severely_out_of_focus": false, "usable_for_spatial_reasoning": true, "reason": "clear enough with minor softness"}'
+        'Answer with strict JSON only: {"clear": true, "clarity_score": 82, "reason": "overall clear with slight softness"}'
     )
 
 
@@ -519,25 +520,31 @@ def _normalize_clarity_score(value: object, *, default: int = 60) -> int:
     return max(0, min(100, score))
 
 
+def _legacy_frame_clear(parsed: dict[str, Any]) -> bool:
+    if isinstance(parsed.get("frame_usable"), bool):
+        return bool(parsed.get("frame_usable"))
+    if "usable_for_spatial_reasoning" in parsed or "severely_out_of_focus" in parsed:
+        usable_for_spatial_reasoning = _coerce_bool(
+            parsed.get("usable_for_spatial_reasoning"),
+            default=True,
+        )
+        severely_out_of_focus = _coerce_bool(
+            parsed.get("severely_out_of_focus"),
+            default=False,
+        )
+        return usable_for_spatial_reasoning and not severely_out_of_focus
+    return True
+
+
 def _normalize_frame_review(value: dict[str, Any] | None) -> dict[str, Any]:
     parsed = value if isinstance(value, dict) else {}
-    fallback_usable = (
-        bool(parsed.get("frame_usable"))
-        if "usable_for_spatial_reasoning" not in parsed and isinstance(parsed.get("frame_usable"), bool)
-        else True
-    )
+    clear = _coerce_bool(parsed.get("clear"), default=_legacy_frame_clear(parsed))
     clarity_score = _normalize_clarity_score(parsed.get("clarity_score"), default=60)
-    severely_out_of_focus = _coerce_bool(parsed.get("severely_out_of_focus"), default=False)
-    usable_for_spatial_reasoning = _coerce_bool(
-        parsed.get("usable_for_spatial_reasoning"),
-        default=fallback_usable,
-    )
     return {
+        "clear": clear,
         "clarity_score": clarity_score,
-        "severely_out_of_focus": severely_out_of_focus,
-        "usable_for_spatial_reasoning": usable_for_spatial_reasoning,
-        "frame_usable": usable_for_spatial_reasoning and not severely_out_of_focus,
-        "reason": str(parsed.get("reason", "")).strip() or "frame_quality_parse_fallback",
+        "frame_usable": clear,
+        "reason": str(parsed.get("reason", "")).strip() or "frame_clarity_parse_fallback",
     }
 
 
@@ -554,10 +561,9 @@ def _frame_decision(
 ) -> dict[str, Any]:
     full_b64 = _image_to_base64(image)
     default = {
+        "clear": True,
         "clarity_score": 60,
-        "severely_out_of_focus": False,
-        "usable_for_spatial_reasoning": True,
-        "reason": "frame_quality_parse_fallback",
+        "reason": "frame_clarity_parse_fallback",
     }
     parsed, _raw_text = _call_vlm_json(
         client,
@@ -2236,10 +2242,8 @@ def _compute_frame_referability_entry(
         objects_by_id,
     )
 
-    normalized_frame_info = (
-        _normalize_frame_review(frame_info)
-        if isinstance(frame_info, dict)
-        else _frame_decision(client, model_name, image)
+    normalized_frame_info = _normalize_frame_review(
+        frame_info if isinstance(frame_info, dict) else _frame_decision(client, model_name, image)
     )
     selector_score_value = int(selector_score) if selector_score is not None else len(selector_visible_object_ids)
     selection_score_value = (
@@ -2382,15 +2386,11 @@ def _compute_frame_referability_entry(
         "frame_usable": normalized_frame_info["frame_usable"],
         "frame_reject_reason": None if normalized_frame_info["frame_usable"] else normalized_frame_info["reason"],
         "selector_score": selector_score_value,
+        "frame_quality_clear": _coerce_bool(
+            normalized_frame_info.get("clear"),
+            default=bool(normalized_frame_info.get("frame_usable", True)),
+        ),
         "frame_quality_score": _normalize_clarity_score(normalized_frame_info.get("clarity_score"), default=60),
-        "frame_quality_severely_out_of_focus": _coerce_bool(
-            normalized_frame_info.get("severely_out_of_focus"),
-            default=False,
-        ),
-        "frame_quality_usable_for_spatial_reasoning": _coerce_bool(
-            normalized_frame_info.get("usable_for_spatial_reasoning"),
-            default=True,
-        ),
         "frame_quality_reason": str(normalized_frame_info.get("reason", "")).strip(),
         "frame_selection_score": selection_score_value,
         "selector_visible_object_ids": selector_visible_object_ids,
@@ -2449,9 +2449,8 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
     if not isinstance(entry, dict):
         return False
     required_keys = {
+        "frame_quality_clear",
         "frame_quality_score",
-        "frame_quality_severely_out_of_focus",
-        "frame_quality_usable_for_spatial_reasoning",
         "frame_quality_reason",
         "frame_selection_score",
         "candidate_visible_object_ids",
@@ -2529,7 +2528,7 @@ def _select_and_rerank_frames(
         if image is None:
             logger.warning("Cannot read image %s", image_path)
             continue
-        frame_info = _frame_decision(client, model_name, image)
+        frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
         selector_score = int(frame.get("score", frame.get("n_visible", 0)) or 0)
         reranked.append(
             {
@@ -2556,7 +2555,7 @@ def _select_and_rerank_frames(
     selected = usable_reranked[:max(0, int(max_frames))]
     if reranked:
         logger.info(
-            "VLM reranked %d geometric frame candidates for %s; kept %d usable frames (usable candidates=%d, best clarity=%d, best rerank score=%d)",
+            "VLM reranked %d geometric frame candidates for %s; kept %d clear frames (clear candidates=%d, best clarity=%d, best rerank score=%d)",
             len(reranked),
             scene_dir.name,
             len(selected),

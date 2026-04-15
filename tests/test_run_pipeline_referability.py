@@ -825,7 +825,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 18.0"):
+        with self.assertRaisesRegex(ValueError, "expected 19.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
@@ -838,7 +838,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
         )
 
-    def test_run_pipeline_uses_crop_unique_label_even_when_full_frame_marks_absent(self) -> None:
+    def test_run_pipeline_repairs_stale_cache_when_full_frame_marks_label_absent(self) -> None:
         root = make_case_dir("pipeline_l1_absent_candidate")
         self.addCleanup(shutil.rmtree, root, True)
         data_root = root / "data"
@@ -850,7 +850,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "18.0",
+            "version": "19.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -946,11 +946,11 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertTrue(captured["called"])
         self.assertEqual(captured["visible_object_ids"], [1])
-        self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(captured["referable_object_ids"], [])
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1])
         self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95})
-        self.assertEqual(captured["label_statuses"], {"lamp": "unique"})
-        self.assertEqual(captured["label_counts"], {"lamp": 1})
+        self.assertEqual(captured["label_statuses"], {"lamp": "absent"})
+        self.assertEqual(captured["label_counts"], {"lamp": 0})
         self.assertEqual(questions, [])
 
     def test_run_pipeline_requires_referability_cache(self) -> None:
@@ -981,7 +981,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "18.0",
+            "version": "19.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1096,7 +1096,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "18.0",
+            "version": "19.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1209,7 +1209,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "18.0",
+            "version": "19.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1316,7 +1316,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "18.0",
+            "version": "19.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1432,7 +1432,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "18.0",
+            "version": "19.0",
             "frames": {
                 scene_id: {
                     image_name: {
