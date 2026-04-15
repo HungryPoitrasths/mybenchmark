@@ -551,7 +551,29 @@ class SupportGraphHeuristicTests(unittest.TestCase):
 
         self.assertIsNone(_supported_by_metrics(child, parent))
 
-    def test_contained_in_uses_parent_opening_polygon_instead_of_bbox(self) -> None:
+    def test_contained_in_bbox_enclosure_fallback_accepts_non_prior_pair(self) -> None:
+        parent = make_object(
+            10,
+            "dresser",
+            (0.0, 0.0, 0.0),
+            (2.0, 2.0, 1.2),
+        )
+        child = make_object(
+            1,
+            "shoe",
+            (0.4, 0.4, 0.2),
+            (0.8, 0.8, 0.5),
+            bottom_hull_xy=_rect(0.4, 0.4, 0.8, 0.8),
+        )
+
+        metrics = _contained_in_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["type"], "contained_in")
+        self.assertEqual(metrics["evidence"]["geometry_contact"]["mode"], "bbox_enclosure_fallback")
+        self.assertEqual(metrics["evidence"]["semantic_prior"]["score"], 0.0)
+
+    def test_contained_in_bbox_enclosure_fallback_uses_parent_bbox_when_outside_opening_polygon(self) -> None:
         parent = make_object(
             10,
             "bin",
@@ -573,7 +595,31 @@ class SupportGraphHeuristicTests(unittest.TestCase):
             bottom_hull_xy=_rect(1.3, 1.3, 1.7, 1.7),
         )
 
-        self.assertIsNone(_contained_in_metrics(child, parent))
+        metrics = _contained_in_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics["evidence"]["geometry_contact"]["mode"], "bbox_enclosure_fallback")
+        self.assertEqual(metrics["evidence"]["xy_overlap"]["geometry_source"]["parent"], "bbox")
+
+    def test_contained_in_bbox_enclosure_fallback_does_not_override_affixed_pair(self) -> None:
+        parent = make_object(
+            10,
+            "dresser",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+        )
+        child = make_object(
+            1,
+            "drawer",
+            (0.05, 0.05, 0.10),
+            (0.95, 0.95, 0.95),
+            bottom_hull_xy=_rect(0.05, 0.05, 0.95, 0.95),
+        )
+
+        candidate = _attachment_candidate(child, parent)
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["type"], "affixed_to")
 
     def test_contained_in_uses_z_overlap_ratio(self) -> None:
         parent = make_object(

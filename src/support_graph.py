@@ -29,6 +29,8 @@ ENCLOSED_SUPPORT_BOTTOM_LIFT_MIN = 0.50
 ENCLOSED_SUPPORT_PARENT_TOP_GAP_MAX = 0.20
 ENCLOSED_SUPPORT_TOP_OVERSHOOT_MAX = 0.05
 ENCLOSED_SUPPORT_CONFIDENCE_MAX = 0.74
+BBOX_CONTAINMENT_XY_COVERAGE_MIN = 0.98
+BBOX_CONTAINMENT_Z_RATIO_MIN = 0.90
 
 SUPPORT_LIKE_TYPES = {
     "supported_by",
@@ -90,7 +92,6 @@ CONTAINER_PARENT_LABELS = {
 CONTAINMENT_PRIORS = {
     ("apple", "bowl"),
     ("fruit", "bowl"),
-    ("clothing", "drawer"),
     ("book", "drawer"),
     ("book", "cabinet"),
     ("book", "box"),
@@ -101,8 +102,6 @@ CONTAINMENT_PRIORS = {
     ("toy", "bin"),
     ("towel", "laundry basket"),
     ("bottle", "refrigerator"),
-    ("cup", "sink"),
-    ("plate", "sink"),
 }
 
 AFFIXED_PRIORS = {
@@ -566,6 +565,116 @@ def _containment_prior(parent_label: str, child_label: str) -> float:
     return 0.0
 
 
+def _bbox_containment_fallback_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
+    child_label = _label(obj_a)
+    parent_label = _label(obj_b)
+    if _affixed_prior(parent_label, child_label) > 0.0:
+        return None
+
+    child_hull, child_source = _bottom_support_polygon(obj_a)
+    child_area = _polygon_area(child_hull)
+    if child_area <= GEOM_EPS:
+        return None
+
+    parent_bbox_poly = _bbox_xy_polygon(obj_b)
+    parent_area = _polygon_area(parent_bbox_poly)
+    if parent_area <= child_area * 1.05:
+        return None
+
+    child_min = np.asarray(obj_a["bbox_min"], dtype=float)
+    child_max = np.asarray(obj_a["bbox_max"], dtype=float)
+    parent_min = np.asarray(obj_b["bbox_min"], dtype=float)
+    parent_max = np.asarray(obj_b["bbox_max"], dtype=float)
+    parent_dims = np.maximum(parent_max - parent_min, GEOM_EPS)
+    child_dims = np.maximum(child_max - child_min, 0.0)
+    child_center = np.asarray(obj_a["center"], dtype=float)
+
+    axis_tol = np.clip(0.02 + 0.03 * parent_dims, 0.02, 0.08)
+    lower_margin = child_min - parent_min
+    upper_margin = parent_max - child_max
+    bbox_enclosed = bool(
+        np.all(lower_margin >= -axis_tol)
+        and np.all(upper_margin >= -axis_tol)
+    )
+    if not bbox_enclosed:
+        return None
+
+    overlap_area = _convex_intersection_area(child_hull, parent_bbox_poly)
+    xy_coverage = overlap_area / max(child_area, GEOM_EPS)
+    center_inside_xy = _point_in_convex_polygon(child_center[:2], parent_bbox_poly)
+    center_inside_xyz = bool(
+        np.all(child_center >= parent_min - axis_tol)
+        and np.all(child_center <= parent_max + axis_tol)
+    )
+
+    child_height = float(max(child_dims[2], 0.0))
+    z_overlap = max(
+        0.0,
+        min(child_max[2], parent_max[2] + axis_tol[2]) - max(child_min[2], parent_min[2] - axis_tol[2]),
+    )
+    z_ratio = z_overlap / max(child_height, GEOM_EPS)
+    child_bottom_inside = bool(child_min[2] >= parent_min[2] - axis_tol[2])
+    z_inside = bool(child_bottom_inside and z_ratio >= BBOX_CONTAINMENT_Z_RATIO_MIN)
+    if xy_coverage < BBOX_CONTAINMENT_XY_COVERAGE_MIN or not center_inside_xy or not z_inside:
+        return None
+
+    child_volume = float(np.prod(np.maximum(child_dims, GEOM_EPS)))
+    parent_volume = float(np.prod(parent_dims))
+    if parent_volume <= child_volume * 1.02:
+        return None
+
+    volume_score = float(np.clip((parent_volume - child_volume) / max(parent_volume, GEOM_EPS), 0.0, 1.0))
+    margin_score = float(np.clip(np.min((np.minimum(lower_margin, upper_margin) + axis_tol) / parent_dims), 0.0, 1.0))
+    containment_score = float(np.clip(
+        0.45 * xy_coverage +
+        0.20 * float(center_inside_xyz) +
+        0.20 * min(z_ratio, 1.0) +
+        0.10 * volume_score +
+        0.05 * margin_score,
+        0.0,
+        1.0,
+    ))
+    confidence = float(np.clip(0.90 * containment_score + 0.10, 0.0, 1.0))
+    return {
+        "type": "contained_in",
+        "confidence": confidence,
+        "evidence": {
+            "geometry_contact": {
+                "axis_gaps": [float(v) for v in _bbox_axis_gaps(obj_a, obj_b)],
+                "mode": "bbox_enclosure_fallback",
+                "axis_tolerance": [float(v) for v in axis_tol],
+                "lower_margin": [float(v) for v in lower_margin],
+                "upper_margin": [float(v) for v in upper_margin],
+            },
+            "xy_overlap": {
+                "child_coverage": float(xy_coverage),
+                "overlap_area": float(overlap_area),
+                "geometry_source": {
+                    "child": child_source,
+                    "parent": "bbox",
+                },
+            },
+            "containment": {
+                "score": containment_score,
+                "center_inside_xy": center_inside_xy,
+                "center_inside_xyz": center_inside_xyz,
+                "z_inside": z_inside,
+                "child_bottom_inside": child_bottom_inside,
+                "z_overlap": float(z_overlap),
+                "z_ratio": float(z_ratio),
+                "size_score": volume_score,
+                "bbox_enclosed": bbox_enclosed,
+                "margin_score": margin_score,
+            },
+            "semantic_prior": {
+                "parent_label": parent_label,
+                "child_label": child_label,
+                "score": 0.0,
+            },
+        },
+    }
+
+
 def _rigid_support_prior(parent_label: str, child_label: str) -> float:
     if (child_label, parent_label) in RIGID_SUPPORT_PRIORS:
         return 1.0
@@ -807,8 +916,9 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     child_label = _label(obj_a)
     parent_label = _label(obj_b)
     prior = _containment_prior(parent_label, child_label)
+    bbox_fallback = _bbox_containment_fallback_metrics(obj_a, obj_b)
     if prior <= 0.0:
-        return None
+        return bbox_fallback
 
     child_hull, child_source = _bottom_support_polygon(obj_a)
     parent_hull, parent_source = _largest_top_surface_polygon(obj_b)
@@ -846,7 +956,7 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     z_inside = bool(child_bottom_inside and z_ratio >= 0.60)
     strong_geometry = xy_coverage >= 0.80 and center_inside_xy and z_inside
     if not strong_geometry and not (prior > 0.0 and xy_coverage >= 0.65 and center_inside_xy and z_inside):
-        return None
+        return bbox_fallback
 
     containment_score = float(np.clip(
         0.55 * xy_coverage +
