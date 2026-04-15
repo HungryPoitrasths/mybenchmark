@@ -1,7 +1,9 @@
+import shutil
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+import uuid
 
 import numpy as np
 
@@ -957,6 +959,66 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module._repair_final_referability_fields(stale_entry)
             )
         )
+
+    def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
+        frame_candidates = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5},
+            {"image_name": "000030.jpg", "score": 9, "n_visible": 3},
+            {"image_name": "000060.jpg", "score": 7, "n_visible": 4},
+        ]
+        frame_decisions = [
+            {
+                "clarity_score": 99,
+                "severely_out_of_focus": True,
+                "usable_for_spatial_reasoning": False,
+                "frame_usable": False,
+                "reason": "severely blurred",
+            },
+            {
+                "clarity_score": 10,
+                "severely_out_of_focus": False,
+                "usable_for_spatial_reasoning": True,
+                "frame_usable": True,
+                "reason": "usable enough",
+            },
+            {
+                "clarity_score": 95,
+                "severely_out_of_focus": False,
+                "usable_for_spatial_reasoning": True,
+                "frame_usable": True,
+                "reason": "sharp",
+            },
+        ]
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"rerank_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ),
+        ):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=frame_candidates,
+                max_frames=2,
+            )
+
+        self.assertEqual([entry["image_name"] for entry in selected], ["000030.jpg", "000060.jpg"])
+        self.assertTrue(all(entry["frame_info"]["frame_usable"] for entry in selected))
+        self.assertEqual(selected[0]["frame_selection_score"], 100009)
+        self.assertEqual(selected[1]["frame_selection_score"], 100007)
 
 
 if __name__ == "__main__":

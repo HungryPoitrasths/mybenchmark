@@ -196,15 +196,15 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(stats["zbuffer_full_mask_area_px"], 0.0)
         self.assertGreaterEqual(stats["zbuffer_mask_area_px"], 0.0)
 
-    def test_count_well_cropped_visible_objects_uses_60_percent_threshold(self) -> None:
+    def test_count_well_cropped_visible_objects_uses_80_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 
         with patch.object(
             frame_selector,
             "_project_object_roi",
             side_effect=[
-                {"bbox_in_frame_ratio": 0.60},
-                {"bbox_in_frame_ratio": 0.59},
+                {"bbox_in_frame_ratio": 0.80},
+                {"bbox_in_frame_ratio": 0.79},
                 {"bbox_in_frame_ratio": 0.95},
             ],
         ):
@@ -219,8 +219,8 @@ class FrameSelectorTests(unittest.TestCase):
     def test_count_well_cropped_visible_objects_reuses_precomputed_audits(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table")]
         audits = {
-            1: {"bbox_in_frame_ratio": 0.60},
-            2: {"bbox_in_frame_ratio": 0.59},
+            1: {"bbox_in_frame_ratio": 0.80},
+            2: {"bbox_in_frame_ratio": 0.79},
         }
 
         with patch.object(
@@ -266,7 +266,7 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["image_name"], "000030.jpg")
         self.assertEqual(results[0]["base_score"], 3)
-        self.assertEqual(results[0]["crop_ge_60_count"], 2)
+        self.assertEqual(results[0]["crop_ge_80_count"], 2)
         self.assertEqual(results[0]["score"], 23)
 
     def test_select_frames_checks_image_quality_before_visibility(self) -> None:

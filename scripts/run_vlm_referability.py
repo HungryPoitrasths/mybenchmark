@@ -88,7 +88,6 @@ DINOX_IOU_THRESHOLD = 0.80
 REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 FRAME_SELECTION_CANDIDATE_MULTIPLIER = 3
-FRAME_QUALITY_PRIMARY_WEIGHT = 1000
 FRAME_USABLE_BONUS = 100000
 
 OBJECT_STATUS_CLEAR = "clear"
@@ -546,8 +545,7 @@ def _normalize_frame_review(value: dict[str, Any] | None) -> dict[str, Any]:
 def _frame_selection_score(selector_score: int, frame_info: dict[str, Any]) -> int:
     normalized = _normalize_frame_review(frame_info)
     usable_bonus = FRAME_USABLE_BONUS if normalized["frame_usable"] else 0
-    clarity_score = normalized["clarity_score"]
-    return usable_bonus + (clarity_score * FRAME_QUALITY_PRIMARY_WEIGHT) + int(selector_score)
+    return usable_bonus + int(selector_score)
 
 
 def _frame_decision(
@@ -2560,14 +2558,18 @@ def _select_and_rerank_frames(
         ),
         reverse=True,
     )
-    selected = reranked[:max(0, int(max_frames))]
+    usable_reranked = [
+        entry for entry in reranked
+        if entry.get("frame_info", {}).get("frame_usable", True)
+    ]
+    selected = usable_reranked[:max(0, int(max_frames))]
     if reranked:
         logger.info(
-            "VLM reranked %d geometric frame candidates for %s; kept %d (usable candidates=%d, best clarity=%d, best rerank score=%d)",
+            "VLM reranked %d geometric frame candidates for %s; kept %d usable frames (usable candidates=%d, best clarity=%d, best rerank score=%d)",
             len(reranked),
             scene_dir.name,
             len(selected),
-            sum(1 for entry in reranked if entry.get("frame_info", {}).get("frame_usable", True)),
+            len(usable_reranked),
             int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
             int(reranked[0].get("frame_selection_score", 0)),
         )

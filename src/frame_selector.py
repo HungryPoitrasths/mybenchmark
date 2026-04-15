@@ -33,22 +33,17 @@ logger = logging.getLogger(__name__)
 #  Image quality gate
 # ---------------------------------------------------------------------------
 
-# Thresholds (tuned for ScanNet 640×480 colour frames)
-SHARPNESS_MIN = 50.0       # Laplacian variance; below → motion blur / out-of-focus
-BRIGHTNESS_MIN = 30.0      # mean grayscale; below → too dark
-BRIGHTNESS_MAX = 235.0     # mean grayscale; above → overexposed
-CONTRAST_MIN = 25.0        # grayscale stddev; below → hazy / washed-out
+# Coarse prefilter threshold for the geometric selector. Detailed image-quality
+# screening happens later in the VLM rerank stage.
+SHARPNESS_MIN = 50.0
 
 
 def passes_image_quality(image_path: Path) -> bool:
-    """Return True if the image at *image_path* passes quality checks.
+    """Return True if the image passes the selector's coarse blur prefilter.
 
-    Checks:
-        1. Sharpness — Laplacian variance on Gaussian-denoised image.
-        2. Brightness — grayscale mean (filters underexposed / overexposed).
-        3. Contrast — grayscale stddev (filters hazy / low-contrast frames).
-
-    Reads at 1/4 resolution to reduce I/O and compute cost.
+    The geometric selector should only remove obviously unusable blurry frames.
+    Fine-grained brightness/contrast quality is deferred to the later VLM
+    review so this stage stays recall-friendly.
     """
     img = cv2.imread(str(image_path))
     if img is None:
@@ -67,30 +62,6 @@ def passes_image_quality(image_path: Path) -> bool:
         logger.debug(
             "Image %s too blurry (Laplacian var=%.1f < %.1f)",
             image_path.name, laplacian_var, SHARPNESS_MIN,
-        )
-        return False
-
-    # Brightness: grayscale mean
-    mean_brightness = float(gray.mean())
-    if mean_brightness < BRIGHTNESS_MIN:
-        logger.debug(
-            "Image %s too dark (mean=%.1f < %.1f)",
-            image_path.name, mean_brightness, BRIGHTNESS_MIN,
-        )
-        return False
-    if mean_brightness > BRIGHTNESS_MAX:
-        logger.debug(
-            "Image %s overexposed (mean=%.1f > %.1f)",
-            image_path.name, mean_brightness, BRIGHTNESS_MAX,
-        )
-        return False
-
-    # Contrast: grayscale standard deviation
-    contrast = float(gray.std())
-    if contrast < CONTRAST_MIN:
-        logger.debug(
-            "Image %s low contrast (std=%.1f < %.1f)",
-            image_path.name, contrast, CONTRAST_MIN,
         )
         return False
 
@@ -723,7 +694,7 @@ VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 400.0
-FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.60
+FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.80
 FRAME_CROP_BONUS_WEIGHT = 10
 
 
@@ -976,10 +947,10 @@ def _frame_candidate_score(
     *,
     n_visible: int,
     n_attachment: int,
-    crop_ge_60_count: int,
+    crop_ge_80_count: int,
 ) -> tuple[int, int]:
     base_score = int(n_visible) * (1 + int(n_attachment))
-    crop_bonus = int(crop_ge_60_count) * FRAME_CROP_BONUS_WEIGHT
+    crop_bonus = int(crop_ge_80_count) * FRAME_CROP_BONUS_WEIGHT
     return base_score, base_score + crop_bonus
 
 
@@ -992,8 +963,11 @@ def select_frames(
     """Select representative frames for a ScanNet scene.
 
     Algorithm:
-        1. Score each frame = #visible_objects × (1 + #support_objects).
-        2. Greedy selection: pick the highest-scoring frame, then iteratively
+        1. Coarsely reject only obviously blurry frames.
+        2. Score each frame = #visible_objects × (1 + #attachment_objects)
+           + 10 × #well-cropped-visible-objects, where well-cropped means
+           bbox_in_frame_ratio >= 0.8.
+        3. Greedy selection: pick the highest-scoring frame, then iteratively
            pick the next that is at least VIEWPOINT_DIVERSITY_MIN_ANGLE away
            from all already-selected frames.
 
@@ -1053,7 +1027,7 @@ def select_frames(
         if i % FRAME_STRIDE != 0:
             continue
 
-        # Image quality gate — reject blurry / dark / overexposed frames
+        # Coarse image-quality gate — only reject obviously blurry frames.
         image_path = color_dir / image_name
         if not image_path.exists():
             n_missing_images += 1
@@ -1074,14 +1048,14 @@ def select_frames(
             continue
 
         n_attachment = _count_attachment_objects(visible, attachment_ids)
-        crop_ge_60_count = _count_well_cropped_visible_objects(
+        crop_ge_80_count = _count_well_cropped_visible_objects(
             visible,
             visibility_audits_by_obj_id=visible_audits,
         )
         base_score, score = _frame_candidate_score(
             n_visible=len(visible),
             n_attachment=n_attachment,
-            crop_ge_60_count=crop_ge_60_count,
+            crop_ge_80_count=crop_ge_80_count,
         )
         frame_entries.append(
             {
@@ -1090,7 +1064,7 @@ def select_frames(
                 "visible_object_ids": [o["id"] for o in visible],
                 "n_visible":         len(visible),
                 "base_score":        base_score,
-                "crop_ge_60_count":  crop_ge_60_count,
+                "crop_ge_80_count":  crop_ge_80_count,
                 "score":             score,
             }
         )
@@ -1144,7 +1118,7 @@ def select_frames(
                 "visible_object_ids": s["visible_object_ids"],
                 "n_visible":         s["n_visible"],
                 "base_score":        s["base_score"],
-                "crop_ge_60_count":  s["crop_ge_60_count"],
+                "crop_ge_80_count":  s["crop_ge_80_count"],
                 "score":             s["score"],
             }
         )
