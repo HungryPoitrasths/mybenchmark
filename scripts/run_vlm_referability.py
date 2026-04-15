@@ -39,6 +39,10 @@ from src.frame_selector import (
     select_frames,
 )
 from src.alias_groups import ALIAS_CONFIG_VERSION
+from src.referability_checks import (
+    normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
+    normalize_object_ids as _shared_normalize_object_ids,
+)
 from src.scene_parser import InstanceMeshData, load_instance_mesh_data
 from src.utils import RayCaster
 from src.utils.colmap_loader import (
@@ -69,6 +73,7 @@ QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 400.0
+QUESTION_REVIEW_CROP_MIN_ZBUFFER_MASK_AREA_PX = 800.0
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
 SEGMENTATION_EXTREME_NOISE_MIN_SCORE = 0.10
 SEGMENTATION_STRONG_MIN_SCORE = 0.50
@@ -270,6 +275,194 @@ def _label_counts_from_statuses(label_statuses: dict[str, str]) -> dict[str, int
     return counts
 
 
+def _merge_final_label_statuses(
+    *,
+    crop_label_statuses: dict[str, str],
+    selector_visible_label_counts: dict[str, int],
+    full_frame_label_statuses: dict[str, str],
+) -> dict[str, str]:
+    """Combine referable-instance review with earlier quantity evidence.
+
+    Crop review answers "is there one referable instance left after filtering?"
+    but benchmark uniqueness needs a stricter veto: if an earlier visibility pass
+    already found two instances of the same label, that label cannot become
+    unique later just because only one instance survived deeper filtering.
+    """
+
+    merged = {
+        str(label): str(status).strip().lower()
+        for label, status in crop_label_statuses.items()
+        if str(label).strip() and str(status).strip()
+    }
+
+    for label, status in full_frame_label_statuses.items():
+        label_key = str(label).strip().lower()
+        if not label_key:
+            continue
+        normalized_status = str(status).strip().lower()
+        if normalized_status in {
+            LABEL_STATUS_UNIQUE,
+            LABEL_STATUS_MULTIPLE,
+            LABEL_STATUS_ABSENT,
+            LABEL_STATUS_UNSURE,
+        }:
+            merged[label_key] = normalized_status
+
+    for label, count in selector_visible_label_counts.items():
+        label_key = str(label).strip().lower()
+        if not label_key:
+            continue
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            continue
+        if count_int >= 2 and merged.get(label_key) != LABEL_STATUS_ABSENT:
+            merged[label_key] = LABEL_STATUS_MULTIPLE
+
+    return dict(sorted(merged.items()))
+
+
+def _final_referable_object_ids(
+    *,
+    label_statuses: dict[str, str],
+    crop_unique_label_object_ids: dict[str, int],
+) -> list[int]:
+    referable_object_ids: list[int] = []
+    for label, obj_id in sorted(crop_unique_label_object_ids.items()):
+        if str(label_statuses.get(label, "")).strip().lower() != LABEL_STATUS_UNIQUE:
+            continue
+        referable_object_ids.append(int(obj_id))
+    return sorted(set(referable_object_ids))
+
+
+def _normalize_cached_object_ids(value: object) -> list[int]:
+    return _shared_normalize_object_ids(value)
+
+
+def _normalize_cached_label_counts(value: object) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if not isinstance(value, dict):
+        return counts
+    for label, count in value.items():
+        label_key = str(label or "").strip().lower()
+        if not label_key:
+            continue
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            continue
+        counts[label_key] = max(0, count_int)
+    return dict(sorted(counts.items()))
+
+
+def _normalize_cached_label_statuses(
+    value: object,
+    *,
+    counts: object = None,
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    normalized_counts = _normalize_cached_label_counts(counts)
+    if isinstance(value, dict):
+        for label, status in value.items():
+            label_key = str(label or "").strip().lower()
+            if not label_key:
+                continue
+            normalized_status = _normalize_full_frame_label_status(
+                status,
+                count=normalized_counts.get(label_key),
+            )
+            if normalized_status is None:
+                continue
+            normalized[label_key] = normalized_status
+    for label_key, count_int in normalized_counts.items():
+        if label_key in normalized:
+            continue
+        normalized_status = _normalize_full_frame_label_status(None, count=count_int)
+        if normalized_status is None:
+            continue
+        normalized[label_key] = normalized_status
+    return dict(sorted(normalized.items()))
+
+
+def _infer_crop_unique_label_object_ids(
+    *,
+    label_to_object_ids: dict[str, list[int]],
+    crop_label_statuses: dict[str, str],
+    crop_referable_object_ids: list[int],
+) -> dict[str, int]:
+    crop_referable_set = set(_normalize_cached_object_ids(crop_referable_object_ids))
+    crop_unique_label_object_ids: dict[str, int] = {}
+    for label, status in sorted(crop_label_statuses.items()):
+        if str(status or "").strip().lower() != LABEL_STATUS_UNIQUE:
+            continue
+        label_object_ids = list(label_to_object_ids.get(str(label), []))
+        candidate_ids = [
+            int(obj_id)
+            for obj_id in label_object_ids
+            if int(obj_id) in crop_referable_set
+        ]
+        if len(candidate_ids) == 1:
+            crop_unique_label_object_ids[str(label)] = int(candidate_ids[0])
+            continue
+        if not candidate_ids and len(label_object_ids) == 1:
+            crop_unique_label_object_ids[str(label)] = int(label_object_ids[0])
+    return dict(sorted(crop_unique_label_object_ids.items()))
+
+
+def _repair_final_referability_fields(entry: Any) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        return {}
+
+    repaired = dict(entry)
+    label_to_object_ids = _shared_normalize_label_to_object_ids(repaired.get("label_to_object_ids"))
+    selector_visible_label_counts = _normalize_cached_label_counts(
+        repaired.get("selector_visible_label_counts")
+    )
+    crop_label_statuses = _normalize_cached_label_statuses(
+        repaired.get("crop_label_statuses"),
+        counts=repaired.get("crop_label_counts"),
+    )
+    crop_label_counts = _label_counts_from_statuses(crop_label_statuses)
+    crop_referable_object_ids = _normalize_cached_object_ids(repaired.get("crop_referable_object_ids"))
+    full_frame_label_statuses = _normalize_cached_label_statuses(
+        repaired.get("full_frame_label_statuses"),
+        counts=repaired.get("full_frame_label_counts"),
+    )
+    full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
+    crop_unique_label_object_ids = _infer_crop_unique_label_object_ids(
+        label_to_object_ids=label_to_object_ids,
+        crop_label_statuses=crop_label_statuses,
+        crop_referable_object_ids=crop_referable_object_ids,
+    )
+    label_statuses = _merge_final_label_statuses(
+        crop_label_statuses=crop_label_statuses,
+        selector_visible_label_counts=selector_visible_label_counts,
+        full_frame_label_statuses=full_frame_label_statuses,
+    )
+    label_counts = _label_counts_from_statuses(label_statuses)
+    referable_object_ids = _final_referable_object_ids(
+        label_statuses=label_statuses,
+        crop_unique_label_object_ids=crop_unique_label_object_ids,
+    )
+
+    repaired.update(
+        {
+            "label_to_object_ids": label_to_object_ids,
+            "selector_visible_label_counts": selector_visible_label_counts,
+            "crop_label_statuses": crop_label_statuses,
+            "crop_label_counts": crop_label_counts,
+            "crop_referable_object_ids": crop_referable_object_ids,
+            "full_frame_label_statuses": full_frame_label_statuses,
+            "full_frame_label_counts": full_frame_label_counts,
+            "label_statuses": label_statuses,
+            "label_counts": label_counts,
+            "referable_object_ids": referable_object_ids,
+            "vlm_unique_object_ids": list(referable_object_ids),
+        }
+    )
+    return repaired
+
+
 def _coerce_bool(value: object, *, default: bool) -> bool:
     if isinstance(value, bool):
         return value
@@ -417,10 +610,56 @@ def _refine_candidate_visible_object_ids(
     visible_object_ids: list[int],
     objects: list[dict[str, Any]],
     camera_pose,
+    color_intrinsics: CameraIntrinsics | None,
     depth_image: np.ndarray | None,
     depth_intrinsics,
+    ray_caster_getter: Callable[[], Any] | None = None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> tuple[list[int], str]:
     selector_ids = sorted({int(obj_id) for obj_id in visible_object_ids})
+    if (
+        selector_ids
+        and color_intrinsics is not None
+        and callable(ray_caster_getter)
+        and callable(instance_mesh_data_getter)
+    ):
+        try:
+            ray_caster = ray_caster_getter()
+            if ray_caster is not None:
+                stage1_instance_mesh_data = instance_mesh_data_getter(
+                    REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+                )
+                stage2_instance_mesh_data: InstanceMeshData | None = None
+                refined: list[int] = []
+                for obj_id in selector_ids:
+                    stage1 = _evaluate_crop_unique_mesh_ray_stage(
+                        obj_id=int(obj_id),
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        ray_caster=ray_caster,
+                        instance_mesh_data=stage1_instance_mesh_data,
+                        base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+                    )
+                    if int(stage1.get("visible_count", 0)) > 0:
+                        refined.append(int(obj_id))
+                        continue
+                    if stage2_instance_mesh_data is None:
+                        stage2_instance_mesh_data = instance_mesh_data_getter(
+                            REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
+                        )
+                    stage2 = _evaluate_crop_unique_mesh_ray_stage(
+                        obj_id=int(obj_id),
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        ray_caster=ray_caster,
+                        instance_mesh_data=stage2_instance_mesh_data,
+                        base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
+                    )
+                    if int(stage2.get("visible_count", 0)) > 0:
+                        refined.append(int(obj_id))
+                return sorted({int(obj_id) for obj_id in refined}), "mesh_ray_refined"
+        except Exception as exc:
+            logger.warning("Mesh-ray refine failed: %s", exc)
     if depth_image is None or depth_intrinsics is None:
         return selector_ids, "projection_fallback"
     try:
@@ -466,7 +705,9 @@ def _build_visibility_audit_by_object_id(
         if not candidate_considered:
             candidate_rejection_reasons.append("not_in_selector_pool")
         elif not candidate_passed:
-            if candidate_visibility_source == "depth_refined":
+            if candidate_visibility_source == "mesh_ray_refined":
+                candidate_rejection_reasons.append("mesh_ray_not_visible")
+            elif candidate_visibility_source == "depth_refined":
                 candidate_rejection_reasons.append("depth_refined_not_visible")
             else:
                 candidate_rejection_reasons.append("not_applicable")
@@ -1256,6 +1497,8 @@ def _build_object_review_crop(
     projected_area_px = float(meta.get("projected_area_px", 0.0) or 0.0)
     bbox_in_frame_ratio = float(meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
     edge_margin_px = float(meta.get("edge_margin_px", 0.0) or 0.0)
+    zbuffer_mask_area_px = float(meta.get("zbuffer_mask_area_px", 0.0) or 0.0)
+    has_zbuffer_mask_area = bool(meta.get("has_zbuffer_mask_area", False))
     result = {
         "valid": False,
         "local_outcome": LOCAL_OUTCOME_OUT_OF_FRAME,
@@ -1265,6 +1508,8 @@ def _build_object_review_crop(
         "projected_area_px": projected_area_px,
         "bbox_in_frame_ratio": bbox_in_frame_ratio,
         "edge_margin_px": edge_margin_px,
+        "zbuffer_mask_area_px": zbuffer_mask_area_px,
+        "has_zbuffer_mask_area": has_zbuffer_mask_area,
         "image_b64": None,
         "mime": "image/jpeg",
     }
@@ -1309,6 +1554,13 @@ def _build_object_review_crop(
         result["local_outcome"] = LOCAL_OUTCOME_EXCLUDED
         result["reason"] = "projected_area_too_small"
         return result
+    if (
+        has_zbuffer_mask_area
+        and zbuffer_mask_area_px < QUESTION_REVIEW_CROP_MIN_ZBUFFER_MASK_AREA_PX
+    ):
+        result["local_outcome"] = LOCAL_OUTCOME_EXCLUDED
+        result["reason"] = "zbuffer_mask_area_too_small"
+        return result
 
     crop_image = image[crop_v_min:crop_v_max, crop_u_min:crop_u_max]
     if crop_image.size == 0:
@@ -1339,6 +1591,8 @@ def _build_object_review_entry(
         "projected_area_px": crop_entry.get("projected_area_px"),
         "bbox_in_frame_ratio": crop_entry.get("bbox_in_frame_ratio"),
         "edge_margin_px": crop_entry.get("edge_margin_px"),
+        "zbuffer_mask_area_px": crop_entry.get("zbuffer_mask_area_px"),
+        "has_zbuffer_mask_area": bool(crop_entry.get("has_zbuffer_mask_area", False)),
         "topology_status": None,
         "topology_reason_codes": [],
         "mesh_mask_status": None,
@@ -1566,77 +1820,6 @@ def _evaluate_crop_unique_mesh_ray_stage(
         visible_count=visible_count,
         valid_count=valid_count,
     )
-
-
-def _apply_crop_unique_mesh_ray_review(
-    *,
-    crop_unique_label_object_ids: dict[str, int],
-    object_reviews: dict[int, dict[str, Any]],
-    camera_pose: CameraPose,
-    color_intrinsics: CameraIntrinsics | None,
-    ray_caster_getter: Callable[[], Any] | None,
-    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None,
-) -> None:
-    if not crop_unique_label_object_ids:
-        return
-    if color_intrinsics is None:
-        raise RuntimeError("mesh-ray referability validation requires color intrinsics")
-    if not callable(ray_caster_getter) or not callable(instance_mesh_data_getter):
-        raise RuntimeError(
-            "mesh-ray referability validation requires lazy ray_caster and instance_mesh_data loaders",
-        )
-
-    ray_caster = ray_caster_getter()
-    if ray_caster is None:
-        raise RuntimeError("mesh-ray referability validation requires a ray caster")
-
-    for _label, obj_id in sorted(crop_unique_label_object_ids.items()):
-        review = object_reviews.get(int(obj_id))
-        if not isinstance(review, dict):
-            continue
-
-        stage1 = _evaluate_crop_unique_mesh_ray_stage(
-            obj_id=int(obj_id),
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT),
-            base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
-        )
-        if int(stage1.get("visible_count", 0)) > 0:
-            review["ray_visibility_review"] = {
-                "applied": True,
-                "decision": "pass",
-                "reason": "stage1_visible_evidence",
-                "stage1": stage1,
-                "stage2": None,
-            }
-            continue
-
-        stage2 = _evaluate_crop_unique_mesh_ray_stage(
-            obj_id=int(obj_id),
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data_getter(REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT),
-            base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
-        )
-        if int(stage2.get("visible_count", 0)) > 0:
-            decision = "pass"
-            reason = "stage2_visible_evidence"
-        elif int(stage2.get("valid_count", 0)) <= 0:
-            decision = "drop"
-            reason = "no_valid_rays_after_stage2"
-        else:
-            decision = "drop"
-            reason = "fully_occluded_after_stage2"
-        review["ray_visibility_review"] = {
-            "applied": True,
-            "decision": decision,
-            "reason": reason,
-            "stage1": stage1,
-            "stage2": stage2,
-        }
 
 
 def _bounds_to_mask(
@@ -2014,8 +2197,11 @@ def _compute_frame_referability_entry(
         selector_visible_object_ids,
         scene_objects,
         camera_pose,
+        color_intrinsics,
         depth_image,
         depth_intrinsics,
+        ray_caster_getter=ray_caster_getter,
+        instance_mesh_data_getter=instance_mesh_data_getter,
     )
     candidate_labels, label_to_object_ids = _build_frame_label_candidates(
         candidate_visible_object_ids,
@@ -2033,6 +2219,11 @@ def _compute_frame_referability_entry(
         if frame_selection_score is not None
         else _frame_selection_score(selector_score_value, normalized_frame_info)
     )
+    visibility_instance_mesh_data = None
+    if callable(instance_mesh_data_getter):
+        visibility_instance_mesh_data = instance_mesh_data_getter(
+            REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
+        )
     visibility_by_obj_id = compute_frame_object_visibility(
         scene_objects,
         camera_pose,
@@ -2040,6 +2231,7 @@ def _compute_frame_referability_entry(
         image_path=image_path,
         depth_image=depth_image,
         depth_intrinsics=depth_intrinsics,
+        instance_mesh_data=visibility_instance_mesh_data,
         strict_mode=False,
     )
     visibility_audit_by_object_id = _build_visibility_audit_by_object_id(
@@ -2104,22 +2296,6 @@ def _compute_frame_referability_entry(
                 object_reviews,
             )
         )
-        _apply_crop_unique_mesh_ray_review(
-            crop_unique_label_object_ids=crop_unique_label_object_ids,
-            object_reviews=object_reviews,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            ray_caster_getter=ray_caster_getter,
-            instance_mesh_data_getter=instance_mesh_data_getter,
-        )
-        crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = (
-            _aggregate_crop_label_reviews(
-                label_to_object_ids,
-                object_reviews,
-            )
-        )
-        label_statuses = dict(crop_label_statuses)
-
         if crop_unique_label_object_ids:
             if image_b64 is None:
                 image_b64 = _image_to_base64(image)
@@ -2145,9 +2321,16 @@ def _compute_frame_referability_entry(
 
         full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
         full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
-        label_statuses = dict(sorted(label_statuses.items()))
+        label_statuses = _merge_final_label_statuses(
+            crop_label_statuses=crop_label_statuses,
+            selector_visible_label_counts=selector_visible_label_counts,
+            full_frame_label_statuses=full_frame_label_statuses,
+        )
         label_counts = _label_counts_from_statuses(label_statuses)
-        referable_object_ids = sorted(set(int(obj_id) for obj_id in crop_referable_object_ids))
+        referable_object_ids = _final_referable_object_ids(
+            label_statuses=label_statuses,
+            crop_unique_label_object_ids=crop_unique_label_object_ids,
+        )
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
         for obj in scene_objects:
@@ -2259,7 +2442,42 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
         "label_counts",
         "referable_object_ids",
     }
-    return required_keys.issubset(entry.keys())
+    if not required_keys.issubset(entry.keys()):
+        return False
+
+    normalized_entry = {
+        "label_to_object_ids": _shared_normalize_label_to_object_ids(entry.get("label_to_object_ids")),
+        "selector_visible_label_counts": _normalize_cached_label_counts(
+            entry.get("selector_visible_label_counts")
+        ),
+        "crop_label_statuses": _normalize_cached_label_statuses(
+            entry.get("crop_label_statuses"),
+            counts=entry.get("crop_label_counts"),
+        ),
+        "crop_label_counts": _normalize_cached_label_counts(entry.get("crop_label_counts")),
+        "crop_referable_object_ids": _normalize_cached_object_ids(entry.get("crop_referable_object_ids")),
+        "full_frame_label_statuses": _normalize_cached_label_statuses(
+            entry.get("full_frame_label_statuses"),
+            counts=entry.get("full_frame_label_counts"),
+        ),
+        "full_frame_label_counts": _normalize_cached_label_counts(entry.get("full_frame_label_counts")),
+        "label_statuses": _normalize_cached_label_statuses(
+            entry.get("label_statuses"),
+            counts=entry.get("label_counts"),
+        ),
+        "label_counts": _normalize_cached_label_counts(entry.get("label_counts")),
+        "referable_object_ids": _normalize_cached_object_ids(entry.get("referable_object_ids")),
+    }
+    repaired_entry = _repair_final_referability_fields(entry)
+    for key, normalized_value in normalized_entry.items():
+        if repaired_entry.get(key) != normalized_value:
+            return False
+    if "vlm_unique_object_ids" in entry:
+        if repaired_entry.get("vlm_unique_object_ids") != _normalize_cached_object_ids(
+            entry.get("vlm_unique_object_ids")
+        ):
+            return False
+    return True
 
 
 def _select_and_rerank_frames(
