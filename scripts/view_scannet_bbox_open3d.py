@@ -6,10 +6,12 @@ import colorsys
 import json
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 import open3d as o3d
+
+o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -234,6 +236,28 @@ def build_bbox_lineset(objects: list[dict]) -> o3d.geometry.LineSet:
     return line_set
 
 
+def build_single_bbox_lineset(
+    obj: dict[str, Any],
+    color: Iterable[float],
+) -> o3d.geometry.LineSet:
+    edge_template = np.asarray(
+        [
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7],
+        ],
+        dtype=np.int32,
+    )
+    corners = bbox_corners(obj["bbox_min"], obj["bbox_max"])
+    line_set = o3d.geometry.LineSet()
+    line_set.points = o3d.utility.Vector3dVector(corners)
+    line_set.lines = o3d.utility.Vector2iVector(edge_template)
+    line_set.colors = o3d.utility.Vector3dVector(
+        np.asarray([list(color)] * len(edge_template), dtype=np.float64)
+    )
+    return line_set
+
+
 def build_center_cloud(objects: list[dict]) -> o3d.geometry.PointCloud:
     centers = []
     colors = []
@@ -245,6 +269,195 @@ def build_center_cloud(objects: list[dict]) -> o3d.geometry.PointCloud:
     cloud.points = o3d.utility.Vector3dVector(np.asarray(centers, dtype=np.float64))
     cloud.colors = o3d.utility.Vector3dVector(np.asarray(colors, dtype=np.float64))
     return cloud
+
+
+def object_center(obj: dict[str, Any]) -> np.ndarray:
+    return np.asarray(obj["center"], dtype=np.float64)
+
+
+def object_extent(obj: dict[str, Any]) -> np.ndarray:
+    bbox_min = np.asarray(obj["bbox_min"], dtype=np.float64)
+    bbox_max = np.asarray(obj["bbox_max"], dtype=np.float64)
+    return bbox_max - bbox_min
+
+
+def objects_scene_diagonal(objects: list[dict[str, Any]]) -> float:
+    mins = np.asarray([obj["bbox_min"] for obj in objects], dtype=np.float64)
+    maxs = np.asarray([obj["bbox_max"] for obj in objects], dtype=np.float64)
+    return float(np.linalg.norm(maxs.max(axis=0) - mins.min(axis=0)))
+
+
+def normalized(vec: np.ndarray, fallback: Iterable[float]) -> np.ndarray:
+    arr = np.asarray(vec, dtype=np.float64)
+    norm = float(np.linalg.norm(arr))
+    if norm <= 1e-8:
+        return np.asarray(list(fallback), dtype=np.float64)
+    return arr / norm
+
+
+def focus_distance_for_object(
+    obj: dict[str, Any],
+    scene_diagonal: float,
+) -> float:
+    extent = object_extent(obj)
+    obj_diag = float(np.linalg.norm(extent))
+    obj_max_dim = float(np.max(np.abs(extent))) if extent.size else 0.0
+    min_distance = 0.6
+    base_distance = max(obj_diag * 1.8, obj_max_dim * 2.4, min_distance)
+    max_distance = max(scene_diagonal * 0.7, 1.5)
+    return float(np.clip(base_distance, min_distance, max_distance))
+
+
+def focus_marker_radius_for_object(
+    obj: dict[str, Any],
+    scene_diagonal: float,
+) -> float:
+    extent = object_extent(obj)
+    obj_diag = float(np.linalg.norm(extent))
+    base_radius = max(obj_diag * 0.08, scene_diagonal * 0.006, 0.03)
+    return float(np.clip(base_radius, 0.03, max(scene_diagonal * 0.03, 0.12)))
+
+
+def add_geometry_no_reset(
+    visualizer: o3d.visualization.Visualizer,
+    geometry: o3d.geometry.Geometry,
+) -> None:
+    try:
+        visualizer.add_geometry(geometry, reset_bounding_box=False)
+    except TypeError:
+        visualizer.add_geometry(geometry)
+
+
+def remove_geometry_no_reset(
+    visualizer: o3d.visualization.Visualizer,
+    geometry: o3d.geometry.Geometry | None,
+) -> None:
+    if geometry is None:
+        return
+    try:
+        visualizer.remove_geometry(geometry, reset_bounding_box=False)
+    except TypeError:
+        visualizer.remove_geometry(geometry)
+
+
+def apply_view_control_params(
+    view_control: o3d.visualization.ViewControl,
+    params: o3d.camera.PinholeCameraParameters,
+) -> None:
+    try:
+        view_control.convert_from_pinhole_camera_parameters(
+            params,
+            allow_arbitrary=True,
+        )
+    except TypeError:
+        view_control.convert_from_pinhole_camera_parameters(params)
+
+
+def focus_on_object(
+    view_control: o3d.visualization.ViewControl,
+    obj: dict[str, Any],
+    scene_diagonal: float,
+) -> None:
+    params = view_control.convert_to_pinhole_camera_parameters()
+    extrinsic = np.asarray(params.extrinsic, dtype=np.float64)
+    rotation = extrinsic[:3, :3]
+    forward = normalized(
+        rotation.T @ np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        [0.0, 0.0, 1.0],
+    )
+    target = object_center(obj)
+    distance = focus_distance_for_object(obj, scene_diagonal)
+    camera_position = target - forward * distance
+
+    new_extrinsic = np.eye(4, dtype=np.float64)
+    new_extrinsic[:3, :3] = rotation
+    new_extrinsic[:3, 3] = -rotation @ camera_position
+    params.extrinsic = new_extrinsic
+    apply_view_control_params(view_control, params)
+
+
+def render_geometries_with_focus_controls(
+    scene_id: str,
+    geometries: list[o3d.geometry.Geometry],
+    objects: list[dict[str, Any]],
+) -> None:
+    visualizer = o3d.visualization.VisualizerWithKeyCallback()
+    if not visualizer.create_window(
+        window_name=f"ScanNet BBox Viewer - {scene_id}",
+        width=1600,
+        height=960,
+    ):
+        raise RuntimeError("Open3D failed to create a visualization window.")
+
+    try:
+        for geometry in geometries:
+            visualizer.add_geometry(geometry)
+
+        render_option = visualizer.get_render_option()
+        render_option.mesh_show_back_face = True
+
+        scene_diagonal = objects_scene_diagonal(objects)
+        state: dict[str, Any] = {
+            "focus_index": None,
+            "focus_marker": None,
+            "focus_bbox": None,
+        }
+
+        def set_focus(
+            visualizer_obj: o3d.visualization.Visualizer,
+            target_index: int,
+        ) -> bool:
+            wrapped_index = int(target_index) % len(objects)
+            state["focus_index"] = wrapped_index
+            target = objects[wrapped_index]
+            focus_on_object(
+                view_control=visualizer_obj.get_view_control(),
+                obj=target,
+                scene_diagonal=scene_diagonal,
+            )
+            remove_geometry_no_reset(visualizer_obj, state["focus_marker"])
+            remove_geometry_no_reset(visualizer_obj, state["focus_bbox"])
+
+            marker = o3d.geometry.TriangleMesh.create_sphere(
+                radius=focus_marker_radius_for_object(target, scene_diagonal),
+            )
+            marker.compute_vertex_normals()
+            marker.paint_uniform_color([1.0, 0.15, 0.15])
+            marker.translate(object_center(target))
+            add_geometry_no_reset(visualizer_obj, marker)
+            state["focus_marker"] = marker
+
+            highlight_bbox = build_single_bbox_lineset(target, [1.0, 0.9, 0.1])
+            add_geometry_no_reset(visualizer_obj, highlight_bbox)
+            state["focus_bbox"] = highlight_bbox
+            print(
+                f"focus center: {target.get('label', 'object')} #{target['id']} "
+                f"({wrapped_index + 1}/{len(objects)})"
+            )
+            visualizer_obj.update_renderer()
+            return False
+
+        def focus_next(visualizer_obj: o3d.visualization.Visualizer) -> bool:
+            current = state["focus_index"]
+            next_index = 0 if current is None else current + 1
+            return set_focus(visualizer_obj, next_index)
+
+        def focus_prev(visualizer_obj: o3d.visualization.Visualizer) -> bool:
+            current = state["focus_index"]
+            prev_index = len(objects) - 1 if current is None else current - 1
+            return set_focus(visualizer_obj, prev_index)
+
+        def focus_current(visualizer_obj: o3d.visualization.Visualizer) -> bool:
+            current = state["focus_index"]
+            target_index = 0 if current is None else current
+            return set_focus(visualizer_obj, target_index)
+
+        visualizer.register_key_callback(ord("N"), focus_next)
+        visualizer.register_key_callback(ord("P"), focus_prev)
+        visualizer.register_key_callback(ord("F"), focus_current)
+        visualizer.run()
+    finally:
+        visualizer.destroy_window()
 
 
 def load_scene_geometry(
@@ -363,19 +576,18 @@ def main() -> None:
     print(f"labels: {', '.join(labels[:12])}{' ...' if len(labels) > 12 else ''}")
     print(
         "Open3D controls: left drag rotate, right drag pan, wheel zoom, "
-        "R reset view, Ctrl/Cmd+C close terminal window if needed."
+        "R reset view, N next object, P previous object, F refocus current object, "
+        "Ctrl/Cmd+C close terminal window if needed."
     )
     print(
         f"box thickness hint requested: {args.box_thickness_hint} "
         "(actual line width depends on the Open3D backend)"
     )
 
-    o3d.visualization.draw_geometries(
-        geoms,
-        window_name=f"ScanNet BBox Viewer - {scene_id}",
-        width=1600,
-        height=960,
-        mesh_show_back_face=True,
+    render_geometries_with_focus_controls(
+        scene_id=scene_id,
+        geometries=geoms,
+        objects=objects,
     )
 
 

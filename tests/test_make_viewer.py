@@ -244,6 +244,49 @@ class MakeViewerTests(unittest.TestCase):
             html_text,
         )
 
+    def test_build_viewer_html_preserves_chinese_audit_text_with_utf8(self) -> None:
+        questions = [
+            {
+                "type": "distance",
+                "scene_id": "scene0000_00",
+                "image_name": "000.jpg",
+                "question": "Where is the tv stand?",
+                "question_post_generation_review": {
+                    "decision": "manual_review",
+                    "mesh_object_reviews": [
+                        {
+                            "label": "tv stand",
+                            "obj_id": 30,
+                            "decision": "manual_review",
+                            "mesh_mask_reason_codes": ["low_iou", "high_over_coverage"],
+                            "reason_codes": ["mesh_low_iou", "mesh_high_over_coverage"],
+                        }
+                    ],
+                    "dinox_label_reviews": [
+                        {
+                            "label": "tv stand",
+                            "decision": "pass",
+                            "reason_codes": [],
+                        }
+                    ],
+                },
+            }
+        ]
+
+        html_text = build_viewer_html(questions, Path("."))
+
+        self.assertIn('<meta charset="UTF-8">', html_text)
+        self.assertIn("生成后审核", html_text)
+        self.assertIn("审核结论：需要人工复核", html_text)
+        self.assertIn("问题概述：1 个对象需要复核。", html_text)
+        self.assertIn("tv stand#30：2D 检测已通过，但 3D 网格投影与该物体不够匹配", html_text)
+
+        raw_bytes = html_text.encode("utf-8")
+        roundtrip_text = raw_bytes.decode("utf-8")
+        self.assertIn("生成后审核", roundtrip_text)
+        self.assertIn("审核结论：需要人工复核", roundtrip_text)
+        self.assertIn("生成后审核".encode("utf-8"), raw_bytes)
+
     def test_task_summary_v2_canonicalizes_legacy_object_centric_type(self) -> None:
         questions = [
             {"type": "object_move_object_centric", "attachment_remapped": True},
@@ -401,10 +444,72 @@ class MakeViewerTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("Post-Generation Audit", notes)
-        self.assertIn("reason codes: dinox_multiple_strong_detections:chair, mesh_low_iou:chair#1", notes)
-        self.assertIn("DINO-X chair: decision=manual_review, strong=2, matched=1", notes)
-        self.assertIn("Mesh chair#1: decision=manual_review, topology=pass, mesh=fail, reasons=mesh_low_iou", notes)
+        self.assertIn("生成后审核", notes)
+        self.assertIn("问题概述：1 个对象需要复核。", notes)
+        self.assertIn(
+            "chair#1：2D 检测和 3D 网格检查都需要复核。2D 问题：找到了多个较强的 2D 检测结果。3D 问题：3D 投影与检测结果的重叠度过低。",
+            notes,
+        )
+
+    def test_question_review_notes_renders_post_generation_audit_ok_objects(self) -> None:
+        notes = question_review_notes(
+            {
+                "question_post_generation_review": {
+                    "decision": "manual_review",
+                    "mesh_object_reviews": [
+                        {
+                            "label": "tv stand",
+                            "obj_id": 30,
+                            "decision": "manual_review",
+                            "topology_status": "warn",
+                            "mesh_mask_status": "fail",
+                            "mesh_mask_reason_codes": [
+                                "low_iou",
+                                "high_over_coverage",
+                                "bad_area_ratio",
+                            ],
+                            "reason_codes": [
+                                "mesh_low_iou",
+                                "mesh_high_over_coverage",
+                                "mesh_bad_area_ratio",
+                            ],
+                        },
+                        {
+                            "label": "pillow",
+                            "obj_id": 61,
+                            "decision": "pass",
+                            "topology_status": "warn",
+                            "mesh_mask_status": "pass",
+                            "mesh_mask_reason_codes": [],
+                            "reason_codes": [],
+                        },
+                    ],
+                    "dinox_label_reviews": [
+                        {
+                            "label": "tv stand",
+                            "decision": "pass",
+                            "strong_detection_count": 1,
+                            "matched_object_ids": [30],
+                            "reason_codes": [],
+                        },
+                        {
+                            "label": "pillow",
+                            "decision": "pass",
+                            "strong_detection_count": 1,
+                            "matched_object_ids": [61],
+                            "reason_codes": [],
+                        },
+                    ],
+                }
+            }
+        )
+
+        self.assertIn("问题概述：1 个对象需要复核。", notes)
+        self.assertIn(
+            "tv stand#30：2D 检测已通过，但 3D 网格投影与该物体不够匹配，原因是3D 投影与检测结果的重叠度过低、3D 投影覆盖了过多额外区域和3D 投影面积和检测结果不一致。",
+            notes,
+        )
+        self.assertIn("pillow#61：正常。2D 检测和 3D 网格检查都已通过。", notes)
 
 
 if __name__ == "__main__":

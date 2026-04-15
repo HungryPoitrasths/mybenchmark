@@ -557,6 +557,169 @@ def _format_presence_object_review(item: dict[str, object]) -> str:
     return f"{name}: {status}"
 
 
+def _normalize_reason_codes(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    for item in value:
+        text = str(item or "").strip().lower()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _join_phrases(parts: list[str]) -> str:
+    filtered = [part.strip() for part in parts if str(part).strip()]
+    if not filtered:
+        return "需要进一步复核"
+    if len(filtered) == 1:
+        return filtered[0]
+    if len(filtered) == 2:
+        return f"{filtered[0]}和{filtered[1]}"
+    return "、".join(filtered[:-1]) + f"和{filtered[-1]}"
+
+
+def _format_audit_object_name(label: object, obj_id: object) -> str:
+    label_text = str(label or "").strip() or "物体"
+    obj_id_text = _stringify_review_value(obj_id)
+    return f"{label_text}#{obj_id_text}" if obj_id_text != "-" else label_text
+
+
+def _humanize_dinox_reason(code: str) -> str:
+    mapping = {
+        "dinox_error": "2D 检测器执行失败",
+        "dinox_no_strong_detection": "没有找到足够可靠的 2D 检测结果",
+        "dinox_multiple_strong_detections": "找到了多个较强的 2D 检测结果",
+        "dinox_detection_misses_target": "2D 检测结果和提到的物体对不上",
+    }
+    text = str(code or "").strip().lower()
+    return mapping.get(text, text.replace("_", " "))
+
+
+def _humanize_mesh_reason(code: str) -> str:
+    mapping = {
+        "mesh_low_iou": "3D 投影与检测结果的重叠度过低",
+        "mesh_high_under_coverage": "3D 投影漏掉了过多目标区域",
+        "mesh_high_over_coverage": "3D 投影覆盖了过多额外区域",
+        "mesh_bad_area_ratio": "3D 投影面积和检测结果不一致",
+        "mesh_high_depth_bad_ratio": "3D 投影深度与图像深度不一致",
+        "mesh_projects_out_of_frame": "3D 投影超出了画面范围",
+        "topology_fail": "3D 网格拓扑不可靠",
+        "missing_projection_context": "缺少投影所需的上下文信息",
+        "missing_instance_mesh_data": "缺少该实例的网格数据",
+        "dinox_error": "用于辅助的 2D 检测器执行失败",
+        "no_detection_overlap": "没有和该物体重叠的 2D 检测结果",
+        "no_detection_mask": "没有可用的 2D 检测掩码",
+        "invalid_crop": "该物体对应的裁剪区域无效",
+    }
+    text = str(code or "").strip().lower()
+    return mapping.get(text, text.replace("_", " "))
+
+
+def _summarize_dinox_review(item: dict[str, object]) -> str:
+    reasons = _normalize_reason_codes(item.get("reason_codes"))
+    if not reasons:
+        return "2D 检测需要进一步复核"
+    return _join_phrases([_humanize_dinox_reason(reason) for reason in reasons])
+
+
+def _summarize_mesh_review(item: dict[str, object]) -> str:
+    mesh_reasons = _normalize_reason_codes(item.get("mesh_mask_reason_codes"))
+    if mesh_reasons:
+        return _join_phrases([_humanize_mesh_reason(f"mesh_{reason}") for reason in mesh_reasons])
+    reasons = _normalize_reason_codes(item.get("reason_codes"))
+    if not reasons:
+        return "3D 网格检查需要进一步复核"
+    return _join_phrases([_humanize_mesh_reason(reason) for reason in reasons])
+
+
+def _humanize_audit_decision(value: object) -> str:
+    text = str(value or "").strip().lower()
+    mapping = {
+        "pass": "通过",
+        "manual_review": "需要人工复核",
+        "drop": "丢弃",
+        "skipped": "跳过",
+    }
+    if not text:
+        return "-"
+    return mapping.get(text, text)
+
+
+def _build_post_generation_audit_lines(post_generation_review: dict[str, object]) -> list[str]:
+    decision = str(post_generation_review.get("decision", "-")).strip() or "-"
+    mesh_reviews = [
+        item for item in post_generation_review.get("mesh_object_reviews", [])
+        if isinstance(item, dict)
+    ]
+    dinox_reviews = [
+        item for item in post_generation_review.get("dinox_label_reviews", [])
+        if isinstance(item, dict)
+    ]
+    dinox_by_label = {
+        str(item.get("label", "")).strip().lower(): item
+        for item in dinox_reviews
+        if str(item.get("label", "")).strip()
+    }
+
+    issue_lines: list[str] = []
+    ok_lines: list[str] = []
+    covered_labels: set[str] = set()
+
+    for item in mesh_reviews:
+        label = str(item.get("label", "")).strip().lower()
+        covered_labels.add(label)
+        object_name = _format_audit_object_name(item.get("label"), item.get("obj_id"))
+        mesh_ok = str(item.get("decision", "")).strip().lower() == "pass"
+        dinox_review = dinox_by_label.get(label)
+        dinox_ok = (
+            dinox_review is None
+            or str(dinox_review.get("decision", "")).strip().lower() in {"", "pass", "skipped"}
+        )
+        if mesh_ok and dinox_ok:
+            ok_lines.append(f"{object_name}：正常。2D 检测和 3D 网格检查都已通过。")
+            continue
+        if mesh_ok and not dinox_ok:
+            issue_lines.append(
+                f"{object_name}：3D 网格检查已通过，但 2D 检测仍需复核，原因是"
+                f"{_summarize_dinox_review(dinox_review)}。"
+            )
+            continue
+        if not mesh_ok and dinox_ok:
+            issue_lines.append(
+                f"{object_name}：2D 检测已通过，但 3D 网格投影与该物体不够匹配，原因是"
+                f"{_summarize_mesh_review(item)}。"
+            )
+            continue
+        issue_lines.append(
+            f"{object_name}：2D 检测和 3D 网格检查都需要复核。"
+            f"2D 问题：{_summarize_dinox_review(dinox_review)}。"
+            f"3D 问题：{_summarize_mesh_review(item)}。"
+        )
+
+    for item in dinox_reviews:
+        label = str(item.get("label", "")).strip().lower()
+        if label in covered_labels:
+            continue
+        label_name = str(item.get("label", "")).strip() or "物体"
+        if str(item.get("decision", "")).strip().lower() == "pass":
+            ok_lines.append(f"{label_name}：正常。2D 检测已通过。")
+        elif str(item.get("decision", "")).strip().lower() != "skipped":
+            issue_lines.append(
+                f"{label_name}：2D 检测需要复核，原因是{_summarize_dinox_review(item)}。"
+            )
+
+    lines = [f"审核结论：{_humanize_audit_decision(decision)}"]
+    if issue_lines:
+        lines.append(f"问题概述：{len(issue_lines)} 个对象需要复核。")
+        lines.extend(issue_lines)
+        lines.extend(ok_lines)
+    else:
+        lines.append("问题概述：未发现审核问题。")
+        lines.extend(ok_lines)
+    return lines
+
+
 def _format_referability_mention(item: dict[str, object]) -> str:
     role = str(item.get("role", "mentioned")).strip() or "mentioned"
     label = str(item.get("label", "")).strip() or "-"
@@ -669,36 +832,8 @@ def _build_review_notes_html(
 
     post_generation_review = question.get("question_post_generation_review")
     if isinstance(post_generation_review, dict):
-        lines = [
-            f"decision: {str(post_generation_review.get('decision', '-')).strip() or '-'}",
-            f"reason codes: {_stringify_review_value(post_generation_review.get('reason_codes'))}",
-            f"flagged labels: {_stringify_review_value(post_generation_review.get('flagged_labels'))}",
-            f"flagged object ids: {_stringify_review_value(post_generation_review.get('flagged_object_ids'))}",
-        ]
-        for item in post_generation_review.get("dinox_label_reviews", []):
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("label", "")).strip() or "-"
-            decision = str(item.get("decision", "-")).strip() or "-"
-            reasons = _stringify_review_value(item.get("reason_codes"))
-            strong_count = _stringify_review_value(item.get("strong_detection_count"))
-            matched_ids = _stringify_review_value(item.get("matched_object_ids"))
-            lines.append(
-                f"DINO-X {label}: decision={decision}, strong={strong_count}, matched={matched_ids}, reasons={reasons}"
-            )
-        for item in post_generation_review.get("mesh_object_reviews", []):
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("label", "")).strip() or "-"
-            obj_id = _stringify_review_value(item.get("obj_id"))
-            decision = str(item.get("decision", "-")).strip() or "-"
-            reasons = _stringify_review_value(item.get("reason_codes"))
-            topology = _stringify_review_value(item.get("topology_status"))
-            mesh_status = _stringify_review_value(item.get("mesh_mask_status"))
-            lines.append(
-                f"Mesh {label}#{obj_id}: decision={decision}, topology={topology}, mesh={mesh_status}, reasons={reasons}"
-            )
-        blocks.append(_render_review_block("Post-Generation Audit", lines))
+        lines = _build_post_generation_audit_lines(post_generation_review)
+        blocks.append(_render_review_block("生成后审核", lines))
 
     referability_audit = question.get("question_referability_audit")
     if include_referability_audit and isinstance(referability_audit, dict):
