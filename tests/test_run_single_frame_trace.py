@@ -314,6 +314,66 @@ class RunSingleFrameTraceTests(unittest.TestCase):
         self.assertIn("Root Cause Summary", html_text)
         self.assertIn("Object Pool Audit", html_text)
 
+    def test_run_single_frame_trace_applies_referable_occlusion_veto(self) -> None:
+        data_root, output_dir, scene_id, image_name = self._make_paths()
+        referability_cache = {
+            "version": "17.0",
+            "frames": {
+                scene_id: {
+                    image_name: make_referability_entry(),
+                }
+            },
+        }
+        captured: dict[str, object] = {}
+        veto_result = {
+            "raw_object_ids": [1, 2],
+            "filtered_object_ids": [1],
+            "low_visible_object_ids": [2],
+            "not_visible_object_ids": [],
+            "skipped_object_ids": [],
+            "audit_by_object_id": {
+                "1": {"status": "visible_enough", "keep_for_generation": True},
+                "2": {"status": "low_visible", "keep_for_generation": False},
+            },
+        }
+
+        def fake_generate_all_questions(**kwargs):
+            captured["referable_object_ids"] = list(kwargs.get("referable_object_ids") or [])
+            return make_fake_questions()
+
+        with ExitStack() as stack:
+            for mocked in self._patch_common(scene_id, image_name):
+                stack.enter_context(mocked)
+            stack.enter_context(
+                patch.object(trace_module, "generate_all_questions", side_effect=fake_generate_all_questions)
+            )
+            stack.enter_context(
+                patch.object(
+                    trace_module,
+                    "_filter_referable_object_ids_with_occlusion_veto",
+                    return_value=veto_result,
+                )
+            )
+            trace_doc = trace_module.run_single_frame_trace(
+                data_root=data_root,
+                scene_id=scene_id,
+                image_name=image_name,
+                output_dir=output_dir,
+                referability_cache=referability_cache,
+                use_occlusion=False,
+            )
+
+        self.assertEqual(trace_doc["status"], "completed")
+        self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(
+            trace_doc["frame_context"]["pipeline_referable_object_ids_used_for_generation"],
+            [1],
+        )
+        self.assertEqual(
+            trace_doc["frame_context"]["referable_occlusion_veto"]["low_visible_object_ids"],
+            [2],
+        )
+
     def test_run_single_frame_trace_falls_back_to_online_referability(self) -> None:
         data_root, output_dir, scene_id, image_name = self._make_paths()
         referability_cache = {"version": "17.0", "frames": {scene_id: {}}}

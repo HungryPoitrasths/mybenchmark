@@ -20,9 +20,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts.make_pipeline_trace_viewer import build_single_frame_trace_html
 from scripts.run_pipeline import (
     DEFAULT_VLM_URL,
+    _build_visible_object_projected_area_map,
     _build_visible_object_in_frame_ratio_map,
     _build_occlusion_eligible_object_ids,
     _build_frame_debug_entry,
+    _filter_referable_object_ids_with_occlusion_veto,
     _build_scene_attachment_rows,
     _filter_frame_attachment_rows,
     _get_referability_entry,
@@ -813,6 +815,13 @@ def run_single_frame_trace(
             camera_pose=camera_pose,
             color_intrinsics=color_intrinsics,
         )
+        projected_area_by_obj_id = _build_visible_object_projected_area_map(
+            visible_object_ids=visible_ids,
+            referability_entry=referability_entry,
+            scene_objects=scene["objects"],
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+        )
         occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
             visible_object_ids=visible_ids,
             mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
@@ -844,6 +853,7 @@ def run_single_frame_trace(
                 selector_visible_ids=selector_visible_ids,
                 pipeline_visible_ids=visible_ids,
                 occlusion_eligible_object_ids=occlusion_eligible_ids,
+                pipeline_referable_object_ids=referable_ids,
                 referability_entry=referability_entry,
                 frame_attachment_rows=frame_attachment_rows,
             ),
@@ -898,6 +908,49 @@ def run_single_frame_trace(
                 depth_image = load_depth_image(depth_path)
             except Exception as exc:
                 logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
+
+        veto_started = time.perf_counter()
+        referable_occlusion_veto = _filter_referable_object_ids_with_occlusion_veto(
+            scene_id=scene_id,
+            image_name=image_name,
+            referable_object_ids=referable_ids,
+            objects_by_id=objects_by_id,
+            projected_area_by_obj_id=projected_area_by_obj_id,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
+        trace_doc["frame_context"]["pipeline_referable_object_ids_used_for_generation"] = list(referable_ids)
+        trace_doc["frame_context"]["referable_occlusion_veto"] = dict(referable_occlusion_veto)
+        _record_stage(
+            trace_doc,
+            stage="referable_occlusion_veto",
+            status="completed",
+            started_at=veto_started,
+            details={
+                "raw_referable_count": len(referable_occlusion_veto["raw_object_ids"]),
+                "filtered_referable_count": len(referable_occlusion_veto["filtered_object_ids"]),
+                "low_visible_count": len(referable_occlusion_veto["low_visible_object_ids"]),
+                "not_visible_count": len(referable_occlusion_veto["not_visible_object_ids"]),
+            },
+        )
+        stage_started = time.perf_counter()
+        if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
+            trace_doc["status"] = "stopped"
+            trace_doc["stop_reason"] = "no_referable_objects_or_l1_candidates"
+            trace_doc["stop_details"] = {
+                "requested_image_name": image_name,
+                "referable_count": len(referable_ids),
+                "label_counts": label_counts,
+                "referability_source": referability_source,
+                "referable_occlusion_veto": {
+                    "low_visible_object_ids": list(referable_occlusion_veto["low_visible_object_ids"]),
+                    "not_visible_object_ids": list(referable_occlusion_veto["not_visible_object_ids"]),
+                },
+            }
+            return trace_doc
 
         raw_questions = generate_all_questions(
             objects=scene["objects"],

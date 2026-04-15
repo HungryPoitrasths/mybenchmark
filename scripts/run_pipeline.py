@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import time
+import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from src.frame_selector import compute_frame_object_visibility
 from src.scene_parser import (
     EXCLUDED_LABELS,
     _load_scene_geometry,
+    _sample_surface_points_from_triangles,
     load_instance_mesh_data,
     load_scannet_label_map,
     parse_scene,
@@ -43,7 +45,14 @@ from src.support_graph import (
     get_scene_support_chain_graph,
     has_nontrivial_attachment,
 )
-from src.qa_generator import generate_all_questions
+from src.qa_generator import (
+    _bbox_probe_visibility_counts,
+    _camera_facing_bbox_probe_points,
+    _in_frame_surface_sample_subset,
+    _instance_triangle_id_set,
+    _mesh_visibility_stats_compat,
+    generate_all_questions,
+)
 from src.referability_checks import (
     QUESTION_MENTION_FIELDS,
     build_question_referability_audit as _shared_build_question_referability_audit,
@@ -94,6 +103,13 @@ QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
 # Other question types now apply their own per-qtype mention thresholds.
 QUESTION_MENTION_MIN_IN_FRAME_RATIO = 0.60
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
+REFERABLE_OCCLUSION_VETO_PROBE_RAY_COUNT = 64
+REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT = 16
+REFERABLE_OCCLUSION_VETO_DENSE_BASE_SAMPLE_COUNT = 512
+REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX = 400.0
+REFERABLE_OCCLUSION_VETO_DENSE_MAX_SAMPLE_COUNT = 4096
+REFERABLE_OCCLUSION_VETO_LOW_VISIBLE_MAX_RATIO = 0.10
+REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE = 64
 
 
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
@@ -2219,6 +2235,407 @@ def _build_occlusion_eligible_object_ids(
     ]
 
 
+def _build_visible_object_projected_area_map(
+    *,
+    visible_object_ids: list[int],
+    referability_entry: dict[str, object] | None,
+    scene_objects: list[dict],
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+) -> dict[int, float]:
+    """Return per-visible-object projected bbox areas in pixels."""
+    visible_ids = _normalize_object_ids(visible_object_ids)
+    if not visible_ids:
+        return {}
+
+    projected_area_by_obj_id: dict[int, float] = {}
+
+    def _ingest_review_container(container: object) -> None:
+        if isinstance(container, dict):
+            entries = container.items()
+        elif isinstance(container, list):
+            entries = [(None, item) for item in container]
+        else:
+            return
+
+        for key, review in entries:
+            if not isinstance(review, dict):
+                continue
+            try:
+                obj_id = int(review.get("obj_id", key))
+                projected_area_px = float(review.get("projected_area_px", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if obj_id in visible_ids:
+                projected_area_by_obj_id[obj_id] = projected_area_px
+
+    _ingest_review_container((referability_entry or {}).get("object_reviews"))
+    _ingest_review_container((referability_entry or {}).get("visibility_audit_by_object_id"))
+
+    missing_ids = [
+        int(obj_id)
+        for obj_id in visible_ids
+        if int(obj_id) not in projected_area_by_obj_id
+    ]
+    if missing_ids and camera_pose is not None and color_intrinsics is not None:
+        visible_set = set(missing_ids)
+        fallback_visibility = compute_frame_object_visibility(
+            objects=[
+                obj for obj in scene_objects
+                if int(obj.get("id", -1)) in visible_set
+            ],
+            pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            image_path=None,
+            depth_image=None,
+            depth_intrinsics=None,
+            strict_mode=False,
+        )
+        for obj_id, meta in fallback_visibility.items():
+            try:
+                projected_area_by_obj_id[int(obj_id)] = float(meta.get("projected_area_px", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+
+    return {
+        int(obj_id): float(projected_area_by_obj_id.get(int(obj_id), 0.0) or 0.0)
+        for obj_id in visible_ids
+    }
+
+
+def _referable_occlusion_veto_dense_sample_budget(projected_area_px: float) -> int:
+    area_px = float(projected_area_px or 0.0)
+    if not np.isfinite(area_px) or area_px <= 0.0:
+        area_px = REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX
+    scale = max(area_px / REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX, 1.0)
+    budget = int(round(REFERABLE_OCCLUSION_VETO_DENSE_BASE_SAMPLE_COUNT * scale))
+    return max(
+        REFERABLE_OCCLUSION_VETO_DENSE_BASE_SAMPLE_COUNT,
+        min(budget, REFERABLE_OCCLUSION_VETO_DENSE_MAX_SAMPLE_COUNT),
+    )
+
+
+def _resample_instance_surface_probe_points(
+    *,
+    instance_mesh_data: object | None,
+    obj_id: int,
+    sample_budget: int,
+    frame_seed_key: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if instance_mesh_data is None or sample_budget <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, int(obj_id))
+    vertices = np.asarray(
+        getattr(instance_mesh_data, "vertices", np.empty((0, 3), dtype=np.float64)),
+        dtype=np.float64,
+    )
+    faces = np.asarray(
+        getattr(instance_mesh_data, "faces", np.empty((0, 3), dtype=np.int64)),
+        dtype=np.int64,
+    )
+    if vertices.ndim != 2 or faces.ndim != 2 or len(vertices) == 0 or len(faces) == 0 or not target_tri_ids:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.int64),
+            np.empty((0, 3), dtype=np.float64),
+        )
+
+    tri_ids = np.array(sorted(int(tri_id) for tri_id in target_tri_ids), dtype=np.int64)
+    seed = zlib.crc32(
+        f"{frame_seed_key}:{int(obj_id)}:{int(sample_budget)}".encode("utf-8")
+    ) & 0xFFFFFFFF
+    rng = np.random.RandomState(seed)
+    return _sample_surface_points_from_triangles(
+        vertices=vertices,
+        faces=faces,
+        triangle_ids=tri_ids,
+        n_samples=int(sample_budget),
+        rng=rng,
+        return_metadata=True,
+    )
+
+
+def _mesh_visibility_counts_with_early_stop(
+    *,
+    ray_caster: object,
+    camera_pos: np.ndarray,
+    target_points: np.ndarray,
+    target_tri_ids: set[int],
+    sample_triangle_ids: np.ndarray,
+    sample_barycentrics: np.ndarray,
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    min_visible_needed: int,
+) -> dict[str, object]:
+    total_points = int(len(target_points))
+    if total_points <= 0 or not target_tri_ids:
+        return {
+            "visible_count": 0,
+            "valid_count": 0,
+            "processed_count": 0,
+            "stopped_early": False,
+            "stop_reason": "no_points",
+        }
+
+    visible_count = 0
+    valid_count = 0
+    processed_count = 0
+    stopped_early = False
+    stop_reason = "completed"
+
+    for start_idx in range(0, total_points, REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE):
+        end_idx = min(start_idx + REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE, total_points)
+        chunk_visible, chunk_valid = _mesh_visibility_stats_compat(
+            ray_caster,
+            camera_pos=np.asarray(camera_pos, dtype=np.float64),
+            target_points=np.asarray(target_points[start_idx:end_idx], dtype=np.float64),
+            target_tri_ids=set(int(tri_id) for tri_id in target_tri_ids),
+            sample_triangle_ids=np.asarray(sample_triangle_ids[start_idx:end_idx], dtype=np.int64),
+            sample_barycentrics=np.asarray(sample_barycentrics[start_idx:end_idx], dtype=np.float64),
+            vertices=np.asarray(vertices, dtype=np.float64),
+            faces=np.asarray(faces, dtype=np.int64),
+        )
+        visible_count += int(chunk_visible)
+        valid_count += int(chunk_valid)
+        processed_count = int(end_idx)
+
+        if visible_count >= int(min_visible_needed):
+            stopped_early = True
+            stop_reason = "visible_enough"
+            break
+
+        remaining_count = total_points - processed_count
+        if visible_count + remaining_count < int(min_visible_needed):
+            stopped_early = True
+            stop_reason = "cannot_reach_threshold"
+            break
+
+    return {
+        "visible_count": int(visible_count),
+        "valid_count": int(valid_count),
+        "processed_count": int(processed_count),
+        "stopped_early": bool(stopped_early),
+        "stop_reason": str(stop_reason),
+    }
+
+
+def _evaluate_referable_occlusion_veto_for_object(
+    *,
+    obj: dict[str, object] | None,
+    obj_id: int,
+    scene_id: str,
+    image_name: str,
+    projected_area_px: float,
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster: object | None,
+    instance_mesh_data: object | None,
+) -> dict[str, object]:
+    audit: dict[str, object] = {
+        "obj_id": int(obj_id),
+        "projected_area_px": float(projected_area_px or 0.0),
+        "status": "skipped",
+        "keep_for_generation": True,
+        "probe_visible_count": 0,
+        "probe_valid_count": 0,
+        "probe_visible_enough_threshold": REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT,
+        "dense_sample_budget": 0,
+        "dense_in_frame_sample_count": 0,
+        "dense_visible_count": 0,
+        "dense_valid_count": 0,
+        "dense_processed_count": 0,
+        "dense_visible_ratio": None,
+        "dense_min_visible_count": 0,
+        "dense_stop_reason": "not_run",
+        "reason": "missing_occlusion_resources",
+    }
+    if obj is None or camera_pose is None or color_intrinsics is None:
+        return audit
+    if ray_caster is None or instance_mesh_data is None:
+        return audit
+
+    bbox_min = np.asarray(obj.get("bbox_min", []), dtype=np.float64)
+    bbox_max = np.asarray(obj.get("bbox_max", []), dtype=np.float64)
+    if bbox_min.shape != (3,) or bbox_max.shape != (3,):
+        audit["reason"] = "invalid_bbox"
+        return audit
+
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    probe_points = _camera_facing_bbox_probe_points(
+        bbox_min=bbox_min,
+        bbox_max=bbox_max,
+        camera_pos=camera_pos,
+        n_samples=REFERABLE_OCCLUSION_VETO_PROBE_RAY_COUNT,
+    )
+    try:
+        probe_visible_count, probe_valid_count = _bbox_probe_visibility_counts(
+            ray_caster=ray_caster,
+            camera_pos=camera_pos,
+            probe_points=probe_points,
+        )
+    except Exception:
+        audit["reason"] = "probe_visibility_error"
+        return audit
+    audit["probe_visible_count"] = int(probe_visible_count)
+    audit["probe_valid_count"] = int(probe_valid_count)
+    if probe_visible_count >= REFERABLE_OCCLUSION_VETO_PROBE_VISIBLE_ENOUGH_COUNT:
+        audit["status"] = "visible_enough"
+        audit["keep_for_generation"] = True
+        audit["reason"] = "probe_visible_enough"
+        return audit
+
+    sample_budget = _referable_occlusion_veto_dense_sample_budget(projected_area_px)
+    audit["dense_sample_budget"] = int(sample_budget)
+    sample_points, sample_triangle_ids, sample_barycentrics = _resample_instance_surface_probe_points(
+        instance_mesh_data=instance_mesh_data,
+        obj_id=int(obj_id),
+        sample_budget=int(sample_budget),
+        frame_seed_key=f"{scene_id}:{image_name}",
+    )
+    if len(sample_points) <= 0:
+        audit["reason"] = "missing_surface_samples"
+        return audit
+
+    (
+        _projected_area_unused,
+        _in_frame_ratio_unused,
+        in_frame_points,
+        in_frame_triangle_ids,
+        in_frame_barycentrics,
+    ) = _in_frame_surface_sample_subset(
+        sample_points,
+        camera_pose,
+        color_intrinsics,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+    )
+    dense_in_frame_count = int(len(in_frame_points))
+    audit["dense_in_frame_sample_count"] = dense_in_frame_count
+    if dense_in_frame_count <= 0:
+        audit["reason"] = "no_in_frame_dense_samples"
+        return audit
+
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, int(obj_id))
+    if not target_tri_ids:
+        audit["reason"] = "missing_target_triangles"
+        return audit
+
+    min_visible_needed = int(
+        max(
+            1,
+            np.floor(
+                REFERABLE_OCCLUSION_VETO_LOW_VISIBLE_MAX_RATIO * dense_in_frame_count
+            ) + 1,
+        )
+    )
+    audit["dense_min_visible_count"] = min_visible_needed
+    try:
+        dense_counts = _mesh_visibility_counts_with_early_stop(
+            ray_caster=ray_caster,
+            camera_pos=camera_pos,
+            target_points=np.asarray(in_frame_points, dtype=np.float64),
+            target_tri_ids=target_tri_ids,
+            sample_triangle_ids=np.asarray(in_frame_triangle_ids, dtype=np.int64),
+            sample_barycentrics=np.asarray(in_frame_barycentrics, dtype=np.float64),
+            vertices=np.asarray(
+                getattr(instance_mesh_data, "vertices", np.empty((0, 3), dtype=np.float64)),
+                dtype=np.float64,
+            ),
+            faces=np.asarray(
+                getattr(instance_mesh_data, "faces", np.empty((0, 3), dtype=np.int64)),
+                dtype=np.int64,
+            ),
+            min_visible_needed=min_visible_needed,
+        )
+    except Exception:
+        audit["reason"] = "dense_visibility_error"
+        return audit
+    visible_count = int(dense_counts["visible_count"])
+    valid_count = int(dense_counts["valid_count"])
+    processed_count = int(dense_counts["processed_count"])
+    visible_ratio = (
+        float(visible_count / dense_in_frame_count)
+        if dense_in_frame_count > 0 else 0.0
+    )
+    audit["dense_visible_count"] = visible_count
+    audit["dense_valid_count"] = valid_count
+    audit["dense_processed_count"] = processed_count
+    audit["dense_visible_ratio"] = visible_ratio
+    audit["dense_stop_reason"] = str(dense_counts["stop_reason"])
+
+    if visible_count <= 0:
+        audit["status"] = "not_visible"
+        audit["keep_for_generation"] = False
+        audit["reason"] = "dense_visible_ratio_zero"
+    elif visible_ratio <= REFERABLE_OCCLUSION_VETO_LOW_VISIBLE_MAX_RATIO:
+        audit["status"] = "low_visible"
+        audit["keep_for_generation"] = False
+        audit["reason"] = "dense_visible_ratio_below_threshold"
+    else:
+        audit["status"] = "visible_enough"
+        audit["keep_for_generation"] = True
+        audit["reason"] = "dense_visible_ratio_above_threshold"
+    return audit
+
+
+def _filter_referable_object_ids_with_occlusion_veto(
+    *,
+    scene_id: str,
+    image_name: str,
+    referable_object_ids: list[int] | None,
+    objects_by_id: dict[int, dict],
+    projected_area_by_obj_id: dict[int, float] | None,
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster: object | None,
+    instance_mesh_data: object | None,
+) -> dict[str, object]:
+    raw_ids = _normalize_object_ids(referable_object_ids)
+    filtered_ids: list[int] = []
+    low_visible_ids: list[int] = []
+    not_visible_ids: list[int] = []
+    skipped_ids: list[int] = []
+    audit_by_obj_id: dict[str, dict[str, object]] = {}
+
+    for obj_id in raw_ids:
+        audit = _evaluate_referable_occlusion_veto_for_object(
+            obj=objects_by_id.get(int(obj_id)),
+            obj_id=int(obj_id),
+            scene_id=scene_id,
+            image_name=image_name,
+            projected_area_px=float((projected_area_by_obj_id or {}).get(int(obj_id), 0.0) or 0.0),
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        audit_by_obj_id[str(int(obj_id))] = audit
+        status = str(audit.get("status", "skipped"))
+        if status == "low_visible":
+            low_visible_ids.append(int(obj_id))
+            continue
+        if status == "not_visible":
+            not_visible_ids.append(int(obj_id))
+            continue
+        filtered_ids.append(int(obj_id))
+        if status == "skipped":
+            skipped_ids.append(int(obj_id))
+
+    return {
+        "raw_object_ids": raw_ids,
+        "filtered_object_ids": filtered_ids,
+        "low_visible_object_ids": low_visible_ids,
+        "not_visible_object_ids": not_visible_ids,
+        "skipped_object_ids": skipped_ids,
+        "audit_by_object_id": audit_by_obj_id,
+    }
+
+
 def _normalize_label_counts(value: object) -> dict[str, int]:
     counts: dict[str, int] = {}
     if not isinstance(value, dict):
@@ -2404,12 +2821,15 @@ def _build_frame_debug_entry(
     selector_visible_ids: list[int],
     pipeline_visible_ids: list[int],
     occlusion_eligible_object_ids: list[int] | None,
-    referability_entry: dict | None,
-    frame_attachment_rows: list[dict[str, object]],
+    pipeline_referable_object_ids: list[int] | None = None,
+    referability_entry: dict | None = None,
+    frame_attachment_rows: list[dict[str, object]] | None = None,
+    referable_occlusion_veto: dict[str, object] | None = None,
     generated_questions: list[dict] | None = None,
     pipeline_skip_reason: str | None = None,
 ) -> dict[str, object]:
     generated_questions = [] if generated_questions is None else [dict(q) for q in generated_questions]
+    frame_attachment_rows = [] if frame_attachment_rows is None else list(frame_attachment_rows)
     label_to_object_ids = (referability_entry or {}).get("label_to_object_ids") or {}
     return {
         "image_name": image_name,
@@ -2421,6 +2841,7 @@ def _build_frame_debug_entry(
         "pipeline_visible_object_ids_used_for_generation": _normalize_object_ids(pipeline_visible_ids),
         "pipeline_visible_label_counts": _count_labels_for_object_ids(pipeline_visible_ids, objects_by_id),
         "occlusion_eligible_object_ids": _normalize_object_ids(occlusion_eligible_object_ids),
+        "pipeline_referable_object_ids_used_for_generation": _normalize_object_ids(pipeline_referable_object_ids),
         "candidate_visibility_source": (referability_entry or {}).get("candidate_visibility_source"),
         "candidate_visible_label_counts": _normalize_label_counts(
             (referability_entry or {}).get("candidate_visible_label_counts")
@@ -2434,6 +2855,7 @@ def _build_frame_debug_entry(
         "vlm_label_statuses": _normalize_label_statuses((referability_entry or {}).get("label_statuses")),
         "vlm_label_counts": _normalize_label_counts((referability_entry or {}).get("label_counts")),
         "referable_object_ids": _normalize_object_ids((referability_entry or {}).get("referable_object_ids")),
+        "referable_occlusion_veto": dict(referable_occlusion_veto or {}),
         "candidate_labels": list((referability_entry or {}).get("candidate_labels", [])),
         "label_to_object_ids": {
             str(label): _normalize_object_ids(obj_ids)
@@ -2675,6 +3097,7 @@ def run_pipeline(
                                 selector_visible_ids=selector_visible_ids,
                                 pipeline_visible_ids=[],
                                 occlusion_eligible_object_ids=[],
+                                pipeline_referable_object_ids=[],
                                 referability_entry=_get_referability_entry(
                                     referability_cache,
                                     scene_id,
@@ -2701,14 +3124,30 @@ def run_pipeline(
                 visible_ids = list(selector_visible_ids)
                 visible_id_set = set(int(obj_id) for obj_id in visible_ids)
                 referable_ids = None
+                raw_referable_ids: list[int] = []
                 label_statuses = None
                 label_counts = None
+                referable_occlusion_veto: dict[str, object] = {
+                    "raw_object_ids": [],
+                    "filtered_object_ids": [],
+                    "low_visible_object_ids": [],
+                    "not_visible_object_ids": [],
+                    "skipped_object_ids": [],
+                    "audit_by_object_id": {},
+                }
                 referability_entry = _get_referability_entry(
                     referability_cache,
                     scene_id,
                     image_name,
                 )
                 mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
+                    visible_object_ids=visible_ids,
+                    referability_entry=referability_entry,
+                    scene_objects=scene["objects"],
+                    camera_pose=camera_pose,
+                    color_intrinsics=color_intrinsics,
+                )
+                projected_area_by_obj_id = _build_visible_object_projected_area_map(
                     visible_object_ids=visible_ids,
                     referability_entry=referability_entry,
                     scene_objects=scene["objects"],
@@ -2722,11 +3161,23 @@ def run_pipeline(
                 if referability_entry is not None:
                     label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
                     label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
-                    referable_ids = [
+                    raw_referable_ids = [
                         int(obj_id)
                         for obj_id in referability_entry.get("referable_object_ids", [])
                         if int(obj_id) in visible_id_set
                     ]
+                    referable_occlusion_veto = _filter_referable_object_ids_with_occlusion_veto(
+                        scene_id=scene_id,
+                        image_name=image_name,
+                        referable_object_ids=raw_referable_ids,
+                        objects_by_id=objects_by_id,
+                        projected_area_by_obj_id=projected_area_by_obj_id,
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        ray_caster=ray_caster,
+                        instance_mesh_data=instance_mesh_data,
+                    )
+                    referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
                     if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
                         if write_frame_debug:
                             frame_attachment_rows = _filter_frame_attachment_rows(
@@ -2741,8 +3192,10 @@ def run_pipeline(
                                     selector_visible_ids=selector_visible_ids,
                                     pipeline_visible_ids=list(visible_ids),
                                     occlusion_eligible_object_ids=occlusion_eligible_ids,
+                                    pipeline_referable_object_ids=referable_ids,
                                     referability_entry=referability_entry,
                                     frame_attachment_rows=frame_attachment_rows,
+                                    referable_occlusion_veto=referable_occlusion_veto,
                                     pipeline_skip_reason="no_referable_objects_or_l1_candidates",
                                 )
                             )
@@ -2803,8 +3256,10 @@ def run_pipeline(
                             selector_visible_ids=selector_visible_ids,
                             pipeline_visible_ids=list(visible_ids),
                             occlusion_eligible_object_ids=occlusion_eligible_ids,
+                            pipeline_referable_object_ids=referable_ids,
                             referability_entry=referability_entry,
                             frame_attachment_rows=frame_attachment_rows,
+                            referable_occlusion_veto=referable_occlusion_veto,
                             generated_questions=audited_questions,
                         )
                     )

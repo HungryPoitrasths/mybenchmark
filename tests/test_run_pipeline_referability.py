@@ -1084,6 +1084,119 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})
         self.assertEqual(len(questions), 1)
 
+    def test_run_pipeline_applies_referable_occlusion_veto_before_generation(self) -> None:
+        root = make_case_dir("pipeline_occlusion_veto")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        referability_cache = {
+            "version": "17.0",
+            "frames": {
+                scene_id: {
+                    image_name: {
+                        "frame_usable": True,
+                        "candidate_visible_object_ids": [2, 1],
+                        "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                        "crop_label_counts": {"cup": 1, "table": 1},
+                        "crop_referable_object_ids": [1, 2],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {},
+                        "full_frame_label_counts": {},
+                        "referable_object_ids": [1, 2],
+                        "label_statuses": {"cup": "unique", "table": "unique"},
+                        "label_counts": {"cup": 1, "table": 1},
+                        "candidate_labels": ["cup", "table"],
+                        "label_to_object_ids": {"cup": [1], "table": [2]},
+                    }
+                }
+            },
+        }
+
+        scene = {
+            "scene_id": scene_id,
+            "objects": [
+                make_object(1, "cup"),
+                make_object(2, "table"),
+            ],
+            "attachment_edges": [
+                {"parent_id": 2, "child_id": 1, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+
+        captured: dict[str, object] = {}
+
+        def fake_generate_all_questions(**kwargs):
+            captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
+            captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            return []
+
+        veto_result = {
+            "raw_object_ids": [1, 2],
+            "filtered_object_ids": [1],
+            "low_visible_object_ids": [2],
+            "not_visible_object_ids": [],
+            "skipped_object_ids": [],
+            "audit_by_object_id": {
+                "1": {"status": "visible_enough", "keep_for_generation": True},
+                "2": {"status": "low_visible", "keep_for_generation": False},
+            },
+        }
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95, "projected_area_px": 900.0},
+                    2: {"bbox_in_frame_ratio": 0.85, "projected_area_px": 1200.0},
+                },
+            ),
+            patch.object(
+                run_pipeline_module,
+                "_filter_referable_object_ids_with_occlusion_veto",
+                return_value=veto_result,
+            ) as veto_mock,
+            patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        veto_mock.assert_called_once()
+        self.assertEqual(captured["visible_object_ids"], [1, 2])
+        self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(questions, [])
+
     def test_run_pipeline_drops_questions_with_ambiguous_nonreferable_mentions(self) -> None:
         root = make_case_dir("pipeline_referability_backstop")
         self.addCleanup(shutil.rmtree, root, True)
