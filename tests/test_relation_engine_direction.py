@@ -7,6 +7,7 @@ from src.relation_engine import (
     compute_all_relations,
     primary_direction,
     primary_direction_allocentric,
+    primary_direction_object_centric,
 )
 from src.utils.colmap_loader import CameraPose
 from src.virtual_ops import apply_movement
@@ -232,6 +233,49 @@ class RelationEngineDirectionTests(unittest.TestCase):
         )
 
         self.assertEqual(direction, "south")
+
+    def test_allocentric_vertical_requires_positive_footprint_overlap(self) -> None:
+        direction, _ = primary_direction_allocentric(
+            np.array([0.2, 1.2, 1.85], dtype=float),
+            np.array([0.2, 0.2, 0.5], dtype=float),
+            obj_a_hull_xy=np.array(_rect(0.0, 1.0, 0.4, 1.4), dtype=float),
+            obj_b_hull_xy=np.array(_rect(0.0, 0.0, 0.4, 0.4), dtype=float),
+            obj_a_bbox_min=np.array([0.0, 1.0, 1.5], dtype=float),
+            obj_a_bbox_max=np.array([0.4, 1.4, 2.2], dtype=float),
+            obj_b_bbox_min=np.array([0.0, 0.0, 0.0], dtype=float),
+            obj_b_bbox_max=np.array([0.4, 0.4, 1.0], dtype=float),
+        )
+
+        self.assertEqual(direction, "north")
+
+    def test_allocentric_vertical_keeps_above_when_footprints_overlap(self) -> None:
+        direction, _ = primary_direction_allocentric(
+            np.array([0.2, 0.2, 1.85], dtype=float),
+            np.array([0.2, 0.2, 0.5], dtype=float),
+            obj_a_hull_xy=np.array(_rect(0.0, 0.0, 0.4, 0.4), dtype=float),
+            obj_b_hull_xy=np.array(_rect(0.0, 0.0, 0.4, 0.4), dtype=float),
+            obj_a_bbox_min=np.array([0.0, 0.0, 1.5], dtype=float),
+            obj_a_bbox_max=np.array([0.4, 0.4, 2.2], dtype=float),
+            obj_b_bbox_min=np.array([0.0, 0.0, 0.0], dtype=float),
+            obj_b_bbox_max=np.array([0.4, 0.4, 1.0], dtype=float),
+        )
+
+        self.assertEqual(direction, "above")
+
+    def test_object_centric_vertical_requires_positive_footprint_overlap(self) -> None:
+        direction, _ = primary_direction_object_centric(
+            np.array([0.2, 0.2, 0.5], dtype=float),
+            np.array([0.2, 1.2, 0.5], dtype=float),
+            np.array([-0.8, 1.2, 1.85], dtype=float),
+            anchor_hull_xy=np.array(_rect(0.0, 0.0, 0.4, 0.4), dtype=float),
+            target_hull_xy=np.array(_rect(-1.0, 1.0, -0.6, 1.4), dtype=float),
+            anchor_bbox_min=np.array([0.0, 0.0, 0.0], dtype=float),
+            anchor_bbox_max=np.array([0.4, 0.4, 1.0], dtype=float),
+            target_bbox_min=np.array([-1.0, 1.0, 1.5], dtype=float),
+            target_bbox_max=np.array([-0.6, 1.4, 2.2], dtype=float),
+        )
+
+        self.assertEqual(direction, "front-left")
 
     def test_spine_override_allows_degenerate_target_hull(self) -> None:
         anchor_ref_xy, target_ref_xy = _horizontal_reference_points_with_spine_override(

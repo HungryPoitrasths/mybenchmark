@@ -262,6 +262,93 @@ def _polygon_centroid_xy(hull_xy: np.ndarray, fallback_xy: np.ndarray) -> np.nda
     return np.asarray(fallback_xy, dtype=float).copy()
 
 
+def _polygon_area_xy(poly: np.ndarray) -> float:
+    if len(poly) < 3:
+        return 0.0
+    x = poly[:, 0]
+    y = poly[:, 1]
+    return float(0.5 * abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def _ensure_ccw_xy(poly: np.ndarray) -> np.ndarray:
+    if len(poly) < 3:
+        return poly
+    signed = 0.5 * (np.dot(poly[:, 0], np.roll(poly[:, 1], -1)) - np.dot(poly[:, 1], np.roll(poly[:, 0], -1)))
+    return poly if signed >= 0 else poly[::-1].copy()
+
+
+def _cross_2d(o: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    return float((a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]))
+
+
+def _is_inside_convex_edge(point: np.ndarray, edge_start: np.ndarray, edge_end: np.ndarray) -> bool:
+    return _cross_2d(edge_start, edge_end, point) >= -_GEOM_EPS
+
+
+def _line_intersection_2d(
+    p1: np.ndarray,
+    p2: np.ndarray,
+    q1: np.ndarray,
+    q2: np.ndarray,
+) -> np.ndarray:
+    r = p2 - p1
+    s = q2 - q1
+    denom = r[0] * s[1] - r[1] * s[0]
+    if abs(denom) <= _GEOM_EPS:
+        return p2.copy()
+    qp = q1 - p1
+    t = (qp[0] * s[1] - qp[1] * s[0]) / denom
+    return p1 + t * r
+
+
+def _clip_convex_polygon(subject: np.ndarray, clipper: np.ndarray) -> np.ndarray:
+    output = subject.copy()
+    clipper = _ensure_ccw_xy(clipper)
+    if len(output) < 3 or len(clipper) < 3:
+        return np.empty((0, 2), dtype=float)
+
+    for i in range(len(clipper)):
+        edge_start = clipper[i]
+        edge_end = clipper[(i + 1) % len(clipper)]
+        input_list = output
+        output_list: list[np.ndarray] = []
+        if len(input_list) == 0:
+            break
+        start = input_list[-1]
+        for end in input_list:
+            end_inside = _is_inside_convex_edge(end, edge_start, edge_end)
+            start_inside = _is_inside_convex_edge(start, edge_start, edge_end)
+            if end_inside:
+                if not start_inside:
+                    output_list.append(_line_intersection_2d(start, end, edge_start, edge_end))
+                output_list.append(end)
+            elif start_inside:
+                output_list.append(_line_intersection_2d(start, end, edge_start, edge_end))
+            start = end
+        output = np.array(output_list, dtype=float) if output_list else np.empty((0, 2), dtype=float)
+    return output
+
+
+def _convex_intersection_area_xy(poly_a: np.ndarray, poly_b: np.ndarray) -> float:
+    if len(poly_a) < 3 or len(poly_b) < 3:
+        return 0.0
+    clipped = _clip_convex_polygon(_ensure_ccw_xy(poly_a), _ensure_ccw_xy(poly_b))
+    return _polygon_area_xy(clipped)
+
+
+def _footprint_polygon_xy(
+    hull_xy: np.ndarray | list[list[float]] | None,
+    bbox_min: np.ndarray | None,
+    bbox_max: np.ndarray | None,
+) -> np.ndarray:
+    hull = np.asarray(hull_xy, dtype=float) if hull_xy is not None else np.empty((0, 2), dtype=float)
+    if hull.ndim == 2 and hull.shape[1] == 2 and len(hull) >= 3:
+        return hull
+    if bbox_min is not None and bbox_max is not None and bbox_min.shape == (3,) and bbox_max.shape == (3,):
+        return _rectangle_from_bbox_xy(bbox_min, bbox_max)
+    return np.empty((0, 2), dtype=float)
+
+
 def _compute_min_area_obb_2d(hull_xy: np.ndarray | list[list[float]]) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, float] | None:
     poly = np.asarray(hull_xy, dtype=float)
     if poly.ndim != 2 or poly.shape[1] != 2 or len(poly) < 3:
@@ -414,6 +501,9 @@ def _vertical_interval_direction(
     a_bbox_max: np.ndarray | None,
     b_bbox_min: np.ndarray | None,
     b_bbox_max: np.ndarray | None,
+    *,
+    a_hull_xy: np.ndarray | list[list[float]] | None = None,
+    b_hull_xy: np.ndarray | list[list[float]] | None = None,
 ) -> tuple[str | None, float]:
     if any(item is None for item in (a_bbox_min, a_bbox_max, b_bbox_min, b_bbox_max)):
         return None, 0.0
@@ -423,6 +513,11 @@ def _vertical_interval_direction(
     b_min = np.asarray(b_bbox_min, dtype=float)
     b_max = np.asarray(b_bbox_max, dtype=float)
     if a_min.shape != (3,) or a_max.shape != (3,) or b_min.shape != (3,) or b_max.shape != (3,):
+        return None, 0.0
+
+    footprint_a = _footprint_polygon_xy(a_hull_xy, a_min, a_max)
+    footprint_b = _footprint_polygon_xy(b_hull_xy, b_min, b_max)
+    if _convex_intersection_area_xy(footprint_a, footprint_b) <= _GEOM_EPS:
         return None, 0.0
 
     gap_up = float(b_min[2] - a_max[2])
@@ -509,6 +604,8 @@ def compute_pairwise_direction(
         np.asarray(obj_a.get("bbox_max", []), dtype=float) if "bbox_max" in obj_a else None,
         np.asarray(obj_b.get("bbox_min", []), dtype=float) if "bbox_min" in obj_b else None,
         np.asarray(obj_b.get("bbox_max", []), dtype=float) if "bbox_max" in obj_b else None,
+        a_hull_xy=_object_bottom_hull_xy(obj_a),
+        b_hull_xy=_object_bottom_hull_xy(obj_b),
     )
     if vertical_label is not None:
         return vertical_label, vertical_ambiguity
@@ -594,6 +691,8 @@ def primary_direction_object_centric(
             np.asarray(anchor_bbox_max, dtype=float) if anchor_bbox_max is not None else None,
             np.asarray(target_bbox_min, dtype=float) if target_bbox_min is not None else None,
             np.asarray(target_bbox_max, dtype=float) if target_bbox_max is not None else None,
+            a_hull_xy=anchor_hull_xy,
+            b_hull_xy=target_hull_xy,
         )
         if vertical_label is not None:
             return vertical_label, vertical_ambiguity
@@ -646,6 +745,8 @@ def primary_direction_allocentric(
             np.asarray(obj_b_bbox_max, dtype=float) if obj_b_bbox_max is not None else None,
             np.asarray(obj_a_bbox_min, dtype=float) if obj_a_bbox_min is not None else None,
             np.asarray(obj_a_bbox_max, dtype=float) if obj_a_bbox_max is not None else None,
+            a_hull_xy=obj_b_hull_xy,
+            b_hull_xy=obj_a_hull_xy,
         )
         if vertical_label is not None:
             return vertical_label, vertical_ambiguity

@@ -72,8 +72,8 @@ class L1DirectionOptionTests(unittest.TestCase):
         lamp = make_object(
             2,
             "lamp",
-            (-0.5, 3.4, 1.7),
-            (-0.1, 3.8, 2.5),
+            (0.0, 3.4, 1.7),
+            (0.4, 3.8, 2.5),
         )
 
         relation = compute_all_relations([bed, lamp], camera_pose)[0]
@@ -87,6 +87,28 @@ class L1DirectionOptionTests(unittest.TestCase):
         self.assertNotIn("front", question["options"])
         self.assertNotIn("front-left", question["options"])
         self.assertNotIn("left", question["options"])
+
+    def test_l1_direction_agent_non_overlapping_vertical_pair_falls_back_to_horizontal(self) -> None:
+        camera_pose = make_floorplan_camera_pose()
+        bed = make_object(
+            1,
+            "bed",
+            (0.0, 0.0, 0.0),
+            (2.0, 4.0, 1.0),
+        )
+        lamp = make_object(
+            2,
+            "lamp",
+            (-0.5, 3.4, 1.7),
+            (-0.1, 3.8, 2.5),
+        )
+
+        relation = compute_all_relations([bed, lamp], camera_pose)[0]
+
+        self.assertEqual(relation["direction_b_rel_a"], "front-left")
+        self.assertEqual(relation["horizontal_direction_b_rel_a"], "front-left")
+
+        self.assertGreaterEqual(relation["ambiguity_score"], 0.0)
 
     def test_l1_direction_agent_suppresses_attached_non_vertical_pair(self) -> None:
         camera_pose = make_floorplan_camera_pose()
