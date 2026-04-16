@@ -140,6 +140,7 @@ def make_referability_entry() -> dict:
         "full_frame_label_counts": {},
         "label_statuses": {"cup": "unique", "table": "unique"},
         "label_counts": {"cup": 1, "table": 1},
+        "attachment_referable_object_ids": [1, 2],
         "referable_object_ids": [1, 2],
     }
 
@@ -338,6 +339,9 @@ class RunSingleFrameTraceTests(unittest.TestCase):
 
         def fake_generate_all_questions(**kwargs):
             captured["referable_object_ids"] = list(kwargs.get("referable_object_ids") or [])
+            captured["attachment_referable_object_ids"] = list(
+                kwargs.get("attachment_referable_object_ids") or []
+            )
             return make_fake_questions()
 
         with ExitStack() as stack:
@@ -364,9 +368,14 @@ class RunSingleFrameTraceTests(unittest.TestCase):
 
         self.assertEqual(trace_doc["status"], "completed")
         self.assertEqual(captured["referable_object_ids"], [1])
+        self.assertEqual(captured["attachment_referable_object_ids"], [1, 2])
         self.assertEqual(
             trace_doc["frame_context"]["pipeline_referable_object_ids_used_for_generation"],
             [1],
+        )
+        self.assertEqual(
+            trace_doc["frame_context"]["pipeline_attachment_referable_object_ids_used_for_generation"],
+            [1, 2],
         )
         self.assertEqual(
             trace_doc["frame_context"]["referable_occlusion_veto"]["low_visible_object_ids"],

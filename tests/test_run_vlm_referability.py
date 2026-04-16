@@ -885,6 +885,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
         self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "unique"})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "unique"})
+        self.assertEqual(frame_entry["attachment_referable_object_ids"], [1])
         self.assertEqual(frame_entry["referable_object_ids"], [])
 
     def test_apply_crop_unique_mesh_quality_review_drops_unique_object_on_mesh_mismatch(self) -> None:
@@ -998,6 +999,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(repaired["full_frame_label_statuses"], {"lamp": "absent"})
         self.assertEqual(repaired["label_statuses"], {"lamp": "absent"})
         self.assertEqual(repaired["label_counts"], {"lamp": 0})
+        self.assertEqual(repaired["attachment_referable_object_ids"], [])
         self.assertEqual(repaired["referable_object_ids"], [])
         self.assertEqual(repaired["vlm_unique_object_ids"], [])
 

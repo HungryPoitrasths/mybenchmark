@@ -922,7 +922,19 @@ def run_single_frame_trace(
             instance_mesh_data=instance_mesh_data,
         )
         referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
+        attachment_referable_ids = [
+            int(obj_id)
+            for obj_id in (
+                (referability_entry or {}).get("attachment_referable_object_ids")
+                or (referability_entry or {}).get("referable_object_ids")
+                or []
+            )
+            if int(obj_id) in visible_id_set
+        ]
         trace_doc["frame_context"]["pipeline_referable_object_ids_used_for_generation"] = list(referable_ids)
+        trace_doc["frame_context"]["pipeline_attachment_referable_object_ids_used_for_generation"] = list(
+            attachment_referable_ids
+        )
         trace_doc["frame_context"]["referable_occlusion_veto"] = dict(referable_occlusion_veto)
         _record_stage(
             trace_doc,
@@ -967,6 +979,7 @@ def run_single_frame_trace(
             instance_mesh_data=instance_mesh_data,
             visible_object_ids=visible_ids,
             referable_object_ids=referable_ids,
+            attachment_referable_object_ids=attachment_referable_ids,
             occlusion_eligible_object_ids=occlusion_eligible_ids,
             mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
             label_statuses=label_statuses,

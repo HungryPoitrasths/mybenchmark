@@ -243,6 +243,75 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["attachment_graph"], {})
         self.assertEqual(captured["attached_by"], {})
 
+    def test_generate_all_questions_keeps_attachment_chain_with_attachment_referable_ids(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "cup"),
+            make_object(4, "chair"),
+        ]
+        attachment_question = {
+            "level": "L3",
+            "type": "attachment_chain",
+            "question": "If the table moves, which objects move with it?",
+            "options": ["box", "cup", "Both box and cup", "chair"],
+            "answer": "C",
+            "correct_value": "Both box and cup",
+            "mentioned_objects": [
+                {"role": "grandparent", "obj_id": 1, "label": "table"},
+                {"role": "parent", "obj_id": 2, "label": "box"},
+                {"role": "grandchild", "obj_id": 3, "label": "cup"},
+                {"role": "neighbor", "obj_id": 4, "label": "chair"},
+            ],
+        }
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l3_attachment_chain", return_value=[attachment_question]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={1: [2], 2: [3]},
+                attached_by={2: 1, 3: 2},
+                support_chain_graph={1: [2], 2: [3]},
+                support_chain_by={2: 1, 3: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3, 4],
+                referable_object_ids=[1],
+                attachment_referable_object_ids=[1, 2, 3, 4],
+                label_statuses={
+                    "table": "unique",
+                    "box": "unique",
+                    "cup": "unique",
+                    "chair": "unique",
+                },
+                label_to_object_ids={
+                    "table": [1],
+                    "box": [2],
+                    "cup": [3],
+                    "chair": [4],
+                },
+                attachment_edges=[
+                    {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                    {"parent_id": 2, "child_id": 3, "type": "supported_by"},
+                ],
+            )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["type"], "attachment_chain")
+
     def test_l2_object_move_attachment_counts_are_left_unchanged_during_generation(self) -> None:
         objects = [
             make_object(1, "table"),
@@ -1132,6 +1201,47 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(question["old_correct_value"], "left")
         self.assertEqual(question["new_correct_value"], "left")
         self.assertTrue(question["has_attachment_chain"])
+
+    def test_attachment_remapped_rotate_questions_allow_attachment_referable_move_source(self) -> None:
+        child = make_object(1, "cup")
+        parent = make_object(2, "table")
+        face = make_object(3, "lamp")
+        ref = make_object(4, "chair")
+        movement_objects = [child, parent, face, ref]
+        rotated_objects = [make_object(1, "cup"), make_object(2, "table"), face, ref]
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator.find_meaningful_orbit_rotation",
+                return_value=[{
+                    "angle": 90,
+                    "rotation_direction": "clockwise",
+                    "signed_angle": -90,
+                    "objects": rotated_objects,
+                }],
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                return_value=("left", 0.1),
+            ),
+        ):
+            questions = generate_l2_object_rotate_object_centric(
+                objects=[child, face, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_rotate_object_centric": [
+                        "rotate {obj_move_source}: where is {obj_ref} from {obj_query} while facing {obj_face}?"
+                    ]
+                },
+                movement_objects=movement_objects,
+                object_map={obj["id"]: obj for obj in movement_objects},
+                attachment_referable_object_ids=[1, 2, 3, 4],
+            )
+
+        self.assertTrue(any(q.get("attachment_remapped") for q in questions))
 
     def test_full_quality_pipeline_leaves_attachment_counts_untouched(self) -> None:
         from src.quality_control import full_quality_pipeline

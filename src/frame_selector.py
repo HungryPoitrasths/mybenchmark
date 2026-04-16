@@ -696,6 +696,8 @@ VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 800.0
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.80
 FRAME_CROP_BONUS_WEIGHT = 10
+ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN = 0.50
+ATTACHMENT_PAIR_BONUS_WEIGHT = 15
 
 
 def build_selector_visibility_audit_from_meta(
@@ -929,15 +931,62 @@ def _count_well_cropped_visible_objects(
     return count
 
 
+def _count_well_cropped_attachment_pairs(
+    visible: list[dict],
+    attachment_graph: dict[int, list[int]] | None,
+    pose: CameraPose | None = None,
+    intrinsics: CameraIntrinsics | None = None,
+    *,
+    visibility_audits_by_obj_id: dict[int, dict[str, Any]] | None = None,
+) -> int:
+    if not attachment_graph:
+        return 0
+
+    visible_ids = {int(obj["id"]) for obj in visible}
+    ratio_by_obj_id: dict[int, float] = {}
+    for obj in visible:
+        obj_id = int(obj["id"])
+        audit = (visibility_audits_by_obj_id or {}).get(obj_id)
+        if audit is not None:
+            ratio_by_obj_id[obj_id] = float(audit.get("bbox_in_frame_ratio", 0.0) or 0.0)
+            continue
+        if pose is None or intrinsics is None:
+            raise ValueError(
+                "_count_well_cropped_attachment_pairs requires either precomputed audits "
+                "or both pose and intrinsics"
+            )
+        roi_info = _project_object_roi(obj, pose, intrinsics)
+        ratio_by_obj_id[obj_id] = float(roi_info.get("bbox_in_frame_ratio", 0.0) or 0.0)
+
+    pair_count = 0
+    for parent_id, child_ids in attachment_graph.items():
+        parent_id_int = int(parent_id)
+        if parent_id_int not in visible_ids:
+            continue
+        parent_ratio = float(ratio_by_obj_id.get(parent_id_int, 0.0) or 0.0)
+        if parent_ratio < ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN:
+            continue
+        for child_id in child_ids:
+            child_id_int = int(child_id)
+            if child_id_int not in visible_ids:
+                continue
+            child_ratio = float(ratio_by_obj_id.get(child_id_int, 0.0) or 0.0)
+            if child_ratio >= ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN:
+                pair_count += 1
+    return pair_count
+
+
 def _frame_candidate_score(
     *,
     n_visible: int,
     n_attachment: int,
     crop_ge_80_count: int,
+    attachment_pair_ge_50_count: int,
 ) -> tuple[int, int]:
     base_score = int(n_visible) * (1 + int(n_attachment))
     crop_bonus = int(crop_ge_80_count) * FRAME_CROP_BONUS_WEIGHT
-    return base_score, base_score + crop_bonus
+    attachment_pair_bonus = int(attachment_pair_ge_50_count) * ATTACHMENT_PAIR_BONUS_WEIGHT
+    return base_score, base_score + crop_bonus + attachment_pair_bonus
 
 
 def select_frames(
@@ -1023,25 +1072,40 @@ def select_frames(
             n_quality_rejected += 1
             continue
 
-        visible = get_visible_objects(
+        visible_result = get_visible_objects(
             objects,
             pose,
             intrinsics,
             instance_mesh_data=instance_mesh_data,
+            return_audits=True,
         )
+        if (
+            isinstance(visible_result, tuple)
+            and len(visible_result) == 2
+            and isinstance(visible_result[1], dict)
+        ):
+            visible, visibility_audits_by_obj_id = visible_result
+        else:
+            visible = visible_result
+            visibility_audits_by_obj_id = {}
         if len(visible) < MIN_VISIBLE_OBJECTS:
             continue
 
         n_attachment = _count_attachment_objects(visible, attachment_ids)
         crop_ge_80_count = _count_well_cropped_visible_objects(
             visible,
-            pose,
-            intrinsics,
+            visibility_audits_by_obj_id=visibility_audits_by_obj_id,
+        )
+        attachment_pair_ge_50_count = _count_well_cropped_attachment_pairs(
+            visible,
+            attachment_graph,
+            visibility_audits_by_obj_id=visibility_audits_by_obj_id,
         )
         base_score, score = _frame_candidate_score(
             n_visible=len(visible),
             n_attachment=n_attachment,
             crop_ge_80_count=crop_ge_80_count,
+            attachment_pair_ge_50_count=attachment_pair_ge_50_count,
         )
         frame_entries.append(
             {
@@ -1051,6 +1115,7 @@ def select_frames(
                 "n_visible":         len(visible),
                 "base_score":        base_score,
                 "crop_ge_80_count":  crop_ge_80_count,
+                "attachment_pair_ge_50_count": attachment_pair_ge_50_count,
                 "score":             score,
             }
         )
@@ -1073,11 +1138,25 @@ def select_frames(
         )
         return []
 
-    # Greedy diverse selection
-    frame_entries.sort(key=lambda e: e["score"], reverse=True)
-    selected: list[dict[str, Any]] = [frame_entries[0]]
+    preferred_entries = [
+        entry for entry in frame_entries
+        if int(entry.get("crop_ge_80_count", 0) or 0) > 0
+    ]
+    selection_pool = preferred_entries if preferred_entries else frame_entries
+    if preferred_entries:
+        logger.info(
+            "Restricting frame selection for %s to %d/%d candidates with at least one bbox_in_frame_ratio >= %.2f object",
+            scene_path.name,
+            len(preferred_entries),
+            len(frame_entries),
+            FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN,
+        )
 
-    for entry in frame_entries[1:]:
+    # Greedy diverse selection
+    selection_pool.sort(key=lambda e: e["score"], reverse=True)
+    selected: list[dict[str, Any]] = [selection_pool[0]]
+
+    for entry in selection_pool[1:]:
         if len(selected) >= max_frames:
             break
         too_close = any(
@@ -1087,11 +1166,11 @@ def select_frames(
         if not too_close:
             selected.append(entry)
 
-    if len(selected) < min(max_frames, len(frame_entries)):
+    if len(selected) < min(max_frames, len(selection_pool)):
         logger.info(
             "Selected %d/%d frames for %s after viewpoint-diversity filtering",
             len(selected),
-            min(max_frames, len(frame_entries)),
+            min(max_frames, len(selection_pool)),
             scene_path.name,
         )
 
@@ -1105,6 +1184,7 @@ def select_frames(
                 "n_visible":         s["n_visible"],
                 "base_score":        s["base_score"],
                 "crop_ge_80_count":  s["crop_ge_80_count"],
+                "attachment_pair_ge_50_count": s["attachment_pair_ge_50_count"],
                 "score":             s["score"],
             }
         )

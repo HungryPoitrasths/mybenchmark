@@ -791,6 +791,54 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             [],
         )
 
+    def test_apply_question_referability_filter_uses_attachment_referable_ids_for_attachment_questions(self) -> None:
+        kept, audited = run_pipeline_module._apply_question_referability_filter(
+            [
+                {
+                    "scene_id": "scene0000_00",
+                    "image_name": "000123.jpg",
+                    "type": "attachment_chain",
+                    "question": "If the table moves, which objects move with it?",
+                    "mentioned_objects": [
+                        {"role": "grandparent", "label": "table", "obj_id": 1},
+                        {"role": "parent", "label": "box", "obj_id": 2},
+                        {"role": "grandchild", "label": "cup", "obj_id": 3},
+                        {"role": "neighbor", "label": "lamp", "obj_id": 4},
+                    ],
+                }
+            ],
+            objects_by_id={
+                1: make_object(1, "table"),
+                2: make_object(2, "box"),
+                3: make_object(3, "cup"),
+                4: make_object(4, "lamp"),
+            },
+            referability_entry={
+                "label_statuses": {
+                    "table": "unique",
+                    "box": "unique",
+                    "cup": "unique",
+                    "lamp": "unique",
+                },
+                "label_to_object_ids": {
+                    "table": [1],
+                    "box": [2],
+                    "cup": [3],
+                    "lamp": [4],
+                },
+            },
+            frame_referable_ids=[1],
+            attachment_frame_referable_ids=[1, 2, 3, 4],
+        )
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(len(audited), 1)
+        self.assertEqual(audited[0]["question_referability_audit"]["decision"], "pass")
+        self.assertEqual(
+            audited[0]["question_referability_audit"]["frame_referable_object_ids"],
+            [1, 2, 3, 4],
+        )
+
     def test_apply_question_referability_filter_raises_on_nonreferable_mention(self) -> None:
         with self.assertRaisesRegex(AssertionError, "Referability backstop detected"):
             run_pipeline_module._apply_question_referability_filter(
@@ -1088,6 +1136,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "full_frame_label_reviews": [],
                         "full_frame_label_statuses": {},
                         "full_frame_label_counts": {},
+                        "attachment_referable_object_ids": [1, 2],
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
@@ -1116,6 +1165,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         def fake_generate_all_questions(**kwargs):
             captured["visible_object_ids"] = list(kwargs["visible_object_ids"])
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            captured["attachment_referable_object_ids"] = list(
+                kwargs.get("attachment_referable_object_ids") or []
+            )
             captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
             captured["mention_in_frame_ratio_by_obj_id"] = dict(
                 kwargs.get("mention_in_frame_ratio_by_obj_id") or {}
@@ -1172,6 +1224,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1, 2])
+        self.assertEqual(captured["attachment_referable_object_ids"], [1, 2])
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
         self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95, 2: 0.85})
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})

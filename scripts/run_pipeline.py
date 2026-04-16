@@ -1049,19 +1049,35 @@ def _iter_question_referability_mentions(
     return _shared_collect_question_mentions(question, objects_by_id)
 
 
+def _question_uses_attachment_referability(question: dict[str, object]) -> bool:
+    question_type = str(question.get("type", "")).strip().lower()
+    return (
+        question_type == "attachment_chain"
+        or question_type.startswith("attachment")
+        or bool(question.get("attachment_remapped", False))
+    )
+
+
 def _build_question_referability_audit(
     question: dict[str, object],
     *,
     objects_by_id: dict[int, dict[str, object]],
     referability_entry: dict[str, object] | None,
     frame_referable_ids: list[int],
+    attachment_frame_referable_ids: list[int] | None = None,
 ) -> dict[str, object]:
+    effective_frame_referable_ids = (
+        attachment_frame_referable_ids
+        if attachment_frame_referable_ids is not None
+        and _question_uses_attachment_referability(question)
+        else frame_referable_ids
+    )
     return _shared_build_question_referability_audit(
         question,
         objects_by_id=objects_by_id,
         label_statuses=(referability_entry or {}).get("label_statuses"),
         label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
-        frame_referable_ids=frame_referable_ids,
+        frame_referable_ids=effective_frame_referable_ids,
     )
 
 
@@ -1071,6 +1087,7 @@ def _apply_question_referability_filter(
     objects_by_id: dict[int, dict[str, object]],
     referability_entry: dict[str, object] | None,
     frame_referable_ids: list[int],
+    attachment_frame_referable_ids: list[int] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     kept_questions: list[dict[str, object]] = []
     audited_questions: list[dict[str, object]] = []
@@ -1083,6 +1100,7 @@ def _apply_question_referability_filter(
             objects_by_id=objects_by_id,
             referability_entry=referability_entry,
             frame_referable_ids=frame_referable_ids,
+            attachment_frame_referable_ids=attachment_frame_referable_ids,
         )
         audited_question["question_referability_audit"] = audit
         audited_questions.append(audited_question)
@@ -3274,6 +3292,7 @@ def run_pipeline(
                 visible_ids = list(selector_visible_ids)
                 visible_id_set = set(int(obj_id) for obj_id in visible_ids)
                 referable_ids = None
+                attachment_referable_ids = None
                 raw_referable_ids: list[int] = []
                 label_statuses = None
                 label_counts = None
@@ -3328,6 +3347,15 @@ def run_pipeline(
                         instance_mesh_data=instance_mesh_data,
                     )
                     referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
+                    attachment_referable_ids = [
+                        int(obj_id)
+                        for obj_id in (
+                            referability_entry.get("attachment_referable_object_ids")
+                            or referability_entry.get("referable_object_ids")
+                            or []
+                        )
+                        if int(obj_id) in visible_id_set
+                    ]
                     if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
                         if write_frame_debug:
                             frame_attachment_rows = _filter_frame_attachment_rows(
@@ -3371,6 +3399,7 @@ def run_pipeline(
                     instance_mesh_data=instance_mesh_data,
                     visible_object_ids=visible_ids,
                     referable_object_ids=referable_ids,
+                    attachment_referable_object_ids=attachment_referable_ids,
                     occlusion_eligible_object_ids=occlusion_eligible_ids,
                     mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
                     label_statuses=label_statuses,
@@ -3390,6 +3419,7 @@ def run_pipeline(
                     objects_by_id=objects_by_id,
                     referability_entry=referability_entry,
                     frame_referable_ids=referable_ids or [],
+                    attachment_frame_referable_ids=attachment_referable_ids or [],
                 )
 
                 scene_questions.extend(kept_questions)

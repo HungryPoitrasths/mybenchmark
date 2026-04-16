@@ -74,6 +74,7 @@ QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
 REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.80
+ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.50
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
 SEGMENTATION_EXTREME_NOISE_MIN_SCORE = 0.10
 SEGMENTATION_STRONG_MIN_SCORE = 0.50
@@ -329,6 +330,7 @@ def _final_referable_object_ids(
     crop_unique_label_object_ids: dict[str, int],
     object_reviews: object = None,
     visibility_audit_by_object_id: object = None,
+    bbox_in_frame_ratio_min: float = REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
 ) -> list[int]:
     def _lookup_review(container: object, obj_id: int) -> dict[str, Any] | None:
         if isinstance(container, dict):
@@ -357,7 +359,7 @@ def _final_referable_object_ids(
                 ratio = float(review.get("bbox_in_frame_ratio"))
             except (TypeError, ValueError):
                 continue
-            return ratio >= REFERABLE_BBOX_IN_FRAME_RATIO_MIN
+            return ratio >= float(bbox_in_frame_ratio_min)
         # Preserve compatibility for older/minimal cache entries that do not
         # carry per-object bbox ratios, while enforcing the gate for new ones.
         return True
@@ -526,6 +528,13 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         object_reviews=entry.get("object_reviews"),
         visibility_audit_by_object_id=entry.get("visibility_audit_by_object_id"),
     )
+    attachment_referable_object_ids = _final_referable_object_ids(
+        label_statuses=label_statuses,
+        crop_unique_label_object_ids=crop_unique_label_object_ids,
+        object_reviews=entry.get("object_reviews"),
+        visibility_audit_by_object_id=entry.get("visibility_audit_by_object_id"),
+        bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+    )
 
     return {
         "label_to_object_ids": label_to_object_ids,
@@ -537,6 +546,7 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         "full_frame_label_counts": full_frame_label_counts,
         "label_statuses": label_statuses,
         "label_counts": label_counts,
+        "attachment_referable_object_ids": attachment_referable_object_ids,
         "referable_object_ids": referable_object_ids,
         "vlm_unique_object_ids": list(referable_object_ids),
     }
@@ -590,6 +600,10 @@ def _frame_entry_has_consistent_final_fields(entry: Any) -> bool:
         "label_counts": _normalize_cached_label_counts(entry.get("label_counts")),
         "referable_object_ids": _normalize_cached_object_ids(entry.get("referable_object_ids")),
     }
+    if "attachment_referable_object_ids" in entry:
+        normalized_entry["attachment_referable_object_ids"] = _normalize_cached_object_ids(
+            entry.get("attachment_referable_object_ids")
+        )
     if "selector_visible_label_counts" in entry:
         normalized_entry["selector_visible_label_counts"] = _normalize_cached_label_counts(
             entry.get("selector_visible_label_counts")
@@ -2409,6 +2423,7 @@ def _compute_frame_referability_entry(
     full_frame_label_counts: dict[str, int] = {}
     label_statuses: dict[str, str] = {}
     label_counts: dict[str, int] = {}
+    attachment_referable_object_ids: list[int] = []
     referable_object_ids: list[int] = []
     alias_group_statuses: dict[str, str] = {}
     referability_reason_by_alias_group: dict[str, str] = {}
@@ -2489,6 +2504,13 @@ def _compute_frame_referability_entry(
             object_reviews=object_reviews,
             visibility_audit_by_object_id=visibility_audit_by_object_id,
         )
+        attachment_referable_object_ids = _final_referable_object_ids(
+            label_statuses=label_statuses,
+            crop_unique_label_object_ids=crop_unique_label_object_ids,
+            object_reviews=object_reviews,
+            visibility_audit_by_object_id=visibility_audit_by_object_id,
+            bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+        )
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
         for obj in scene_objects:
@@ -2564,6 +2586,9 @@ def _compute_frame_referability_entry(
         "vlm_label_reviews": list(alias_group_reviews),
         "label_statuses": dict(sorted(label_statuses.items())),
         "label_counts": dict(sorted(label_counts.items())),
+        "attachment_referable_object_ids": sorted(
+            set(int(obj_id) for obj_id in attachment_referable_object_ids)
+        ),
         "referable_object_ids": sorted(set(int(obj_id) for obj_id in referable_object_ids)),
         "vlm_unique_object_ids": sorted(set(int(obj_id) for obj_id in referable_object_ids)),
     }
