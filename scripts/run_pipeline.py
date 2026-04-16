@@ -369,17 +369,8 @@ def _apply_question_dinox_audit(
             label_audit["mentioned_object_ids"] = mentioned_object_ids
             label_audits.append(label_audit)
 
-        if not label_audits:
-            overall_status = "skipped"
-        elif any(str(item.get("status", "")).strip().lower() == "error" for item in label_audits):
-            overall_status = "error"
-        elif any(str(item.get("status", "")).strip().lower() == "ok" for item in label_audits):
-            overall_status = "ok"
-        else:
-            overall_status = "skipped"
-
         question["question_dinox_audit"] = {
-            "status": overall_status,
+            "status": _question_dinox_overall_status(label_audits),
             "labels": label_audits,
         }
 
@@ -401,19 +392,447 @@ def _post_audit_review_stub(frame_context: dict[str, object], obj_id: int) -> di
     }
 
 
+def _question_dinox_overall_status(label_audits: list[dict[str, object]]) -> str:
+    if not label_audits:
+        return "skipped"
+    if any(str(item.get("status", "")).strip().lower() == "error" for item in label_audits):
+        return "error"
+    if any(str(item.get("status", "")).strip().lower() == "ok" for item in label_audits):
+        return "ok"
+    return "skipped"
+
+
+def _build_question_post_dinox_skipped_label_audit(
+    *,
+    label: str,
+    reason: str,
+    roles: list[object],
+    mentioned_object_ids: list[object],
+) -> dict[str, object]:
+    return {
+        "status": "skipped",
+        "label": label,
+        "decision": "skipped",
+        "reason": reason,
+        "reason_codes": [reason],
+        "roles": list(roles),
+        "mentioned_object_ids": list(mentioned_object_ids),
+        "matched_object_ids": [],
+        "unmatched_object_ids": list(mentioned_object_ids),
+        "raw_detection_count": 0,
+        "loose_detection_count": 0,
+        "strong_detection_count": 0,
+        "raw_detections": [],
+    }
+
+
+def _match_question_post_dinox_object_ids(
+    *,
+    mentioned_object_ids: list[object],
+    strong_detections: list[dict[str, object]],
+    frame_context: dict[str, object],
+    image_shape: tuple[int, ...],
+) -> tuple[list[int], list[int]]:
+    matched_object_ids: list[int] = []
+    unmatched_object_ids: list[int] = []
+
+    for obj_id in mentioned_object_ids:
+        normalized_obj_id = int(obj_id)
+        review_stub = _post_audit_review_stub(frame_context, normalized_obj_id)
+        matched = any(
+            _select_best_detection_for_object_review(
+                detections=[detection],
+                review=review_stub,
+                image_shape=image_shape,
+            ) is not None
+            for detection in strong_detections
+        )
+        if matched:
+            matched_object_ids.append(normalized_obj_id)
+        else:
+            unmatched_object_ids.append(normalized_obj_id)
+
+    return matched_object_ids, unmatched_object_ids
+
+
+def _build_question_post_dinox_label_review(
+    *,
+    target: dict[str, object],
+    frame_context: dict[str, object],
+    scene_id: str,
+    image_name: str,
+    data_root: Path,
+    detection_cache: dict[tuple[str, str, str], dict[str, object]],
+    image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+) -> dict[str, object]:
+    label = str(target.get("label", "")).strip().lower()
+    roles = list(target.get("roles", []))
+    mentioned_object_ids = list(target.get("mentioned_object_ids", []))
+
+    if not label:
+        return _build_question_post_dinox_skipped_label_audit(
+            label="",
+            reason="missing_label",
+            roles=roles,
+            mentioned_object_ids=mentioned_object_ids,
+        )
+
+    if label in EXCLUDED_LABELS:
+        return _build_question_post_dinox_skipped_label_audit(
+            label=label,
+            reason="excluded_label",
+            roles=roles,
+            mentioned_object_ids=mentioned_object_ids,
+        )
+
+    cached = _get_question_dinox_cache_entry(
+        scene_id=scene_id,
+        image_name=image_name,
+        label=label,
+        data_root=data_root,
+        detection_cache=detection_cache,
+        image_shape_cache=image_shape_cache,
+    )
+    strong_detections = [
+        detection for detection in cached.get("strong_detections", [])
+        if isinstance(detection, dict)
+    ]
+    matched_object_ids, unmatched_object_ids = _match_question_post_dinox_object_ids(
+        mentioned_object_ids=mentioned_object_ids,
+        strong_detections=strong_detections,
+        frame_context=frame_context,
+        image_shape=tuple(cached.get("image_shape") or ()),
+    )
+
+    reason_codes: list[str] = []
+    if str(cached.get("status", "")).strip().lower() != "ok":
+        reason_codes.append("dinox_error")
+    elif mentioned_object_ids:
+        strong_count = int(cached.get("strong_detection_count", 0) or 0)
+        if strong_count <= 0:
+            reason_codes.append("dinox_no_strong_detection")
+        elif strong_count >= 2:
+            reason_codes.append("dinox_multiple_strong_detections")
+        if strong_count > 0 and unmatched_object_ids:
+            reason_codes.append("dinox_detection_misses_target")
+
+    label_audit = _copy_question_dinox_cache_entry(cached)
+    label_audit["decision"] = "manual_review" if reason_codes else "pass"
+    label_audit["reason_codes"] = reason_codes
+    label_audit["roles"] = roles
+    label_audit["mentioned_object_ids"] = mentioned_object_ids
+    label_audit["matched_object_ids"] = matched_object_ids
+    label_audit["unmatched_object_ids"] = unmatched_object_ids
+    return label_audit
+
+
+def _run_question_post_dinox_stage(
+    *,
+    question: dict[str, object],
+    frame_context: dict[str, object],
+    data_root: Path,
+    detection_cache: dict[tuple[str, str, str], dict[str, object]],
+    image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+) -> dict[str, object]:
+    scene_id = str(question.get("scene_id", "")).strip()
+    image_name = str(question.get("image_name", "")).strip()
+    label_audits: list[dict[str, object]] = []
+    dinox_reason_codes: list[str] = []
+    flagged_labels: list[str] = []
+    flagged_object_ids: list[int] = []
+
+    for target in _collect_question_dinox_label_targets(question):
+        label_audit = _build_question_post_dinox_label_review(
+            target=target,
+            frame_context=frame_context,
+            scene_id=scene_id,
+            image_name=image_name,
+            data_root=data_root,
+            detection_cache=detection_cache,
+            image_shape_cache=image_shape_cache,
+        )
+        label_audits.append(label_audit)
+
+        if str(label_audit.get("decision", "")).strip().lower() != "manual_review":
+            continue
+        label = str(label_audit.get("label", "")).strip().lower()
+        dinox_reason_codes.extend(
+            f"{code}:{label}"
+            for code in label_audit.get("reason_codes", [])
+        )
+        if label and label not in flagged_labels:
+            flagged_labels.append(label)
+        for obj_id in label_audit.get("mentioned_object_ids", []):
+            normalized_obj_id = int(obj_id)
+            if normalized_obj_id not in flagged_object_ids:
+                flagged_object_ids.append(normalized_obj_id)
+
+    return {
+        "audit": {
+            "status": _question_dinox_overall_status(label_audits),
+            "labels": label_audits,
+        },
+        "reason_codes": dinox_reason_codes,
+        "flagged_labels": flagged_labels,
+        "flagged_object_ids": flagged_object_ids,
+    }
+
+
+def _get_question_post_mesh_resources(
+    *,
+    scene_id: str,
+    frame_context: dict[str, object],
+    objects_by_id: dict[int, dict[str, object]],
+    scene_mesh_cache: dict[str, object],
+    scene_depth_intrinsics_cache: dict[str, object],
+) -> dict[str, object]:
+    scene_dir = frame_context.get("scene_dir") if isinstance(frame_context, dict) else None
+    pose = frame_context.get("pose") if isinstance(frame_context, dict) else None
+    color_intrinsics = frame_context.get("color_intrinsics") if isinstance(frame_context, dict) else None
+    has_projection_context = bool(frame_context.get("has_projection_context", False)) if isinstance(frame_context, dict) else False
+
+    if scene_id and scene_id not in scene_depth_intrinsics_cache:
+        if isinstance(scene_dir, Path):
+            try:
+                scene_depth_intrinsics_cache[scene_id] = load_scannet_depth_intrinsics(scene_dir)
+            except Exception:
+                scene_depth_intrinsics_cache[scene_id] = None
+        else:
+            scene_depth_intrinsics_cache[scene_id] = None
+
+    if scene_id and scene_id not in scene_mesh_cache:
+        if isinstance(scene_dir, Path):
+            try:
+                scene_mesh_cache[scene_id] = load_instance_mesh_data(
+                    scene_dir,
+                    instance_ids=sorted(int(obj_id) for obj_id in objects_by_id.keys()),
+                    n_surface_samples=1,
+                )
+            except Exception as exc:
+                logger.warning("Question post-generation mesh load failed for %s: %s", scene_id, exc)
+                scene_mesh_cache[scene_id] = None
+        else:
+            scene_mesh_cache[scene_id] = None
+
+    return {
+        "pose": pose,
+        "color_intrinsics": color_intrinsics,
+        "has_projection_context": has_projection_context,
+        "instance_mesh_data": scene_mesh_cache.get(scene_id),
+        "depth_intrinsics": scene_depth_intrinsics_cache.get(scene_id),
+    }
+
+
+def _apply_question_post_review_results(
+    question: dict[str, object],
+    *,
+    dinox_stage: dict[str, object],
+    mesh_stage: dict[str, object],
+) -> None:
+    combined_reason_codes = _dedupe_strings(
+        list(dinox_stage.get("reason_codes", [])) + list(mesh_stage.get("reason_codes", []))
+    )
+    question["question_dinox_audit"] = dict(dinox_stage.get("audit", {}))
+    question["question_mesh_audit"] = dict(mesh_stage.get("audit", {}))
+    question["question_post_generation_review"] = {
+        "decision": "manual_review" if combined_reason_codes else "pass",
+        "reason_codes": combined_reason_codes,
+        "flagged_labels": _dedupe_strings(
+            list(dinox_stage.get("flagged_labels", [])) + list(mesh_stage.get("flagged_labels", []))
+        ),
+        "flagged_object_ids": sorted(
+            {
+                int(obj_id)
+                for obj_id in list(dinox_stage.get("flagged_object_ids", []))
+                + list(mesh_stage.get("flagged_object_ids", []))
+            }
+        ),
+        "dinox_label_reviews": list(question["question_dinox_audit"].get("labels", [])),
+        "mesh_object_reviews": list(question["question_mesh_audit"].get("objects", [])),
+    }
+
+
+def _run_question_post_mesh_stage(
+    *,
+    question: dict[str, object],
+    frame_context: dict[str, object],
+    objects_by_id: dict[int, dict[str, object]],
+    data_root: Path,
+    detection_cache: dict[tuple[str, str, str], dict[str, object]],
+    image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+    scene_mesh_cache: dict[str, object],
+    scene_depth_intrinsics_cache: dict[str, object],
+    topology_cache: dict[tuple[str, int], dict[str, object]],
+) -> dict[str, object]:
+    scene_id = str(question.get("scene_id", "")).strip()
+    image_name = str(question.get("image_name", "")).strip()
+    mesh_object_reviews: list[dict[str, object]] = []
+    mesh_reason_codes: list[str] = []
+    flagged_labels: list[str] = []
+    flagged_object_ids: list[int] = []
+    seen_mesh_obj_ids: set[int] = set()
+    mesh_resources = _get_question_post_mesh_resources(
+        scene_id=scene_id,
+        frame_context=frame_context,
+        objects_by_id=objects_by_id,
+        scene_mesh_cache=scene_mesh_cache,
+        scene_depth_intrinsics_cache=scene_depth_intrinsics_cache,
+    )
+    pose = mesh_resources["pose"]
+    color_intrinsics = mesh_resources["color_intrinsics"]
+    has_projection_context = bool(mesh_resources["has_projection_context"])
+    instance_mesh_data = mesh_resources["instance_mesh_data"]
+    depth_intrinsics = mesh_resources["depth_intrinsics"]
+
+    for mention in _iter_question_referability_mentions(question, objects_by_id):
+        obj_id = _coerce_object_id(mention.get("obj_id"))
+        label = str(mention.get("label", "")).strip().lower()
+        roles = _dedupe_strings(
+            [str(role).strip() for role in mention.get("observed_roles", []) if str(role).strip()]
+            or [str(mention.get("role", "")).strip()]
+        )
+        if obj_id is None or obj_id in seen_mesh_obj_ids or label in EXCLUDED_LABELS:
+            continue
+        seen_mesh_obj_ids.add(int(obj_id))
+
+        crop_entry = {}
+        crop_by_obj_id = frame_context.get("crop_by_obj_id", {})
+        if isinstance(crop_by_obj_id, dict):
+            crop_entry = crop_by_obj_id.get(int(obj_id), {}) or {}
+        mesh_review: dict[str, object] = {
+            "label": label,
+            "obj_id": int(obj_id),
+            "roles": roles,
+            "decision": "manual_review",
+            "reason": "",
+            "reason_codes": [],
+            "topology_status": None,
+            "topology_reason_codes": [],
+            "mesh_mask_status": None,
+            "mesh_mask_reason_codes": [],
+            "mesh_mask_iou": None,
+            "mesh_mask_under_coverage": None,
+            "mesh_mask_over_coverage": None,
+            "mesh_mask_area_ratio": None,
+            "mesh_mask_depth_bad_ratio": None,
+            "matched_detection": None,
+        }
+
+        if not has_projection_context or pose is None or color_intrinsics is None:
+            mesh_review["reason"] = "missing_projection_context"
+            mesh_review["reason_codes"] = ["missing_projection_context"]
+        elif instance_mesh_data is None:
+            mesh_review["reason"] = "missing_instance_mesh_data"
+            mesh_review["reason_codes"] = ["missing_instance_mesh_data"]
+        elif not bool(crop_entry.get("valid", False)):
+            mesh_review["reason"] = str(crop_entry.get("reason", "")).strip() or "invalid_crop"
+            mesh_review["reason_codes"] = [str(mesh_review["reason"])]
+        else:
+            topology_key = (scene_id, int(obj_id))
+            topology_quality = topology_cache.get(topology_key)
+            if topology_quality is None:
+                topology_quality = _compute_topology_quality_for_object(
+                    obj_id=int(obj_id),
+                    instance_mesh_data=instance_mesh_data,
+                )
+                topology_cache[topology_key] = topology_quality
+            mesh_review["topology_status"] = str(topology_quality.get("status", "")).strip().lower() or None
+            mesh_review["topology_reason_codes"] = list(topology_quality.get("reason_codes", []))
+
+            if str(topology_quality.get("status", "")).strip().lower() == "fail":
+                mesh_review["reason"] = "topology_fail"
+                mesh_review["reason_codes"] = ["topology_fail"]
+            else:
+                cached = _get_question_dinox_cache_entry(
+                    scene_id=scene_id,
+                    image_name=image_name,
+                    label=label,
+                    data_root=data_root,
+                    detection_cache=detection_cache,
+                    image_shape_cache=image_shape_cache,
+                )
+                if str(cached.get("status", "")).strip().lower() != "ok":
+                    mesh_review["reason"] = "dinox_error"
+                    mesh_review["reason_codes"] = ["dinox_error"]
+                else:
+                    matched_detection = _select_best_detection_for_object_review(
+                        detections=list(cached.get("candidate_detections", [])),
+                        review=_post_audit_review_stub(frame_context, int(obj_id)),
+                        image_shape=tuple(cached.get("image_shape") or ()),
+                    )
+                    if matched_detection is None:
+                        mesh_review["reason"] = (
+                            "no_detection_overlap"
+                            if list(cached.get("candidate_detections", []))
+                            else "no_detection_mask"
+                        )
+                        mesh_review["reason_codes"] = [str(mesh_review["reason"])]
+                    else:
+                        mesh_review["matched_detection"] = _serialize_question_dinox_detection(matched_detection)
+                        mesh_quality = _compute_mesh_mask_quality_for_object(
+                            obj_id=int(obj_id),
+                            detection_mask=np.asarray(matched_detection.get("mask"), dtype=bool),
+                            topology_status=str(topology_quality.get("status", "")),
+                            camera_pose=pose,
+                            color_intrinsics=color_intrinsics,
+                            depth_image=None,
+                            depth_intrinsics=depth_intrinsics,
+                            instance_mesh_data=instance_mesh_data,
+                        )
+                        mesh_review["mesh_mask_status"] = str(mesh_quality.get("status", "")).strip().lower() or None
+                        mesh_review["mesh_mask_reason_codes"] = list(mesh_quality.get("reason_codes", []))
+                        mesh_review["mesh_mask_iou"] = mesh_quality.get("iou")
+                        mesh_review["mesh_mask_under_coverage"] = mesh_quality.get("under_coverage")
+                        mesh_review["mesh_mask_over_coverage"] = mesh_quality.get("over_coverage")
+                        mesh_review["mesh_mask_area_ratio"] = mesh_quality.get("area_ratio")
+                        mesh_review["mesh_mask_depth_bad_ratio"] = mesh_quality.get("depth_bad_ratio")
+                        if str(mesh_quality.get("status", "")).strip().lower() == "fail":
+                            mesh_review["reason"] = "mesh_mask_mismatch"
+                            mesh_review["reason_codes"] = [
+                                f"mesh_{code}" for code in mesh_quality.get("reason_codes", [])
+                            ]
+                        else:
+                            mesh_review["decision"] = "pass"
+                            mesh_review["reason"] = "mesh_mask_match"
+                            mesh_review["reason_codes"] = []
+
+        if mesh_review["decision"] != "pass":
+            mesh_reason_codes.extend(
+                f"{code}:{label}#{int(obj_id)}"
+                for code in mesh_review.get("reason_codes", [])
+            )
+            if label and label not in flagged_labels:
+                flagged_labels.append(label)
+            if int(obj_id) not in flagged_object_ids:
+                flagged_object_ids.append(int(obj_id))
+        mesh_object_reviews.append(mesh_review)
+
+    return {
+        "audit": {
+            "status": "ok" if mesh_object_reviews else "skipped",
+            "objects": mesh_object_reviews,
+        },
+        "reason_codes": mesh_reason_codes,
+        "flagged_labels": flagged_labels,
+        "flagged_object_ids": flagged_object_ids,
+    }
+
+
 def _apply_question_post_generation_audit(
     *,
     questions: list[dict[str, object]],
     data_root: Path,
     output_dir: Path,
+    frame_context_by_key: dict[tuple[str, str], dict[str, object]] | None = None,
 ) -> list[dict[str, object]]:
     detection_cache: dict[tuple[str, str, str], dict[str, object]] = {}
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None] = {}
-    frame_context_by_key = _prebuild_question_review_frame_contexts(
-        questions=questions,
-        data_root=data_root,
-        output_dir=output_dir,
-    )
+    if frame_context_by_key is None:
+        frame_context_by_key = _prebuild_question_review_frame_contexts(
+            questions=questions,
+            data_root=data_root,
+            output_dir=output_dir,
+        )
     scene_mesh_cache: dict[str, object] = {}
     scene_depth_intrinsics_cache: dict[str, object] = {}
     topology_cache: dict[tuple[str, int], dict[str, object]] = {}
@@ -426,296 +845,29 @@ def _apply_question_post_generation_audit(
             dict(frame_context.get("objects_by_id", {}))
             if isinstance(frame_context, dict) else {}
         )
-
-        label_targets = _collect_question_dinox_label_targets(question)
-        label_audits: list[dict[str, object]] = []
-        dinox_reason_codes: list[str] = []
-        flagged_labels: list[str] = []
-        flagged_object_ids: list[int] = []
-
-        for target in label_targets:
-            label = str(target.get("label", "")).strip().lower()
-            roles = list(target.get("roles", []))
-            mentioned_object_ids = list(target.get("mentioned_object_ids", []))
-
-            if not label:
-                label_audits.append(
-                    {
-                        "status": "skipped",
-                        "label": "",
-                        "decision": "skipped",
-                        "reason": "missing_label",
-                        "reason_codes": ["missing_label"],
-                        "roles": roles,
-                        "mentioned_object_ids": mentioned_object_ids,
-                        "matched_object_ids": [],
-                        "raw_detection_count": 0,
-                        "loose_detection_count": 0,
-                        "strong_detection_count": 0,
-                        "raw_detections": [],
-                    }
-                )
-                continue
-
-            if label in EXCLUDED_LABELS:
-                label_audits.append(
-                    {
-                        "status": "skipped",
-                        "label": label,
-                        "decision": "skipped",
-                        "reason": "excluded_label",
-                        "reason_codes": ["excluded_label"],
-                        "roles": roles,
-                        "mentioned_object_ids": mentioned_object_ids,
-                        "matched_object_ids": [],
-                        "raw_detection_count": 0,
-                        "loose_detection_count": 0,
-                        "strong_detection_count": 0,
-                        "raw_detections": [],
-                    }
-                )
-                continue
-
-            cached = _get_question_dinox_cache_entry(
-                scene_id=scene_id,
-                image_name=image_name,
-                label=label,
-                data_root=data_root,
-                detection_cache=detection_cache,
-                image_shape_cache=image_shape_cache,
-            )
-            strong_detections = [
-                detection for detection in cached.get("strong_detections", [])
-                if isinstance(detection, dict)
-            ]
-            matched_object_ids: list[int] = []
-            for obj_id in mentioned_object_ids:
-                review_stub = _post_audit_review_stub(frame_context, int(obj_id))
-                if any(
-                    _select_best_detection_for_object_review(
-                        detections=[detection],
-                        review=review_stub,
-                        image_shape=tuple(cached.get("image_shape") or ()),
-                    ) is not None
-                    for detection in strong_detections
-                ):
-                    matched_object_ids.append(int(obj_id))
-
-            reason_codes: list[str] = []
-            if str(cached.get("status", "")).strip().lower() != "ok":
-                reason_codes.append("dinox_error")
-            elif mentioned_object_ids:
-                strong_count = int(cached.get("strong_detection_count", 0) or 0)
-                if strong_count <= 0:
-                    reason_codes.append("dinox_no_strong_detection")
-                elif strong_count >= 2:
-                    reason_codes.append("dinox_multiple_strong_detections")
-                if strong_count > 0 and not matched_object_ids:
-                    reason_codes.append("dinox_detection_misses_target")
-
-            decision = "manual_review" if reason_codes else "pass"
-            if decision == "manual_review":
-                dinox_reason_codes.extend(f"{code}:{label}" for code in reason_codes)
-                if label not in flagged_labels:
-                    flagged_labels.append(label)
-                for obj_id in mentioned_object_ids:
-                    if int(obj_id) not in flagged_object_ids:
-                        flagged_object_ids.append(int(obj_id))
-
-            label_audit = _copy_question_dinox_cache_entry(cached)
-            label_audit["decision"] = decision
-            label_audit["reason_codes"] = reason_codes
-            label_audit["roles"] = roles
-            label_audit["mentioned_object_ids"] = mentioned_object_ids
-            label_audit["matched_object_ids"] = matched_object_ids
-            label_audits.append(label_audit)
-
-        if not label_audits:
-            question["question_dinox_audit"] = {
-                "status": "skipped",
-                "labels": [],
-            }
-        elif any(str(item.get("status", "")).strip().lower() == "error" for item in label_audits):
-            question["question_dinox_audit"] = {
-                "status": "error",
-                "labels": label_audits,
-            }
-        else:
-            question["question_dinox_audit"] = {
-                "status": "ok",
-                "labels": label_audits,
-            }
-
-        mesh_object_reviews: list[dict[str, object]] = []
-        mesh_reason_codes: list[str] = []
-        seen_mesh_obj_ids: set[int] = set()
-        scene_dir = frame_context.get("scene_dir") if isinstance(frame_context, dict) else None
-        pose = frame_context.get("pose") if isinstance(frame_context, dict) else None
-        color_intrinsics = frame_context.get("color_intrinsics") if isinstance(frame_context, dict) else None
-        has_projection_context = bool(frame_context.get("has_projection_context", False)) if isinstance(frame_context, dict) else False
-
-        if scene_id and scene_id not in scene_depth_intrinsics_cache:
-            if isinstance(scene_dir, Path):
-                try:
-                    scene_depth_intrinsics_cache[scene_id] = load_scannet_depth_intrinsics(scene_dir)
-                except Exception:
-                    scene_depth_intrinsics_cache[scene_id] = None
-            else:
-                scene_depth_intrinsics_cache[scene_id] = None
-
-        if scene_id and scene_id not in scene_mesh_cache:
-            if isinstance(scene_dir, Path):
-                try:
-                    scene_mesh_cache[scene_id] = load_instance_mesh_data(
-                        scene_dir,
-                        instance_ids=sorted(int(obj_id) for obj_id in objects_by_id.keys()),
-                        n_surface_samples=1,
-                    )
-                except Exception as exc:
-                    logger.warning("Question post-generation mesh load failed for %s: %s", scene_id, exc)
-                    scene_mesh_cache[scene_id] = None
-            else:
-                scene_mesh_cache[scene_id] = None
-
-        instance_mesh_data = scene_mesh_cache.get(scene_id)
-        depth_intrinsics = scene_depth_intrinsics_cache.get(scene_id)
-
-        for mention in _iter_question_referability_mentions(question, objects_by_id):
-            obj_id = _coerce_object_id(mention.get("obj_id"))
-            label = str(mention.get("label", "")).strip().lower()
-            roles = _dedupe_strings(
-                [str(role).strip() for role in mention.get("observed_roles", []) if str(role).strip()]
-                or [str(mention.get("role", "")).strip()]
-            )
-            if obj_id is None or obj_id in seen_mesh_obj_ids or label in EXCLUDED_LABELS:
-                continue
-            seen_mesh_obj_ids.add(int(obj_id))
-
-            crop_entry = {}
-            crop_by_obj_id = frame_context.get("crop_by_obj_id", {})
-            if isinstance(crop_by_obj_id, dict):
-                crop_entry = crop_by_obj_id.get(int(obj_id), {}) or {}
-            mesh_review: dict[str, object] = {
-                "label": label,
-                "obj_id": int(obj_id),
-                "roles": roles,
-                "decision": "manual_review",
-                "reason": "",
-                "reason_codes": [],
-                "topology_status": None,
-                "topology_reason_codes": [],
-                "mesh_mask_status": None,
-                "mesh_mask_reason_codes": [],
-                "mesh_mask_iou": None,
-                "mesh_mask_under_coverage": None,
-                "mesh_mask_over_coverage": None,
-                "mesh_mask_area_ratio": None,
-                "mesh_mask_depth_bad_ratio": None,
-                "matched_detection": None,
-            }
-
-            if not has_projection_context or pose is None or color_intrinsics is None:
-                mesh_review["reason"] = "missing_projection_context"
-                mesh_review["reason_codes"] = ["missing_projection_context"]
-            elif not isinstance(instance_mesh_data, object) or instance_mesh_data is None:
-                mesh_review["reason"] = "missing_instance_mesh_data"
-                mesh_review["reason_codes"] = ["missing_instance_mesh_data"]
-            elif not bool(crop_entry.get("valid", False)):
-                mesh_review["reason"] = str(crop_entry.get("reason", "")).strip() or "invalid_crop"
-                mesh_review["reason_codes"] = [str(mesh_review["reason"])]
-            else:
-                topology_key = (scene_id, int(obj_id))
-                topology_quality = topology_cache.get(topology_key)
-                if topology_quality is None:
-                    topology_quality = _compute_topology_quality_for_object(
-                        obj_id=int(obj_id),
-                        instance_mesh_data=instance_mesh_data,
-                    )
-                    topology_cache[topology_key] = topology_quality
-                mesh_review["topology_status"] = str(topology_quality.get("status", "")).strip().lower() or None
-                mesh_review["topology_reason_codes"] = list(topology_quality.get("reason_codes", []))
-
-                if str(topology_quality.get("status", "")).strip().lower() == "fail":
-                    mesh_review["reason"] = "topology_fail"
-                    mesh_review["reason_codes"] = ["topology_fail"]
-                else:
-                    cached = _get_question_dinox_cache_entry(
-                        scene_id=scene_id,
-                        image_name=image_name,
-                        label=label,
-                        data_root=data_root,
-                        detection_cache=detection_cache,
-                        image_shape_cache=image_shape_cache,
-                    )
-                    if str(cached.get("status", "")).strip().lower() != "ok":
-                        mesh_review["reason"] = "dinox_error"
-                        mesh_review["reason_codes"] = ["dinox_error"]
-                    else:
-                        matched_detection = _select_best_detection_for_object_review(
-                            detections=list(cached.get("candidate_detections", [])),
-                            review=_post_audit_review_stub(frame_context, int(obj_id)),
-                            image_shape=tuple(cached.get("image_shape") or ()),
-                        )
-                        if matched_detection is None:
-                            mesh_review["reason"] = (
-                                "no_detection_overlap"
-                                if list(cached.get("candidate_detections", []))
-                                else "no_detection_mask"
-                            )
-                            mesh_review["reason_codes"] = [str(mesh_review["reason"])]
-                        else:
-                            mesh_review["matched_detection"] = _serialize_question_dinox_detection(matched_detection)
-                            mesh_quality = _compute_mesh_mask_quality_for_object(
-                                obj_id=int(obj_id),
-                                detection_mask=np.asarray(matched_detection.get("mask"), dtype=bool),
-                                topology_status=str(topology_quality.get("status", "")),
-                                camera_pose=pose,
-                                color_intrinsics=color_intrinsics,
-                                depth_image=None,
-                                depth_intrinsics=depth_intrinsics,
-                                instance_mesh_data=instance_mesh_data,
-                            )
-                            mesh_review["mesh_mask_status"] = str(mesh_quality.get("status", "")).strip().lower() or None
-                            mesh_review["mesh_mask_reason_codes"] = list(mesh_quality.get("reason_codes", []))
-                            mesh_review["mesh_mask_iou"] = mesh_quality.get("iou")
-                            mesh_review["mesh_mask_under_coverage"] = mesh_quality.get("under_coverage")
-                            mesh_review["mesh_mask_over_coverage"] = mesh_quality.get("over_coverage")
-                            mesh_review["mesh_mask_area_ratio"] = mesh_quality.get("area_ratio")
-                            mesh_review["mesh_mask_depth_bad_ratio"] = mesh_quality.get("depth_bad_ratio")
-                            if str(mesh_quality.get("status", "")).strip().lower() == "fail":
-                                mesh_review["reason"] = "mesh_mask_mismatch"
-                                mesh_review["reason_codes"] = [f"mesh_{code}" for code in mesh_quality.get("reason_codes", [])]
-                            else:
-                                mesh_review["decision"] = "pass"
-                                mesh_review["reason"] = "mesh_mask_match"
-                                mesh_review["reason_codes"] = []
-
-            if mesh_review["decision"] != "pass":
-                mesh_reason_codes.extend(
-                    f"{code}:{label}#{int(obj_id)}"
-                    for code in mesh_review.get("reason_codes", [])
-                )
-                if label and label not in flagged_labels:
-                    flagged_labels.append(label)
-                if int(obj_id) not in flagged_object_ids:
-                    flagged_object_ids.append(int(obj_id))
-            mesh_object_reviews.append(mesh_review)
-
-        question["question_mesh_audit"] = {
-            "status": "ok" if mesh_object_reviews else "skipped",
-            "objects": mesh_object_reviews,
-        }
-
-        combined_reason_codes = _dedupe_strings(dinox_reason_codes + mesh_reason_codes)
-        post_review = {
-            "decision": "manual_review" if combined_reason_codes else "pass",
-            "reason_codes": combined_reason_codes,
-            "flagged_labels": flagged_labels,
-            "flagged_object_ids": flagged_object_ids,
-            "dinox_label_reviews": label_audits,
-            "mesh_object_reviews": mesh_object_reviews,
-        }
-        question["question_post_generation_review"] = post_review
+        dinox_stage = _run_question_post_dinox_stage(
+            question=question,
+            frame_context=frame_context,
+            data_root=data_root,
+            detection_cache=detection_cache,
+            image_shape_cache=image_shape_cache,
+        )
+        mesh_stage = _run_question_post_mesh_stage(
+            question=question,
+            frame_context=frame_context,
+            objects_by_id=objects_by_id,
+            data_root=data_root,
+            detection_cache=detection_cache,
+            image_shape_cache=image_shape_cache,
+            scene_mesh_cache=scene_mesh_cache,
+            scene_depth_intrinsics_cache=scene_depth_intrinsics_cache,
+            topology_cache=topology_cache,
+        )
+        _apply_question_post_review_results(
+            question,
+            dinox_stage=dinox_stage,
+            mesh_stage=mesh_stage,
+        )
 
     return questions
 
@@ -1948,6 +2100,7 @@ def _run_question_presence_review(
     vlm_url: str | None,
     vlm_model: str | None,
     workers: int = 8,
+    frame_context_by_key: dict[tuple[str, str], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     from scripts.make_viewer import build_viewer_html
 
@@ -1960,11 +2113,12 @@ def _run_question_presence_review(
     _, review_fn = _make_question_presence_reviewer(client, model_name)
     _, answer_review_fn = _make_question_answer_reviewer(client, model_name)
     reviewed_questions: list[dict[str, object]] = []
-    frame_context_by_key = _prebuild_question_review_frame_contexts(
-        questions=questions,
-        data_root=data_root,
-        output_dir=output_dir,
-    )
+    if frame_context_by_key is None:
+        frame_context_by_key = _prebuild_question_review_frame_contexts(
+            questions=questions,
+            data_root=data_root,
+            output_dir=output_dir,
+        )
 
     if questions:
         with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
@@ -2081,6 +2235,7 @@ def _run_question_presence_review(
         "review_json_path": review_json_path,
         "flagged_json_path": flagged_json_path,
         "flagged_html_path": flagged_html_path,
+        "questions": reviewed_questions,
     }
 
 
@@ -2863,6 +3018,21 @@ def _write_json_file(path: Path, payload: object) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
+def _build_benchmark_payload(questions: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "name": "CausalSpatial-Bench",
+        "version": "1.0",
+        "statistics": compute_statistics(questions),
+        "questions": questions,
+    }
+
+
+def _write_benchmark_file(output_dir: Path, questions: list[dict[str, object]]) -> Path:
+    benchmark_path = output_dir / "benchmark.json"
+    _write_json_file(benchmark_path, _build_benchmark_payload(questions))
+    return benchmark_path
+
+
 def _finalize_scene_debug_file(
     debug_path: Path,
     *,
@@ -3281,10 +3451,16 @@ def run_pipeline(
             raw_question_count,
         )
         final_questions = full_quality_pipeline(all_questions)
+        question_review_frame_contexts = _prebuild_question_review_frame_contexts(
+            questions=final_questions,
+            data_root=Path(data_root),
+            output_dir=output_dir,
+        )
         final_questions = _apply_question_post_generation_audit(
             questions=final_questions,
             data_root=Path(data_root),
             output_dir=output_dir,
+            frame_context_by_key=question_review_frame_contexts,
         )
         all_questions = []
 
@@ -3314,14 +3490,7 @@ def run_pipeline(
         except OSError:
             pass
 
-    benchmark = {
-        "name": "CausalSpatial-Bench",
-        "version": "1.0",
-        "statistics": compute_statistics(final_questions),
-        "questions": final_questions,
-    }
-    benchmark_path = output_dir / "benchmark.json"
-    _write_json_file(benchmark_path, benchmark)
+    benchmark_path = _write_benchmark_file(output_dir, final_questions)
 
     if run_question_presence_review:
         _run_question_presence_review(
@@ -3331,6 +3500,7 @@ def run_pipeline(
             vlm_url=vlm_url,
             vlm_model=vlm_model,
             workers=question_presence_review_workers,
+            frame_context_by_key=question_review_frame_contexts,
         )
 
     logger.info(
