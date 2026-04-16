@@ -691,6 +691,8 @@ def refine_visible_ids_with_depth(
 
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
+# Denser sampling gives the later VLM rerank a broader candidate pool.
+FRAME_STRIDE = 5
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 800.0
@@ -983,7 +985,10 @@ def _frame_candidate_score(
     crop_ge_80_count: int,
     attachment_pair_ge_50_count: int,
 ) -> tuple[int, int]:
-    base_score = int(n_visible) * (1 + int(n_attachment))
+    # Visibility count remains a hard gate upstream, but it no longer boosts
+    # the candidate ranking itself.
+    _ = int(n_visible)
+    base_score = int(n_attachment)
     crop_bonus = int(crop_ge_80_count) * FRAME_CROP_BONUS_WEIGHT
     attachment_pair_bonus = int(attachment_pair_ge_50_count) * ATTACHMENT_PAIR_BONUS_WEIGHT
     return base_score, base_score + crop_bonus + attachment_pair_bonus
@@ -1053,7 +1058,6 @@ def select_frames(
     # Score every frame — but stride to avoid processing thousands of frames.
     # ScanNet captures ~30 fps; stride=30 samples every ~1s which is still
     # dense enough to find diverse viewpoints while cutting runtime by ~30×.
-    FRAME_STRIDE = 30
     color_dir = scene_path / "color"
     n_quality_rejected = 0
     n_missing_images = 0

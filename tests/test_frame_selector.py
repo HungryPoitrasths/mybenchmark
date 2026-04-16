@@ -319,6 +319,23 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
 
+    def test_frame_candidate_score_does_not_use_visible_object_count(self) -> None:
+        base_a, score_a = frame_selector._frame_candidate_score(
+            n_visible=10,
+            n_attachment=2,
+            crop_ge_80_count=1,
+            attachment_pair_ge_50_count=1,
+        )
+        base_b, score_b = frame_selector._frame_candidate_score(
+            n_visible=3,
+            n_attachment=2,
+            crop_ge_80_count=1,
+            attachment_pair_ge_50_count=1,
+        )
+
+        self.assertEqual(base_a, base_b)
+        self.assertEqual(score_a, score_b)
+
     def test_select_frames_adds_crop_bonus_to_score(self) -> None:
         root = make_case_dir("frame_selector")
         self.addCleanup(shutil.rmtree, root, True)
@@ -326,7 +343,7 @@ class FrameSelectorTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True)
         (scene_dir / "color").mkdir(parents=True)
         (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
-        image_names = [f"{idx:06d}.jpg" for idx in range(31)]
+        image_names = [f"{idx:06d}.jpg" for idx in range(6)]
         for image_name in image_names:
             (scene_dir / "color" / image_name).write_bytes(b"jpg")
 
@@ -348,10 +365,10 @@ class FrameSelectorTests(unittest.TestCase):
             results = frame_selector.select_frames(scene_dir, objects, max_frames=1)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["image_name"], "000030.jpg")
-        self.assertEqual(results[0]["base_score"], 3)
+        self.assertEqual(results[0]["image_name"], "000005.jpg")
+        self.assertEqual(results[0]["base_score"], 0)
         self.assertEqual(results[0]["crop_ge_80_count"], 2)
-        self.assertEqual(results[0]["score"], 23)
+        self.assertEqual(results[0]["score"], 20)
 
     def test_select_frames_adds_attachment_pair_bonus_to_score(self) -> None:
         root = make_case_dir("frame_selector_attachment_bonus")
@@ -360,7 +377,7 @@ class FrameSelectorTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True)
         (scene_dir / "color").mkdir(parents=True)
         (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
-        image_names = [f"{idx:06d}.jpg" for idx in range(31)]
+        image_names = [f"{idx:06d}.jpg" for idx in range(6)]
         for image_name in image_names:
             (scene_dir / "color" / image_name).write_bytes(b"jpg")
 
@@ -388,9 +405,10 @@ class FrameSelectorTests(unittest.TestCase):
             )
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["image_name"], "000030.jpg")
+        self.assertEqual(results[0]["image_name"], "000005.jpg")
+        self.assertEqual(results[0]["base_score"], 2)
         self.assertEqual(results[0]["attachment_pair_ge_50_count"], 1)
-        self.assertEqual(results[0]["score"], 24)
+        self.assertEqual(results[0]["score"], 17)
 
     def test_select_frames_prefers_frames_with_well_cropped_objects(self) -> None:
         root = make_case_dir("frame_selector_prefers_ge80")
@@ -399,7 +417,7 @@ class FrameSelectorTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True)
         (scene_dir / "color").mkdir(parents=True)
         (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
-        image_names = [f"{idx:06d}.jpg" for idx in range(31)]
+        image_names = [f"{idx:06d}.jpg" for idx in range(6)]
         for image_name in image_names:
             (scene_dir / "color" / image_name).write_bytes(b"jpg")
 
@@ -421,9 +439,10 @@ class FrameSelectorTests(unittest.TestCase):
             results = frame_selector.select_frames(scene_dir, objects, max_frames=1)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["image_name"], "000030.jpg")
+        self.assertEqual(results[0]["image_name"], "000005.jpg")
+        self.assertEqual(results[0]["base_score"], 0)
         self.assertEqual(results[0]["crop_ge_80_count"], 1)
-        self.assertEqual(results[0]["score"], 13)
+        self.assertEqual(results[0]["score"], 10)
 
     def test_select_frames_checks_image_quality_before_visibility(self) -> None:
         root = make_case_dir("frame_selector_quality_first")
