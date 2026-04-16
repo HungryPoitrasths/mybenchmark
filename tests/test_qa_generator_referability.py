@@ -1114,6 +1114,84 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(questions, [])
 
+    def test_l1_occlusion_absent_status_requires_strict_mesh_ray_review_to_emit_not_visible(self) -> None:
+        strict_review = {
+            "obj_id": 1,
+            "strict_not_visible": True,
+            "reason": "all_mesh_rays_blocked",
+            "strict_ray_budget": 512,
+            "strict_ray_valid_count": 512,
+            "strict_ray_visible_count": 0,
+        }
+
+        with patch(
+            "src.qa_generator._evaluate_absent_label_strict_not_visible_candidate",
+            return_value=strict_review,
+        ) as strict_review_mock:
+            questions = generate_l1_occlusion_questions(
+                objects=[make_object(1, "cup")],
+                camera_pose=make_camera_pose(),
+                color_intrinsics=None,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=None,
+                instance_mesh_data=None,
+                templates={},
+                label_statuses={"cup": "absent"},
+                label_counts={"cup": 0},
+            )
+
+        self.assertEqual(strict_review_mock.call_count, 1)
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "not visible")
+        self.assertEqual(
+            questions[0]["occlusion_decision_source"],
+            "strict_mesh_ray_review_from_vlm_absent",
+        )
+        self.assertEqual(questions[0]["geometry_candidate_reviews"], [strict_review])
+
+    def test_l1_occlusion_absent_status_skips_not_visible_when_any_strict_mesh_ray_review_fails(self) -> None:
+        strict_reviews = [
+            {
+                "obj_id": 1,
+                "strict_not_visible": True,
+                "reason": "all_mesh_rays_blocked",
+                "strict_ray_budget": 512,
+                "strict_ray_valid_count": 512,
+                "strict_ray_visible_count": 0,
+            },
+            {
+                "obj_id": 2,
+                "strict_not_visible": False,
+                "reason": "bbox_probe_visibility_present",
+                "strict_ray_budget": 512,
+                "strict_ray_valid_count": 512,
+                "strict_ray_visible_count": 3,
+            },
+        ]
+
+        with patch(
+            "src.qa_generator._evaluate_absent_label_strict_not_visible_candidate",
+            side_effect=strict_reviews,
+        ) as strict_review_mock:
+            questions = generate_l1_occlusion_questions(
+                objects=[make_object(1, "cup"), make_object(2, "cup")],
+                camera_pose=make_camera_pose(),
+                color_intrinsics=None,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=None,
+                instance_mesh_data=None,
+                templates={},
+                label_statuses={"cup": "absent"},
+                label_counts={"cup": 0},
+            )
+
+        self.assertEqual(strict_review_mock.call_count, 2)
+        self.assertEqual(questions, [])
+
     def test_l2_generators_skip_attachment_remapped_nonreferable_move_source(self) -> None:
         referable_child = make_object(1, "cup")
         hidden_parent = make_object(2, "table")

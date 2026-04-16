@@ -206,6 +206,9 @@ L1_OCCLUSION_OCCLUDED_MIN = 0.10
 L1_OCCLUSION_OCCLUDED_MIN_COUNT = 16
 L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_NOT_VISIBLE_PROBE_RAY_COUNT = 64
+L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT = 512
+L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
+L1_ABSENT_STRICT_NOT_VISIBLE_MAX_RAY_COUNT = 4096
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
 # Prefer removal questions that actually change visibility. If a frame would
@@ -1477,6 +1480,18 @@ def _camera_facing_bbox_probe_points(
     return probe_points
 
 
+def _absent_label_strict_mesh_ray_budget(projected_area: float) -> int:
+    area_px = float(projected_area or 0.0)
+    if not np.isfinite(area_px) or area_px <= 0.0:
+        area_px = L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX
+    scale = max(area_px / L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX, 1.0)
+    budget = int(round(L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT * scale))
+    return max(
+        L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT,
+        min(budget, L1_ABSENT_STRICT_NOT_VISIBLE_MAX_RAY_COUNT),
+    )
+
+
 def _bbox_probe_visibility_counts(
     *,
     ray_caster,
@@ -1622,6 +1637,145 @@ def _resolve_l1_occlusion_decision(
         return None, grayzone_fallback_source, overlay_available
 
     return decision, source_used, overlay_available
+
+
+def _evaluate_absent_label_strict_not_visible_candidate(
+    *,
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+) -> dict[str, Any]:
+    obj_id = int(obj.get("id", -1))
+    projected_area = 0.0
+    in_frame_ratio = 0.0
+    in_frame_sample_count = 0
+    surface_visible_count = 0
+    surface_valid_count = 0
+    surface_effective_ratio = 0.0
+    surface_sufficient_evidence = False
+    strict_ray_budget = 0
+    strict_ray_valid_count = 0
+    strict_ray_visible_count = 0
+
+    def _result(strict_not_visible: bool, reason: str) -> dict[str, Any]:
+        return {
+            "obj_id": obj_id,
+            "strict_not_visible": bool(strict_not_visible),
+            "reason": str(reason),
+            "projected_area": float(projected_area),
+            "in_frame_ratio": float(in_frame_ratio),
+            "in_frame_sample_count": int(in_frame_sample_count),
+            "surface_visible_count": int(surface_visible_count),
+            "surface_valid_count": int(surface_valid_count),
+            "surface_effective_ratio": float(surface_effective_ratio),
+            "surface_sufficient_evidence": bool(surface_sufficient_evidence),
+            "strict_ray_budget": int(strict_ray_budget),
+            "strict_ray_valid_count": int(strict_ray_valid_count),
+            "strict_ray_visible_count": int(strict_ray_visible_count),
+        }
+
+    if color_intrinsics is None or ray_caster is None or instance_mesh_data is None:
+        return _result(False, "missing_mesh_ray_resources")
+
+    sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+    sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+        instance_mesh_data,
+        obj_id,
+    )
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, obj_id)
+    if len(sample_points) == 0 or not target_tri_ids:
+        return _result(False, "missing_surface_samples")
+
+    (
+        projected_area,
+        in_frame_ratio,
+        in_frame_points,
+        in_frame_triangle_ids,
+        in_frame_barycentrics,
+    ) = _in_frame_surface_sample_subset(
+        sample_points,
+        camera_pose,
+        color_intrinsics,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+    )
+    in_frame_sample_count = int(len(in_frame_points))
+    if (
+        projected_area < MIN_PROJECTED_AREA_PX
+        or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
+        or in_frame_sample_count <= 0
+    ):
+        return _result(False, "insufficient_in_frame_coverage")
+
+    strict_ray_budget = _absent_label_strict_mesh_ray_budget(projected_area)
+    if in_frame_sample_count < strict_ray_budget:
+        return _result(False, "insufficient_in_frame_surface_samples")
+
+    sampled_points, sampled_triangle_ids, sampled_barycentrics = _surface_probe_subset(
+        in_frame_points,
+        strict_ray_budget,
+        sample_triangle_ids=in_frame_triangle_ids,
+        sample_barycentrics=in_frame_barycentrics,
+    )
+    modified_scene = _build_modified_scene(
+        ray_caster=ray_caster,
+        instance_mesh_data=instance_mesh_data,
+        removed_ids=set(),
+    )
+    if modified_scene is None or modified_scene.ray_caster is None:
+        return _result(False, "missing_modified_scene")
+
+    mesh_vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
+    mesh_faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    surface_visible_count, surface_valid_count = _compute_counterfactual_target_visibility_stats(
+        modified_scene=modified_scene,
+        target_surface_points=sampled_points,
+        target_triangle_ids=target_tri_ids,
+        camera_pos=camera_pos,
+        instance_mesh_data=instance_mesh_data,
+        target_obj_id=obj_id,
+        sample_triangle_ids=sampled_triangle_ids,
+        sample_barycentrics=sampled_barycentrics,
+        vertices=mesh_vertices,
+        faces=mesh_faces,
+    )
+    surface_effective_ratio = (
+        float(surface_valid_count / len(sampled_points))
+        if len(sampled_points) > 0 else 0.0
+    )
+    surface_sufficient_evidence = (
+        surface_valid_count >= strict_ray_budget
+        and surface_effective_ratio >= 1.0
+    )
+    if (
+        surface_valid_count < strict_ray_budget
+        or surface_visible_count > 0
+        or not surface_sufficient_evidence
+    ):
+        if surface_visible_count > 0:
+            return _result(False, "surface_visibility_present")
+        return _result(False, "surface_visibility_inconclusive")
+
+    bbox_probe_points = _camera_facing_bbox_probe_points(
+        bbox_min=np.asarray(obj["bbox_min"], dtype=np.float64),
+        bbox_max=np.asarray(obj["bbox_max"], dtype=np.float64),
+        camera_pos=camera_pos,
+        n_samples=strict_ray_budget,
+    )
+    strict_ray_visible_count, strict_ray_valid_count = _bbox_probe_visibility_counts(
+        ray_caster=modified_scene.ray_caster,
+        camera_pos=camera_pos,
+        probe_points=bbox_probe_points,
+        ignored_tri_ids=set(modified_scene.ignored_tri_ids),
+    )
+    if strict_ray_valid_count < strict_ray_budget:
+        return _result(False, "bbox_probe_inconclusive")
+    if strict_ray_visible_count > 0:
+        return _result(False, "bbox_probe_visibility_present")
+    return _result(True, "all_mesh_rays_blocked")
 
 
 def _compute_l1_occlusion_metrics(
@@ -2449,33 +2603,15 @@ def generate_l1_occlusion_questions(
                 candidate_reviews: list[dict[str, Any]] = []
                 all_not_visible = True
                 for candidate in candidates:
-                    metrics = _compute_l1_occlusion_metrics(
+                    strict_review = _evaluate_absent_label_strict_not_visible_candidate(
                         obj=candidate,
                         camera_pose=camera_pose,
                         color_intrinsics=color_intrinsics,
-                        depth_image=depth_image,
-                        depth_intrinsics=depth_intrinsics,
-                        occlusion_backend=occlusion_backend,
                         ray_caster=ray_caster,
                         instance_mesh_data=instance_mesh_data,
                     )
-                    decision, _source_unused, _overlay_unused = _resolve_l1_occlusion_decision(
-                        metrics=metrics,
-                        source_used="geometry_review_from_vlm_absent",
-                        grayzone_fallback_source="geometry_grayzone_fallback",
-                    )
-                    candidate_reviews.append(
-                        {
-                            "obj_id": int(candidate["id"]),
-                            "decision": decision,
-                            "projected_area": float(metrics.projected_area),
-                            "in_frame_ratio": float(metrics.in_frame_ratio),
-                            "valid_in_frame_count": int(metrics.valid_in_frame_count),
-                            "not_visible_probe_visible_count": int(metrics.not_visible_probe_visible_count),
-                            "not_visible_probe_valid_count": int(metrics.not_visible_probe_valid_count),
-                        }
-                    )
-                    if decision != "not visible":
+                    candidate_reviews.append(dict(strict_review))
+                    if not bool(strict_review.get("strict_not_visible", False)):
                         all_not_visible = False
 
                 if all_not_visible:
@@ -2486,7 +2622,7 @@ def generate_l1_occlusion_questions(
                             templates=templates,
                             obj_id=None,
                             extra={
-                                "occlusion_decision_source": "geometry_review_from_vlm_absent",
+                                "occlusion_decision_source": "strict_mesh_ray_review_from_vlm_absent",
                                 "vlm_label_status": status,
                                 "vlm_label_count": 0 if count is None else count,
                                 "geometry_candidate_reviews": candidate_reviews,

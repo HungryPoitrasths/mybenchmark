@@ -1148,48 +1148,54 @@ class L1OcclusionQuestionTests(unittest.TestCase):
         self.assertEqual(sufficient_count_metrics.occluded_in_frame_count, 16)
         self.assertEqual(sufficient_count_metrics.decision, "occluded")
 
-    def test_l1_occlusion_absent_vlm_status_uses_geometry_review_not_direct_absent_label(self) -> None:
-        surface_points = np.column_stack(
-            [
-                np.linspace(-0.5, 0.5, L1_OCCLUSION_SAMPLE_COUNT, dtype=np.float64),
-                np.zeros(L1_OCCLUSION_SAMPLE_COUNT, dtype=np.float64),
-                np.full(L1_OCCLUSION_SAMPLE_COUNT, 2.0, dtype=np.float64),
-            ]
-        )
+    def test_l1_occlusion_absent_vlm_status_uses_strict_mesh_ray_review_not_direct_absent_label(self) -> None:
+        strict_review = {
+            "obj_id": 1,
+            "strict_not_visible": True,
+            "reason": "all_mesh_rays_blocked",
+            "strict_ray_budget": 512,
+            "strict_ray_valid_count": 512,
+            "strict_ray_visible_count": 0,
+        }
 
-        questions = generate_l1_occlusion_questions(
-            objects=[
-                {
-                    "id": 1,
-                    "label": "cup",
-                    "center": [0.0, 0.0, 2.0],
-                    "bbox_min": [-0.5, -0.25, 1.9],
-                    "bbox_max": [0.5, 0.25, 2.1],
-                }
-            ],
-            camera_pose=make_camera_pose(),
-            color_intrinsics=make_camera_intrinsics(),
-            depth_image=None,
-            depth_intrinsics=None,
-            occlusion_backend="mesh_ray",
-            ray_caster=_AlwaysBlockedBBoxCaster(visible_count=0, valid_count=512),
-            instance_mesh_data=InstanceMeshData(
-                vertices=np.empty((0, 3), dtype=np.float64),
-                faces=np.empty((0, 3), dtype=np.int64),
-                triangle_ids_by_instance={1: np.array([0], dtype=np.int64)},
-                boundary_triangle_ids_by_instance={},
-                surface_points_by_instance={1: surface_points},
-            ),
-            templates={},
-            label_statuses={"cup": "absent"},
-            label_counts={"cup": 0},
-        )
+        with patch(
+            "src.qa_generator._evaluate_absent_label_strict_not_visible_candidate",
+            return_value=strict_review,
+        ) as strict_review_mock:
+            questions = generate_l1_occlusion_questions(
+                objects=[
+                    {
+                        "id": 1,
+                        "label": "cup",
+                        "center": [0.0, 0.0, 2.0],
+                        "bbox_min": [-0.5, -0.25, 1.9],
+                        "bbox_max": [0.5, 0.25, 2.1],
+                    }
+                ],
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=_AlwaysBlockedBBoxCaster(visible_count=0, valid_count=512),
+                instance_mesh_data=InstanceMeshData(
+                    vertices=np.empty((0, 3), dtype=np.float64),
+                    faces=np.empty((0, 3), dtype=np.int64),
+                    triangle_ids_by_instance={1: np.array([0], dtype=np.int64)},
+                    boundary_triangle_ids_by_instance={},
+                    surface_points_by_instance={1: np.empty((0, 3), dtype=np.float64)},
+                ),
+                templates={},
+                label_statuses={"cup": "absent"},
+                label_counts={"cup": 0},
+            )
 
+        self.assertEqual(strict_review_mock.call_count, 1)
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]["correct_value"], "not visible")
         self.assertEqual(
             questions[0]["occlusion_decision_source"],
-            "geometry_review_from_vlm_absent",
+            "strict_mesh_ray_review_from_vlm_absent",
         )
         self.assertEqual(questions[0]["vlm_label_status"], "absent")
 
