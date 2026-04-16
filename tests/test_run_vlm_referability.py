@@ -368,16 +368,21 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(caster._responses, [])
 
     def test_refine_candidate_visible_object_ids_falls_back_to_projection_when_mesh_ray_fails(self) -> None:
-        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-            [1],
-            [make_object(1, "chair")],
-            make_camera_pose(),
-            make_camera_intrinsics(),
-            np.ones((4, 4), dtype=np.float32),
-            make_camera_intrinsics(),
-            ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
-            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-        )
+        with patch.object(
+            referability_module,
+            "refine_visible_ids_with_depth",
+            return_value=[1],
+        ):
+            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
+                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+            )
 
         self.assertEqual(candidate_ids, [1])
         self.assertEqual(source, "projection_fallback")
@@ -1045,6 +1050,56 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertFalse(referability_module._frame_entry_has_debug_fields(stale_entry))
         self.assertTrue(referability_module._frame_entry_has_debug_fields(consistent_entry))
+
+    def test_frame_entry_has_debug_fields_accepts_exact_crop_label_counts_above_two(self) -> None:
+        entry = {
+            "frame_usable": True,
+            "frame_quality_clear": True,
+            "frame_quality_score": 82,
+            "frame_quality_reason": "clear enough",
+            "frame_selection_score": 82001,
+            "candidate_visible_object_ids": [1, 2, 3, 4],
+            "candidate_visibility_source": "mesh_ray_depth_refined",
+            "candidate_labels": ["stool"],
+            "label_to_object_ids": {"stool": [1, 2, 3, 4]},
+            "selector_visible_object_ids": [1, 2, 3, 4],
+            "selector_visible_label_counts": {"stool": 4},
+            "visibility_audit_by_object_id": {
+                str(obj_id): {
+                    "obj_id": obj_id,
+                    "label": "stool",
+                    "candidate_considered": True,
+                    "candidate_passed": True,
+                    "candidate_rejection_reasons": [],
+                    "bbox_in_frame_ratio": 0.9,
+                }
+                for obj_id in (1, 2, 3, 4)
+            },
+            "object_reviews": {
+                str(obj_id): {
+                    "obj_id": obj_id,
+                    "label": "stool",
+                    "local_outcome": "reviewed",
+                    "vlm_status": "clear",
+                    "bbox_in_frame_ratio": 0.9,
+                }
+                for obj_id in (1, 2, 3, 4)
+            },
+            "crop_label_statuses": {"stool": "multiple"},
+            "crop_label_counts": {"stool": 4},
+            "crop_referable_object_ids": [],
+            "full_frame_label_reviews": [],
+            "full_frame_label_statuses": {},
+            "full_frame_label_counts": {},
+            "label_statuses": {"stool": "multiple"},
+            "label_counts": {"stool": 2},
+            "referable_object_ids": [],
+            "vlm_unique_object_ids": [],
+        }
+
+        self.assertTrue(referability_module._frame_entry_has_debug_fields(entry))
+        repaired = referability_module._repair_final_referability_fields(entry)
+        self.assertEqual(repaired["crop_label_counts"], {"stool": 4})
 
     def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
         frame_candidates = [

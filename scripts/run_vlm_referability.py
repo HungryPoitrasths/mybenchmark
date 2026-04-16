@@ -446,6 +446,46 @@ def _infer_crop_unique_label_object_ids(
     return dict(sorted(crop_unique_label_object_ids.items()))
 
 
+def _derive_crop_label_counts(
+    *,
+    label_to_object_ids: dict[str, list[int]],
+    crop_label_statuses: dict[str, str],
+    object_reviews: object = None,
+) -> dict[str, int]:
+    def _lookup_review(container: object, obj_id: int) -> dict[str, Any] | None:
+        if isinstance(container, dict):
+            review = container.get(str(obj_id))
+            if not isinstance(review, dict):
+                review = container.get(obj_id)
+            return review if isinstance(review, dict) else None
+        if isinstance(container, list):
+            for item in container:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    item_obj_id = int(item.get("obj_id"))
+                except (TypeError, ValueError):
+                    continue
+                if item_obj_id == int(obj_id):
+                    return item
+        return None
+
+    crop_label_counts = _label_counts_from_statuses(crop_label_statuses)
+    for label, obj_ids in sorted(label_to_object_ids.items()):
+        clear_count = 0
+        saw_review = False
+        for obj_id in obj_ids:
+            review = _lookup_review(object_reviews, int(obj_id))
+            if review is None:
+                continue
+            saw_review = True
+            if _effective_object_review_status(review) == OBJECT_STATUS_CLEAR:
+                clear_count += 1
+        if saw_review:
+            crop_label_counts[str(label)] = int(clear_count)
+    return dict(sorted(crop_label_counts.items()))
+
+
 def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
     if not isinstance(entry, dict):
         return {}
@@ -458,7 +498,11 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         entry.get("crop_label_statuses"),
         counts=entry.get("crop_label_counts"),
     )
-    crop_label_counts = _label_counts_from_statuses(crop_label_statuses)
+    crop_label_counts = _derive_crop_label_counts(
+        label_to_object_ids=label_to_object_ids,
+        crop_label_statuses=crop_label_statuses,
+        object_reviews=entry.get("object_reviews"),
+    )
     crop_referable_object_ids = _normalize_cached_object_ids(entry.get("crop_referable_object_ids"))
     full_frame_label_statuses = _normalize_cached_label_statuses(
         entry.get("full_frame_label_statuses"),
