@@ -827,7 +827,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.79),
+            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.69),
         }
 
         with (
@@ -1002,6 +1002,54 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(repaired["attachment_referable_object_ids"], [])
         self.assertEqual(repaired["referable_object_ids"], [])
         self.assertEqual(repaired["vlm_unique_object_ids"], [])
+
+    def test_derive_final_referability_fields_recovers_relaxed_attachment_ids_from_legacy_entry(self) -> None:
+        legacy_entry = {
+            "label_to_object_ids": {
+                "table": [1],
+                "cup": [2],
+            },
+            "crop_label_statuses": {
+                "table": "unique",
+                "cup": "unique",
+            },
+            "crop_label_counts": {
+                "table": 1,
+                "cup": 1,
+            },
+            "crop_referable_object_ids": [1, 2],
+            "full_frame_label_statuses": {
+                "table": "unique",
+                "cup": "unique",
+            },
+            "full_frame_label_counts": {
+                "table": 1,
+                "cup": 1,
+            },
+            "object_reviews": {
+                "1": {
+                    "obj_id": 1,
+                    "label": "table",
+                    "local_outcome": "reviewed",
+                    "vlm_status": "clear",
+                    "bbox_in_frame_ratio": 0.55,
+                },
+                "2": {
+                    "obj_id": 2,
+                    "label": "cup",
+                    "local_outcome": "reviewed",
+                    "vlm_status": "clear",
+                    "bbox_in_frame_ratio": 0.95,
+                },
+            },
+            "referable_object_ids": [2],
+        }
+
+        derived = referability_module._derive_final_referability_fields(legacy_entry)
+
+        self.assertEqual(derived["label_statuses"], {"cup": "unique", "table": "unique"})
+        self.assertEqual(derived["referable_object_ids"], [2])
+        self.assertEqual(derived["attachment_referable_object_ids"], [1, 2])
 
     def test_frame_entry_has_debug_fields_rejects_stale_final_field_mismatch(self) -> None:
         stale_entry = {

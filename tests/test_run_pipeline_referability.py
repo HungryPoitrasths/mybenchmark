@@ -997,6 +997,39 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
         )
 
+    def test_frames_from_referability_cache_prefers_reranked_scores_over_image_name(self) -> None:
+        frames = run_pipeline_module._frames_from_referability_cache(
+            {
+                "000900.jpg": {
+                    "frame_usable": True,
+                    "candidate_visible_object_ids": [1],
+                    "frame_selection_score": 10,
+                    "selector_score": 10,
+                },
+                "000100.jpg": {
+                    "frame_usable": True,
+                    "candidate_visible_object_ids": [2],
+                    "frame_selection_score": 100,
+                    "selector_score": 50,
+                },
+                "000500.jpg": {
+                    "frame_usable": True,
+                    "candidate_visible_object_ids": [3],
+                    "frame_selection_score": 100,
+                    "selector_score": 40,
+                },
+            }
+        )
+
+        self.assertEqual(
+            [frame["image_name"] for frame in frames],
+            ["000100.jpg", "000500.jpg", "000900.jpg"],
+        )
+        self.assertEqual(
+            [frame["visible_object_ids"] for frame in frames],
+            [[2], [3], [1]],
+        )
+
     def test_run_pipeline_rejects_stale_cache_when_full_frame_marks_label_absent(self) -> None:
         root = make_case_dir("pipeline_l1_absent_candidate")
         self.addCleanup(shutil.rmtree, root, True)
@@ -1231,6 +1264,118 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["label_counts"], {"cup": 1, "table": 1})
         self.assertEqual(captured["label_to_object_ids"], {"cup": [1], "table": [2]})
         self.assertEqual(len(questions), 1)
+
+    def test_run_pipeline_derives_relaxed_attachment_ids_when_cache_entry_omits_them(self) -> None:
+        root = make_case_dir("pipeline_attachment_legacy_cache")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        referability_cache = {
+            "version": "19.0",
+            "frames": {
+                scene_id: {
+                    image_name: {
+                        "frame_usable": True,
+                        "candidate_visible_object_ids": [2, 1],
+                        "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                        "crop_label_counts": {"cup": 1, "table": 1},
+                        "crop_referable_object_ids": [1, 2],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {"cup": "unique", "table": "unique"},
+                        "full_frame_label_counts": {"cup": 1, "table": 1},
+                        "referable_object_ids": [2],
+                        "label_statuses": {"cup": "unique", "table": "unique"},
+                        "label_counts": {"cup": 1, "table": 1},
+                        "candidate_labels": ["cup", "table"],
+                        "label_to_object_ids": {"cup": [2], "table": [1]},
+                        "object_reviews": {
+                            "1": {
+                                "obj_id": 1,
+                                "label": "table",
+                                "local_outcome": "reviewed",
+                                "vlm_status": "clear",
+                                "bbox_in_frame_ratio": 0.55,
+                            },
+                            "2": {
+                                "obj_id": 2,
+                                "label": "cup",
+                                "local_outcome": "reviewed",
+                                "vlm_status": "clear",
+                                "bbox_in_frame_ratio": 0.95,
+                            },
+                        },
+                    }
+                }
+            },
+        }
+
+        scene = {
+            "scene_id": scene_id,
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "cup"),
+            ],
+            "attachment_edges": [
+                {"parent_id": 1, "child_id": 2, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+
+        captured: dict[str, object] = {}
+
+        def fake_generate_all_questions(**kwargs):
+            captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
+            captured["attachment_referable_object_ids"] = list(
+                kwargs.get("attachment_referable_object_ids") or []
+            )
+            return []
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.55},
+                    2: {"bbox_in_frame_ratio": 0.95},
+                },
+            ),
+            patch.object(run_pipeline_module, "generate_all_questions", side_effect=fake_generate_all_questions),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        self.assertEqual(captured["referable_object_ids"], [2])
+        self.assertEqual(captured["attachment_referable_object_ids"], [1, 2])
 
     def test_run_pipeline_keeps_benchmark_raw_after_question_presence_review(self) -> None:
         root = make_case_dir("pipeline_review_raw_benchmark")

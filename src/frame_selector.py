@@ -696,7 +696,7 @@ FRAME_STRIDE = 5
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 800.0
-FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.80
+FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.70
 FRAME_CROP_BONUS_WEIGHT = 10
 ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN = 0.50
 ATTACHMENT_PAIR_BONUS_WEIGHT = 15
@@ -982,14 +982,14 @@ def _frame_candidate_score(
     *,
     n_visible: int,
     n_attachment: int,
-    crop_ge_80_count: int,
+    crop_ge_70_count: int,
     attachment_pair_ge_50_count: int,
 ) -> tuple[int, int]:
     # Visibility count remains a hard gate upstream, but it no longer boosts
     # the candidate ranking itself.
     _ = int(n_visible)
     base_score = int(n_attachment)
-    crop_bonus = int(crop_ge_80_count) * FRAME_CROP_BONUS_WEIGHT
+    crop_bonus = int(crop_ge_70_count) * FRAME_CROP_BONUS_WEIGHT
     attachment_pair_bonus = int(attachment_pair_ge_50_count) * ATTACHMENT_PAIR_BONUS_WEIGHT
     return base_score, base_score + crop_bonus + attachment_pair_bonus
 
@@ -1006,7 +1006,7 @@ def select_frames(
         1. Coarsely reject only obviously blurry frames.
         2. Score each frame = #visible_objects × (1 + #attachment_objects)
            + 10 × #well-cropped-visible-objects, where well-cropped means
-           bbox_in_frame_ratio >= 0.8.
+           bbox_in_frame_ratio >= 0.7.
         3. Greedy selection: pick the highest-scoring frame, then iteratively
            pick the next that is at least VIEWPOINT_DIVERSITY_MIN_ANGLE away
            from all already-selected frames.
@@ -1096,7 +1096,7 @@ def select_frames(
             continue
 
         n_attachment = _count_attachment_objects(visible, attachment_ids)
-        crop_ge_80_count = _count_well_cropped_visible_objects(
+        crop_ge_70_count = _count_well_cropped_visible_objects(
             visible,
             visibility_audits_by_obj_id=visibility_audits_by_obj_id,
         )
@@ -1108,7 +1108,7 @@ def select_frames(
         base_score, score = _frame_candidate_score(
             n_visible=len(visible),
             n_attachment=n_attachment,
-            crop_ge_80_count=crop_ge_80_count,
+            crop_ge_70_count=crop_ge_70_count,
             attachment_pair_ge_50_count=attachment_pair_ge_50_count,
         )
         frame_entries.append(
@@ -1118,7 +1118,7 @@ def select_frames(
                 "visible_object_ids": [o["id"] for o in visible],
                 "n_visible":         len(visible),
                 "base_score":        base_score,
-                "crop_ge_80_count":  crop_ge_80_count,
+                "crop_ge_70_count":  crop_ge_70_count,
                 "attachment_pair_ge_50_count": attachment_pair_ge_50_count,
                 "score":             score,
             }
@@ -1144,7 +1144,7 @@ def select_frames(
 
     preferred_entries = [
         entry for entry in frame_entries
-        if int(entry.get("crop_ge_80_count", 0) or 0) > 0
+        if int(entry.get("crop_ge_70_count", 0) or 0) > 0
     ]
     selection_pool = preferred_entries if preferred_entries else frame_entries
     if preferred_entries:
@@ -1187,7 +1187,7 @@ def select_frames(
                 "visible_object_ids": s["visible_object_ids"],
                 "n_visible":         s["n_visible"],
                 "base_score":        s["base_score"],
-                "crop_ge_80_count":  s["crop_ge_80_count"],
+                "crop_ge_70_count":  s["crop_ge_70_count"],
                 "attachment_pair_ge_50_count": s["attachment_pair_ge_50_count"],
                 "score":             s["score"],
             }

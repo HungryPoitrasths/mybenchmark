@@ -73,6 +73,7 @@ from scripts.run_vlm_referability import (
     _call_dinox_joint_detection as _referability_call_dinox_joint_detection,
     _compute_mesh_mask_quality_for_object,
     _compute_topology_quality_for_object,
+    _derive_final_referability_fields,
     _dedupe_detections_by_mask_iou,
     _frame_entry_has_consistent_final_fields,
     _select_best_detection_for_object_review,
@@ -2296,8 +2297,14 @@ def _has_l1_visibility_candidates(label_statuses: object) -> bool:
 
 
 def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[str, object]]:
+    def _coerce_rank(value: object) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
     frames: list[dict[str, object]] = []
-    for image_name, entry in sorted(scene_frames.items()):
+    for image_name, entry in scene_frames.items():
         if not isinstance(entry, dict):
             continue
         if not entry.get("frame_usable", True):
@@ -2314,8 +2321,19 @@ def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[
             {
                 "image_name": image_name,
                 "visible_object_ids": sorted(visible_object_ids),
+                "frame_selection_score": _coerce_rank(entry.get("frame_selection_score", 0) or 0),
+                "selector_score": _coerce_rank(entry.get("selector_score", 0) or 0),
             }
         )
+    # Preserve referability rerank intent instead of falling back to filename
+    # order when the pipeline reuses cached frames.
+    frames.sort(
+        key=lambda frame: (
+            -int(frame.get("frame_selection_score", 0) or 0),
+            -int(frame.get("selector_score", 0) or 0),
+            str(frame.get("image_name", "")),
+        )
+    )
     return frames
 
 
@@ -3347,13 +3365,16 @@ def run_pipeline(
                         instance_mesh_data=instance_mesh_data,
                     )
                     referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
+                    raw_attachment_referable_ids = referability_entry.get(
+                        "attachment_referable_object_ids"
+                    )
+                    if raw_attachment_referable_ids is None:
+                        raw_attachment_referable_ids = _derive_final_referability_fields(
+                            referability_entry
+                        ).get("attachment_referable_object_ids", [])
                     attachment_referable_ids = [
                         int(obj_id)
-                        for obj_id in (
-                            referability_entry.get("attachment_referable_object_ids")
-                            or referability_entry.get("referable_object_ids")
-                            or []
-                        )
+                        for obj_id in (raw_attachment_referable_ids or [])
                         if int(obj_id) in visible_id_set
                     ]
                     if not referable_ids and not _has_l1_visibility_candidates(label_statuses):

@@ -264,15 +264,15 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(stats["zbuffer_full_mask_area_px"], 0.0)
         self.assertGreaterEqual(stats["zbuffer_mask_area_px"], 0.0)
 
-    def test_count_well_cropped_visible_objects_uses_80_percent_threshold(self) -> None:
+    def test_count_well_cropped_visible_objects_uses_70_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 
         with patch.object(
             frame_selector,
             "_project_object_roi",
             side_effect=[
-                {"bbox_in_frame_ratio": 0.80},
-                {"bbox_in_frame_ratio": 0.79},
+                {"bbox_in_frame_ratio": 0.70},
+                {"bbox_in_frame_ratio": 0.69},
                 {"bbox_in_frame_ratio": 0.95},
             ],
         ):
@@ -287,8 +287,8 @@ class FrameSelectorTests(unittest.TestCase):
     def test_count_well_cropped_visible_objects_reuses_precomputed_audits(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table")]
         audits = {
-            1: {"bbox_in_frame_ratio": 0.80},
-            2: {"bbox_in_frame_ratio": 0.79},
+            1: {"bbox_in_frame_ratio": 0.70},
+            2: {"bbox_in_frame_ratio": 0.69},
         }
 
         with patch.object(
@@ -323,13 +323,13 @@ class FrameSelectorTests(unittest.TestCase):
         base_a, score_a = frame_selector._frame_candidate_score(
             n_visible=10,
             n_attachment=2,
-            crop_ge_80_count=1,
+            crop_ge_70_count=1,
             attachment_pair_ge_50_count=1,
         )
         base_b, score_b = frame_selector._frame_candidate_score(
             n_visible=3,
             n_attachment=2,
-            crop_ge_80_count=1,
+            crop_ge_70_count=1,
             attachment_pair_ge_50_count=1,
         )
 
@@ -367,7 +367,7 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["image_name"], "000005.jpg")
         self.assertEqual(results[0]["base_score"], 0)
-        self.assertEqual(results[0]["crop_ge_80_count"], 2)
+        self.assertEqual(results[0]["crop_ge_70_count"], 2)
         self.assertEqual(results[0]["score"], 20)
 
     def test_select_frames_adds_attachment_pair_bonus_to_score(self) -> None:
@@ -411,7 +411,7 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(results[0]["score"], 17)
 
     def test_select_frames_prefers_frames_with_well_cropped_objects(self) -> None:
-        root = make_case_dir("frame_selector_prefers_ge80")
+        root = make_case_dir("frame_selector_prefers_ge70")
         self.addCleanup(shutil.rmtree, root, True)
         scene_dir = root / "scene0000_00"
         (scene_dir / "pose").mkdir(parents=True)
@@ -441,7 +441,7 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["image_name"], "000005.jpg")
         self.assertEqual(results[0]["base_score"], 0)
-        self.assertEqual(results[0]["crop_ge_80_count"], 1)
+        self.assertEqual(results[0]["crop_ge_70_count"], 1)
         self.assertEqual(results[0]["score"], 10)
 
     def test_select_frames_checks_image_quality_before_visibility(self) -> None:
