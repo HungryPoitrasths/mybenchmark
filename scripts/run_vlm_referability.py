@@ -103,6 +103,9 @@ VALID_OBJECT_STATUSES = {
 LOCAL_OUTCOME_OUT_OF_FRAME = "out_of_frame"
 LOCAL_OUTCOME_EXCLUDED = "excluded"
 LOCAL_OUTCOME_REVIEWED = "reviewed"
+OBJECT_REVIEW_MODE_VLM_CROP = "vlm_crop"
+OBJECT_REVIEW_MODE_SELECTOR_DUPLICATE_SHORTCUT = "selector_duplicate_shortcut"
+OBJECT_REVIEW_SKIP_SELECTOR_DUPLICATE_REASON = "selector_visible_label_multiple"
 
 LABEL_STATUS_UNIQUE = "unique"
 LABEL_STATUS_MULTIPLE = "multiple"
@@ -448,6 +451,40 @@ def _infer_crop_unique_label_object_ids(
     return dict(sorted(crop_unique_label_object_ids.items()))
 
 
+def _selector_duplicate_shortcut_labels(
+    selector_visible_label_counts: dict[str, int],
+) -> set[str]:
+    shortcut_labels: set[str] = set()
+    for label, count in selector_visible_label_counts.items():
+        label_key = str(label).strip().lower()
+        if not label_key:
+            continue
+        try:
+            count_int = int(count)
+        except (TypeError, ValueError):
+            continue
+        if count_int >= 2:
+            shortcut_labels.add(label_key)
+    return shortcut_labels
+
+
+def _derive_selector_duplicate_shortcut_crop_reviews(
+    *,
+    label_to_object_ids: dict[str, list[int]],
+    selector_visible_label_counts: dict[str, int],
+) -> tuple[dict[str, str], dict[str, int]]:
+    crop_label_statuses: dict[str, str] = {}
+    crop_label_counts: dict[str, int] = {}
+    for label in sorted(_selector_duplicate_shortcut_labels(selector_visible_label_counts)):
+        candidate_count = len({int(obj_id) for obj_id in label_to_object_ids.get(label, [])})
+        crop_label_statuses[label] = (
+            LABEL_STATUS_MULTIPLE
+            if candidate_count > 0 else LABEL_STATUS_ABSENT
+        )
+        crop_label_counts[label] = int(candidate_count)
+    return dict(sorted(crop_label_statuses.items())), dict(sorted(crop_label_counts.items()))
+
+
 def _derive_crop_label_counts(
     *,
     label_to_object_ids: dict[str, list[int]],
@@ -476,13 +513,25 @@ def _derive_crop_label_counts(
     for label, obj_ids in sorted(label_to_object_ids.items()):
         clear_count = 0
         saw_review = False
+        used_selector_duplicate_shortcut = False
         for obj_id in obj_ids:
             review = _lookup_review(object_reviews, int(obj_id))
             if review is None:
                 continue
             saw_review = True
+            review_mode = str(review.get("review_mode", "")).strip().lower()
+            if review_mode == OBJECT_REVIEW_MODE_SELECTOR_DUPLICATE_SHORTCUT:
+                used_selector_duplicate_shortcut = True
             if _effective_object_review_status(review) == OBJECT_STATUS_CLEAR:
                 clear_count += 1
+        if used_selector_duplicate_shortcut:
+            crop_status = str(crop_label_statuses.get(str(label), "")).strip().lower()
+            if crop_status == LABEL_STATUS_MULTIPLE:
+                crop_label_counts[str(label)] = len({int(obj_id) for obj_id in obj_ids})
+                continue
+            if crop_status == LABEL_STATUS_ABSENT:
+                crop_label_counts[str(label)] = 0
+                continue
         if saw_review:
             crop_label_counts[str(label)] = int(clear_count)
     return dict(sorted(crop_label_counts.items()))
@@ -1740,6 +1789,8 @@ def _build_object_review_entry(
     return {
         "obj_id": int(obj_id),
         "label": str(label).strip().lower(),
+        "review_mode": OBJECT_REVIEW_MODE_VLM_CROP,
+        "review_skip_reason": None,
         "local_outcome": str(crop_entry.get("local_outcome", "")),
         "local_reason": str(crop_entry.get("reason", "")),
         "vlm_status": None,
@@ -2379,6 +2430,14 @@ def _compute_frame_referability_entry(
         candidate_visible_object_ids,
         objects_by_id,
     )
+    selector_duplicate_shortcut_labels = _selector_duplicate_shortcut_labels(
+        selector_visible_label_counts
+    )
+    vlm_label_to_object_ids = {
+        str(label): [int(obj_id) for obj_id in obj_ids]
+        for label, obj_ids in sorted(label_to_object_ids.items())
+        if str(label) not in selector_duplicate_shortcut_labels
+    }
 
     normalized_frame_info = _normalize_frame_review(
         frame_info if isinstance(frame_info, dict) else _frame_decision(client, model_name, image)
@@ -2427,6 +2486,7 @@ def _compute_frame_referability_entry(
     referable_object_ids: list[int] = []
     alias_group_statuses: dict[str, str] = {}
     referability_reason_by_alias_group: dict[str, str] = {}
+    label_status_reason_by_label: dict[str, str] = {}
     frame_anchor_candidate_ids_by_alias_group: dict[str, list[int]] = {}
     frame_anchor_candidate_count_by_alias_group: dict[str, int] = {}
     alias_group_reviews: list[dict[str, Any]] = []
@@ -2447,6 +2507,11 @@ def _compute_frame_referability_entry(
                 label=label,
                 crop_entry=crop_entry,
             )
+            if label in selector_duplicate_shortcut_labels:
+                review["review_mode"] = OBJECT_REVIEW_MODE_SELECTOR_DUPLICATE_SHORTCUT
+                review["review_skip_reason"] = OBJECT_REVIEW_SKIP_SELECTOR_DUPLICATE_REASON
+                object_reviews[int(obj_id)] = review
+                continue
             if crop_entry.get("local_outcome") == LOCAL_OUTCOME_REVIEWED:
                 if image_b64 is None:
                     image_b64 = _image_to_base64(image)
@@ -2463,10 +2528,26 @@ def _compute_frame_referability_entry(
 
         crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = (
             _aggregate_crop_label_reviews(
-                label_to_object_ids,
+                vlm_label_to_object_ids,
                 object_reviews,
             )
         )
+        shortcut_crop_label_statuses, shortcut_crop_label_counts = (
+            _derive_selector_duplicate_shortcut_crop_reviews(
+                label_to_object_ids=label_to_object_ids,
+                selector_visible_label_counts=selector_visible_label_counts,
+            )
+        )
+        crop_label_statuses.update(shortcut_crop_label_statuses)
+        crop_label_counts.update(shortcut_crop_label_counts)
+        crop_label_statuses = dict(sorted(crop_label_statuses.items()))
+        crop_label_counts = dict(sorted(crop_label_counts.items()))
+        label_status_reason_by_label = {
+            str(label): "selector_duplicate_shortcut"
+            for label in shortcut_crop_label_statuses
+        }
+        for label in crop_label_statuses:
+            label_status_reason_by_label.setdefault(str(label), "derived_from_crop_vlm")
         if crop_unique_label_object_ids:
             if image_b64 is None:
                 image_b64 = _image_to_base64(image)
@@ -2513,18 +2594,26 @@ def _compute_frame_referability_entry(
         )
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
+        alias_group_to_reasons: dict[str, set[str]] = defaultdict(set)
         for obj in scene_objects:
             alias_group = str(obj.get("alias_group", "")).strip().lower()
             label = str(obj.get("label", "")).strip().lower()
             if not alias_group or label not in label_statuses:
                 continue
             alias_group_to_statuses[alias_group].add(label_statuses[label])
+            alias_group_to_reasons[alias_group].add(
+                label_status_reason_by_label.get(label, "derived_from_crop_vlm")
+            )
         alias_group_statuses = {
             alias_group: (next(iter(statuses)) if len(statuses) == 1 else LABEL_STATUS_UNSURE)
             for alias_group, statuses in sorted(alias_group_to_statuses.items())
         }
         referability_reason_by_alias_group = {
-            alias_group: "derived_from_crop_vlm"
+            alias_group: (
+                next(iter(alias_group_to_reasons.get(alias_group, {"derived_from_crop_vlm"})))
+                if len(alias_group_to_reasons.get(alias_group, set())) == 1
+                else "mixed_sources"
+            )
             for alias_group in alias_group_statuses
         }
 

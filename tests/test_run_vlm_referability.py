@@ -504,7 +504,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_object_review_decision",
-                side_effect=[("clear", '{"status":"clear"}'), ("absent", '{"status":"absent"}')],
+                side_effect=[("absent", '{"status":"absent"}')],
             ) as review_mock,
             patch.object(
                 referability_module,
@@ -535,26 +535,23 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["frame_quality_clear"], True)
         self.assertEqual(frame_entry["frame_quality_score"], 82)
         self.assertEqual(frame_entry["candidate_visibility_source"], "mesh_ray_depth_refined")
-        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique", "lamp": "absent"})
-        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 1, "lamp": 0})
-        self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
-        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "unique"})
-        self.assertEqual(frame_entry["full_frame_label_counts"], {"chair": 1})
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "multiple", "lamp": "absent"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 2, "lamp": 0})
+        self.assertEqual(frame_entry["crop_referable_object_ids"], [])
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {})
+        self.assertEqual(frame_entry["full_frame_label_counts"], {})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple", "lamp": "absent"})
         self.assertEqual(frame_entry["label_counts"], {"chair": 2, "lamp": 0})
         self.assertEqual(frame_entry["referable_object_ids"], [])
-        self.assertEqual(frame_entry["full_frame_label_reviews"][0]["crop_referable_object_id"], 1)
-        self.assertEqual(frame_entry["object_reviews"]["1"]["vlm_status"], "clear")
+        self.assertEqual(frame_entry["full_frame_label_reviews"], [])
+        self.assertEqual(frame_entry["object_reviews"]["1"]["review_mode"], "selector_duplicate_shortcut")
+        self.assertEqual(frame_entry["object_reviews"]["1"]["review_skip_reason"], "selector_visible_label_multiple")
+        self.assertIsNone(frame_entry["object_reviews"]["1"]["vlm_status"])
         self.assertEqual(frame_entry["object_reviews"]["2"]["local_outcome"], "out_of_frame")
         self.assertEqual(frame_entry["object_reviews"]["3"]["vlm_status"], "absent")
-        self.assertEqual(frame_entry["referability_reason_by_alias_group"]["chair_family"], "derived_from_crop_vlm")
-        self.assertEqual(review_mock.call_count, 2)
-        full_frame_mock.assert_called_once_with(
-            unittest.mock.ANY,
-            "fake-vlm",
-            unittest.mock.ANY,
-            "chair",
-        )
+        self.assertEqual(frame_entry["referability_reason_by_alias_group"]["chair_family"], "selector_duplicate_shortcut")
+        self.assertEqual(review_mock.call_count, 1)
+        full_frame_mock.assert_not_called()
 
     def test_compute_frame_referability_entry_uses_earlier_quantity_veto(self) -> None:
         scene_objects = [
@@ -618,11 +615,82 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 selector_visible_object_ids=[1, 2],
             )
 
-        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "unique"})
-        self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "multiple"})
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "multiple"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 2})
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple"})
         self.assertEqual(frame_entry["label_counts"], {"chair": 2})
         self.assertEqual(frame_entry["referable_object_ids"], [])
+
+    def test_compute_frame_referability_entry_duplicate_selector_label_without_candidates_becomes_absent(self) -> None:
+        scene_objects = [
+            make_object(1, "chair"),
+            make_object(2, "chair"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=900.0),
+            2: make_visibility_meta(projected_area_px=900.0),
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clear": True,
+                    "clarity_score": 82,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([], "mesh_ray_depth_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_object_review_decision",
+            ) as review_mock,
+            patch.object(
+                referability_module,
+                "_full_frame_label_review_decision",
+            ) as full_frame_mock,
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_quality_review",
+                return_value={},
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1, 2],
+            )
+
+        self.assertEqual(frame_entry["candidate_visible_object_ids"], [])
+        self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "absent"})
+        self.assertEqual(frame_entry["crop_label_counts"], {"chair": 0})
+        self.assertEqual(frame_entry["full_frame_label_statuses"], {})
+        self.assertEqual(frame_entry["label_statuses"], {"chair": "absent"})
+        self.assertEqual(frame_entry["label_counts"], {"chair": 0})
+        self.assertEqual(frame_entry["referable_object_ids"], [])
+        review_mock.assert_not_called()
+        full_frame_mock.assert_not_called()
 
     def test_compute_frame_referability_entry_full_frame_absent_vetoes_crop_unique(self) -> None:
         scene_objects = [make_object(1, "shelves")]
@@ -1150,6 +1218,56 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(referability_module._frame_entry_has_debug_fields(entry))
         repaired = referability_module._repair_final_referability_fields(entry)
         self.assertEqual(repaired["crop_label_counts"], {"stool": 4})
+
+    def test_frame_entry_has_debug_fields_accepts_selector_duplicate_shortcut_counts(self) -> None:
+        entry = {
+            "frame_usable": True,
+            "frame_quality_clear": True,
+            "frame_quality_score": 82,
+            "frame_quality_reason": "clear enough",
+            "frame_selection_score": 82001,
+            "candidate_visible_object_ids": [1],
+            "candidate_visibility_source": "mesh_ray_depth_refined",
+            "candidate_labels": ["chair"],
+            "label_to_object_ids": {"chair": [1]},
+            "selector_visible_object_ids": [1, 2],
+            "selector_visible_label_counts": {"chair": 2},
+            "visibility_audit_by_object_id": {
+                "1": {
+                    "obj_id": 1,
+                    "label": "chair",
+                    "candidate_considered": True,
+                    "candidate_passed": True,
+                    "candidate_rejection_reasons": [],
+                    "bbox_in_frame_ratio": 0.9,
+                }
+            },
+            "object_reviews": {
+                "1": {
+                    "obj_id": 1,
+                    "label": "chair",
+                    "review_mode": "selector_duplicate_shortcut",
+                    "review_skip_reason": "selector_visible_label_multiple",
+                    "local_outcome": "reviewed",
+                    "vlm_status": None,
+                    "bbox_in_frame_ratio": 0.9,
+                }
+            },
+            "crop_label_statuses": {"chair": "multiple"},
+            "crop_label_counts": {"chair": 1},
+            "crop_referable_object_ids": [],
+            "full_frame_label_reviews": [],
+            "full_frame_label_statuses": {},
+            "full_frame_label_counts": {},
+            "label_statuses": {"chair": "multiple"},
+            "label_counts": {"chair": 2},
+            "referable_object_ids": [],
+            "vlm_unique_object_ids": [],
+        }
+
+        self.assertTrue(referability_module._frame_entry_has_debug_fields(entry))
+        repaired = referability_module._repair_final_referability_fields(entry)
+        self.assertEqual(repaired["crop_label_counts"], {"chair": 1})
 
     def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
         frame_candidates = [
