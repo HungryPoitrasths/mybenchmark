@@ -174,6 +174,8 @@ class FilterImageQualityTests(unittest.TestCase):
         self.assertIn("BRISQUE: -", html)
         self.assertIn("data:image/jpeg;base64,drop", html)
         self.assertIn("data:image/jpeg;base64,keep", html)
+        self.assertIn('width="640"', html)
+        self.assertIn('height="480"', html)
         self.assertIn("filtered out", html)
         self.assertIn("kept", html)
         self.assertLess(html.index("000001_drop.jpg"), html.index("000002_keep.jpg"))
@@ -226,6 +228,38 @@ class FilterImageQualityTests(unittest.TestCase):
         self.assertEqual(len(mapping), 2)
         self.assertTrue(mapping[kept_path].startswith("data:image/jpeg;base64,"))
         self.assertTrue(mapping[filtered_path].startswith("data:image/jpeg;base64,"))
+
+    def test_build_embedded_report_images_uses_original_bytes_when_resize_disabled(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"embed_original_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        image = np.zeros((40, 60, 3), dtype=np.uint8)
+        ok, encoded = cv2.imencode(".png", image)
+        self.assertTrue(ok)
+        image_path = root / "frame.png"
+        encoded.tofile(str(image_path))
+
+        records = [
+            quality_module.ImageQualityRecord(
+                image_path=image_path,
+                width=60,
+                height=40,
+                laplacian_variance=1.0,
+                tenengrad=1.0,
+                stage1_pass=False,
+                final_pass=False,
+            )
+        ]
+
+        mapping = quality_module._build_embedded_report_images(
+            records,
+            report_image_max_side=0,
+            report_jpeg_quality=80,
+            show_progress=False,
+        )
+
+        self.assertTrue(mapping[image_path].startswith("data:image/png;base64,"))
 
     def test_evaluate_stage1_reads_image_and_applies_thresholds(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"quality_{uuid.uuid4().hex}"

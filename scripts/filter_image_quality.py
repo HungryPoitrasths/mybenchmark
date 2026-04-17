@@ -30,6 +30,7 @@ import base64
 import csv
 import html
 import json
+import mimetypes
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +45,7 @@ DEFAULT_LAPLACIAN_THRESHOLD = 120.0
 DEFAULT_TENENGRAD_THRESHOLD = 15.0
 DEFAULT_BRISQUE_THRESHOLD = 35.0
 DEFAULT_BRISQUE_MAX_SIDE = 0
-DEFAULT_REPORT_IMAGE_MAX_SIDE = 512
+DEFAULT_REPORT_IMAGE_MAX_SIDE = 0
 DEFAULT_REPORT_JPEG_QUALITY = 85
 
 
@@ -205,6 +206,13 @@ def encode_jpeg_data_url(image_bgr: np.ndarray, *, quality: int) -> str:
     return f"data:image/jpeg;base64,{payload}"
 
 
+def encode_file_data_url(image_path: Path) -> str:
+    mime_type, _ = mimetypes.guess_type(str(image_path))
+    resolved_mime = mime_type or "application/octet-stream"
+    payload = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    return f"data:{resolved_mime};base64,{payload}"
+
+
 def evaluate_stage1(
     image_path: Path,
     *,
@@ -328,7 +336,7 @@ def build_html_report(
                 f"""
                 <article class="card">
                   <div class="image-wrap">
-                    <img src="{html.escape(image_src)}" loading="lazy" alt="{html.escape(record.image_path.name)}" />
+                    <img src="{html.escape(image_src)}" loading="lazy" alt="{html.escape(record.image_path.name)}" width="{record.width}" height="{record.height}" />
                   </div>
                   <div class="card-body">
                     <div class="card-title">#{index} {html.escape(record.image_path.name)}</div>
@@ -430,7 +438,7 @@ def build_html_report(
       display: block;
     }}
     .card {{
-      display: flex;
+      display: block;
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 14px;
@@ -438,24 +446,17 @@ def build_html_report(
       margin-bottom: 18px;
     }}
     .image-wrap {{
-      --preview-width: min(560px, 46vw);
-      flex: 0 0 auto;
-      width: var(--preview-width);
       background: #000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      overflow: auto;
     }}
     .image-wrap img {{
-      width: var(--preview-width);
-      max-width: 100%;
-      height: auto;
       display: block;
+      width: auto;
+      height: auto;
+      max-width: none;
     }}
     .card-body {{
       padding: 18px 20px;
-      flex: 1;
-      min-width: 0;
     }}
     .card-title {{
       font-size: 20px;
@@ -509,18 +510,6 @@ def build_html_report(
       border-radius: 14px;
       padding: 18px;
       color: var(--muted);
-    }}
-    @media (max-width: 1100px) {{
-      .card {{
-        display: block;
-      }}
-      .image-wrap {{
-        --preview-width: 100%;
-        width: 100%;
-      }}
-      .image-wrap img {{
-        width: 100%;
-      }}
     }}
   </style>
 </head>
@@ -591,12 +580,12 @@ def _build_embedded_report_images(
     if show_progress:
         iterable = tqdm(ordered, desc="Embed report images", unit="img")
     for index, record in enumerate(iterable, start=1):
+        if report_image_max_side is None or int(report_image_max_side) <= 0:
+            mapping[record.image_path] = encode_file_data_url(record.image_path)
+            continue
         image = read_image(record.image_path)
         preview = resize_for_brisque(image, max_side=report_image_max_side)
-        mapping[record.image_path] = encode_jpeg_data_url(
-            preview,
-            quality=report_jpeg_quality,
-        )
+        mapping[record.image_path] = encode_jpeg_data_url(preview, quality=report_jpeg_quality)
     return mapping
 
 
@@ -675,8 +664,8 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_REPORT_IMAGE_MAX_SIDE,
         help=(
-            "When --copy-selected-images is set, write compressed JPEG previews whose longer side "
-            "is at most this many pixels. Use 0 to keep original preview resolution."
+            "When --copy-selected-images is set, embed previews whose longer side is at most this many "
+            "pixels. Use 0 to embed the original image bytes at original resolution."
         ),
     )
     parser.add_argument(
