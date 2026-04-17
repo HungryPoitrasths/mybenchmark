@@ -123,12 +123,13 @@ class FilterImageQualityTests(unittest.TestCase):
     def test_build_html_report_lists_selected_images(self) -> None:
         output_dir = Path("output/report_test")
         embedded_images = {
-            Path("images/000001_drop.jpg"): "data:image/jpeg;base64,drop",
-            Path("images/000002_keep.jpg"): "data:image/jpeg;base64,keep",
+            Path("images/1_drop.jpg"): "data:image/jpeg;base64,drop1",
+            Path("images/2_keep.jpg"): "data:image/jpeg;base64,keep2",
+            Path("images/10_keep.jpg"): "data:image/jpeg;base64,keep10",
         }
         records = [
             quality_module.ImageQualityRecord(
-                image_path=Path("images/000002_keep.jpg"),
+                image_path=Path("images/10_keep.jpg"),
                 width=640,
                 height=480,
                 laplacian_variance=180.0,
@@ -141,7 +142,7 @@ class FilterImageQualityTests(unittest.TestCase):
                 final_pass=True,
             ),
             quality_module.ImageQualityRecord(
-                image_path=Path("images/000001_drop.jpg"),
+                image_path=Path("images/1_drop.jpg"),
                 width=640,
                 height=480,
                 laplacian_variance=20.0,
@@ -153,13 +154,26 @@ class FilterImageQualityTests(unittest.TestCase):
                 stage2_pass=False,
                 final_pass=False,
             ),
+            quality_module.ImageQualityRecord(
+                image_path=Path("images/2_keep.jpg"),
+                width=640,
+                height=480,
+                laplacian_variance=150.0,
+                tenengrad=22.0,
+                stage1_pass=True,
+                brisque_score=24.0,
+                brisque_input_width=640,
+                brisque_input_height=480,
+                stage2_pass=True,
+                final_pass=True,
+            ),
         ]
 
         html = quality_module.build_html_report(
             records=records,
             output_dir=output_dir,
             title="Quality Report",
-            summary={"total_images": 2, "stage1_pass": 1, "final_selected": 1},
+            summary={"total_images": 3, "stage1_pass": 2, "final_selected": 2},
             thresholds={
                 "laplacian_threshold": 120.0,
                 "tenengrad_threshold": 15.0,
@@ -168,17 +182,37 @@ class FilterImageQualityTests(unittest.TestCase):
             copied_image_map=embedded_images,
         )
 
-        self.assertIn("000001_drop.jpg", html)
-        self.assertIn("000002_keep.jpg", html)
+        self.assertIn("1_drop.jpg", html)
+        self.assertIn("2_keep.jpg", html)
+        self.assertIn("10_keep.jpg", html)
         self.assertIn("BRISQUE: 19.50", html)
+        self.assertIn("BRISQUE: 24.00", html)
         self.assertIn("BRISQUE: -", html)
-        self.assertIn("data:image/jpeg;base64,drop", html)
-        self.assertIn("data:image/jpeg;base64,keep", html)
+        self.assertIn("data:image/jpeg;base64,drop1", html)
+        self.assertIn("data:image/jpeg;base64,keep2", html)
+        self.assertIn("data:image/jpeg;base64,keep10", html)
         self.assertIn('width="640"', html)
         self.assertIn('height="480"', html)
         self.assertIn("filtered out", html)
         self.assertIn("kept", html)
-        self.assertLess(html.index("000001_drop.jpg"), html.index("000002_keep.jpg"))
+        self.assertLess(html.index("1_drop.jpg"), html.index("2_keep.jpg"))
+        self.assertLess(html.index("2_keep.jpg"), html.index("10_keep.jpg"))
+
+    def test_collect_image_paths_uses_natural_order(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"collect_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        for name in ("10.jpg", "2.jpg", "1.jpg"):
+            (root / name).write_bytes(b"test")
+
+        image_paths = quality_module._collect_image_paths(
+            root,
+            patterns=("*.jpg",),
+            recursive=False,
+        )
+
+        self.assertEqual([path.name for path in image_paths], ["1.jpg", "2.jpg", "10.jpg"])
 
     def test_build_embedded_report_images_writes_data_urls_for_all_records(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"copy_report_{uuid.uuid4().hex}"

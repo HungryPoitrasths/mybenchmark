@@ -32,6 +32,7 @@ import html
 import json
 import mimetypes
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -47,6 +48,7 @@ DEFAULT_BRISQUE_THRESHOLD = 35.0
 DEFAULT_BRISQUE_MAX_SIDE = 0
 DEFAULT_REPORT_IMAGE_MAX_SIDE = 0
 DEFAULT_REPORT_JPEG_QUALITY = 85
+_NATURAL_SORT_PATTERN = re.compile(r"(\d+)")
 
 
 @dataclass(slots=True)
@@ -109,6 +111,22 @@ class BrisqueScorer:
         return float(score)
 
 
+def _natural_sort_tokens(value: str) -> tuple[tuple[int, Any], ...]:
+    tokens: list[tuple[int, Any]] = []
+    for chunk in _NATURAL_SORT_PATTERN.split(value):
+        if not chunk:
+            continue
+        if chunk.isdigit():
+            tokens.append((0, int(chunk)))
+        else:
+            tokens.append((1, chunk.lower()))
+    return tuple(tokens)
+
+
+def _natural_path_sort_key(path: Path) -> tuple[Any, ...]:
+    return (_natural_sort_tokens(path.name), str(path).lower())
+
+
 def _collect_image_paths(
     input_dir: Path,
     *,
@@ -126,7 +144,7 @@ def _collect_image_paths(
         for path in iterator:
             if path.is_file():
                 image_paths.add(path.resolve())
-    return sorted(image_paths)
+    return sorted(image_paths, key=_natural_path_sort_key)
 
 
 def select_image_paths_in_order(
@@ -302,7 +320,7 @@ def build_html_report(
     copied_image_map: dict[Path, str] | None = None,
 ) -> str:
     copied_image_map = copied_image_map or {}
-    ordered_records = sorted(records, key=lambda item: str(item.image_path.name))
+    ordered_records = sorted(records, key=lambda item: _natural_path_sort_key(item.image_path))
 
     summary_items = "".join(
         f'<div class="stat"><div class="stat-value">{html.escape(str(value))}</div>'
@@ -575,7 +593,7 @@ def _build_embedded_report_images(
     show_progress: bool = False,
 ) -> dict[Path, str]:
     mapping: dict[Path, str] = {}
-    ordered = sorted(records, key=lambda item: str(item.image_path.name))
+    ordered = sorted(records, key=lambda item: _natural_path_sort_key(item.image_path))
     iterable: Iterable[ImageQualityRecord] = ordered
     if show_progress:
         iterable = tqdm(ordered, desc="Embed report images", unit="img")
