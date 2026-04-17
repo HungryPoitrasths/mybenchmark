@@ -21,6 +21,25 @@ class _StubBrisqueScorer:
 
 
 class FilterImageQualityTests(unittest.TestCase):
+    def test_select_image_paths_in_order_returns_sequential_slice(self) -> None:
+        image_paths = [Path(f"{index:06d}.jpg") for index in range(6)]
+
+        selected = quality_module.select_image_paths_in_order(
+            image_paths,
+            max_images=3,
+            sample_start=2,
+        )
+
+        self.assertEqual(selected, image_paths[2:5])
+
+    def test_select_image_paths_in_order_rejects_non_positive_max_images(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_images must be > 0"):
+            quality_module.select_image_paths_in_order(
+                [Path("000000.jpg")],
+                max_images=0,
+                sample_start=0,
+            )
+
     def test_sharp_metrics_rank_sharp_image_above_blurred_image(self) -> None:
         base = np.zeros((128, 128), dtype=np.uint8)
         cv2.rectangle(base, (24, 24), (104, 104), 255, thickness=-1)

@@ -120,6 +120,25 @@ def _collect_image_paths(
     return sorted(image_paths)
 
 
+def select_image_paths_in_order(
+    image_paths: Sequence[Path],
+    *,
+    max_images: int | None,
+    sample_start: int = 0,
+) -> list[Path]:
+    if sample_start < 0:
+        raise ValueError(f"sample_start must be >= 0, got {sample_start}")
+    if max_images is not None and max_images <= 0:
+        raise ValueError(f"max_images must be > 0, got {max_images}")
+
+    ordered = list(image_paths)
+    if sample_start >= len(ordered):
+        return []
+    if max_images is None:
+        return ordered[sample_start:]
+    return ordered[sample_start:sample_start + max_images]
+
+
 def compute_laplacian_variance(gray_image: np.ndarray) -> float:
     laplacian = cv2.Laplacian(gray_image, cv2.CV_64F)
     return float(laplacian.var())
@@ -490,6 +509,18 @@ def parse_args() -> argparse.Namespace:
         help="Recursively scan subdirectories under input_dir.",
     )
     parser.add_argument(
+        "--max-images",
+        type=int,
+        default=None,
+        help="Process at most this many images, using sorted filename order.",
+    )
+    parser.add_argument(
+        "--sample-start",
+        type=int,
+        default=0,
+        help="Skip this many sorted images before taking the sequential sample window.",
+    )
+    parser.add_argument(
         "--laplacian-threshold",
         type=float,
         default=DEFAULT_LAPLACIAN_THRESHOLD,
@@ -524,13 +555,21 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    image_paths = _collect_image_paths(
+    all_image_paths = _collect_image_paths(
         args.input_dir,
         patterns=args.patterns,
         recursive=bool(args.recursive),
     )
+    image_paths = select_image_paths_in_order(
+        all_image_paths,
+        max_images=args.max_images,
+        sample_start=int(args.sample_start),
+    )
     if not image_paths:
-        raise ValueError(f"No images matched under {args.input_dir}")
+        raise ValueError(
+            f"No images selected under {args.input_dir}; "
+            f"available={len(all_image_paths)}, sample_start={args.sample_start}, max_images={args.max_images}"
+        )
 
     stage1_records_and_images = (
         evaluate_stage1(
@@ -579,6 +618,13 @@ def main() -> None:
         "input_dir": str(args.input_dir),
         "patterns": list(args.patterns),
         "recursive": bool(args.recursive),
+        "sampling": {
+            "mode": "sequential",
+            "available_images": len(all_image_paths),
+            "selected_images": len(image_paths),
+            "sample_start": int(args.sample_start),
+            "max_images": args.max_images,
+        },
         "thresholds": thresholds,
         "summary": summary,
         "records": [record.to_dict(output_dir=args.output_dir) for record in records],
@@ -587,6 +633,7 @@ def main() -> None:
     _write_csv(csv_path, records=records)
     html_path.write_text(report_html, encoding="utf-8")
 
+    print(f"Selected {len(image_paths)} / {len(all_image_paths)} image(s) in sequential order")
     print(f"Scanned {summary['total_images']} image(s)")
     print(f"Stage-1 pass: {summary['stage1_pass']}")
     print(f"Final selected: {summary['final_selected']}")
