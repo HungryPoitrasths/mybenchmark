@@ -1,4 +1,5 @@
 import shutil
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -214,6 +215,19 @@ class _SequenceVisibilityCaster:
 
 
 class RunVlmReferabilityTests(unittest.TestCase):
+    def test_run_in_thread_pool_preserves_input_order(self) -> None:
+        def work_item(value: int) -> int:
+            time.sleep(0.01 * (4 - value))
+            return value * 10
+
+        results = referability_module._run_in_thread_pool(
+            [1, 2, 3],
+            work_item,
+            max_workers=3,
+        )
+
+        self.assertEqual(results, [10, 20, 30])
+
     def test_topology_warn_triggers_when_any_warn_condition_is_met(self) -> None:
         quality = referability_module._compute_topology_quality_for_object(
             obj_id=1,
@@ -1404,22 +1418,25 @@ class RunVlmReferabilityTests(unittest.TestCase):
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5},
             {"image_name": "000030.jpg", "score": 19, "n_visible": 4},
             {"image_name": "000060.jpg", "score": 18, "n_visible": 4},
-            {"image_name": "000090.jpg", "score": 17, "n_visible": 4},
-            {"image_name": "000120.jpg", "score": 16, "n_visible": 3},
-            {"image_name": "000150.jpg", "score": 15, "n_visible": 3},
         ]
         frame_decisions = [
             {
                 "clear": True,
-                "clarity_score": 80,
+                "clarity_score": 81,
+                "frame_usable": True,
+                "reason": "sharp enough",
+            },
+            {
+                "clear": True,
+                "clarity_score": 75,
                 "frame_usable": True,
                 "reason": "sharp",
             },
             {
                 "clear": True,
-                "clarity_score": 72,
+                "clarity_score": 70,
                 "frame_usable": True,
-                "reason": "clear enough",
+                "reason": "clear",
             },
         ]
 
@@ -1448,9 +1465,122 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 max_frames=2,
             )
 
+        self.assertEqual(frame_decision_mock.call_count, 3)
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000030.jpg"])
+        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [81, 75])
+
+    def test_select_attachment_group_representatives_samples_then_checks_referable_ids_until_match(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000010.jpg", "score": 19, "n_visible": 6, "visible_object_ids": [1, 2, 9, 10, 11, 12]},
+            {"image_name": "000020.jpg", "score": 18, "n_visible": 2, "visible_object_ids": [1, 2]},
+            {"image_name": "000030.jpg", "score": 17, "n_visible": 4, "visible_object_ids": [1, 2, 9, 10]},
+            {"image_name": "000040.jpg", "score": 16, "n_visible": 7, "visible_object_ids": [1, 2, 9, 10, 11, 12, 13]},
+            {"image_name": "000050.jpg", "score": 15, "n_visible": 1, "visible_object_ids": [1]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 74,
+                "frame_usable": True,
+                "reason": "clear",
+            },
+            {
+                "clear": True,
+                "clarity_score": 72,
+                "frame_usable": True,
+                "reason": "clear enough",
+            },
+        ]
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_group_stop_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ) as frame_decision_mock,
+        ):
+            def build_entry(frame: dict, reviewed_frame: dict) -> dict:
+                if frame["image_name"] == "000030.jpg":
+                    return {"attachment_referable_object_ids": [1]}
+                if frame["image_name"] == "000000.jpg":
+                    return {"attachment_referable_object_ids": [1, 2]}
+                raise AssertionError(f"unexpected frame {frame['image_name']}")
+
+            selected = referability_module._select_attachment_group_representatives(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frames=frames,
+                attachment_graph={1: [2], 3: [4]},
+                attachment_entry_builder=build_entry,
+            )
+
         self.assertEqual(frame_decision_mock.call_count, 2)
-        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000090.jpg"])
-        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [80, 72])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
+        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [72])
+
+    def test_select_attachment_group_representatives_skips_group_when_no_sampled_frame_reaches_70(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000020.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [1, 2, 9, 10]},
+            {"image_name": "000030.jpg", "score": 17, "n_visible": 2, "visible_object_ids": [1, 2]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 68,
+                "frame_usable": True,
+                "reason": "softish",
+            },
+            {
+                "clear": True,
+                "clarity_score": 69,
+                "frame_usable": True,
+                "reason": "still below threshold",
+            },
+        ]
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_group_drop_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ),
+        ):
+            selected = referability_module._select_attachment_group_representatives(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frames=frames,
+                attachment_graph={1: [2]},
+                attachment_entry_builder=lambda frame, reviewed_frame: (_ for _ in ()).throw(
+                    AssertionError("referability VLM should not run below clarity threshold")
+                ),
+            )
+
+        self.assertEqual(selected, [])
 
 
 if __name__ == "__main__":

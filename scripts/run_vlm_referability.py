@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import inspect
 import json
 import logging
@@ -90,7 +91,7 @@ REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER = 5
-NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
+ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -188,6 +189,22 @@ def _call_vlm_json(
     except Exception as exc:
         logger.warning("VLM call failed: %s", exc)
         return default, ""
+
+
+def _run_in_thread_pool(
+    items: list[Any],
+    fn: Callable[[Any], Any],
+    *,
+    max_workers: int,
+) -> list[Any]:
+    if not items:
+        return []
+    worker_count = max(1, int(max_workers))
+    if worker_count <= 1 or len(items) <= 1:
+        return [fn(item) for item in items]
+    with ThreadPoolExecutor(max_workers=min(worker_count, len(items))) as executor:
+        futures = [executor.submit(fn, item) for item in items]
+        return [future.result() for future in futures]
 
 
 def _frame_prompt() -> str:
@@ -831,6 +848,115 @@ def _compress_attachment_group_frames(
     return kept
 
 
+def _review_frame_clarity(
+    *,
+    client,
+    model_name: str,
+    color_dir: Path,
+    frame: dict[str, Any],
+) -> dict[str, Any] | None:
+    image_name = str(frame.get("image_name", "")).strip()
+    if not image_name:
+        return None
+    image_path = color_dir / image_name
+    image = cv2.imread(str(image_path))
+    if image is None:
+        logger.warning("Cannot read image %s", image_path)
+        return None
+    frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
+    selector_score = int(frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0)
+    return {
+        **frame,
+        "selector_score": selector_score,
+        "frame_info": frame_info,
+        "frame_selection_score": _frame_selection_score(selector_score, frame_info),
+    }
+
+
+def _attachment_frame_group_key(
+    frame: dict[str, Any],
+    attachment_graph: dict[int, list[int]] | None,
+) -> tuple[int, ...]:
+    attachment_ids: set[int] = set()
+    for parent_id, child_ids in (attachment_graph or {}).items():
+        attachment_ids.add(int(parent_id))
+        attachment_ids.update(int(child_id) for child_id in child_ids)
+    return tuple(
+        sorted(
+            {
+                int(obj_id)
+                for obj_id in frame.get("visible_object_ids", [])
+                if int(obj_id) in attachment_ids
+            }
+        )
+    )
+
+
+def _select_attachment_group_representatives(
+    *,
+    client,
+    model_name: str,
+    scene_dir: Path,
+    frames: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]] | None,
+    attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
+    vlm_workers: int = 1,
+) -> list[dict[str, Any]]:
+    color_dir = scene_dir / "color"
+    grouped_frames: dict[tuple[int, ...], list[dict[str, Any]]] = {}
+    sampled_frames = list(frames[::3])
+    for frame in sampled_frames:
+        group_key = _attachment_frame_group_key(frame, attachment_graph)
+        grouped_frames.setdefault(group_key, []).append(frame)
+
+    def _select_group(item: tuple[int, list[dict[str, Any]]]) -> dict[str, Any] | None:
+        group_id, group_frames = item
+        ordered_frames = sorted(
+            group_frames,
+            key=lambda frame: len(frame.get("visible_object_ids", []) or []),
+            reverse=True,
+        )
+        expected_attachment_ids = _attachment_frame_group_key(ordered_frames[0], attachment_graph) if ordered_frames else ()
+        for frame in ordered_frames:
+            reviewed_frame = _review_frame_clarity(
+                client=client,
+                model_name=model_name,
+                color_dir=color_dir,
+                frame=frame,
+            )
+            if reviewed_frame is None:
+                continue
+            reviewed_frame["attachment_view_group_id"] = group_id
+            if int(reviewed_frame.get("frame_info", {}).get("clarity_score", 0) or 0) < ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE:
+                continue
+            if attachment_entry_builder is None:
+                return reviewed_frame
+            entry = attachment_entry_builder(frame, reviewed_frame)
+            if not isinstance(entry, dict):
+                continue
+            combined = dict(reviewed_frame)
+            combined.update(entry)
+            actual_attachment_ids = tuple(
+                sorted(int(obj_id) for obj_id in combined.get("attachment_referable_object_ids", []) or [])
+            )
+            if actual_attachment_ids != expected_attachment_ids:
+                continue
+            return _with_attachment_pair_metadata(
+                combined,
+                combined,
+                attachment_graph,
+                attachment_view_group_id=group_id,
+            )
+        return None
+
+    selected = _run_in_thread_pool(
+        list(enumerate(grouped_frames.values())),
+        _select_group,
+        max_workers=vlm_workers,
+    )
+    return [entry for entry in selected if entry is not None]
+
+
 def _run_frame_clarity_reviews(
     *,
     client,
@@ -841,25 +967,18 @@ def _run_frame_clarity_reviews(
     color_dir = scene_dir / "color"
     reviewed: list[dict[str, Any]] = []
     for frame in frames:
-        image_name = str(frame.get("image_name", "")).strip()
-        if not image_name:
+        reviewed_frame = _review_frame_clarity(
+            client=client,
+            model_name=model_name,
+            color_dir=color_dir,
+            frame=frame,
+        )
+        if reviewed_frame is None:
             continue
-        image_path = color_dir / image_name
-        image = cv2.imread(str(image_path))
-        if image is None:
-            logger.warning("Cannot read image %s", image_path)
-            continue
-        frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
+        frame_info = reviewed_frame.get("frame_info", {})
         if not frame_info["frame_usable"]:
             continue
-        selector_score = int(frame.get("selector_score", frame.get("score", 0)) or 0)
-        reviewed.append(
-            {
-                **frame,
-                "frame_info": frame_info,
-                "frame_selection_score": _frame_selection_score(selector_score, frame_info),
-            }
-        )
+        reviewed.append(reviewed_frame)
     return reviewed
 
 
@@ -2641,6 +2760,7 @@ def _compute_frame_referability_entry(
     selector_score: int | None = None,
     frame_info: dict[str, Any] | None = None,
     frame_selection_score: int | None = None,
+    vlm_workers: int = 1,
     ray_caster_getter: Callable[[], Any] | None = None,
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> dict[str, Any]:
@@ -2733,6 +2853,7 @@ def _compute_frame_referability_entry(
 
     if normalized_frame_info["frame_usable"]:
         image_b64: str | None = None
+        pending_object_review_jobs: list[tuple[int, str, str, dict[str, Any]]] = []
         for obj_id in candidate_visible_object_ids:
             obj = objects_by_id.get(int(obj_id))
             if obj is None:
@@ -2752,15 +2873,36 @@ def _compute_frame_referability_entry(
             if crop_entry.get("local_outcome") == LOCAL_OUTCOME_REVIEWED:
                 if image_b64 is None:
                     image_b64 = _image_to_base64(image)
-                status, raw_response = _object_review_decision(
-                    client,
-                    model_name,
-                    image_b64,
-                    str(crop_entry.get("image_b64", "") or ""),
-                    label,
+                pending_object_review_jobs.append(
+                    (
+                        int(obj_id),
+                        label,
+                        str(crop_entry.get("image_b64", "") or ""),
+                        dict(review),
+                    )
                 )
-                review["vlm_status"] = status
-                review["raw_response"] = raw_response or None
+                continue
+            object_reviews[int(obj_id)] = review
+
+        def _run_object_review_job(job: tuple[int, str, str, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
+            obj_id, label, crop_b64, review = job
+            status, raw_response = _object_review_decision(
+                client,
+                model_name,
+                str(image_b64 or ""),
+                crop_b64,
+                label,
+            )
+            updated_review = dict(review)
+            updated_review["vlm_status"] = status
+            updated_review["raw_response"] = raw_response or None
+            return int(obj_id), updated_review
+
+        for obj_id, review in _run_in_thread_pool(
+            pending_object_review_jobs,
+            _run_object_review_job,
+            max_workers=vlm_workers,
+        ):
             object_reviews[int(obj_id)] = review
 
         crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = (
@@ -2788,7 +2930,8 @@ def _compute_frame_referability_entry(
         if crop_unique_label_object_ids:
             if image_b64 is None:
                 image_b64 = _image_to_base64(image)
-            for label, obj_id in sorted(crop_unique_label_object_ids.items()):
+            def _run_full_frame_label_review_job(item: tuple[str, int]) -> dict[str, Any]:
+                label, obj_id = item
                 status, raw_response = _full_frame_label_review_decision(
                     client,
                     model_name,
@@ -2796,17 +2939,22 @@ def _compute_frame_referability_entry(
                     label,
                 )
                 status = _normalize_full_frame_label_status(status) or LABEL_STATUS_UNSURE
-                full_frame_label_reviews.append(
-                    {
-                        "label": str(label),
-                        "status": status,
-                        "crop_status": crop_label_statuses.get(label),
-                        "crop_clear_count": crop_label_counts.get(label),
-                        "crop_referable_object_id": int(obj_id),
-                        "raw_response": raw_response or None,
-                    }
-                )
-                full_frame_label_statuses[str(label)] = status
+                return {
+                    "label": str(label),
+                    "status": status,
+                    "crop_status": crop_label_statuses.get(label),
+                    "crop_clear_count": crop_label_counts.get(label),
+                    "crop_referable_object_id": int(obj_id),
+                    "raw_response": raw_response or None,
+                }
+
+            for review_payload in _run_in_thread_pool(
+                list(sorted(crop_unique_label_object_ids.items())),
+                _run_full_frame_label_review_job,
+                max_workers=vlm_workers,
+            ):
+                full_frame_label_reviews.append(review_payload)
+                full_frame_label_statuses[str(review_payload["label"])] = str(review_payload["status"])
 
         full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
         full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
@@ -2965,6 +3113,7 @@ def _select_and_rerank_frames(
     scene_dir: Path,
     frame_candidates: list[dict[str, Any]],
     max_frames: int,
+    vlm_workers: int = 1,
 ) -> list[dict[str, Any]]:
     if not frame_candidates:
         return []
@@ -2972,8 +3121,6 @@ def _select_and_rerank_frames(
     color_dir = scene_dir / "color"
     reranked: list[dict[str, Any]] = []
     reviewed_frame_count = 0
-    target_group_count = min(max(1, int(max_frames)), len(frame_candidates))
-    group_size = max(1, (len(frame_candidates) + target_group_count - 1) // target_group_count)
 
     def _sort_key(entry: dict[str, Any]) -> tuple[int, int, int, str]:
         return (
@@ -2982,44 +3129,22 @@ def _select_and_rerank_frames(
             int(entry.get("n_visible", 0)),
             str(entry.get("image_name", "")),
         )
-
-    def _review_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
-        image_name = str(frame.get("image_name", "")).strip()
-        if not image_name:
-            return None
-        image_path = color_dir / image_name
-        image = cv2.imread(str(image_path))
-        if image is None:
-            logger.warning("Cannot read image %s", image_path)
-            return None
-        frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
-        selector_score = int(frame.get("score", frame.get("n_visible", 0)) or 0)
-        return {
-            **frame,
-            "selector_score": selector_score,
-            "frame_info": frame_info,
-            "frame_selection_score": _frame_selection_score(selector_score, frame_info),
-        }
-
-    for group_start in range(0, len(frame_candidates), group_size):
-        group_frames = frame_candidates[group_start:group_start + group_size]
-        best_reviewed_frame: dict[str, Any] | None = None
-        for frame in group_frames:
-            reviewed_frame = _review_frame(frame)
-            if reviewed_frame is None:
-                continue
-            reviewed_frame_count += 1
-            frame_info = reviewed_frame.get("frame_info", {})
-            if frame_info.get("frame_usable", True):
-                if best_reviewed_frame is None or _sort_key(reviewed_frame) > _sort_key(best_reviewed_frame):
-                    best_reviewed_frame = reviewed_frame
-                if (
-                    int(frame_info.get("clarity_score", 0) or 0)
-                    >= NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE
-                ):
-                    break
-        if best_reviewed_frame is not None:
-            reranked.append(best_reviewed_frame)
+    reviewed_frames = _run_in_thread_pool(
+        list(frame_candidates),
+        lambda frame: _review_frame_clarity(
+            client=client,
+            model_name=model_name,
+            color_dir=color_dir,
+            frame=frame,
+        ),
+        max_workers=vlm_workers,
+    )
+    for reviewed_frame in reviewed_frames:
+        if reviewed_frame is None:
+            continue
+        reviewed_frame_count += 1
+        if reviewed_frame.get("frame_info", {}).get("frame_usable", True):
+            reranked.append(reviewed_frame)
 
     reranked.sort(
         key=_sort_key,
@@ -3028,10 +3153,9 @@ def _select_and_rerank_frames(
     selected = reranked[:max(0, int(max_frames))]
     if reranked:
         logger.info(
-            "VLM reranked %d geometric frame candidates for %s across %d group(s); reviewed %d image(s), kept %d clear frames (clear groups=%d, best clarity=%d, best rerank score=%d)",
+            "VLM reranked %d geometric frame candidates for %s; reviewed %d image(s), kept %d clear frames (clear candidates=%d, best clarity=%d, best rerank score=%d)",
             len(frame_candidates),
             scene_dir.name,
-            target_group_count,
             reviewed_frame_count,
             len(selected),
             len(reranked),
@@ -3079,6 +3203,10 @@ def main():
     parser.add_argument(
         "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
         help="Legacy compatibility flag; per-object review now issues one VLM request per valid crop",
+    )
+    parser.add_argument(
+        "--vlm_workers", type=int, default=4,
+        help="Maximum number of concurrent independent VLM requests",
     )
     args = parser.parse_args()
 
@@ -3233,86 +3361,77 @@ def main():
             scene_dir=scene_dir,
             frame_candidates=non_attachment_candidate_frames,
             max_frames=int(args.max_frames),
+            vlm_workers=int(args.vlm_workers),
         ) if non_attachment_candidate_frames else []
 
-        attachment_entry_by_name: dict[str, dict[str, Any]] = {}
-        attachment_group_survivors: list[dict[str, Any]] = []
-        if attachment_candidate_frames:
-            attachment_groups = _build_attachment_view_groups(
-                attachment_candidate_frames,
-                poses,
+        def _build_attachment_entry(
+            frame: dict[str, Any],
+            reviewed_frame: dict[str, Any],
+        ) -> dict[str, Any] | None:
+            image_name = str(frame.get("image_name", "")).strip()
+            if not image_name or image_name not in poses:
+                return None
+
+            image_path = scene_dir / "color" / image_name
+            image = cv2.imread(str(image_path))
+            if image is None:
+                logger.warning("Cannot read image %s", image_path)
+                return None
+
+            camera_pose = poses[image_name]
+            selector_visible_object_ids = [
+                int(obj_id)
+                for obj_id in frame.get("visible_object_ids", [])
+                if int(obj_id) in objects_by_id
+            ]
+            depth_image = None
+            frame_id = Path(image_name).stem
+            depth_path = scene_dir / "depth" / f"{frame_id}.png"
+            if depth_intrinsics is not None and depth_path.exists():
+                try:
+                    depth_image = load_depth_image(depth_path)
+                except Exception as exc:
+                    logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
+
+            return _compute_frame_referability_entry(
+                client=client,
+                model_name=model_name,
+                scene_objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                image=image,
+                image_path=image_path,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                selector_visible_object_ids=selector_visible_object_ids,
+                selector_score=int(
+                    frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0
+                ),
+                frame_info=reviewed_frame.get("frame_info", _selector_quality_pass_frame_info()),
+                frame_selection_score=int(
+                    reviewed_frame.get(
+                        "frame_selection_score",
+                        frame.get("selector_score", frame.get("score", 0)),
+                    ) or 0
+                ),
+                vlm_workers=int(args.vlm_workers),
+                ray_caster_getter=ray_caster_getter,
+                instance_mesh_data_getter=instance_mesh_data_getter,
             )
-            for group_id, group_frames in enumerate(attachment_groups):
-                reviewed_group_frames: list[dict[str, Any]] = []
-                for frame in group_frames:
-                    image_name = str(frame.get("image_name", "")).strip()
-                    if not image_name or image_name not in poses:
-                        continue
 
-                    image_path = scene_dir / "color" / image_name
-                    image = cv2.imread(str(image_path))
-                    if image is None:
-                        logger.warning("Cannot read image %s", image_path)
-                        continue
-
-                    camera_pose = poses[image_name]
-                    selector_visible_object_ids = [
-                        int(obj_id)
-                        for obj_id in frame.get("visible_object_ids", [])
-                        if int(obj_id) in objects_by_id
-                    ]
-                    depth_image = None
-                    frame_id = Path(image_name).stem
-                    depth_path = scene_dir / "depth" / f"{frame_id}.png"
-                    if depth_intrinsics is not None and depth_path.exists():
-                        try:
-                            depth_image = load_depth_image(depth_path)
-                        except Exception as exc:
-                            logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
-
-                    entry = _compute_frame_referability_entry(
-                        client=client,
-                        model_name=model_name,
-                        scene_objects=scene["objects"],
-                        objects_by_id=objects_by_id,
-                        image=image,
-                        image_path=image_path,
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        depth_image=depth_image,
-                        depth_intrinsics=depth_intrinsics,
-                        selector_visible_object_ids=selector_visible_object_ids,
-                        selector_score=int(
-                            frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0
-                        ),
-                        frame_info=_selector_quality_pass_frame_info(),
-                        frame_selection_score=int(
-                            frame.get("selector_score", frame.get("score", 0)) or 0
-                        ),
-                        ray_caster_getter=ray_caster_getter,
-                        instance_mesh_data_getter=instance_mesh_data_getter,
-                    )
-                    attachment_entry_by_name[image_name] = entry
-                    reviewed_group_frames.append(
-                        _with_attachment_pair_metadata(
-                            frame,
-                            entry,
-                            attachment_graph,
-                            attachment_view_group_id=group_id,
-                        )
-                    )
-                attachment_group_survivors.extend(
-                    _compress_attachment_group_frames(reviewed_group_frames)
-                )
-
-        attachment_clear_frames = _run_frame_clarity_reviews(
+        attachment_selected_frames = _select_attachment_group_representatives(
             client=client,
             model_name=model_name,
             scene_dir=scene_dir,
-            frames=attachment_group_survivors,
-        ) if attachment_group_survivors else []
+            frames=attachment_candidate_frames,
+            attachment_graph=attachment_graph,
+            attachment_entry_builder=_build_attachment_entry,
+            vlm_workers=int(args.vlm_workers),
+        ) if attachment_candidate_frames else []
+
         selected_attachment_frames = _select_attachment_frames_by_global_pair_coverage(
-            attachment_clear_frames,
+            attachment_selected_frames,
             max_frames=int(args.max_frames),
         )
         remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))
@@ -3336,15 +3455,8 @@ def main():
 
         for frame in selected_attachment_frames:
             image_name = str(frame.get("image_name", "")).strip()
-            entry = attachment_entry_by_name.get(image_name)
-            if entry is None:
-                continue
-            updated_entry = _apply_frame_review_to_entry(
-                entry,
-                dict(frame.get("frame_info", {})),
-            )
             final_scene_entries[image_name] = _attach_selection_metadata(
-                updated_entry,
+                frame,
                 attachment_graph,
                 final_selection_rank=final_selection_rank,
                 attachment_view_group_id=frame.get("attachment_view_group_id"),
@@ -3392,6 +3504,7 @@ def main():
                 selector_score=int(frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0),
                 frame_info=dict(frame.get("frame_info", {})),
                 frame_selection_score=int(frame.get("frame_selection_score", 0) or 0),
+                vlm_workers=int(args.vlm_workers),
                 ray_caster_getter=ray_caster_getter,
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
