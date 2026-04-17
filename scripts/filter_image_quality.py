@@ -427,36 +427,40 @@ def build_html_report(
       border-bottom: none;
     }}
     .gallery {{
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 18px;
+      display: block;
     }}
     .card {{
+      display: flex;
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 14px;
       overflow: hidden;
+      margin-bottom: 18px;
     }}
     .image-wrap {{
+      --preview-width: min(560px, 46vw);
+      flex: 0 0 auto;
+      width: var(--preview-width);
       background: #000;
-      aspect-ratio: 4 / 3;
       display: flex;
       align-items: center;
       justify-content: center;
     }}
     .image-wrap img {{
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
+      width: var(--preview-width);
+      max-width: 100%;
+      height: auto;
       display: block;
     }}
     .card-body {{
-      padding: 14px;
+      padding: 18px 20px;
+      flex: 1;
+      min-width: 0;
     }}
     .card-title {{
-      font-size: 16px;
+      font-size: 20px;
       font-weight: 700;
-      margin-bottom: 6px;
+      margin-bottom: 8px;
     }}
     .meta {{
       color: var(--muted);
@@ -497,7 +501,7 @@ def build_html_report(
     .metrics {{
       display: grid;
       gap: 6px;
-      font-size: 13px;
+      font-size: 15px;
     }}
     .empty {{
       background: var(--panel);
@@ -505,6 +509,18 @@ def build_html_report(
       border-radius: 14px;
       padding: 18px;
       color: var(--muted);
+    }}
+    @media (max-width: 1100px) {{
+      .card {{
+        display: block;
+      }}
+      .image-wrap {{
+        --preview-width: 100%;
+        width: 100%;
+      }}
+      .image-wrap img {{
+        width: 100%;
+      }}
     }}
   </style>
 </head>
