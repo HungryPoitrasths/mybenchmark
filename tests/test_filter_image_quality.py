@@ -171,6 +171,50 @@ class FilterImageQualityTests(unittest.TestCase):
         self.assertIn("kept", html)
         self.assertLess(html.index("000001_drop.jpg"), html.index("000002_keep.jpg"))
 
+    def test_copy_report_images_copies_kept_and_filtered_records(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"copy_report_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        image = np.zeros((16, 16, 3), dtype=np.uint8)
+        ok, encoded = cv2.imencode(".jpg", image)
+        self.assertTrue(ok)
+
+        kept_path = root / "000001_kept.jpg"
+        filtered_path = root / "000002_filtered.jpg"
+        encoded.tofile(str(kept_path))
+        encoded.tofile(str(filtered_path))
+
+        records = [
+            quality_module.ImageQualityRecord(
+                image_path=kept_path,
+                width=16,
+                height=16,
+                laplacian_variance=100.0,
+                tenengrad=20.0,
+                stage1_pass=True,
+                brisque_score=10.0,
+                stage2_pass=True,
+                final_pass=True,
+            ),
+            quality_module.ImageQualityRecord(
+                image_path=filtered_path,
+                width=16,
+                height=16,
+                laplacian_variance=10.0,
+                tenengrad=2.0,
+                stage1_pass=False,
+                stage2_pass=False,
+                final_pass=False,
+            ),
+        ]
+
+        mapping = quality_module._copy_report_images(records, output_dir=root, show_progress=False)
+
+        self.assertEqual(len(mapping), 2)
+        self.assertTrue((root / mapping[kept_path]).exists())
+        self.assertTrue((root / mapping[filtered_path]).exists())
+
     def test_evaluate_stage1_reads_image_and_applies_thresholds(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"quality_{uuid.uuid4().hex}"
         root.mkdir(parents=True, exist_ok=False)

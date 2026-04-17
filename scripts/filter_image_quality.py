@@ -37,6 +37,7 @@ from typing import Any, Iterable, Sequence
 
 import cv2
 import numpy as np
+from tqdm import tqdm
 
 DEFAULT_IMAGE_PATTERNS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
 DEFAULT_LAPLACIAN_THRESHOLD = 120.0
@@ -222,9 +223,13 @@ def apply_brisque_filter(
     brisque_threshold: float,
     brisque_max_side: int | None,
     scorer: BrisqueScorer,
+    show_progress: bool = False,
 ) -> list[ImageQualityRecord]:
     results: list[ImageQualityRecord] = []
-    for record, image in records_and_images:
+    iterable: Iterable[tuple[ImageQualityRecord, np.ndarray]] = records_and_images
+    if show_progress:
+        iterable = tqdm(list(records_and_images), desc="Stage 2/2 BRISQUE", unit="img")
+    for record, image in iterable:
         if not record.stage1_pass:
             record.stage2_pass = False
             record.final_pass = False
@@ -542,16 +547,20 @@ def _write_csv(
             )
 
 
-def _copy_selected_images(
+def _copy_report_images(
     records: Sequence[ImageQualityRecord],
     *,
     output_dir: Path,
+    show_progress: bool = False,
 ) -> dict[Path, str]:
-    copied_dir = output_dir / "selected_images"
+    copied_dir = output_dir / "report_images"
     copied_dir.mkdir(parents=True, exist_ok=True)
     mapping: dict[Path, str] = {}
-    selected = [record for record in records if record.final_pass]
-    for index, record in enumerate(selected, start=1):
+    ordered = sorted(records, key=lambda item: str(item.image_path.name))
+    iterable: Iterable[ImageQualityRecord] = ordered
+    if show_progress:
+        iterable = tqdm(ordered, desc="Copy report images", unit="img")
+    for index, record in enumerate(iterable, start=1):
         destination = copied_dir / f"{index:04d}_{record.image_path.name}"
         shutil.copy2(record.image_path, destination)
         mapping[record.image_path] = destination.relative_to(output_dir).as_posix()
@@ -623,7 +632,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--copy-selected-images",
         action="store_true",
-        help="Copy final selected images into output_dir/selected_images for a self-contained report.",
+        help=(
+            "Copy all images referenced by the HTML report into output_dir/report_images "
+            "so the gallery remains viewable even when original absolute paths are inaccessible."
+        ),
     )
     return parser.parse_args()
 
@@ -647,14 +659,14 @@ def main() -> None:
             f"available={len(all_image_paths)}, sample_start={args.sample_start}, max_images={args.max_images}"
         )
 
-    stage1_records_and_images = (
+    stage1_records_and_images = [
         evaluate_stage1(
             image_path,
             laplacian_threshold=float(args.laplacian_threshold),
             tenengrad_threshold=float(args.tenengrad_threshold),
         )
-        for image_path in image_paths
-    )
+        for image_path in tqdm(image_paths, desc="Stage 1/2 Sharpness", unit="img")
+    ]
 
     brisque_scorer = BrisqueScorer()
     records = apply_brisque_filter(
@@ -662,6 +674,7 @@ def main() -> None:
         brisque_threshold=float(args.brisque_threshold),
         brisque_max_side=int(args.brisque_max_side),
         scorer=brisque_scorer,
+        show_progress=True,
     )
 
     summary = summarize_records(records)
@@ -674,7 +687,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     copied_image_map = (
-        _copy_selected_images(records, output_dir=args.output_dir)
+        _copy_report_images(records, output_dir=args.output_dir, show_progress=True)
         if args.copy_selected_images
         else None
     )
