@@ -92,6 +92,7 @@ REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER = 5
 ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
+NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -892,6 +893,13 @@ def _attachment_frame_group_key(
     )
 
 
+def _visible_object_frame_group_key(frame: dict[str, Any]) -> tuple[Any, ...] | None:
+    visible_object_ids = frame.get("visible_object_ids")
+    if isinstance(visible_object_ids, list):
+        return tuple(sorted(int(obj_id) for obj_id in visible_object_ids))
+    return None
+
+
 def _select_attachment_group_representatives(
     *,
     client,
@@ -980,6 +988,63 @@ def _run_frame_clarity_reviews(
             continue
         reviewed.append(reviewed_frame)
     return reviewed
+
+
+def _select_non_attachment_group_representatives(
+    *,
+    client,
+    model_name: str,
+    scene_dir: Path,
+    frames: list[dict[str, Any]],
+    vlm_workers: int = 1,
+) -> list[dict[str, Any]]:
+    if not frames:
+        return []
+
+    color_dir = scene_dir / "color"
+    grouped_frames: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for frame in frames:
+        group_key = _visible_object_frame_group_key(frame)
+        if group_key is None:
+            continue
+        grouped_frames.setdefault(group_key, []).append(frame)
+
+    def _group_sort_key(frame: dict[str, Any]) -> tuple[int, int, str]:
+        return (
+            int(frame.get("score", frame.get("selector_score", 0)) or 0),
+            int(frame.get("n_visible", 0) or 0),
+            str(frame.get("image_name", "")),
+        )
+
+    def _select_group(item: tuple[tuple[Any, ...], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        _group_key, group_frames = item
+        kept: list[dict[str, Any]] = []
+        ordered_frames = sorted(group_frames, key=_group_sort_key, reverse=True)
+        for frame in ordered_frames:
+            reviewed_frame = _review_frame_clarity(
+                client=client,
+                model_name=model_name,
+                color_dir=color_dir,
+                frame=frame,
+            )
+            if reviewed_frame is None:
+                continue
+            frame_info = reviewed_frame.get("frame_info", {})
+            if frame_info.get("frame_usable", True):
+                kept.append(reviewed_frame)
+            if (
+                frame_info.get("frame_usable", True)
+                and int(frame_info.get("clarity_score", 0) or 0) >= NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE
+            ):
+                break
+        return kept
+
+    selected_groups = _run_in_thread_pool(
+        list(grouped_frames.items()),
+        _select_group,
+        max_workers=vlm_workers,
+    )
+    return [frame for group in selected_groups for frame in group]
 
 
 def _select_attachment_frames_by_global_pair_coverage(
@@ -3118,7 +3183,6 @@ def _select_and_rerank_frames(
     if not frame_candidates:
         return []
 
-    color_dir = scene_dir / "color"
     reranked: list[dict[str, Any]] = []
     reviewed_frame_count = 0
 
@@ -3129,22 +3193,16 @@ def _select_and_rerank_frames(
             int(entry.get("n_visible", 0)),
             str(entry.get("image_name", "")),
         )
-    reviewed_frames = _run_in_thread_pool(
-        list(frame_candidates),
-        lambda frame: _review_frame_clarity(
-            client=client,
-            model_name=model_name,
-            color_dir=color_dir,
-            frame=frame,
-        ),
-        max_workers=vlm_workers,
+    reviewed_frames = _select_non_attachment_group_representatives(
+        client=client,
+        model_name=model_name,
+        scene_dir=scene_dir,
+        frames=frame_candidates,
+        vlm_workers=vlm_workers,
     )
     for reviewed_frame in reviewed_frames:
-        if reviewed_frame is None:
-            continue
         reviewed_frame_count += 1
-        if reviewed_frame.get("frame_info", {}).get("frame_usable", True):
-            reranked.append(reviewed_frame)
+        reranked.append(reviewed_frame)
 
     reranked.sort(
         key=_sort_key,
