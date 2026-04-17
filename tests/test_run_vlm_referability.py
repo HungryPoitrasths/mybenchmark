@@ -1399,6 +1399,59 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(selected[0]["frame_selection_score"], 100009)
         self.assertEqual(selected[1]["frame_selection_score"], 100007)
 
+    def test_select_and_rerank_frames_stops_reviewing_group_after_first_high_quality_hit(self) -> None:
+        frame_candidates = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5},
+            {"image_name": "000030.jpg", "score": 19, "n_visible": 4},
+            {"image_name": "000060.jpg", "score": 18, "n_visible": 4},
+            {"image_name": "000090.jpg", "score": 17, "n_visible": 4},
+            {"image_name": "000120.jpg", "score": 16, "n_visible": 3},
+            {"image_name": "000150.jpg", "score": 15, "n_visible": 3},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 80,
+                "frame_usable": True,
+                "reason": "sharp",
+            },
+            {
+                "clear": True,
+                "clarity_score": 72,
+                "frame_usable": True,
+                "reason": "clear enough",
+            },
+        ]
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"rerank_group_stop_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ) as frame_decision_mock,
+        ):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=frame_candidates,
+                max_frames=2,
+            )
+
+        self.assertEqual(frame_decision_mock.call_count, 2)
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000090.jpg"])
+        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [80, 72])
+
 
 if __name__ == "__main__":
     unittest.main()

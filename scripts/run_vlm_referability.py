@@ -90,6 +90,7 @@ REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER = 5
+NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -2965,49 +2966,75 @@ def _select_and_rerank_frames(
     frame_candidates: list[dict[str, Any]],
     max_frames: int,
 ) -> list[dict[str, Any]]:
+    if not frame_candidates:
+        return []
+
     color_dir = scene_dir / "color"
     reranked: list[dict[str, Any]] = []
-    for frame in frame_candidates:
-        image_name = str(frame.get("image_name", "")).strip()
-        if not image_name:
-            continue
-        image_path = color_dir / image_name
-        image = cv2.imread(str(image_path))
-        if image is None:
-            logger.warning("Cannot read image %s", image_path)
-            continue
-        frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
-        selector_score = int(frame.get("score", frame.get("n_visible", 0)) or 0)
-        reranked.append(
-            {
-                **frame,
-                "selector_score": selector_score,
-                "frame_info": frame_info,
-                "frame_selection_score": _frame_selection_score(selector_score, frame_info),
-            }
-        )
+    reviewed_frame_count = 0
+    target_group_count = min(max(1, int(max_frames)), len(frame_candidates))
+    group_size = max(1, (len(frame_candidates) + target_group_count - 1) // target_group_count)
 
-    reranked.sort(
-        key=lambda entry: (
+    def _sort_key(entry: dict[str, Any]) -> tuple[int, int, int, str]:
+        return (
             int(entry.get("frame_selection_score", 0)),
             int(entry.get("selector_score", 0)),
             int(entry.get("n_visible", 0)),
             str(entry.get("image_name", "")),
-        ),
+        )
+
+    def _review_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
+        image_name = str(frame.get("image_name", "")).strip()
+        if not image_name:
+            return None
+        image_path = color_dir / image_name
+        image = cv2.imread(str(image_path))
+        if image is None:
+            logger.warning("Cannot read image %s", image_path)
+            return None
+        frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
+        selector_score = int(frame.get("score", frame.get("n_visible", 0)) or 0)
+        return {
+            **frame,
+            "selector_score": selector_score,
+            "frame_info": frame_info,
+            "frame_selection_score": _frame_selection_score(selector_score, frame_info),
+        }
+
+    for group_start in range(0, len(frame_candidates), group_size):
+        group_frames = frame_candidates[group_start:group_start + group_size]
+        best_reviewed_frame: dict[str, Any] | None = None
+        for frame in group_frames:
+            reviewed_frame = _review_frame(frame)
+            if reviewed_frame is None:
+                continue
+            reviewed_frame_count += 1
+            frame_info = reviewed_frame.get("frame_info", {})
+            if frame_info.get("frame_usable", True):
+                if best_reviewed_frame is None or _sort_key(reviewed_frame) > _sort_key(best_reviewed_frame):
+                    best_reviewed_frame = reviewed_frame
+                if (
+                    int(frame_info.get("clarity_score", 0) or 0)
+                    >= NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE
+                ):
+                    break
+        if best_reviewed_frame is not None:
+            reranked.append(best_reviewed_frame)
+
+    reranked.sort(
+        key=_sort_key,
         reverse=True,
     )
-    usable_reranked = [
-        entry for entry in reranked
-        if entry.get("frame_info", {}).get("frame_usable", True)
-    ]
-    selected = usable_reranked[:max(0, int(max_frames))]
+    selected = reranked[:max(0, int(max_frames))]
     if reranked:
         logger.info(
-            "VLM reranked %d geometric frame candidates for %s; kept %d clear frames (clear candidates=%d, best clarity=%d, best rerank score=%d)",
-            len(reranked),
+            "VLM reranked %d geometric frame candidates for %s across %d group(s); reviewed %d image(s), kept %d clear frames (clear groups=%d, best clarity=%d, best rerank score=%d)",
+            len(frame_candidates),
             scene_dir.name,
+            target_group_count,
+            reviewed_frame_count,
             len(selected),
-            len(usable_reranked),
+            len(reranked),
             int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
             int(reranked[0].get("frame_selection_score", 0)),
         )
