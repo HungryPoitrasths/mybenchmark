@@ -3116,6 +3116,7 @@ def run_pipeline(
     vlm_url: str | None = None,
     vlm_model: str | None = None,
     write_frame_debug: bool = True,
+    run_question_dinox_audit: bool = False,
     run_question_presence_review: bool = True,
     question_presence_review_workers: int = 8,
 ):
@@ -3155,6 +3156,7 @@ def run_pipeline(
     debug_scene_ids: list[str] = []
     processed_scene_ids: list[str] = []
     final_questions: list[dict] = []
+    question_review_frame_contexts: dict[tuple[str, str], dict[str, object]] | None = None
 
     raw_questions_dir = output_dir / "_raw_questions_tmp"
     raw_questions_dir.mkdir(parents=True, exist_ok=True)
@@ -3502,17 +3504,21 @@ def run_pipeline(
             raw_question_count,
         )
         final_questions = full_quality_pipeline(all_questions)
-        question_review_frame_contexts = _prebuild_question_review_frame_contexts(
-            questions=final_questions,
-            data_root=Path(data_root),
-            output_dir=output_dir,
-        )
-        final_questions = _apply_question_post_generation_audit(
-            questions=final_questions,
-            data_root=Path(data_root),
-            output_dir=output_dir,
-            frame_context_by_key=question_review_frame_contexts,
-        )
+        if run_question_dinox_audit or run_question_presence_review:
+            question_review_frame_contexts = _prebuild_question_review_frame_contexts(
+                questions=final_questions,
+                data_root=Path(data_root),
+                output_dir=output_dir,
+            )
+        if run_question_dinox_audit:
+            final_questions = _apply_question_post_generation_audit(
+                questions=final_questions,
+                data_root=Path(data_root),
+                output_dir=output_dir,
+                frame_context_by_key=question_review_frame_contexts,
+            )
+        else:
+            logger.info("Skipping DINO-X-dependent post-generation audit")
         all_questions = []
 
         by_scene: dict[str, list] = defaultdict(list)
@@ -3915,6 +3921,12 @@ def main():
         help="Write per-scene frame_debug/<scene_id>.json with frame/object audit data",
     )
     parser.add_argument(
+        "--question_dinox_audit",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run the DINO-X-dependent post-generation audit (question_dinox_audit/question_mesh_audit/question_post_generation_review)",
+    )
+    parser.add_argument(
         "--question_presence_review",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -3944,6 +3956,7 @@ def main():
         vlm_url=args.vlm_url,
         vlm_model=args.vlm_model,
         write_frame_debug=args.write_frame_debug,
+        run_question_dinox_audit=args.question_dinox_audit,
         run_question_presence_review=args.question_presence_review,
         question_presence_review_workers=args.question_presence_review_workers,
     )
