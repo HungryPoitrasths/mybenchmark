@@ -26,6 +26,7 @@ BRISQUE dependency:
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import html
 import json
@@ -191,8 +192,7 @@ def read_image(image_path: Path) -> np.ndarray:
     return image
 
 
-def write_jpeg_image(image_path: Path, image_bgr: np.ndarray, *, quality: int) -> None:
-    image_path.parent.mkdir(parents=True, exist_ok=True)
+def encode_jpeg_data_url(image_bgr: np.ndarray, *, quality: int) -> str:
     normalized_quality = max(1, min(100, int(quality)))
     ok, encoded = cv2.imencode(
         ".jpg",
@@ -200,8 +200,9 @@ def write_jpeg_image(image_path: Path, image_bgr: np.ndarray, *, quality: int) -
         [int(cv2.IMWRITE_JPEG_QUALITY), normalized_quality],
     )
     if not ok:
-        raise ValueError(f"Cannot encode JPEG preview: {image_path}")
-    encoded.tofile(str(image_path))
+        raise ValueError("Cannot encode embedded JPEG preview")
+    payload = base64.b64encode(encoded.tobytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{payload}"
 
 
 def evaluate_stage1(
@@ -561,27 +562,25 @@ def _write_csv(
             )
 
 
-def _copy_report_images(
+def _build_embedded_report_images(
     records: Sequence[ImageQualityRecord],
     *,
-    output_dir: Path,
     report_image_max_side: int | None,
     report_jpeg_quality: int,
     show_progress: bool = False,
 ) -> dict[Path, str]:
-    copied_dir = output_dir / "report_images"
-    copied_dir.mkdir(parents=True, exist_ok=True)
     mapping: dict[Path, str] = {}
     ordered = sorted(records, key=lambda item: str(item.image_path.name))
     iterable: Iterable[ImageQualityRecord] = ordered
     if show_progress:
-        iterable = tqdm(ordered, desc="Copy report images", unit="img")
+        iterable = tqdm(ordered, desc="Embed report images", unit="img")
     for index, record in enumerate(iterable, start=1):
-        destination = copied_dir / f"{index:04d}_{record.image_path.stem}.jpg"
         image = read_image(record.image_path)
         preview = resize_for_brisque(image, max_side=report_image_max_side)
-        write_jpeg_image(destination, preview, quality=report_jpeg_quality)
-        mapping[record.image_path] = destination.relative_to(output_dir).as_posix()
+        mapping[record.image_path] = encode_jpeg_data_url(
+            preview,
+            quality=report_jpeg_quality,
+        )
     return mapping
 
 
@@ -651,8 +650,8 @@ def parse_args() -> argparse.Namespace:
         "--copy-selected-images",
         action="store_true",
         help=(
-            "Copy all images referenced by the HTML report into output_dir/report_images "
-            "so the gallery remains viewable even when original absolute paths are inaccessible."
+            "Embed compressed JPEG previews directly into the HTML report so the gallery remains "
+            "viewable even when original image paths are inaccessible."
         ),
     )
     parser.add_argument(
@@ -722,9 +721,8 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     copied_image_map = (
-        _copy_report_images(
+        _build_embedded_report_images(
             records,
-            output_dir=args.output_dir,
             report_image_max_side=int(args.report_image_max_side),
             report_jpeg_quality=int(args.report_jpeg_quality),
             show_progress=True,

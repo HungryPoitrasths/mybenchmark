@@ -122,6 +122,10 @@ class FilterImageQualityTests(unittest.TestCase):
 
     def test_build_html_report_lists_selected_images(self) -> None:
         output_dir = Path("output/report_test")
+        embedded_images = {
+            Path("images/000001_drop.jpg"): "data:image/jpeg;base64,drop",
+            Path("images/000002_keep.jpg"): "data:image/jpeg;base64,keep",
+        }
         records = [
             quality_module.ImageQualityRecord(
                 image_path=Path("images/000002_keep.jpg"),
@@ -161,17 +165,20 @@ class FilterImageQualityTests(unittest.TestCase):
                 "tenengrad_threshold": 15.0,
                 "brisque_threshold": 35.0,
             },
+            copied_image_map=embedded_images,
         )
 
         self.assertIn("000001_drop.jpg", html)
         self.assertIn("000002_keep.jpg", html)
         self.assertIn("BRISQUE: 19.50", html)
         self.assertIn("BRISQUE: -", html)
+        self.assertIn("data:image/jpeg;base64,drop", html)
+        self.assertIn("data:image/jpeg;base64,keep", html)
         self.assertIn("filtered out", html)
         self.assertIn("kept", html)
         self.assertLess(html.index("000001_drop.jpg"), html.index("000002_keep.jpg"))
 
-    def test_copy_report_images_writes_compressed_previews_for_all_records(self) -> None:
+    def test_build_embedded_report_images_writes_data_urls_for_all_records(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"copy_report_{uuid.uuid4().hex}"
         root.mkdir(parents=True, exist_ok=False)
         self.addCleanup(shutil.rmtree, root, True)
@@ -209,20 +216,16 @@ class FilterImageQualityTests(unittest.TestCase):
             ),
         ]
 
-        mapping = quality_module._copy_report_images(
+        mapping = quality_module._build_embedded_report_images(
             records,
-            output_dir=root,
             report_image_max_side=32,
             report_jpeg_quality=80,
             show_progress=False,
         )
 
         self.assertEqual(len(mapping), 2)
-        self.assertTrue((root / mapping[kept_path]).exists())
-        self.assertTrue((root / mapping[filtered_path]).exists())
-        self.assertEqual((root / mapping[kept_path]).suffix, ".jpg")
-        preview = quality_module.read_image(root / mapping[kept_path])
-        self.assertEqual(preview.shape[:2], (26, 32))
+        self.assertTrue(mapping[kept_path].startswith("data:image/jpeg;base64,"))
+        self.assertTrue(mapping[filtered_path].startswith("data:image/jpeg;base64,"))
 
     def test_evaluate_stage1_reads_image_and_applies_thresholds(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"quality_{uuid.uuid4().hex}"
