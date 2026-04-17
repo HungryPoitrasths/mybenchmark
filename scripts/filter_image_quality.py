@@ -30,7 +30,6 @@ import csv
 import html
 import json
 import os
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -44,6 +43,8 @@ DEFAULT_LAPLACIAN_THRESHOLD = 120.0
 DEFAULT_TENENGRAD_THRESHOLD = 15.0
 DEFAULT_BRISQUE_THRESHOLD = 35.0
 DEFAULT_BRISQUE_MAX_SIDE = 0
+DEFAULT_REPORT_IMAGE_MAX_SIDE = 512
+DEFAULT_REPORT_JPEG_QUALITY = 85
 
 
 @dataclass(slots=True)
@@ -188,6 +189,19 @@ def read_image(image_path: Path) -> np.ndarray:
     if image is None:
         raise ValueError(f"Cannot decode image: {image_path}")
     return image
+
+
+def write_jpeg_image(image_path: Path, image_bgr: np.ndarray, *, quality: int) -> None:
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_quality = max(1, min(100, int(quality)))
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        image_bgr,
+        [int(cv2.IMWRITE_JPEG_QUALITY), normalized_quality],
+    )
+    if not ok:
+        raise ValueError(f"Cannot encode JPEG preview: {image_path}")
+    encoded.tofile(str(image_path))
 
 
 def evaluate_stage1(
@@ -551,6 +565,8 @@ def _copy_report_images(
     records: Sequence[ImageQualityRecord],
     *,
     output_dir: Path,
+    report_image_max_side: int | None,
+    report_jpeg_quality: int,
     show_progress: bool = False,
 ) -> dict[Path, str]:
     copied_dir = output_dir / "report_images"
@@ -561,8 +577,10 @@ def _copy_report_images(
     if show_progress:
         iterable = tqdm(ordered, desc="Copy report images", unit="img")
     for index, record in enumerate(iterable, start=1):
-        destination = copied_dir / f"{index:04d}_{record.image_path.name}"
-        shutil.copy2(record.image_path, destination)
+        destination = copied_dir / f"{index:04d}_{record.image_path.stem}.jpg"
+        image = read_image(record.image_path)
+        preview = resize_for_brisque(image, max_side=report_image_max_side)
+        write_jpeg_image(destination, preview, quality=report_jpeg_quality)
         mapping[record.image_path] = destination.relative_to(output_dir).as_posix()
     return mapping
 
@@ -637,6 +655,21 @@ def parse_args() -> argparse.Namespace:
             "so the gallery remains viewable even when original absolute paths are inaccessible."
         ),
     )
+    parser.add_argument(
+        "--report-image-max-side",
+        type=int,
+        default=DEFAULT_REPORT_IMAGE_MAX_SIDE,
+        help=(
+            "When --copy-selected-images is set, write compressed JPEG previews whose longer side "
+            "is at most this many pixels. Use 0 to keep original preview resolution."
+        ),
+    )
+    parser.add_argument(
+        "--report-jpeg-quality",
+        type=int,
+        default=DEFAULT_REPORT_JPEG_QUALITY,
+        help="JPEG quality for HTML report preview images when --copy-selected-images is set.",
+    )
     return parser.parse_args()
 
 
@@ -683,11 +716,19 @@ def main() -> None:
         "tenengrad_threshold": float(args.tenengrad_threshold),
         "brisque_threshold": float(args.brisque_threshold),
         "brisque_max_side": float(args.brisque_max_side),
+        "report_image_max_side": float(args.report_image_max_side),
+        "report_jpeg_quality": float(args.report_jpeg_quality),
     }
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     copied_image_map = (
-        _copy_report_images(records, output_dir=args.output_dir, show_progress=True)
+        _copy_report_images(
+            records,
+            output_dir=args.output_dir,
+            report_image_max_side=int(args.report_image_max_side),
+            report_jpeg_quality=int(args.report_jpeg_quality),
+            show_progress=True,
+        )
         if args.copy_selected_images
         else None
     )
