@@ -20,10 +20,19 @@ def make_case_dir(prefix: str) -> Path:
     return path
 
 
-def make_camera_pose(image_name: str) -> CameraPose:
+def make_camera_pose(image_name: str, *, yaw_degrees: float = 0.0) -> CameraPose:
+    yaw_radians = np.deg2rad(float(yaw_degrees))
+    rotation_c2w = np.array(
+        [
+            [np.cos(yaw_radians), 0.0, np.sin(yaw_radians)],
+            [0.0, 1.0, 0.0],
+            [-np.sin(yaw_radians), 0.0, np.cos(yaw_radians)],
+        ],
+        dtype=np.float64,
+    )
     return CameraPose(
         image_name=image_name,
-        rotation=np.eye(3, dtype=np.float64),
+        rotation=rotation_c2w.T,
         translation=np.zeros(3, dtype=np.float64),
     )
 
@@ -420,6 +429,77 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual([entry["image_name"] for entry in results], ["000000.jpg", "000003.jpg"])
         self.assertTrue(all(entry["attachment_viewpoint_exempt"] for entry in results))
+
+    def test_select_frames_keeps_all_attachment_candidates_when_requested_for_review_pool(self) -> None:
+        root = make_case_dir("frame_selector_attachment_review_pool")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(21)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        processed_names = [image_names[idx] for idx in range(0, len(image_names), frame_selector.FRAME_STRIDE)]
+        yaw_by_image_name = {
+            processed_names[0]: 0.0,
+            processed_names[1]: 5.0,
+            processed_names[2]: 10.0,
+            processed_names[3]: 15.0,
+            processed_names[4]: 40.0,
+            processed_names[5]: 80.0,
+            processed_names[6]: 120.0,
+        }
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={
+                    image_name: make_camera_pose(
+                        image_name,
+                        yaw_degrees=yaw_by_image_name.get(image_name, 0.0),
+                    )
+                    for image_name in image_names
+                },
+            ),
+            patch.object(
+                frame_selector,
+                "get_visible_objects",
+                side_effect=[objects] * len(processed_names),
+            ),
+            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(
+                frame_selector,
+                "_count_attachment_objects",
+                side_effect=[7, 6, 5, 4, 0, 0, 0],
+            ),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+            patch.object(
+                frame_selector,
+                "_count_well_cropped_attachment_pairs",
+                side_effect=[1, 1, 1, 1, 0, 0, 0],
+            ),
+        ):
+            results = frame_selector.select_frames(
+                scene_dir,
+                objects,
+                attachment_graph={2: [1]},
+                max_frames=2,
+                keep_all_attachment_frames=True,
+                non_attachment_limit=2,
+            )
+
+        self.assertEqual(
+            [entry["image_name"] for entry in results],
+            processed_names[:6],
+        )
+        self.assertEqual(sum(1 for entry in results if entry["attachment_viewpoint_exempt"]), 4)
+        self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 2)
 
     def test_select_frames_prefers_ge70_pool_before_score(self) -> None:
         root = make_case_dir("frame_selector")

@@ -89,7 +89,7 @@ DINOX_IOU_THRESHOLD = 0.80
 REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
-FRAME_SELECTION_CANDIDATE_MULTIPLIER = 10
+NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER = 5
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -3149,15 +3149,17 @@ def main():
             processed += 1
             continue
 
-        frame_candidate_limit = max(
-            int(args.max_frames),
-            int(args.max_frames) * FRAME_SELECTION_CANDIDATE_MULTIPLIER,
+        non_attachment_candidate_limit = max(
+            0,
+            int(args.max_frames) * NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER,
         )
         frame_candidates = select_frames(
             scene_dir,
             scene["objects"],
             attachment_graph,
-            frame_candidate_limit,
+            int(args.max_frames),
+            keep_all_attachment_frames=True,
+            non_attachment_limit=non_attachment_candidate_limit,
         )
         if not frame_candidates:
             continue
@@ -3191,6 +3193,12 @@ def main():
             for frame in frame_candidates
             if not bool(frame.get("attachment_viewpoint_exempt"))
         ]
+        logger.info(
+            "Selected %d attachment-qualified and %d non-attachment frame candidates for %s before VLM review",
+            len(attachment_candidate_frames),
+            len(non_attachment_candidate_frames),
+            scene_id,
+        )
 
         non_attachment_frames = _select_and_rerank_frames(
             client=client,

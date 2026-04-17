@@ -998,6 +998,9 @@ def select_frames(
     objects: list[dict],
     attachment_graph: dict[int, list[int]] | None = None,
     max_frames: int = DEFAULT_MAX_FRAMES,
+    *,
+    keep_all_attachment_frames: bool = False,
+    non_attachment_limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Select representative frames for a ScanNet scene.
 
@@ -1012,6 +1015,9 @@ def select_frames(
            viewpoint-diversity pruning so the later referability stage can
            compare nearby views. Remaining frames are greedily filtered to keep
            only viewpoint-diverse candidates.
+        4. Callers that need a larger referability review pool can keep all
+           attachment-qualified frames while separately capping the number of
+           non-attachment candidates.
 
     Returns:
         List of dicts: ``{image_name, camera_position, visible_object_ids,
@@ -1177,18 +1183,27 @@ def select_frames(
         if int(entry.get("attachment_pair_ge_50_count", 0) or 0) <= 0
     ]
 
-    selected: list[dict[str, Any]] = attachment_entries[:selection_limit]
+    selected: list[dict[str, Any]]
+    if keep_all_attachment_frames:
+        selected = list(attachment_entries)
+    else:
+        selected = attachment_entries[:selection_limit]
+
+    if non_attachment_limit is None:
+        non_attachment_target = max(0, selection_limit - len(selected))
+    else:
+        non_attachment_target = max(0, int(non_attachment_limit))
+
     selected_non_attachment: list[dict[str, Any]] = []
-    if len(selected) < selection_limit:
-        for entry in non_attachment_entries:
-            if len(selected) + len(selected_non_attachment) >= selection_limit:
-                break
-            too_close = any(
-                _angular_distance(entry["pose"], sel["pose"]) < VIEWPOINT_DIVERSITY_MIN_ANGLE
-                for sel in selected_non_attachment
-            )
-            if not too_close:
-                selected_non_attachment.append(entry)
+    for entry in non_attachment_entries:
+        if len(selected_non_attachment) >= non_attachment_target:
+            break
+        too_close = any(
+            _angular_distance(entry["pose"], sel["pose"]) < VIEWPOINT_DIVERSITY_MIN_ANGLE
+            for sel in selected_non_attachment
+        )
+        if not too_close:
+            selected_non_attachment.append(entry)
     selected.extend(selected_non_attachment)
 
     if len(selected) < len(selection_pool):
