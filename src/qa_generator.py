@@ -168,6 +168,7 @@ ALL_DIRECTIONS = ALL_DIRECTIONS_10
 ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = [label for _, label in DISTANCE_BINS]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
+L1_VISIBLE_OCCLUSION_STATES = frozenset({"not occluded", "occluded"})
 OCCLUSION_DEFINITION_NOTE = (
     "Here, 'occluded' means blocked by another object; being partly outside "
     "the image frame does not count as occlusion."
@@ -208,6 +209,13 @@ L1_OCCLUSION_SAMPLE_COUNT = 512
 L1_NOT_VISIBLE_PROBE_RAY_COUNT = 64
 L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT = 512
 L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
+
+
+def _is_l2_occlusion_not_visible_transition(
+    old_status: str | None,
+    new_status: str | None,
+) -> bool:
+    return old_status in L1_VISIBLE_OCCLUSION_STATES and new_status == "not visible"
 L1_ABSENT_STRICT_NOT_VISIBLE_MAX_RAY_COUNT = 4096
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
@@ -3991,6 +3999,8 @@ def _find_object_move_occlusion_changes(
         )
         if new_status is None or old_status == new_status:
             continue
+        if not _is_l2_occlusion_not_visible_transition(old_status, new_status):
+            continue
 
         occlusion_changes.append({
             "obj_a_id": target_obj_id,
@@ -4862,13 +4872,13 @@ def generate_l2_object_move(
         if occlusion_enabled and compare_backend is not None:
             if selected_state is not None:
                 visibility = _visibility_for_state(selected_state)
-                if visibility[0] is not None and visibility[4] is not None and visibility[0] != visibility[4]:
+                if _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
                     occlusion_state = selected_state
                     occlusion_visibility = visibility
             if occlusion_state is None:
                 for candidate_state in _fallback_states():
                     visibility = _visibility_for_state(candidate_state)
-                    if visibility[0] is None or visibility[4] is None or visibility[0] == visibility[4]:
+                    if not _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
                         continue
                     occlusion_state = candidate_state
                     occlusion_visibility = visibility
@@ -5109,6 +5119,34 @@ def generate_l2_viewpoint_move(
                         status="skipped",
                         reason_code="visibility_unchanged",
                         reason_detail="camera motion does not change the L1-style occlusion state of the target",
+                        evidence={
+                            "camera_translation": prompt_direction,
+                            "distance_m": float(dist),
+                            "original_status": old_status,
+                            "new_status": new_status,
+                            "original_source": old_source,
+                            "new_source": new_source,
+                            "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                            "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                        },
+                    )
+                    continue
+
+                if not _is_l2_occlusion_not_visible_transition(old_status, new_status):
+                    reason_counts["transition_not_visible_rule_failed"] += 1
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l2_viewpoint_move",
+                        candidate_kind="viewpoint_target",
+                        candidate_key=candidate_key,
+                        object_ids=object_ids,
+                        status="skipped",
+                        reason_code="requires_visible_to_not_visible_transition",
+                        reason_detail=(
+                            "L2 viewpoint occlusion questions require the target to be visible "
+                            "before the move and not visible after the move"
+                        ),
                         evidence={
                             "camera_translation": prompt_direction,
                             "distance_m": float(dist),

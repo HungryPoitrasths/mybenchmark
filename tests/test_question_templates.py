@@ -170,7 +170,7 @@ class QuestionTemplateTests(unittest.TestCase):
                 side_effect=[
                     (make_l1_metrics("not occluded"), "mesh_ray"),
                     *[(make_l1_metrics("not occluded"), "mesh_ray")] * 9,
-                    (make_l1_metrics("occluded"), "mesh_ray"),
+                    (make_l1_metrics("not visible"), "mesh_ray"),
                     *[(make_l1_metrics("not occluded"), "mesh_ray")] * 2,
                 ],
             ),
@@ -197,7 +197,7 @@ class QuestionTemplateTests(unittest.TestCase):
             questions[0]["question"],
         )
         self.assertNotIn("toward the camera", questions[0]["question"])
-        self.assertEqual(questions[0]["correct_value"], "occluded")
+        self.assertEqual(questions[0]["correct_value"], "not visible")
         self.assertEqual(
             set(questions[0]["options"]),
             {"not occluded", "occluded", "not visible"},
@@ -290,6 +290,41 @@ class QuestionTemplateTests(unittest.TestCase):
                     (make_l1_metrics("not occluded"), "mesh_ray"),
                     *[(make_l1_metrics("not occluded"), "mesh_ray")] * 11,
                     (make_grayzone_metrics(), "mesh_ray"),
+                ],
+            ),
+        ):
+            questions = generate_l2_viewpoint_move(
+                objects=[{"id": 1, "label": "curtain"}],
+                camera_pose=camera_pose,
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                templates={
+                    "L2_viewpoint_move": [
+                        "If the camera translates {direction_with_camera_hint} by {distance}, what happens to {obj_a}?"
+                    ]
+                },
+            )
+
+        self.assertEqual(len(questions), 0)
+
+    def test_viewpoint_move_skips_visible_to_occluded_transition(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch("src.qa_generator._build_modified_scene", return_value=None),
+            patch("src.qa_generator.apply_viewpoint_change", return_value=camera_pose),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
+                    *[(make_l1_metrics("not occluded"), "mesh_ray")] * 11,
                 ],
             ),
         ):

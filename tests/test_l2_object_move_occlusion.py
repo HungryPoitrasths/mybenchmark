@@ -116,8 +116,8 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             patch(
                 "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
                 side_effect=[
-                    (make_l1_metrics("occluded"), "mesh_ray"),
                     (make_l1_metrics("not visible"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
                 ],
             ),
         ):
@@ -136,7 +136,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(changes[0]["target_obj_id"], 1)
         self.assertEqual(changes[0]["target_obj_label"], "sofa")
         self.assertEqual(changes[0]["old"]["visibility_status"], "not occluded")
-        self.assertEqual(changes[0]["new"]["visibility_status"], "occluded")
+        self.assertEqual(changes[0]["new"]["visibility_status"], "not visible")
 
     def test_generate_l2_object_move_emits_single_target_l1_style_occlusion_question(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
@@ -166,7 +166,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             ),
             patch(
                 "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
-                return_value=(make_l1_metrics("occluded"), "mesh_ray"),
+                return_value=(make_l1_metrics("not visible"), "mesh_ray"),
             ),
             patch(
                 "src.qa_generator._generate_l2_distance_questions_for_object",
@@ -197,7 +197,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         ]
         self.assertEqual(len(occlusion_questions), 1)
         question = occlusion_questions[0]
-        self.assertEqual(question["correct_value"], "occluded")
+        self.assertEqual(question["correct_value"], "not visible")
         self.assertEqual(set(question["options"]), {"not occluded", "occluded", "not visible"})
         self.assertEqual(len(question["options"]), 3)
         self.assertEqual(question["moved_obj_label"], "sofa")
@@ -317,10 +317,10 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
                         "mesh_ray",
                         "static_visible",
                         make_l1_metrics("not occluded"),
-                        "occluded",
+                        "not visible",
                         "mesh_ray",
-                        "counterfactual_occluded",
-                        make_l1_metrics("occluded"),
+                        "counterfactual_not_visible",
+                        make_l1_metrics("not visible"),
                     ),
                 ],
             ),
@@ -350,7 +350,62 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         occlusion_questions = [q for q in questions if q.get("type") == "object_move_occlusion"]
         self.assertEqual(len(occlusion_questions), 1)
         self.assertEqual(occlusion_questions[0]["delta"], [1.0, 0.0, 0.0])
-        self.assertEqual(occlusion_questions[0]["correct_value"], "occluded")
+        self.assertEqual(occlusion_questions[0]["correct_value"], "not visible")
+
+    def test_generate_l2_object_move_skips_visible_to_occluded_transition(self) -> None:
+        sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
+        cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
+        objects = [sofa, cushion]
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=objects,
+            moved_ids={1, 2},
+        )
+
+        with (
+            patch(
+                "src.qa_generator._select_object_move_state",
+                side_effect=[None, selected_state],
+            ),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                return_value=[],
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                ],
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
+                return_value=(make_l1_metrics("occluded"), "mesh_ray"),
+            ),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ),
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertFalse(any(q.get("type") == "object_move_occlusion" for q in questions))
 
     def test_generate_l2_object_move_does_not_reuse_occlusion_changes_across_different_deltas(self) -> None:
         objects = [
