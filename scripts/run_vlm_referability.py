@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.frame_selector import (
+    VIEWPOINT_DIVERSITY_MIN_ANGLE,
     build_selector_visibility_audit_from_meta,
     compute_frame_object_visibility,
     refine_visible_ids_with_depth,
@@ -90,6 +91,7 @@ REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 FRAME_SELECTION_CANDIDATE_MULTIPLIER = 10
 FRAME_USABLE_BONUS = 100000
+FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
 OBJECT_STATUS_CLEAR = "clear"
 OBJECT_STATUS_ABSENT = "absent"
@@ -719,6 +721,240 @@ def _frame_selection_score(selector_score: int, frame_info: dict[str, Any]) -> i
     normalized = _normalize_frame_review(frame_info)
     usable_bonus = FRAME_USABLE_BONUS if normalized["frame_usable"] else 0
     return usable_bonus + int(selector_score)
+
+
+def _selector_quality_pass_frame_info() -> dict[str, Any]:
+    return {
+        "clear": True,
+        "clarity_score": 60,
+        "frame_usable": True,
+        "reason": "selector_image_quality_pass",
+    }
+
+
+def _camera_heading_distance_deg(pose_a: CameraPose, pose_b: CameraPose) -> float:
+    fwd_a = pose_a.rotation.T[:, 2]
+    fwd_b = pose_b.rotation.T[:, 2]
+    cos_angle = np.clip(np.dot(fwd_a, fwd_b), -1.0, 1.0)
+    return float(np.degrees(np.arccos(cos_angle)))
+
+
+def _attachment_frame_sort_key(frame: dict[str, Any]) -> tuple[int, int, str]:
+    return (
+        -int(frame.get("attachment_referable_pair_count", 0) or 0),
+        -int(frame.get("crop_ge_70_count", 0) or 0),
+        str(frame.get("image_name", "")),
+    )
+
+
+def _build_attachment_view_groups(
+    frames: list[dict[str, Any]],
+    poses: dict[str, CameraPose],
+) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    group_anchor_poses: list[CameraPose | None] = []
+    for frame in frames:
+        image_name = str(frame.get("image_name", "")).strip()
+        pose = poses.get(image_name)
+        assigned = False
+        for idx, anchor_pose in enumerate(group_anchor_poses):
+            if pose is None or anchor_pose is None:
+                continue
+            if _camera_heading_distance_deg(pose, anchor_pose) < VIEWPOINT_DIVERSITY_MIN_ANGLE:
+                groups[idx].append(frame)
+                assigned = True
+                break
+        if assigned:
+            continue
+        groups.append([frame])
+        group_anchor_poses.append(pose)
+    return groups
+
+
+def _build_attachment_referable_pairs(
+    attachment_graph: dict[int, list[int]] | None,
+    attachment_referable_object_ids: list[int] | None,
+) -> list[list[int]]:
+    if not attachment_graph:
+        return []
+
+    referable_ids = {int(obj_id) for obj_id in (attachment_referable_object_ids or [])}
+    if not referable_ids:
+        return []
+
+    pairs: list[list[int]] = []
+    for parent_id, child_ids in sorted(attachment_graph.items()):
+        parent_id_int = int(parent_id)
+        if parent_id_int not in referable_ids:
+            continue
+        for child_id in sorted(int(value) for value in child_ids):
+            if child_id in referable_ids:
+                pairs.append([parent_id_int, child_id])
+    return pairs
+
+
+def _with_attachment_pair_metadata(
+    frame: dict[str, Any],
+    entry: dict[str, Any],
+    attachment_graph: dict[int, list[int]] | None,
+    *,
+    attachment_view_group_id: int | None = None,
+) -> dict[str, Any]:
+    attachment_pairs = _build_attachment_referable_pairs(
+        attachment_graph,
+        entry.get("attachment_referable_object_ids"),
+    )
+    enriched = dict(frame)
+    enriched["attachment_referable_pairs"] = list(attachment_pairs)
+    enriched["attachment_referable_pair_count"] = len(attachment_pairs)
+    enriched["attachment_view_group_id"] = attachment_view_group_id
+    return enriched
+
+
+def _compress_attachment_group_frames(
+    frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    covered_pairs: set[tuple[int, int]] = set()
+    kept: list[dict[str, Any]] = []
+    for frame in sorted(frames, key=_attachment_frame_sort_key):
+        pairs = {
+            (int(pair[0]), int(pair[1]))
+            for pair in frame.get("attachment_referable_pairs", [])
+            if isinstance(pair, list) and len(pair) == 2
+        }
+        if not pairs:
+            continue
+        if pairs - covered_pairs:
+            kept.append(frame)
+            covered_pairs.update(pairs)
+    return kept
+
+
+def _run_frame_clarity_reviews(
+    *,
+    client,
+    model_name: str,
+    scene_dir: Path,
+    frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    color_dir = scene_dir / "color"
+    reviewed: list[dict[str, Any]] = []
+    for frame in frames:
+        image_name = str(frame.get("image_name", "")).strip()
+        if not image_name:
+            continue
+        image_path = color_dir / image_name
+        image = cv2.imread(str(image_path))
+        if image is None:
+            logger.warning("Cannot read image %s", image_path)
+            continue
+        frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
+        if not frame_info["frame_usable"]:
+            continue
+        selector_score = int(frame.get("selector_score", frame.get("score", 0)) or 0)
+        reviewed.append(
+            {
+                **frame,
+                "frame_info": frame_info,
+                "frame_selection_score": _frame_selection_score(selector_score, frame_info),
+            }
+        )
+    return reviewed
+
+
+def _select_attachment_frames_by_global_pair_coverage(
+    frames: list[dict[str, Any]],
+    *,
+    max_frames: int,
+) -> list[dict[str, Any]]:
+    remaining = list(sorted(frames, key=_attachment_frame_sort_key))
+    if max_frames <= 0:
+        return []
+
+    selected: list[dict[str, Any]] = []
+    covered_pairs: set[tuple[int, int]] = set()
+    while remaining and len(selected) < max_frames:
+        best_idx = -1
+        best_key: tuple[int, int, int] | None = None
+        best_image_name = ""
+        for idx, frame in enumerate(remaining):
+            pairs = {
+                (int(pair[0]), int(pair[1]))
+                for pair in frame.get("attachment_referable_pairs", [])
+                if isinstance(pair, list) and len(pair) == 2
+            }
+            new_pair_count = len(pairs - covered_pairs)
+            key = (
+                new_pair_count,
+                int(frame.get("attachment_referable_pair_count", 0) or 0),
+                int(frame.get("crop_ge_70_count", 0) or 0),
+            )
+            image_name = str(frame.get("image_name", ""))
+            if (
+                best_key is None
+                or key > best_key
+                or (key == best_key and image_name < best_image_name)
+            ):
+                best_idx = idx
+                best_key = key
+                best_image_name = image_name
+        if best_idx < 0 or best_key is None or best_key[0] <= 0:
+            break
+        chosen = remaining.pop(best_idx)
+        selected.append(chosen)
+        covered_pairs.update(
+            {
+                (int(pair[0]), int(pair[1]))
+                for pair in chosen.get("attachment_referable_pairs", [])
+                if isinstance(pair, list) and len(pair) == 2
+            }
+        )
+
+    for frame in remaining:
+        if len(selected) >= max_frames:
+            break
+        selected.append(frame)
+    return selected
+
+
+def _apply_frame_review_to_entry(
+    entry: dict[str, Any],
+    frame_info: dict[str, Any],
+) -> dict[str, Any]:
+    normalized = _normalize_frame_review(frame_info)
+    updated = dict(entry)
+    selector_score = int(updated.get("selector_score", 0) or 0)
+    updated["frame_usable"] = normalized["frame_usable"]
+    updated["frame_reject_reason"] = None if normalized["frame_usable"] else normalized["reason"]
+    updated["frame_quality_clear"] = _coerce_bool(
+        normalized.get("clear"),
+        default=bool(normalized.get("frame_usable", True)),
+    )
+    updated["frame_quality_score"] = _normalize_clarity_score(
+        normalized.get("clarity_score"),
+        default=60,
+    )
+    updated["frame_quality_reason"] = str(normalized.get("reason", "")).strip()
+    updated["frame_selection_score"] = _frame_selection_score(selector_score, normalized)
+    return updated
+
+
+def _attach_selection_metadata(
+    entry: dict[str, Any],
+    attachment_graph: dict[int, list[int]] | None,
+    *,
+    final_selection_rank: int,
+    attachment_view_group_id: int | None = None,
+) -> dict[str, Any]:
+    updated = dict(entry)
+    updated["attachment_referable_pairs"] = _build_attachment_referable_pairs(
+        attachment_graph,
+        updated.get("attachment_referable_object_ids"),
+    )
+    updated["attachment_referable_pair_count"] = len(updated["attachment_referable_pairs"])
+    updated["attachment_view_group_id"] = attachment_view_group_id
+    updated["final_selection_rank"] = int(final_selection_rank)
+    return updated
 
 
 def _frame_decision(
@@ -2675,6 +2911,10 @@ def _compute_frame_referability_entry(
         "vlm_label_reviews": list(alias_group_reviews),
         "label_statuses": dict(sorted(label_statuses.items())),
         "label_counts": dict(sorted(label_counts.items())),
+        "attachment_referable_pairs": [],
+        "attachment_referable_pair_count": 0,
+        "attachment_view_group_id": None,
+        "final_selection_rank": FRAME_SELECTION_FALLBACK_RANK,
         "attachment_referable_object_ids": sorted(
             set(int(obj_id) for obj_id in attachment_referable_object_ids)
         ),
@@ -2691,6 +2931,9 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
         "frame_quality_score",
         "frame_quality_reason",
         "frame_selection_score",
+        "attachment_referable_pairs",
+        "attachment_referable_pair_count",
+        "final_selection_rank",
         "candidate_visible_object_ids",
         "candidate_visibility_source",
         "candidate_labels",
@@ -2938,41 +3181,144 @@ def main():
             scene_objects=scene["objects"],
             axis_alignment=axis_align,
         )
-        frames = _select_and_rerank_frames(
+        attachment_candidate_frames = [
+            frame
+            for frame in frame_candidates
+            if bool(frame.get("attachment_viewpoint_exempt"))
+        ]
+        non_attachment_candidate_frames = [
+            frame
+            for frame in frame_candidates
+            if not bool(frame.get("attachment_viewpoint_exempt"))
+        ]
+
+        non_attachment_frames = _select_and_rerank_frames(
             client=client,
             model_name=model_name,
             scene_dir=scene_dir,
-            frame_candidates=frame_candidates,
+            frame_candidates=non_attachment_candidate_frames,
+            max_frames=int(args.max_frames),
+        ) if non_attachment_candidate_frames else []
+
+        attachment_entry_by_name: dict[str, dict[str, Any]] = {}
+        attachment_group_survivors: list[dict[str, Any]] = []
+        if attachment_candidate_frames:
+            attachment_groups = _build_attachment_view_groups(
+                attachment_candidate_frames,
+                poses,
+            )
+            for group_id, group_frames in enumerate(attachment_groups):
+                reviewed_group_frames: list[dict[str, Any]] = []
+                for frame in group_frames:
+                    image_name = str(frame.get("image_name", "")).strip()
+                    if not image_name or image_name not in poses:
+                        continue
+
+                    image_path = scene_dir / "color" / image_name
+                    image = cv2.imread(str(image_path))
+                    if image is None:
+                        logger.warning("Cannot read image %s", image_path)
+                        continue
+
+                    camera_pose = poses[image_name]
+                    selector_visible_object_ids = [
+                        int(obj_id)
+                        for obj_id in frame.get("visible_object_ids", [])
+                        if int(obj_id) in objects_by_id
+                    ]
+                    depth_image = None
+                    frame_id = Path(image_name).stem
+                    depth_path = scene_dir / "depth" / f"{frame_id}.png"
+                    if depth_intrinsics is not None and depth_path.exists():
+                        try:
+                            depth_image = load_depth_image(depth_path)
+                        except Exception as exc:
+                            logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
+
+                    entry = _compute_frame_referability_entry(
+                        client=client,
+                        model_name=model_name,
+                        scene_objects=scene["objects"],
+                        objects_by_id=objects_by_id,
+                        image=image,
+                        image_path=image_path,
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        depth_image=depth_image,
+                        depth_intrinsics=depth_intrinsics,
+                        selector_visible_object_ids=selector_visible_object_ids,
+                        selector_score=int(
+                            frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0
+                        ),
+                        frame_info=_selector_quality_pass_frame_info(),
+                        frame_selection_score=int(
+                            frame.get("selector_score", frame.get("score", 0)) or 0
+                        ),
+                        ray_caster_getter=ray_caster_getter,
+                        instance_mesh_data_getter=instance_mesh_data_getter,
+                    )
+                    attachment_entry_by_name[image_name] = entry
+                    reviewed_group_frames.append(
+                        _with_attachment_pair_metadata(
+                            frame,
+                            entry,
+                            attachment_graph,
+                            attachment_view_group_id=group_id,
+                        )
+                    )
+                attachment_group_survivors.extend(
+                    _compress_attachment_group_frames(reviewed_group_frames)
+                )
+
+        attachment_clear_frames = _run_frame_clarity_reviews(
+            client=client,
+            model_name=model_name,
+            scene_dir=scene_dir,
+            frames=attachment_group_survivors,
+        ) if attachment_group_survivors else []
+        selected_attachment_frames = _select_attachment_frames_by_global_pair_coverage(
+            attachment_clear_frames,
             max_frames=int(args.max_frames),
         )
-        if not frames:
-            logger.info("Scene %s has no reranked frames -> skipping", scene_id)
+        remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))
+        selected_non_attachment_frames = non_attachment_frames[:remaining_slots]
+
+        if not selected_attachment_frames and not selected_non_attachment_frames:
+            logger.info("Scene %s has no final referability frames -> skipping", scene_id)
             continue
-        selected_names = {str(frame["image_name"]) for frame in frames}
-        for stale_name in list(scene_cache.keys()):
-            if stale_name not in selected_names:
-                del scene_cache[stale_name]
-        pending_frames = [
-            frame
-            for frame in frames
-            if not _frame_entry_has_debug_fields(scene_cache.get(frame["image_name"]))
-        ]
-        if not pending_frames:
-            logger.info("Scene %s selected frames already cached -> skipping", scene_id)
-            processed += 1
-            continue
+
         logger.info(
-            "Processing referability scene %s (%d/%d) with %d selected frames (%d pending after resume)",
+            "Processing referability scene %s (%d/%d) with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
             scene_id,
             processed + 1,
             args.max_scenes,
-            len(frames),
-            len(pending_frames),
+            len(selected_attachment_frames),
+            len(selected_non_attachment_frames),
         )
 
-        for frame in pending_frames:
-            image_name = frame["image_name"]
-            if image_name not in poses:
+        final_scene_entries: dict[str, dict[str, Any]] = {}
+        final_selection_rank = 0
+
+        for frame in selected_attachment_frames:
+            image_name = str(frame.get("image_name", "")).strip()
+            entry = attachment_entry_by_name.get(image_name)
+            if entry is None:
+                continue
+            updated_entry = _apply_frame_review_to_entry(
+                entry,
+                dict(frame.get("frame_info", {})),
+            )
+            final_scene_entries[image_name] = _attach_selection_metadata(
+                updated_entry,
+                attachment_graph,
+                final_selection_rank=final_selection_rank,
+                attachment_view_group_id=frame.get("attachment_view_group_id"),
+            )
+            final_selection_rank += 1
+
+        for frame in selected_non_attachment_frames:
+            image_name = str(frame.get("image_name", "")).strip()
+            if not image_name or image_name not in poses:
                 continue
 
             image_path = scene_dir / "color" / image_name
@@ -2984,7 +3330,7 @@ def main():
             camera_pose = poses[image_name]
             selector_visible_object_ids = [
                 int(obj_id)
-                for obj_id in frame["visible_object_ids"]
+                for obj_id in frame.get("visible_object_ids", [])
                 if int(obj_id) in objects_by_id
             ]
             depth_image = None
@@ -2996,7 +3342,7 @@ def main():
                 except Exception as exc:
                     logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
 
-            scene_cache[image_name] = _compute_frame_referability_entry(
+            entry = _compute_frame_referability_entry(
                 client=client,
                 model_name=model_name,
                 scene_objects=scene["objects"],
@@ -3014,10 +3360,27 @@ def main():
                 ray_caster_getter=ray_caster_getter,
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
+            final_scene_entries[image_name] = _attach_selection_metadata(
+                entry,
+                attachment_graph,
+                final_selection_rank=final_selection_rank,
+            )
+            final_selection_rank += 1
 
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(cache, f, indent=2, ensure_ascii=False)
+        if not final_scene_entries:
+            logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
+            continue
+
+        scene_cache.clear()
+        for image_name, entry in sorted(
+            final_scene_entries.items(),
+            key=lambda item: int(item[1].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)),
+        ):
+            scene_cache[image_name] = entry
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2, ensure_ascii=False)
 
         processed += 1
 

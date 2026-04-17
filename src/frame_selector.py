@@ -1,7 +1,8 @@
 """Stage 3: Representative frame selection.
 
 For each scene, select 3-5 frames that collectively cover as many objects
-(and support relationships) as possible while maintaining viewpoint diversity.
+(and support relationships) as possible while preserving strong referable
+attachment candidates.
 
 ScanNet stores one colour image per frame in ``color/<frame_id>.jpg`` and the
 corresponding camera pose in ``pose/<frame_id>.txt``.
@@ -893,10 +894,7 @@ def get_visible_objects(
 
 
 def _angular_distance(pose_a: CameraPose, pose_b: CameraPose) -> float:
-    """Approximate angular difference between two viewing directions (degrees).
-
-    This ignores camera translation and only measures heading diversity.
-    """
+    """Approximate angular difference between two viewing directions (degrees)."""
     fwd_a = pose_a.rotation.T[:, 2]
     fwd_b = pose_b.rotation.T[:, 2]
     cos_angle = np.clip(np.dot(fwd_a, fwd_b), -1.0, 1.0)
@@ -1010,9 +1008,10 @@ def select_frames(
            Within the active candidate pool, rank frames by
            #attachment_objects + 15 × #well-cropped-attachment-pairs first,
            then by the number of well-cropped visible objects.
-        3. Greedy selection: pick the highest-scoring frame, then iteratively
-           pick the next that is at least VIEWPOINT_DIVERSITY_MIN_ANGLE away
-           from all already-selected frames.
+        3. Frames with at least one well-cropped attachment pair bypass the
+           viewpoint-diversity pruning so the later referability stage can
+           compare nearby views. Remaining frames are greedily filtered to keep
+           only viewpoint-diverse candidates.
 
     Returns:
         List of dicts: ``{image_name, camera_position, visible_object_ids,
@@ -1159,7 +1158,6 @@ def select_frames(
             FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN,
         )
 
-    # Greedy diverse selection
     selection_pool.sort(
         key=lambda e: (
             int(e.get("score", 0) or 0),
@@ -1167,23 +1165,37 @@ def select_frames(
         ),
         reverse=True,
     )
-    selected: list[dict[str, Any]] = [selection_pool[0]]
+    selection_limit = max(1, int(max_frames))
+    attachment_entries = [
+        entry
+        for entry in selection_pool
+        if int(entry.get("attachment_pair_ge_50_count", 0) or 0) > 0
+    ]
+    non_attachment_entries = [
+        entry
+        for entry in selection_pool
+        if int(entry.get("attachment_pair_ge_50_count", 0) or 0) <= 0
+    ]
 
-    for entry in selection_pool[1:]:
-        if len(selected) >= max_frames:
-            break
-        too_close = any(
-            _angular_distance(entry["pose"], sel["pose"]) < VIEWPOINT_DIVERSITY_MIN_ANGLE
-            for sel in selected
-        )
-        if not too_close:
-            selected.append(entry)
+    selected: list[dict[str, Any]] = attachment_entries[:selection_limit]
+    selected_non_attachment: list[dict[str, Any]] = []
+    if len(selected) < selection_limit:
+        for entry in non_attachment_entries:
+            if len(selected) + len(selected_non_attachment) >= selection_limit:
+                break
+            too_close = any(
+                _angular_distance(entry["pose"], sel["pose"]) < VIEWPOINT_DIVERSITY_MIN_ANGLE
+                for sel in selected_non_attachment
+            )
+            if not too_close:
+                selected_non_attachment.append(entry)
+    selected.extend(selected_non_attachment)
 
-    if len(selected) < min(max_frames, len(selection_pool)):
+    if len(selected) < len(selection_pool):
         logger.info(
-            "Selected %d/%d frames for %s after viewpoint-diversity filtering",
+            "Selected %d/%d frame candidates for %s after attachment-aware viewpoint filtering",
             len(selected),
-            min(max_frames, len(selection_pool)),
+            len(selection_pool),
             scene_path.name,
         )
 
@@ -1198,6 +1210,9 @@ def select_frames(
                 "base_score":        s["base_score"],
                 "crop_ge_70_count":  s["crop_ge_70_count"],
                 "attachment_pair_ge_50_count": s["attachment_pair_ge_50_count"],
+                "attachment_viewpoint_exempt": bool(
+                    int(s.get("attachment_pair_ge_50_count", 0) or 0) > 0
+                ),
                 "score":             s["score"],
             }
         )

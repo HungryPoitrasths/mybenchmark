@@ -1027,6 +1027,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "frame_quality_score": 82,
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
+            "attachment_referable_pairs": [],
+            "attachment_referable_pair_count": 0,
+            "final_selection_rank": 0,
             "candidate_visible_object_ids": [1],
             "candidate_visibility_source": "mesh_ray_depth_refined",
             "candidate_labels": ["lamp"],
@@ -1126,6 +1129,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "frame_quality_score": 82,
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
+            "attachment_referable_pairs": [],
+            "attachment_referable_pair_count": 0,
+            "final_selection_rank": 0,
             "candidate_visible_object_ids": [1],
             "candidate_visibility_source": "mesh_ray_depth_refined",
             "candidate_labels": ["lamp"],
@@ -1176,6 +1182,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "frame_quality_score": 82,
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
+            "attachment_referable_pairs": [],
+            "attachment_referable_pair_count": 0,
+            "final_selection_rank": 0,
             "candidate_visible_object_ids": [1, 2, 3, 4],
             "candidate_visibility_source": "mesh_ray_depth_refined",
             "candidate_labels": ["stool"],
@@ -1226,6 +1235,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "frame_quality_score": 82,
             "frame_quality_reason": "clear enough",
             "frame_selection_score": 82001,
+            "attachment_referable_pairs": [],
+            "attachment_referable_pair_count": 0,
+            "final_selection_rank": 0,
             "candidate_visible_object_ids": [1],
             "candidate_visibility_source": "mesh_ray_depth_refined",
             "candidate_labels": ["chair"],
@@ -1268,6 +1280,67 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(referability_module._frame_entry_has_debug_fields(entry))
         repaired = referability_module._repair_final_referability_fields(entry)
         self.assertEqual(repaired["crop_label_counts"], {"chair": 1})
+
+    def test_compress_attachment_group_frames_keeps_distinct_referable_pairs(self) -> None:
+        frames = [
+            {
+                "image_name": "000003.jpg",
+                "crop_ge_70_count": 3,
+                "attachment_referable_pairs": [[2, 1]],
+                "attachment_referable_pair_count": 1,
+            },
+            {
+                "image_name": "000006.jpg",
+                "crop_ge_70_count": 2,
+                "attachment_referable_pairs": [[3, 1]],
+                "attachment_referable_pair_count": 1,
+            },
+            {
+                "image_name": "000009.jpg",
+                "crop_ge_70_count": 1,
+                "attachment_referable_pairs": [[2, 1]],
+                "attachment_referable_pair_count": 1,
+            },
+        ]
+
+        kept = referability_module._compress_attachment_group_frames(frames)
+
+        self.assertEqual(
+            [frame["image_name"] for frame in kept],
+            ["000003.jpg", "000006.jpg"],
+        )
+
+    def test_select_attachment_frames_by_global_pair_coverage_prefers_new_pairs(self) -> None:
+        frames = [
+            {
+                "image_name": "000003.jpg",
+                "crop_ge_70_count": 3,
+                "attachment_referable_pairs": [[2, 1], [3, 1]],
+                "attachment_referable_pair_count": 2,
+            },
+            {
+                "image_name": "000006.jpg",
+                "crop_ge_70_count": 2,
+                "attachment_referable_pairs": [[2, 1]],
+                "attachment_referable_pair_count": 1,
+            },
+            {
+                "image_name": "000009.jpg",
+                "crop_ge_70_count": 1,
+                "attachment_referable_pairs": [[4, 1]],
+                "attachment_referable_pair_count": 1,
+            },
+        ]
+
+        selected = referability_module._select_attachment_frames_by_global_pair_coverage(
+            frames,
+            max_frames=2,
+        )
+
+        self.assertEqual(
+            [frame["image_name"] for frame in selected],
+            ["000003.jpg", "000009.jpg"],
+        )
 
     def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
         frame_candidates = [

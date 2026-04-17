@@ -353,6 +353,74 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(base_a, base_b)
         self.assertEqual(score_a, score_b)
 
+    def test_select_frames_prunes_ranked_nearby_viewpoints_without_attachment_exemption(self) -> None:
+        root = make_case_dir("frame_selector_prunes_nearby_views")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(6)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
+            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_count_attachment_objects", side_effect=[5, 4]),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+        ):
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=2)
+
+        self.assertEqual([entry["image_name"] for entry in results], ["000000.jpg"])
+        self.assertEqual([entry["score"] for entry in results], [5])
+
+    def test_select_frames_keeps_ranked_nearby_viewpoints_for_attachment_exempt_frames(self) -> None:
+        root = make_case_dir("frame_selector_attachment_nearby_views")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(6)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
+            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_count_attachment_objects", side_effect=[5, 4]),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", side_effect=[1, 1]),
+        ):
+            results = frame_selector.select_frames(
+                scene_dir,
+                objects,
+                attachment_graph={2: [1]},
+                max_frames=2,
+            )
+
+        self.assertEqual([entry["image_name"] for entry in results], ["000000.jpg", "000003.jpg"])
+        self.assertTrue(all(entry["attachment_viewpoint_exempt"] for entry in results))
+
     def test_select_frames_prefers_ge70_pool_before_score(self) -> None:
         root = make_case_dir("frame_selector")
         self.addCleanup(shutil.rmtree, root, True)
@@ -382,7 +450,7 @@ class FrameSelectorTests(unittest.TestCase):
             results = frame_selector.select_frames(scene_dir, objects, max_frames=1)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["image_name"], "000005.jpg")
+        self.assertEqual(results[0]["image_name"], "000003.jpg")
         self.assertEqual(results[0]["base_score"], 0)
         self.assertEqual(results[0]["crop_ge_70_count"], 2)
         self.assertEqual(results[0]["score"], 0)
@@ -422,7 +490,7 @@ class FrameSelectorTests(unittest.TestCase):
             )
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["image_name"], "000005.jpg")
+        self.assertEqual(results[0]["image_name"], "000003.jpg")
         self.assertEqual(results[0]["base_score"], 2)
         self.assertEqual(results[0]["attachment_pair_ge_50_count"], 1)
         self.assertEqual(results[0]["score"], 17)
@@ -490,7 +558,7 @@ class FrameSelectorTests(unittest.TestCase):
             results = frame_selector.select_frames(scene_dir, objects, max_frames=1)
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["image_name"], "000005.jpg")
+        self.assertEqual(results[0]["image_name"], "000003.jpg")
         self.assertEqual(results[0]["base_score"], 0)
         self.assertEqual(results[0]["crop_ge_70_count"], 2)
         self.assertEqual(results[0]["score"], 0)

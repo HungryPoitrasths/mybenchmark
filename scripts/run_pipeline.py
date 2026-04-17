@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """One-click pipeline runner for CausalSpatial-Bench.
 
 Usage:
@@ -2321,14 +2321,22 @@ def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[
             {
                 "image_name": image_name,
                 "visible_object_ids": sorted(visible_object_ids),
+                "final_selection_rank": _coerce_rank(
+                    entry.get("final_selection_rank", 1_000_000)
+                ),
+                "attachment_referable_pair_count": _coerce_rank(
+                    entry.get("attachment_referable_pair_count", 0) or 0
+                ),
                 "frame_selection_score": _coerce_rank(entry.get("frame_selection_score", 0) or 0),
                 "selector_score": _coerce_rank(entry.get("selector_score", 0) or 0),
             }
         )
-    # Preserve referability rerank intent instead of falling back to filename
-    # order when the pipeline reuses cached frames.
+    # Prefer the attachment-aware selection order when present, then fall back
+    # to the legacy rerank fields for older caches.
     frames.sort(
         key=lambda frame: (
+            int(frame.get("final_selection_rank", 1_000_000)),
+            -int(frame.get("attachment_referable_pair_count", 0) or 0),
             -int(frame.get("frame_selection_score", 0) or 0),
             -int(frame.get("selector_score", 0) or 0),
             str(frame.get("image_name", "")),

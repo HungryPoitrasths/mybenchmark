@@ -1,4 +1,4 @@
-import json
+﻿import json
 import shutil
 import unittest
 import uuid
@@ -1028,6 +1028,41 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(
             [frame["visible_object_ids"] for frame in frames],
             [[2], [3], [1]],
+        )
+
+    def test_frames_from_referability_cache_prefers_final_attachment_selection_rank(self) -> None:
+        frames = run_pipeline_module._frames_from_referability_cache(
+            {
+                "000900.jpg": {
+                    "frame_usable": True,
+                    "candidate_visible_object_ids": [1],
+                    "attachment_referable_pair_count": 3,
+                    "final_selection_rank": 1,
+                    "frame_selection_score": 10,
+                    "selector_score": 10,
+                },
+                "000100.jpg": {
+                    "frame_usable": True,
+                    "candidate_visible_object_ids": [2],
+                    "attachment_referable_pair_count": 1,
+                    "final_selection_rank": 0,
+                    "frame_selection_score": 100,
+                    "selector_score": 50,
+                },
+                "000500.jpg": {
+                    "frame_usable": True,
+                    "candidate_visible_object_ids": [3],
+                    "attachment_referable_pair_count": 2,
+                    "final_selection_rank": 2,
+                    "frame_selection_score": 1000,
+                    "selector_score": 999,
+                },
+            }
+        )
+
+        self.assertEqual(
+            [frame["image_name"] for frame in frames],
+            ["000100.jpg", "000900.jpg", "000500.jpg"],
         )
 
     def test_run_pipeline_rejects_stale_cache_when_full_frame_marks_label_absent(self) -> None:
