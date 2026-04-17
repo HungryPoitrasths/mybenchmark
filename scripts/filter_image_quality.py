@@ -42,6 +42,7 @@ DEFAULT_IMAGE_PATTERNS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
 DEFAULT_LAPLACIAN_THRESHOLD = 120.0
 DEFAULT_TENENGRAD_THRESHOLD = 15.0
 DEFAULT_BRISQUE_THRESHOLD = 35.0
+DEFAULT_BRISQUE_MAX_SIDE = 0
 
 
 @dataclass(slots=True)
@@ -53,6 +54,8 @@ class ImageQualityRecord:
     tenengrad: float
     stage1_pass: bool
     brisque_score: float | None = None
+    brisque_input_width: int | None = None
+    brisque_input_height: int | None = None
     stage2_pass: bool | None = None
     final_pass: bool = False
 
@@ -66,6 +69,8 @@ class ImageQualityRecord:
             "tenengrad": round(float(self.tenengrad), 6),
             "stage1_pass": bool(self.stage1_pass),
             "brisque_score": None if self.brisque_score is None else round(float(self.brisque_score), 6),
+            "brisque_input_width": self.brisque_input_width,
+            "brisque_input_height": self.brisque_input_height,
             "stage2_pass": None if self.stage2_pass is None else bool(self.stage2_pass),
             "final_pass": bool(self.final_pass),
         }
@@ -152,6 +157,25 @@ def compute_tenengrad(gray_image: np.ndarray) -> float:
     return float(np.mean(gradient_magnitude))
 
 
+def resize_for_brisque(image_bgr: np.ndarray, *, max_side: int | None) -> np.ndarray:
+    if max_side is None or int(max_side) <= 0:
+        return image_bgr
+
+    height, width = image_bgr.shape[:2]
+    longest_side = max(int(width), int(height))
+    if longest_side <= int(max_side):
+        return image_bgr
+
+    scale = float(max_side) / float(longest_side)
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    return cv2.resize(
+        image_bgr,
+        (resized_width, resized_height),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
 def read_image(image_path: Path) -> np.ndarray:
     try:
         buffer = np.fromfile(str(image_path), dtype=np.uint8)
@@ -196,6 +220,7 @@ def apply_brisque_filter(
     records_and_images: Iterable[tuple[ImageQualityRecord, np.ndarray]],
     *,
     brisque_threshold: float,
+    brisque_max_side: int | None,
     scorer: BrisqueScorer,
 ) -> list[ImageQualityRecord]:
     results: list[ImageQualityRecord] = []
@@ -206,7 +231,10 @@ def apply_brisque_filter(
             results.append(record)
             continue
 
-        score = scorer.score(image)
+        brisque_image = resize_for_brisque(image, max_side=brisque_max_side)
+        record.brisque_input_width = int(brisque_image.shape[1])
+        record.brisque_input_height = int(brisque_image.shape[0])
+        score = scorer.score(brisque_image)
         record.brisque_score = float(score)
         record.stage2_pass = score <= float(brisque_threshold)
         record.final_pass = bool(record.stage2_pass)
@@ -246,15 +274,7 @@ def build_html_report(
     copied_image_map: dict[Path, str] | None = None,
 ) -> str:
     copied_image_map = copied_image_map or {}
-    selected = sorted(
-        (record for record in records if record.final_pass),
-        key=lambda item: (
-            float(item.brisque_score if item.brisque_score is not None else float("inf")),
-            -float(item.laplacian_variance),
-            -float(item.tenengrad),
-            str(item.image_path),
-        ),
-    )
+    ordered_records = sorted(records, key=lambda item: str(item.image_path.name))
 
     summary_items = "".join(
         f'<div class="stat"><div class="stat-value">{html.escape(str(value))}</div>'
@@ -270,12 +290,20 @@ def build_html_report(
         for name, value in thresholds.items()
     )
 
-    if selected:
+    if ordered_records:
         cards = []
-        for index, record in enumerate(selected, start=1):
+        for index, record in enumerate(ordered_records, start=1):
             image_src = copied_image_map.get(record.image_path)
             if image_src is None:
                 image_src = _html_relpath(record.image_path, output_dir)
+            status_text = "kept" if record.final_pass else "filtered out"
+            stage1_text = "pass" if record.stage1_pass else "reject"
+            stage2_text = (
+                "-"
+                if record.stage2_pass is None
+                else ("pass" if record.stage2_pass else "reject")
+            )
+            status_class = "status-kept" if record.final_pass else "status-filtered"
             cards.append(
                 f"""
                 <article class="card">
@@ -284,11 +312,16 @@ def build_html_report(
                   </div>
                   <div class="card-body">
                     <div class="card-title">#{index} {html.escape(record.image_path.name)}</div>
+                    <div class="status-row">
+                      <span class="status-pill {status_class}">{html.escape(status_text)}</span>
+                      <span class="status-detail">stage1: {html.escape(stage1_text)} / stage2: {html.escape(stage2_text)}</span>
+                    </div>
                     <div class="meta">{html.escape(str(record.image_path))}</div>
                     <div class="metrics">
                       <span>Laplacian: {record.laplacian_variance:.2f}</span>
                       <span>Tenengrad: {record.tenengrad:.2f}</span>
-                      <span>BRISQUE: {float(record.brisque_score or 0.0):.2f}</span>
+                      <span>BRISQUE: {'-' if record.brisque_score is None else f'{float(record.brisque_score):.2f}'}</span>
+                      <span>BRISQUE input: {record.brisque_input_width or record.width} × {record.brisque_input_height or record.height}</span>
                       <span>Size: {record.width} × {record.height}</span>
                     </div>
                   </div>
@@ -411,6 +444,36 @@ def build_html_report(
       word-break: break-all;
       margin-bottom: 10px;
     }}
+    .status-row {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }}
+    .status-pill {{
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }}
+    .status-kept {{
+      background: rgba(72, 187, 120, 0.18);
+      color: #7ee787;
+      border: 1px solid rgba(72, 187, 120, 0.35);
+    }}
+    .status-filtered {{
+      background: rgba(248, 81, 73, 0.16);
+      color: #ff9b9b;
+      border: 1px solid rgba(248, 81, 73, 0.35);
+    }}
+    .status-detail {{
+      color: var(--muted);
+      font-size: 12px;
+    }}
     .metrics {{
       display: grid;
       gap: 6px;
@@ -428,7 +491,7 @@ def build_html_report(
 <body>
   <div class="container">
     <h1>{html.escape(title)}</h1>
-    <div class="lead">先用 Laplacian variance 和 Tenengrad 做一级筛选，再用 BRISQUE 做二级筛选。下面只展示最终保留的图片。</div>
+    <div class="lead">先用 Laplacian variance 和 Tenengrad 做一级筛选，再用 BRISQUE 做二级筛选。下面按图片编号顺序展示全部图片，并标记每张图是否被筛掉。</div>
     <section class="stats">{summary_items}</section>
     <table class="thresholds">
       <tbody>{threshold_items}</tbody>
@@ -453,6 +516,8 @@ def _write_csv(
         "tenengrad",
         "stage1_pass",
         "brisque_score",
+        "brisque_input_width",
+        "brisque_input_height",
         "stage2_pass",
         "final_pass",
     ]
@@ -469,6 +534,8 @@ def _write_csv(
                     "tenengrad": f"{record.tenengrad:.6f}",
                     "stage1_pass": int(record.stage1_pass),
                     "brisque_score": "" if record.brisque_score is None else f"{record.brisque_score:.6f}",
+                    "brisque_input_width": "" if record.brisque_input_width is None else int(record.brisque_input_width),
+                    "brisque_input_height": "" if record.brisque_input_height is None else int(record.brisque_input_height),
                     "stage2_pass": "" if record.stage2_pass is None else int(bool(record.stage2_pass)),
                     "final_pass": int(record.final_pass),
                 }
@@ -539,6 +606,15 @@ def parse_args() -> argparse.Namespace:
         help="Maximum BRISQUE score allowed to pass stage 2. Lower is better.",
     )
     parser.add_argument(
+        "--brisque-max-side",
+        type=int,
+        default=DEFAULT_BRISQUE_MAX_SIDE,
+        help=(
+            "Resize stage-1 survivors so the longer side is at most this many pixels before "
+            "BRISQUE scoring. Use 0 to disable resizing."
+        ),
+    )
+    parser.add_argument(
         "--title",
         type=str,
         default="Image Quality Filter Report",
@@ -584,6 +660,7 @@ def main() -> None:
     records = apply_brisque_filter(
         stage1_records_and_images,
         brisque_threshold=float(args.brisque_threshold),
+        brisque_max_side=int(args.brisque_max_side),
         scorer=brisque_scorer,
     )
 
@@ -592,6 +669,7 @@ def main() -> None:
         "laplacian_threshold": float(args.laplacian_threshold),
         "tenengrad_threshold": float(args.tenengrad_threshold),
         "brisque_threshold": float(args.brisque_threshold),
+        "brisque_max_side": float(args.brisque_max_side),
     }
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -636,6 +714,7 @@ def main() -> None:
     print(f"Selected {len(image_paths)} / {len(all_image_paths)} image(s) in sequential order")
     print(f"Scanned {summary['total_images']} image(s)")
     print(f"Stage-1 pass: {summary['stage1_pass']}")
+    print(f"BRISQUE max side: {args.brisque_max_side}")
     print(f"Final selected: {summary['final_selected']}")
     print(f"JSON: {json_path}")
     print(f"CSV: {csv_path}")

@@ -14,7 +14,7 @@ class _StubBrisqueScorer:
         self._scores = list(scores)
 
     def score(self, image_bgr: np.ndarray) -> float:
-        _ = image_bgr
+        self.last_shape = image_bgr.shape
         if not self._scores:
             raise AssertionError("BRISQUE scorer called more times than expected")
         return float(self._scores.pop(0))
@@ -52,6 +52,20 @@ class FilterImageQualityTests(unittest.TestCase):
 
         self.assertGreater(sharp_laplacian, blur_laplacian)
         self.assertGreater(sharp_tenengrad, blur_tenengrad)
+
+    def test_resize_for_brisque_limits_longest_side(self) -> None:
+        image = np.zeros((1000, 800, 3), dtype=np.uint8)
+
+        resized = quality_module.resize_for_brisque(image, max_side=512)
+
+        self.assertEqual(resized.shape[:2], (512, 410))
+
+    def test_resize_for_brisque_can_be_disabled(self) -> None:
+        image = np.zeros((1000, 800, 3), dtype=np.uint8)
+
+        resized = quality_module.resize_for_brisque(image, max_side=0)
+
+        self.assertIs(resized, image)
 
     def test_apply_brisque_filter_only_scores_stage1_survivors(self) -> None:
         image = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -94,11 +108,14 @@ class FilterImageQualityTests(unittest.TestCase):
         results = quality_module.apply_brisque_filter(
             records,
             brisque_threshold=35.0,
+            brisque_max_side=16,
             scorer=_StubBrisqueScorer([22.0, 41.0]),
         )
 
         self.assertEqual([item.final_pass for item in results], [True, False, False])
         self.assertEqual(results[0].brisque_score, 22.0)
+        self.assertEqual(results[0].brisque_input_width, 16)
+        self.assertEqual(results[0].brisque_input_height, 16)
         self.assertIsNone(results[1].brisque_score)
         self.assertEqual(results[2].brisque_score, 41.0)
         self.assertEqual(results[1].stage2_pass, False)
@@ -107,24 +124,28 @@ class FilterImageQualityTests(unittest.TestCase):
         output_dir = Path("output/report_test")
         records = [
             quality_module.ImageQualityRecord(
-                image_path=Path("images/keep.jpg"),
+                image_path=Path("images/000002_keep.jpg"),
                 width=640,
                 height=480,
                 laplacian_variance=180.0,
                 tenengrad=25.0,
                 stage1_pass=True,
                 brisque_score=19.5,
+                brisque_input_width=640,
+                brisque_input_height=480,
                 stage2_pass=True,
                 final_pass=True,
             ),
             quality_module.ImageQualityRecord(
-                image_path=Path("images/drop.jpg"),
+                image_path=Path("images/000001_drop.jpg"),
                 width=640,
                 height=480,
                 laplacian_variance=20.0,
                 tenengrad=4.0,
                 stage1_pass=False,
                 brisque_score=None,
+                brisque_input_width=None,
+                brisque_input_height=None,
                 stage2_pass=False,
                 final_pass=False,
             ),
@@ -142,9 +163,13 @@ class FilterImageQualityTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("keep.jpg", html)
+        self.assertIn("000001_drop.jpg", html)
+        self.assertIn("000002_keep.jpg", html)
         self.assertIn("BRISQUE: 19.50", html)
-        self.assertNotIn("drop.jpg", html)
+        self.assertIn("BRISQUE: -", html)
+        self.assertIn("filtered out", html)
+        self.assertIn("kept", html)
+        self.assertLess(html.index("000001_drop.jpg"), html.index("000002_keep.jpg"))
 
     def test_evaluate_stage1_reads_image_and_applies_thresholds(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"quality_{uuid.uuid4().hex}"
