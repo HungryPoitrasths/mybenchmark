@@ -34,7 +34,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.frame_selector import (
-    VIEWPOINT_DIVERSITY_MIN_ANGLE,
     build_selector_visibility_audit_from_meta,
     compute_frame_object_visibility,
     refine_visible_ids_with_depth,
@@ -781,44 +780,12 @@ def _selector_quality_pass_frame_info() -> dict[str, Any]:
     }
 
 
-def _camera_heading_distance_deg(pose_a: CameraPose, pose_b: CameraPose) -> float:
-    fwd_a = pose_a.rotation.T[:, 2]
-    fwd_b = pose_b.rotation.T[:, 2]
-    cos_angle = np.clip(np.dot(fwd_a, fwd_b), -1.0, 1.0)
-    return float(np.degrees(np.arccos(cos_angle)))
-
-
 def _attachment_frame_sort_key(frame: dict[str, Any]) -> tuple[int, int, str]:
     return (
         -int(frame.get("attachment_referable_pair_count", 0) or 0),
         -int(frame.get("crop_ge_70_count", 0) or 0),
         str(frame.get("image_name", "")),
     )
-
-
-def _build_attachment_view_groups(
-    frames: list[dict[str, Any]],
-    poses: dict[str, CameraPose],
-) -> list[list[dict[str, Any]]]:
-    groups: list[list[dict[str, Any]]] = []
-    group_anchor_poses: list[CameraPose | None] = []
-    for frame in frames:
-        image_name = str(frame.get("image_name", "")).strip()
-        pose = poses.get(image_name)
-        assigned = False
-        for idx, anchor_pose in enumerate(group_anchor_poses):
-            if pose is None or anchor_pose is None:
-                continue
-            if _camera_heading_distance_deg(pose, anchor_pose) < VIEWPOINT_DIVERSITY_MIN_ANGLE:
-                groups[idx].append(frame)
-                assigned = True
-                break
-        if assigned:
-            continue
-        groups.append([frame])
-        group_anchor_poses.append(pose)
-    return groups
-
 
 def _build_attachment_referable_pairs(
     attachment_graph: dict[int, list[int]] | None,
@@ -840,6 +807,32 @@ def _build_attachment_referable_pairs(
             if child_id in referable_ids:
                 pairs.append([parent_id_int, child_id])
     return pairs
+
+
+def _normalize_attachment_pair_key(
+    pairs: list[list[int]] | tuple[tuple[int, int], ...] | None,
+) -> tuple[tuple[int, int], ...]:
+    return tuple(
+        sorted(
+            {
+                (int(pair[0]), int(pair[1]))
+                for pair in (pairs or [])
+                if isinstance(pair, (list, tuple)) and len(pair) == 2
+            }
+        )
+    )
+
+
+def _visible_attachment_pair_group_key(
+    frame: dict[str, Any],
+    attachment_graph: dict[int, list[int]] | None,
+) -> tuple[tuple[int, int], ...]:
+    return _normalize_attachment_pair_key(
+        _build_attachment_referable_pairs(
+            attachment_graph,
+            frame.get("visible_object_ids"),
+        )
+    )
 
 
 def _with_attachment_pair_metadata(
@@ -904,25 +897,6 @@ def _review_frame_clarity(
     }
 
 
-def _attachment_frame_group_key(
-    frame: dict[str, Any],
-    attachment_graph: dict[int, list[int]] | None,
-) -> tuple[int, ...]:
-    attachment_ids: set[int] = set()
-    for parent_id, child_ids in (attachment_graph or {}).items():
-        attachment_ids.add(int(parent_id))
-        attachment_ids.update(int(child_id) for child_id in child_ids)
-    return tuple(
-        sorted(
-            {
-                int(obj_id)
-                for obj_id in frame.get("visible_object_ids", [])
-                if int(obj_id) in attachment_ids
-            }
-        )
-    )
-
-
 def _visible_object_frame_group_key(frame: dict[str, Any]) -> tuple[Any, ...] | None:
     visible_object_ids = frame.get("visible_object_ids")
     if isinstance(visible_object_ids, list):
@@ -951,20 +925,22 @@ def _select_attachment_group_representatives(
     vlm_workers: int = 1,
 ) -> list[dict[str, Any]]:
     color_dir = scene_dir / "color"
-    grouped_frames: dict[tuple[int, ...], list[dict[str, Any]]] = {}
-    sampled_frames = list(frames[::3])
-    for frame in sampled_frames:
-        group_key = _attachment_frame_group_key(frame, attachment_graph)
+    grouped_frames: dict[tuple[tuple[int, int], ...], list[dict[str, Any]]] = {}
+    for frame in frames:
+        group_key = _visible_attachment_pair_group_key(frame, attachment_graph)
+        if not group_key:
+            continue
         grouped_frames.setdefault(group_key, []).append(frame)
 
-    def _select_group(item: tuple[int, list[dict[str, Any]]]) -> dict[str, Any] | None:
-        group_id, group_frames = item
+    def _select_group(
+        item: tuple[int, tuple[tuple[tuple[int, int], ...], list[dict[str, Any]]]]
+    ) -> dict[str, Any] | None:
+        group_id, (expected_attachment_pairs, group_frames) = item
         ordered_frames = sorted(
             group_frames,
             key=lambda frame: len(frame.get("visible_object_ids", []) or []),
             reverse=True,
         )
-        expected_attachment_ids = _attachment_frame_group_key(ordered_frames[0], attachment_graph) if ordered_frames else ()
         for frame in ordered_frames:
             reviewed_frame = _review_frame_clarity(
                 client=client,
@@ -984,10 +960,13 @@ def _select_attachment_group_representatives(
                 continue
             combined = dict(reviewed_frame)
             combined.update(entry)
-            actual_attachment_ids = tuple(
-                sorted(int(obj_id) for obj_id in combined.get("attachment_referable_object_ids", []) or [])
+            actual_attachment_pairs = _normalize_attachment_pair_key(
+                _build_attachment_referable_pairs(
+                    attachment_graph,
+                    combined.get("attachment_referable_object_ids"),
+                )
             )
-            if actual_attachment_ids != expected_attachment_ids:
+            if actual_attachment_pairs != expected_attachment_pairs:
                 continue
             return _with_attachment_pair_metadata(
                 combined,
@@ -998,7 +977,7 @@ def _select_attachment_group_representatives(
         return None
 
     selected = _run_in_thread_pool(
-        list(enumerate(grouped_frames.values())),
+        list(enumerate(grouped_frames.items())),
         _select_group,
         max_workers=vlm_workers,
     )
