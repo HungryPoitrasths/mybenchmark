@@ -987,6 +987,129 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected 19.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
+    def test_load_referability_cache_rejects_inconsistent_entry_without_repair_flag(self) -> None:
+        case_dir = make_case_dir("cache_inconsistent")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "19.0",
+                    "frames": {
+                        "scene0000_00": {
+                            "000123.jpg": {
+                                "frame_usable": True,
+                                "label_to_object_ids": {"lamp": [1]},
+                                "selector_visible_label_counts": {"lamp": 1},
+                                "crop_label_statuses": {"lamp": "unique"},
+                                "crop_label_counts": {"lamp": 1},
+                                "crop_referable_object_ids": [1],
+                                "full_frame_label_reviews": [{"label": "lamp", "status": "absent"}],
+                                "full_frame_label_statuses": {"lamp": "absent"},
+                                "full_frame_label_counts": {"lamp": 0},
+                                "label_statuses": {"lamp": "unique"},
+                                "label_counts": {"lamp": 1},
+                                "referable_object_ids": [1],
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "lamp",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    }
+                                },
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Rerun with --repair_referability_cache"):
+            run_pipeline_module._load_referability_cache(cache_path)
+
+    def test_load_referability_cache_can_repair_inconsistent_entry(self) -> None:
+        case_dir = make_case_dir("cache_repair")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "19.0",
+                    "frames": {
+                        scene_id: {
+                            image_name: {
+                                "frame_usable": True,
+                                "frame_quality_clear": True,
+                                "frame_quality_score": 82,
+                                "frame_quality_reason": "clear enough",
+                                "frame_selection_score": 82001,
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_pair_count": 0,
+                                "final_selection_rank": 0,
+                                "candidate_visible_object_ids": [1],
+                                "candidate_visibility_source": "mesh_ray_depth_refined",
+                                "candidate_labels": ["lamp"],
+                                "label_to_object_ids": {"lamp": [1]},
+                                "selector_visible_object_ids": [1],
+                                "selector_visible_label_counts": {"lamp": 1},
+                                "visibility_audit_by_object_id": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "lamp",
+                                        "candidate_considered": True,
+                                        "candidate_passed": True,
+                                        "candidate_rejection_reasons": [],
+                                    }
+                                },
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "lamp",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    }
+                                },
+                                "crop_label_statuses": {"lamp": "unique"},
+                                "crop_label_counts": {"lamp": 1},
+                                "crop_referable_object_ids": [1],
+                                "full_frame_label_reviews": [{"label": "lamp", "status": "absent"}],
+                                "full_frame_label_statuses": {"lamp": "absent"},
+                                "full_frame_label_counts": {"lamp": 0},
+                                "label_statuses": {"lamp": "unique"},
+                                "label_counts": {"lamp": 1},
+                                "referable_object_ids": [1],
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        cache = run_pipeline_module._load_referability_cache(
+            cache_path,
+            repair_inconsistent_entries=True,
+            persist_repaired_entries=True,
+        )
+
+        repaired_entry = cache["frames"][scene_id][image_name]
+        self.assertEqual(repaired_entry["label_statuses"], {"lamp": "absent"})
+        self.assertEqual(repaired_entry["label_counts"], {"lamp": 0})
+        self.assertEqual(repaired_entry["attachment_referable_object_ids"], [])
+        self.assertEqual(repaired_entry["referable_object_ids"], [])
+        self.assertEqual(repaired_entry["vlm_unique_object_ids"], [])
+
+        persisted_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        persisted_entry = persisted_cache["frames"][scene_id][image_name]
+        self.assertEqual(persisted_entry["label_statuses"], {"lamp": "absent"})
+        self.assertEqual(persisted_entry["referable_object_ids"], [])
+
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
         self.assertTrue(
             run_pipeline_module._has_l1_visibility_candidates({"lamp": "absent"})

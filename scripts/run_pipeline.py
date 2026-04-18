@@ -22,6 +22,7 @@ import time
 import zlib
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Iterator
 
 import cv2
 import numpy as np
@@ -76,6 +77,7 @@ from scripts.run_vlm_referability import (
     _derive_final_referability_fields,
     _dedupe_detections_by_mask_iou,
     _frame_entry_has_consistent_final_fields,
+    _repair_final_referability_fields,
     _select_best_detection_for_object_review,
     _strong_detection_min_area,
 )
@@ -873,7 +875,50 @@ def _apply_question_post_generation_audit(
     return questions
 
 
-def _load_referability_cache(path: Path) -> dict | None:
+def _iter_referability_cache_frame_entries(
+    cache: dict | None,
+) -> Iterator[tuple[dict[str, object], str, str, object]]:
+    if not isinstance(cache, dict):
+        return
+    frames = cache.get("frames", cache)
+    if not isinstance(frames, dict):
+        return
+    for scene_id, scene_frames in frames.items():
+        if not isinstance(scene_frames, dict):
+            continue
+        if "/" in str(scene_id):
+            scene_key, image_name = str(scene_id).split("/", 1)
+            yield frames, scene_key, str(image_name), scene_frames
+            continue
+        for image_name, entry in scene_frames.items():
+            yield scene_frames, str(scene_id), str(image_name), entry
+
+
+def _find_inconsistent_referability_entry(cache: dict | None) -> str | None:
+    for _scene_frames, scene_id, image_name, entry in _iter_referability_cache_frame_entries(cache):
+        if isinstance(entry, dict) and not _frame_entry_has_consistent_final_fields(entry):
+            return f"{scene_id}/{image_name}"
+    return None
+
+
+def _repair_referability_cache_entries(cache: dict | None) -> int:
+    repaired_count = 0
+    for scene_frames, _scene_id, image_name, entry in _iter_referability_cache_frame_entries(cache):
+        if not isinstance(entry, dict):
+            continue
+        if _frame_entry_has_consistent_final_fields(entry):
+            continue
+        scene_frames[image_name] = _repair_final_referability_fields(entry)
+        repaired_count += 1
+    return repaired_count
+
+
+def _load_referability_cache(
+    path: Path,
+    *,
+    repair_inconsistent_entries: bool = False,
+    persist_repaired_entries: bool = False,
+) -> dict | None:
     if not path.exists():
         logger.warning("Referability cache not found: %s", path)
         return None
@@ -885,6 +930,30 @@ def _load_referability_cache(path: Path) -> dict | None:
             f"Referability cache version mismatch: expected {EXPECTED_REFERABILITY_CACHE_VERSION}, got {version or '<missing>'}. "
             "Regenerate the referability cache with the updated VLM prompts before running the pipeline."
         )
+    inconsistent_entry = _find_inconsistent_referability_entry(data)
+    if inconsistent_entry is not None:
+        if not repair_inconsistent_entries:
+            raise ValueError(
+                f"Referability cache entry for {inconsistent_entry} is inconsistent with cache version "
+                f"{EXPECTED_REFERABILITY_CACHE_VERSION}. Rerun with --repair_referability_cache to repair "
+                "deterministic final fields, or regenerate the referability cache if the underlying prompts changed."
+            )
+        repaired_count = _repair_referability_cache_entries(data)
+        remaining_inconsistent_entry = _find_inconsistent_referability_entry(data)
+        if remaining_inconsistent_entry is not None:
+            raise ValueError(
+                f"Referability cache entry for {remaining_inconsistent_entry} is inconsistent with cache version "
+                f"{EXPECTED_REFERABILITY_CACHE_VERSION} even after repair. Regenerate the referability cache from scratch."
+            )
+        logger.warning(
+            "Repaired %d inconsistent referability cache entr%s in %s",
+            repaired_count,
+            "y" if repaired_count == 1 else "ies",
+            path,
+        )
+        if persist_repaired_entries and repaired_count > 0:
+            _write_json_file(path, data)
+            logger.info("Wrote repaired referability cache to %s", path)
     logger.info("Loaded referability cache from %s", path)
     return data
 
@@ -3946,12 +4015,22 @@ def main():
         default=8,
         help="Thread pool size for post-generation question presence/answer review",
     )
+    parser.add_argument(
+        "--repair_referability_cache",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Repair deterministic final-field drift inside a same-version referability cache and write the repaired cache back to disk",
+    )
     args = parser.parse_args()
 
     if args.label_map:
         load_scannet_label_map(args.label_map)
 
-    referability_cache = _load_referability_cache(Path(args.referability_cache))
+    referability_cache = _load_referability_cache(
+        Path(args.referability_cache),
+        repair_inconsistent_entries=args.repair_referability_cache,
+        persist_repaired_entries=args.repair_referability_cache,
+    )
 
     run_pipeline(
         data_root=Path(args.data_root),
