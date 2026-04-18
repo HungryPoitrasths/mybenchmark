@@ -235,6 +235,22 @@ def _object_review_prompt(label: str) -> str:
     )
 
 
+def _full_frame_label_count_prompt(label: str) -> str:
+    return (
+        "You are given one full scene image. "
+        "Count how many clearly identifiable instances of the target label are visible in the full image. "
+        "The target label is "
+        f"{json.dumps(str(label), ensure_ascii=False)}. "
+        "Count only objects that are visually present and identifiable in the image itself. "
+        "Do not infer hidden objects, off-screen objects, or objects that are too ambiguous to recognize. "
+        "If none are visible, use count=0 and status=absent. "
+        "If exactly one is clearly visible, use count=1 and status=unique. "
+        "If two or more are clearly visible, use the best exact integer count you can and status=multiple. "
+        "If you cannot judge confidently, use status=unsure and count=null. "
+        'Answer with strict JSON only using this schema: {"count": 1, "status": "unique", "reason": "short reason"}'
+    )
+
+
 def _normalize_object_review_status(value: object) -> str | None:
     text = str(value or "").strip().lower()
     if text in {"clear", "present", "visible", "yes"}:
@@ -243,6 +259,34 @@ def _normalize_object_review_status(value: object) -> str | None:
         return OBJECT_STATUS_ABSENT
     if text in {"unsure", "uncertain", "unknown", "cannot_tell", "can't tell"}:
         return OBJECT_STATUS_UNSURE
+    return None
+
+
+def _normalize_full_frame_label_count(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        pass
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    word_to_count = {
+        "zero": 0,
+        "none": 0,
+        "one": 1,
+        "single": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+    }
+    if text in word_to_count:
+        return word_to_count[text]
+    match = re.search(r"\d+", text)
+    if match:
+        return max(0, int(match.group(0)))
     return None
 
 
@@ -1168,61 +1212,56 @@ def _object_review_decision(
     return status, raw_text
 
 
-def _full_frame_label_dinox_review(
+def _full_frame_label_vlm_review(
     *,
-    client: object | None,
-    image_path: Path,
-    image_shape: tuple[int, ...],
+    client,
+    model: str,
+    image_b64: str,
     label: str,
 ) -> dict[str, Any]:
     normalized_label = str(label or "").strip().lower()
     review = {
-        "backend": "dinox",
+        "backend": "vlm",
         "label": normalized_label,
         "status": LABEL_STATUS_UNSURE,
+        "count": None,
         "reason": "pending",
-        "raw_detection_count": 0,
-        "raw_detections": [],
         "raw_response": None,
     }
     if not normalized_label:
         review["reason"] = "missing_label"
         return review
 
-    try:
-        detections = _call_dinox_joint_detection(
-            client=client,
-            image_path=image_path,
-            alias_variants=[normalized_label],
-            image_shape=image_shape,
-            targets=["bbox"],
-        )
-    except Exception as exc:
-        review["reason"] = str(exc).strip() or "dinox_error"
-        return review
-
-    serialized_detections = [
-        _serialize_detection(detection)
-        for detection in detections
-        if isinstance(detection, dict)
-    ]
-    raw_detection_count = len(serialized_detections)
-    if raw_detection_count <= 0:
-        status = LABEL_STATUS_ABSENT
-        reason = "no_raw_detections"
-    elif raw_detection_count == 1:
-        status = LABEL_STATUS_UNIQUE
-        reason = "single_raw_detection"
-    else:
-        status = LABEL_STATUS_MULTIPLE
-        reason = "multiple_raw_detections"
+    default = {
+        "count": None,
+        "status": LABEL_STATUS_UNSURE,
+        "reason": "parse_fallback",
+    }
+    parsed, raw_text = _call_vlm_json(
+        client,
+        model,
+        [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            {"type": "text", "text": _full_frame_label_count_prompt(normalized_label)},
+        ],
+        default=default,
+        max_tokens=128,
+    )
+    count = _normalize_full_frame_label_count(
+        parsed.get("count", parsed.get("visible_count", parsed.get("label_count")))
+    )
+    status = (
+        _normalize_full_frame_label_status(parsed.get("status"), count=count)
+        or LABEL_STATUS_UNSURE
+    )
+    reason = str(parsed.get("reason", "")).strip() or "parse_fallback"
 
     review.update(
         {
             "status": status,
+            "count": count,
             "reason": reason,
-            "raw_detection_count": raw_detection_count,
-            "raw_detections": serialized_detections,
+            "raw_response": raw_text or None,
         }
     )
     return review
@@ -3015,33 +3054,40 @@ def _compute_frame_referability_entry(
         for label in crop_label_statuses:
             label_status_reason_by_label.setdefault(str(label), "derived_from_crop_vlm")
         if crop_unique_label_object_ids:
+            if image_b64 is None:
+                image_b64 = _image_to_base64(image)
+
             def _run_full_frame_label_review_job(item: tuple[str, int]) -> dict[str, Any]:
                 label, obj_id = item
-                dinox_review = _full_frame_label_dinox_review(
+                vlm_review = _full_frame_label_vlm_review(
                     client=client,
-                    image_path=image_path,
-                    image_shape=tuple(image.shape),
+                    model=model_name,
+                    image_b64=str(image_b64 or ""),
                     label=label,
                 )
+                count = _normalize_full_frame_label_count(vlm_review.get("count"))
                 status = (
-                    _normalize_full_frame_label_status(dinox_review.get("status"))
+                    _normalize_full_frame_label_status(vlm_review.get("status"), count=count)
                     or LABEL_STATUS_UNSURE
                 )
+                if count is None:
+                    count = _label_status_count(status)
                 return {
                     "label": str(label),
                     "status": status,
+                    "count": count,
                     "crop_status": crop_label_statuses.get(label),
                     "crop_clear_count": crop_label_counts.get(label),
                     "crop_referable_object_id": int(obj_id),
-                    "backend": str(dinox_review.get("backend", "dinox") or "dinox"),
-                    "reason": str(dinox_review.get("reason", "")).strip() or None,
-                    "raw_detection_count": int(dinox_review.get("raw_detection_count", 0) or 0),
+                    "backend": str(vlm_review.get("backend", "vlm") or "vlm"),
+                    "reason": str(vlm_review.get("reason", "")).strip() or None,
+                    "raw_detection_count": int(vlm_review.get("raw_detection_count", 0) or 0),
                     "raw_detections": [
                         dict(item)
-                        for item in dinox_review.get("raw_detections", [])
+                        for item in vlm_review.get("raw_detections", [])
                         if isinstance(item, dict)
                     ],
-                    "raw_response": dinox_review.get("raw_response"),
+                    "raw_response": vlm_review.get("raw_response"),
                 }
 
             for review_payload in _run_in_thread_pool(
@@ -3053,7 +3099,11 @@ def _compute_frame_referability_entry(
                 full_frame_label_statuses[str(review_payload["label"])] = str(review_payload["status"])
 
         full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
-        full_frame_label_counts = _label_counts_from_statuses(full_frame_label_statuses)
+        full_frame_label_counts = {
+            str(review_payload["label"]): int(review_payload["count"])
+            for review_payload in full_frame_label_reviews
+            if _normalize_full_frame_label_count(review_payload.get("count")) is not None
+        }
         label_statuses = _merge_final_label_statuses(
             crop_label_statuses=crop_label_statuses,
             selector_visible_label_counts=selector_visible_label_counts,
