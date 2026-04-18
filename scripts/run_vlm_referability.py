@@ -90,7 +90,6 @@ DINOX_IOU_THRESHOLD = 0.80
 REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
-NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER = 5
 ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 FRAME_USABLE_BONUS = 100000
@@ -929,6 +928,16 @@ def _visible_object_frame_group_key(frame: dict[str, Any]) -> tuple[Any, ...] | 
     if isinstance(visible_object_ids, list):
         return tuple(sorted(int(obj_id) for obj_id in visible_object_ids))
     return None
+
+
+def _count_visible_object_frame_groups(frames: list[dict[str, Any]]) -> int:
+    return len(
+        {
+            group_key
+            for group_key in (_visible_object_frame_group_key(frame) for frame in frames)
+            if group_key is not None
+        }
+    )
 
 
 def _select_attachment_group_representatives(
@@ -3266,6 +3275,7 @@ def _select_and_rerank_frames(
 
     reranked: list[dict[str, Any]] = []
     reviewed_frame_count = 0
+    group_count = _count_visible_object_frame_groups(frame_candidates)
 
     def _sort_key(entry: dict[str, Any]) -> tuple[int, str]:
         return (
@@ -3290,8 +3300,9 @@ def _select_and_rerank_frames(
     selected = reranked[:max(0, int(max_frames))]
     if reranked:
         logger.info(
-            "VLM reranked %d geometric frame candidates for %s; reviewed %d image(s), kept %d clear frames (clear candidates=%d, best clarity=%d)",
+            "VLM reranked %d geometric frame candidates across %d visible-object groups for %s; reviewed %d image(s), kept %d clear frames (clear candidates=%d, best clarity=%d)",
             len(frame_candidates),
+            group_count,
             scene_dir.name,
             reviewed_frame_count,
             len(selected),
@@ -3440,17 +3451,12 @@ def main():
             processed += 1
             continue
 
-        non_attachment_candidate_limit = max(
-            0,
-            int(args.max_frames) * NON_ATTACHMENT_FRAME_CANDIDATE_MULTIPLIER,
-        )
         frame_candidates = select_frames(
             scene_dir,
             scene["objects"],
             attachment_graph,
             int(args.max_frames),
             keep_all_attachment_frames=True,
-            non_attachment_limit=non_attachment_candidate_limit,
         )
         if not frame_candidates:
             continue
@@ -3484,10 +3490,14 @@ def main():
             for frame in frame_candidates
             if not bool(frame.get("attachment_viewpoint_exempt"))
         ]
+        non_attachment_group_count = _count_visible_object_frame_groups(
+            non_attachment_candidate_frames
+        )
         logger.info(
-            "Selected %d attachment-qualified and %d non-attachment frame candidates for %s before VLM review",
+            "Selected %d attachment-qualified and %d non-attachment frame candidates across %d visible-object groups for %s before VLM review",
             len(attachment_candidate_frames),
             len(non_attachment_candidate_frames),
+            non_attachment_group_count,
             scene_id,
         )
 

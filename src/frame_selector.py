@@ -1190,7 +1190,10 @@ def select_frames(
         selected = attachment_entries[:selection_limit]
 
     if non_attachment_limit is None:
-        non_attachment_target = max(0, selection_limit - len(selected))
+        if keep_all_attachment_frames:
+            non_attachment_target = len(non_attachment_entries)
+        else:
+            non_attachment_target = max(0, selection_limit - len(selected))
     else:
         non_attachment_target = max(0, int(non_attachment_limit))
 
