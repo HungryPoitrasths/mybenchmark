@@ -481,6 +481,69 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(normalized["frame_usable"], True)
         self.assertEqual(normalized["clarity_score"], 82)
 
+    def test_full_frame_label_dinox_review_maps_raw_box_count_to_label_status(self) -> None:
+        cases = [
+            ([], "absent", "no_raw_detections"),
+            (
+                [
+                    {"bbox": [1, 2, 10, 20], "score": 0.42, "area_px": 180, "category": "chair"},
+                ],
+                "unique",
+                "single_raw_detection",
+            ),
+            (
+                [
+                    {"bbox": [1, 2, 10, 20], "score": 0.42, "area_px": 180, "category": "chair"},
+                    {"bbox": [30, 40, 50, 60], "score": 0.31, "area_px": 400, "category": "chair"},
+                ],
+                "multiple",
+                "multiple_raw_detections",
+            ),
+        ]
+
+        for detections, expected_status, expected_reason in cases:
+            with self.subTest(expected_status=expected_status):
+                with patch.object(
+                    referability_module,
+                    "_call_dinox_joint_detection",
+                    return_value=detections,
+                ) as dinox_mock:
+                    review = referability_module._full_frame_label_dinox_review(
+                        client=object(),
+                        image_path=Path("image.jpg"),
+                        image_shape=(120, 120, 3),
+                        label="Chair",
+                    )
+
+                self.assertEqual(review["backend"], "dinox")
+                self.assertEqual(review["label"], "chair")
+                self.assertEqual(review["status"], expected_status)
+                self.assertEqual(review["reason"], expected_reason)
+                self.assertEqual(review["raw_detection_count"], len(detections))
+                self.assertEqual(len(review["raw_detections"]), len(detections))
+                self.assertIsNone(review["raw_response"])
+                self.assertEqual(dinox_mock.call_args.kwargs["alias_variants"], ["chair"])
+                self.assertEqual(dinox_mock.call_args.kwargs["targets"], ["bbox"])
+
+    def test_full_frame_label_dinox_review_returns_unsure_on_dinox_error(self) -> None:
+        with patch.object(
+            referability_module,
+            "_call_dinox_joint_detection",
+            side_effect=RuntimeError("dinox unavailable"),
+        ):
+            review = referability_module._full_frame_label_dinox_review(
+                client=object(),
+                image_path=Path("image.jpg"),
+                image_shape=(120, 120, 3),
+                label="chair",
+            )
+
+        self.assertEqual(review["backend"], "dinox")
+        self.assertEqual(review["status"], "unsure")
+        self.assertEqual(review["reason"], "dinox unavailable")
+        self.assertEqual(review["raw_detection_count"], 0)
+        self.assertEqual(review["raw_detections"], [])
+
     def test_compute_frame_referability_entry_builds_crop_vlm_reviews(self) -> None:
         scene_objects = [
             make_object(1, "chair"),
@@ -522,8 +585,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ) as review_mock,
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
-                return_value=("unique", '{"status":"unique"}'),
+                "_full_frame_label_dinox_review",
+                return_value={
+                    "backend": "dinox",
+                    "status": "unique",
+                    "reason": "single_raw_detection",
+                    "raw_detection_count": 1,
+                    "raw_detections": [{"bbox": [0.0, 0.0, 10.0, 10.0], "score": 0.9, "area_px": 100, "category": "lamp"}],
+                    "raw_response": None,
+                },
             ) as full_frame_mock,
             patch.object(
                 referability_module,
@@ -606,8 +676,18 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
-                return_value=("multiple", '{"status":"multiple"}'),
+                "_full_frame_label_dinox_review",
+                return_value={
+                    "backend": "dinox",
+                    "status": "multiple",
+                    "reason": "multiple_raw_detections",
+                    "raw_detection_count": 2,
+                    "raw_detections": [
+                        {"bbox": [0.0, 0.0, 10.0, 10.0], "score": 0.9, "area_px": 100, "category": "chair"},
+                        {"bbox": [10.0, 10.0, 20.0, 20.0], "score": 0.8, "area_px": 100, "category": "chair"},
+                    ],
+                    "raw_response": None,
+                },
             ),
             patch.object(
                 referability_module,
@@ -674,7 +754,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ) as review_mock,
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
+                "_full_frame_label_dinox_review",
             ) as full_frame_mock,
             patch.object(
                 referability_module,
@@ -741,8 +821,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
-                return_value=("absent", '{"status":"absent"}'),
+                "_full_frame_label_dinox_review",
+                return_value={
+                    "backend": "dinox",
+                    "status": "absent",
+                    "reason": "no_raw_detections",
+                    "raw_detection_count": 0,
+                    "raw_detections": [],
+                    "raw_response": None,
+                },
             ),
             patch.object(
                 referability_module,
@@ -767,6 +854,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["crop_label_statuses"], {"shelves": "unique"})
         self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
         self.assertEqual(frame_entry["full_frame_label_statuses"], {"shelves": "absent"})
+        self.assertEqual(frame_entry["full_frame_label_reviews"][0]["backend"], "dinox")
+        self.assertEqual(frame_entry["full_frame_label_reviews"][0]["raw_detection_count"], 0)
+        self.assertEqual(frame_entry["full_frame_label_reviews"][0]["reason"], "no_raw_detections")
+        self.assertIsNone(frame_entry["full_frame_label_reviews"][0]["raw_response"])
         self.assertEqual(frame_entry["label_statuses"], {"shelves": "absent"})
         self.assertEqual(frame_entry["label_counts"], {"shelves": 0})
         self.assertEqual(frame_entry["referable_object_ids"], [])
@@ -805,7 +896,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ) as review_mock,
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
+                "_full_frame_label_dinox_review",
             ) as full_frame_mock,
             patch.object(
                 referability_module,
@@ -878,8 +969,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
-                return_value=("unique", '{"status":"unique"}'),
+                "_full_frame_label_dinox_review",
+                return_value={
+                    "backend": "dinox",
+                    "status": "unique",
+                    "reason": "single_raw_detection",
+                    "raw_detection_count": 1,
+                    "raw_detections": [{"bbox": [0.0, 0.0, 10.0, 10.0], "score": 0.9, "area_px": 100, "category": "chair"}],
+                    "raw_response": None,
+                },
             ),
             patch.object(
                 referability_module,
@@ -940,8 +1038,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_review_decision",
-                return_value=("unique", '{"status":"unique"}'),
+                "_full_frame_label_dinox_review",
+                return_value={
+                    "backend": "dinox",
+                    "status": "unique",
+                    "reason": "single_raw_detection",
+                    "raw_detection_count": 1,
+                    "raw_detections": [{"bbox": [0.0, 0.0, 10.0, 10.0], "score": 0.9, "area_px": 100, "category": "chair"}],
+                    "raw_response": None,
+                },
             ),
             patch.object(
                 referability_module,
@@ -1356,7 +1461,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ["000003.jpg", "000009.jpg"],
         )
 
-    def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
+    def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_clarity_score(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2, 3]},
             {"image_name": "000030.jpg", "score": 9, "n_visible": 3, "visible_object_ids": [4, 5]},
@@ -1408,10 +1513,54 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 max_frames=2,
             )
 
-        self.assertEqual([entry["image_name"] for entry in selected], ["000030.jpg", "000060.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000060.jpg", "000030.jpg"])
         self.assertTrue(all(entry["frame_info"]["frame_usable"] for entry in selected))
-        self.assertEqual(selected[0]["frame_selection_score"], 100009)
-        self.assertEqual(selected[1]["frame_selection_score"], 100007)
+        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [95, 10])
+        self.assertEqual(selected[0]["frame_selection_score"], 100007)
+        self.assertEqual(selected[1]["frame_selection_score"], 100009)
+
+    def test_select_and_rerank_frames_keeps_group_input_order_before_clarity_review(self) -> None:
+        frame_candidates = [
+            {"image_name": "000000.jpg", "score": 1, "n_visible": 2, "visible_object_ids": [1, 2]},
+            {"image_name": "000030.jpg", "score": 99, "n_visible": 5, "visible_object_ids": [2, 1]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 72,
+                "frame_usable": True,
+                "reason": "clear enough",
+            },
+        ]
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"rerank_group_input_order_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ) as frame_decision_mock,
+        ):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=frame_candidates,
+                max_frames=1,
+            )
+
+        self.assertEqual(frame_decision_mock.call_count, 1)
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
+        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [72])
 
     def test_select_and_rerank_frames_stops_reviewing_group_after_first_high_quality_hit(self) -> None:
         frame_candidates = [

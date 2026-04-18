@@ -235,19 +235,6 @@ def _object_review_prompt(label: str) -> str:
     )
 
 
-def _full_frame_label_review_prompt(label: str) -> str:
-    return (
-        "You are given one indoor scene image. "
-        "Decide how many objects in the full frame would reasonably be called "
-        f"{json.dumps(str(label), ensure_ascii=False)} by a human viewer. "
-        "Return unique when exactly one object in the image would be called that label. "
-        "Return multiple when two or more objects in the image would be called that label. "
-        "Return absent when none would be called that label. "
-        "Return unsure when you cannot decide confidently. "
-        'Answer with strict JSON only using this schema: {"status": "unique", "reason": "short reason"}'
-    )
-
-
 def _normalize_object_review_status(value: object) -> str | None:
     text = str(value or "").strip().lower()
     if text in {"clear", "present", "visible", "yes"}:
@@ -1009,18 +996,10 @@ def _select_non_attachment_group_representatives(
             continue
         grouped_frames.setdefault(group_key, []).append(frame)
 
-    def _group_sort_key(frame: dict[str, Any]) -> tuple[int, int, str]:
-        return (
-            int(frame.get("score", frame.get("selector_score", 0)) or 0),
-            int(frame.get("n_visible", 0) or 0),
-            str(frame.get("image_name", "")),
-        )
-
     def _select_group(item: tuple[tuple[Any, ...], list[dict[str, Any]]]) -> list[dict[str, Any]]:
         _group_key, group_frames = item
         kept: list[dict[str, Any]] = []
-        ordered_frames = sorted(group_frames, key=_group_sort_key, reverse=True)
-        for frame in ordered_frames:
+        for frame in group_frames:
             reviewed_frame = _review_frame_clarity(
                 client=client,
                 model_name=model_name,
@@ -1189,31 +1168,64 @@ def _object_review_decision(
     return status, raw_text
 
 
-def _full_frame_label_review_decision(
-    client,
-    model: str,
-    image_b64: str,
+def _full_frame_label_dinox_review(
+    *,
+    client: object | None,
+    image_path: Path,
+    image_shape: tuple[int, ...],
     label: str,
-) -> tuple[str, str]:
-    default = {"status": LABEL_STATUS_UNSURE, "reason": "parse_fallback"}
-    parsed, raw_text = _call_vlm_json(
-        client,
-        model,
-        [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            {"type": "text", "text": _full_frame_label_review_prompt(label)},
-        ],
-        default=default,
-        max_tokens=128,
-    )
-    status = (
-        _normalize_full_frame_label_status(
-            parsed.get("status"),
-            count=parsed.get("count"),
+) -> dict[str, Any]:
+    normalized_label = str(label or "").strip().lower()
+    review = {
+        "backend": "dinox",
+        "label": normalized_label,
+        "status": LABEL_STATUS_UNSURE,
+        "reason": "pending",
+        "raw_detection_count": 0,
+        "raw_detections": [],
+        "raw_response": None,
+    }
+    if not normalized_label:
+        review["reason"] = "missing_label"
+        return review
+
+    try:
+        detections = _call_dinox_joint_detection(
+            client=client,
+            image_path=image_path,
+            alias_variants=[normalized_label],
+            image_shape=image_shape,
+            targets=["bbox"],
         )
-        or LABEL_STATUS_UNSURE
+    except Exception as exc:
+        review["reason"] = str(exc).strip() or "dinox_error"
+        return review
+
+    serialized_detections = [
+        _serialize_detection(detection)
+        for detection in detections
+        if isinstance(detection, dict)
+    ]
+    raw_detection_count = len(serialized_detections)
+    if raw_detection_count <= 0:
+        status = LABEL_STATUS_ABSENT
+        reason = "no_raw_detections"
+    elif raw_detection_count == 1:
+        status = LABEL_STATUS_UNIQUE
+        reason = "single_raw_detection"
+    else:
+        status = LABEL_STATUS_MULTIPLE
+        reason = "multiple_raw_detections"
+
+    review.update(
+        {
+            "status": status,
+            "reason": reason,
+            "raw_detection_count": raw_detection_count,
+            "raw_detections": serialized_detections,
+        }
     )
-    return status, raw_text
+    return review
 
 
 def _build_frame_label_candidates(
@@ -1567,10 +1579,18 @@ def _call_dinox_joint_detection(
     image_path: Path,
     alias_variants: list[str],
     image_shape: tuple[int, ...],
+    targets: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_variants = _normalize_alias_variants(alias_variants)
     if not normalized_variants:
         return []
+    normalized_targets = [
+        str(target).strip().lower()
+        for target in (targets if targets is not None else ["bbox", "mask"])
+        if str(target).strip()
+    ]
+    if not normalized_targets:
+        normalized_targets = ["bbox", "mask"]
 
     try:
         from dds_cloudapi_sdk.tasks.v2_task import create_task_with_local_image_auto_resize  # type: ignore
@@ -1579,19 +1599,21 @@ def _call_dinox_joint_detection(
 
     prompt_text = ".".join(normalized_variants)
     cloud_client = _get_dinox_client(client)
+    api_body_without_image: dict[str, Any] = {
+        "model": DEFAULT_DINOX_MODEL,
+        "prompt": {
+            "type": "text",
+            "text": prompt_text,
+        },
+        "targets": normalized_targets,
+        "bbox_threshold": DINOX_BBOX_THRESHOLD,
+        "iou_threshold": DINOX_IOU_THRESHOLD,
+    }
+    if "mask" in normalized_targets:
+        api_body_without_image["mask_format"] = "coco_rle"
     task = create_task_with_local_image_auto_resize(
         api_path="/v2/task/dinox/detection",
-        api_body_without_image={
-            "model": DEFAULT_DINOX_MODEL,
-            "prompt": {
-                "type": "text",
-                "text": prompt_text,
-            },
-            "targets": ["bbox", "mask"],
-            "bbox_threshold": DINOX_BBOX_THRESHOLD,
-            "iou_threshold": DINOX_IOU_THRESHOLD,
-            "mask_format": "coco_rle",
-        },
+        api_body_without_image=api_body_without_image,
         image_path=str(image_path),
     )
     cloud_client.run_task(task)
@@ -2993,24 +3015,33 @@ def _compute_frame_referability_entry(
         for label in crop_label_statuses:
             label_status_reason_by_label.setdefault(str(label), "derived_from_crop_vlm")
         if crop_unique_label_object_ids:
-            if image_b64 is None:
-                image_b64 = _image_to_base64(image)
             def _run_full_frame_label_review_job(item: tuple[str, int]) -> dict[str, Any]:
                 label, obj_id = item
-                status, raw_response = _full_frame_label_review_decision(
-                    client,
-                    model_name,
-                    str(image_b64 or ""),
-                    label,
+                dinox_review = _full_frame_label_dinox_review(
+                    client=client,
+                    image_path=image_path,
+                    image_shape=tuple(image.shape),
+                    label=label,
                 )
-                status = _normalize_full_frame_label_status(status) or LABEL_STATUS_UNSURE
+                status = (
+                    _normalize_full_frame_label_status(dinox_review.get("status"))
+                    or LABEL_STATUS_UNSURE
+                )
                 return {
                     "label": str(label),
                     "status": status,
                     "crop_status": crop_label_statuses.get(label),
                     "crop_clear_count": crop_label_counts.get(label),
                     "crop_referable_object_id": int(obj_id),
-                    "raw_response": raw_response or None,
+                    "backend": str(dinox_review.get("backend", "dinox") or "dinox"),
+                    "reason": str(dinox_review.get("reason", "")).strip() or None,
+                    "raw_detection_count": int(dinox_review.get("raw_detection_count", 0) or 0),
+                    "raw_detections": [
+                        dict(item)
+                        for item in dinox_review.get("raw_detections", [])
+                        if isinstance(item, dict)
+                    ],
+                    "raw_response": dinox_review.get("raw_response"),
                 }
 
             for review_payload in _run_in_thread_pool(
@@ -3186,13 +3217,12 @@ def _select_and_rerank_frames(
     reranked: list[dict[str, Any]] = []
     reviewed_frame_count = 0
 
-    def _sort_key(entry: dict[str, Any]) -> tuple[int, int, int, str]:
+    def _sort_key(entry: dict[str, Any]) -> tuple[int, str]:
         return (
-            int(entry.get("frame_selection_score", 0)),
-            int(entry.get("selector_score", 0)),
-            int(entry.get("n_visible", 0)),
+            -int(entry.get("frame_info", {}).get("clarity_score", 0) or 0),
             str(entry.get("image_name", "")),
         )
+
     reviewed_frames = _select_non_attachment_group_representatives(
         client=client,
         model_name=model_name,
@@ -3206,19 +3236,17 @@ def _select_and_rerank_frames(
 
     reranked.sort(
         key=_sort_key,
-        reverse=True,
     )
     selected = reranked[:max(0, int(max_frames))]
     if reranked:
         logger.info(
-            "VLM reranked %d geometric frame candidates for %s; reviewed %d image(s), kept %d clear frames (clear candidates=%d, best clarity=%d, best rerank score=%d)",
+            "VLM reranked %d geometric frame candidates for %s; reviewed %d image(s), kept %d clear frames (clear candidates=%d, best clarity=%d)",
             len(frame_candidates),
             scene_dir.name,
             reviewed_frame_count,
             len(selected),
             len(reranked),
             int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
-            int(reranked[0].get("frame_selection_score", 0)),
         )
     return selected
 
