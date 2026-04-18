@@ -551,7 +551,7 @@ class SupportGraphHeuristicTests(unittest.TestCase):
 
         self.assertIsNone(_supported_by_metrics(child, parent))
 
-    def test_contained_in_bbox_enclosure_fallback_accepts_non_prior_pair(self) -> None:
+    def test_contained_in_rejects_non_prior_pair_without_hull_containment(self) -> None:
         parent = make_object(
             10,
             "dresser",
@@ -566,14 +566,9 @@ class SupportGraphHeuristicTests(unittest.TestCase):
             bottom_hull_xy=_rect(0.4, 0.4, 0.8, 0.8),
         )
 
-        metrics = _contained_in_metrics(child, parent)
+        self.assertIsNone(_contained_in_metrics(child, parent))
 
-        self.assertIsNotNone(metrics)
-        self.assertEqual(metrics["type"], "contained_in")
-        self.assertEqual(metrics["evidence"]["geometry_contact"]["mode"], "bbox_enclosure_fallback")
-        self.assertEqual(metrics["evidence"]["semantic_prior"]["score"], 0.0)
-
-    def test_contained_in_bbox_enclosure_fallback_uses_parent_bbox_when_outside_opening_polygon(self) -> None:
+    def test_contained_in_rejects_when_child_hull_extends_outside_parent_hull(self) -> None:
         parent = make_object(
             10,
             "bin",
@@ -595,13 +590,9 @@ class SupportGraphHeuristicTests(unittest.TestCase):
             bottom_hull_xy=_rect(1.3, 1.3, 1.7, 1.7),
         )
 
-        metrics = _contained_in_metrics(child, parent)
+        self.assertIsNone(_contained_in_metrics(child, parent))
 
-        self.assertIsNotNone(metrics)
-        self.assertEqual(metrics["evidence"]["geometry_contact"]["mode"], "bbox_enclosure_fallback")
-        self.assertEqual(metrics["evidence"]["xy_overlap"]["geometry_source"]["parent"], "bbox")
-
-    def test_contained_in_bbox_enclosure_fallback_does_not_override_affixed_pair(self) -> None:
+    def test_contained_in_does_not_override_affixed_pair(self) -> None:
         parent = make_object(
             10,
             "dresser",
@@ -620,6 +611,57 @@ class SupportGraphHeuristicTests(unittest.TestCase):
 
         self.assertIsNotNone(candidate)
         self.assertEqual(candidate["type"], "affixed_to")
+
+    def test_contained_in_requires_complete_child_hull_coverage(self) -> None:
+        parent = make_object(
+            10,
+            "bin",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_hull_xy=_rect(0.0, 0.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.2, 0.2, 0.2),
+            (1.05, 0.8, 0.8),
+            bottom_hull_xy=_rect(0.2, 0.2, 1.05, 0.8),
+        )
+
+        self.assertIsNone(_contained_in_metrics(child, parent))
+
+    def test_contained_in_marks_hull_fully_contained_in_evidence(self) -> None:
+        parent = make_object(
+            10,
+            "bin",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            top_hull_xy=_rect(0.0, 0.0, 1.0, 1.0),
+            top_surface_candidates=[{
+                "z": 1.0,
+                "hull_xy": _rect(0.0, 0.0, 1.0, 1.0),
+                "area": 1.0,
+                "score": 1.0,
+            }],
+        )
+        child = make_object(
+            1,
+            "book",
+            (0.2, 0.2, 0.2),
+            (0.8, 0.8, 0.8),
+            bottom_hull_xy=_rect(0.2, 0.2, 0.8, 0.8),
+        )
+
+        metrics = _contained_in_metrics(child, parent)
+
+        self.assertIsNotNone(metrics)
+        self.assertTrue(metrics["evidence"]["containment"]["hull_fully_contained"])
 
     def test_contained_in_uses_z_overlap_ratio(self) -> None:
         parent = make_object(

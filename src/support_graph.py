@@ -294,6 +294,19 @@ def _bottom_support_polygon(obj: dict) -> tuple[np.ndarray, str]:
     return _bbox_xy_polygon(obj), "bbox"
 
 
+def _explicit_bottom_support_polygon(obj: dict) -> tuple[np.ndarray, str] | None:
+    hull = _support_face_polygon(obj, "bottom_hull_xy")
+    if len(hull) >= 3:
+        return hull, "bottom_hull_xy"
+    support_geom = obj.get("support_geom") or {}
+    raw_candidates = support_geom.get("bottom_surface_candidates") or []
+    if raw_candidates:
+        candidates = _bottom_surface_candidates(obj)
+        best = max(candidates, key=lambda item: (float(item["area"]), float(item["score"])))
+        return np.asarray(best["hull_xy"], dtype=float), "bottom_surface_candidates"
+    return None
+
+
 def compute_bottom_footprint_overlap_metrics(obj_a: dict, obj_b: dict) -> dict[str, float | str]:
     """Compute overlap statistics for two bottom-footprint polygons."""
     poly_a, source_a = _bottom_support_polygon(obj_a)
@@ -328,6 +341,14 @@ def _point_in_convex_polygon(point: np.ndarray, poly: np.ndarray) -> bool:
         if _cross_2d(start, end, point) < -GEOM_EPS:
             return False
     return True
+
+
+def _convex_polygon_contains_polygon(inner: np.ndarray, outer: np.ndarray) -> bool:
+    if len(inner) < 3 or len(outer) < 3:
+        return False
+    outer = _ensure_ccw(np.asarray(outer, dtype=float))
+    inner = np.asarray(inner, dtype=float)
+    return all(_point_in_convex_polygon(vertex, outer) for vertex in inner)
 
 
 def _surface_candidates_from_support_geom(
@@ -406,6 +427,17 @@ def _largest_top_surface_polygon(obj: dict) -> tuple[np.ndarray, str]:
     if len(legacy_hull) >= 3:
         return legacy_hull, "top_hull_xy"
     return _bbox_xy_polygon(obj), "bbox"
+
+
+def _largest_explicit_top_surface_polygon(obj: dict) -> tuple[np.ndarray, str] | None:
+    candidates = _top_surface_candidates(obj)
+    if candidates:
+        best = max(candidates, key=lambda item: float(item["area"]))
+        return np.asarray(best["hull_xy"], dtype=float), "top_surface_candidates"
+    legacy_hull = _support_face_polygon(obj, "top_hull_xy")
+    if len(legacy_hull) >= 3:
+        return legacy_hull, "top_hull_xy"
+    return None
 
 
 def _bbox_axis_gaps(obj_a: dict, obj_b: dict) -> np.ndarray:
@@ -916,12 +948,13 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     child_label = _label(obj_a)
     parent_label = _label(obj_b)
     prior = _containment_prior(parent_label, child_label)
-    bbox_fallback = _bbox_containment_fallback_metrics(obj_a, obj_b)
-    if prior <= 0.0:
-        return bbox_fallback
 
-    child_hull, child_source = _bottom_support_polygon(obj_a)
-    parent_hull, parent_source = _largest_top_surface_polygon(obj_b)
+    child_hull_result = _explicit_bottom_support_polygon(obj_a)
+    parent_hull_result = _largest_explicit_top_surface_polygon(obj_b)
+    if child_hull_result is None or parent_hull_result is None:
+        return None
+    child_hull, child_source = child_hull_result
+    parent_hull, parent_source = parent_hull_result
 
     child_area = _polygon_area(child_hull)
     parent_area = _polygon_area(parent_hull)
@@ -930,6 +963,10 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
 
     overlap_area = _convex_intersection_area(child_hull, parent_hull)
     xy_coverage = overlap_area / max(child_area, GEOM_EPS)
+    hull_fully_contained = bool(
+        xy_coverage >= 1.0 - 1e-6
+        and _convex_polygon_contains_polygon(child_hull, parent_hull)
+    )
 
     child_min = np.asarray(obj_a["bbox_min"], dtype=float)
     child_max = np.asarray(obj_a["bbox_max"], dtype=float)
@@ -954,9 +991,8 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
     size_score = float(np.clip((parent_area - child_area) / max(parent_area, GEOM_EPS), 0.0, 1.0))
 
     z_inside = bool(child_bottom_inside and z_ratio >= 0.60)
-    strong_geometry = xy_coverage >= 0.80 and center_inside_xy and z_inside
-    if not strong_geometry and not (prior > 0.0 and xy_coverage >= 0.65 and center_inside_xy and z_inside):
-        return bbox_fallback
+    if not (hull_fully_contained and center_inside_xy and z_inside):
+        return None
 
     containment_score = float(np.clip(
         0.55 * xy_coverage +
@@ -984,6 +1020,7 @@ def _contained_in_metrics(obj_a: dict, obj_b: dict) -> dict[str, Any] | None:
             },
             "containment": {
                 "score": containment_score,
+                "hull_fully_contained": hull_fully_contained,
                 "center_inside_xy": center_inside_xy,
                 "center_inside_xyz": center_inside_xyz,
                 "z_inside": z_inside,
