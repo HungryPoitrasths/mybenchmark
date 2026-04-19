@@ -91,6 +91,7 @@ REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
+NON_ATTACHMENT_GROUP_FRAME_STRIDE = 3
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -1022,6 +1023,7 @@ def _select_non_attachment_group_representatives(
     scene_dir: Path,
     frames: list[dict[str, Any]],
     vlm_workers: int = 1,
+    referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     debug_groups_out: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not frames:
@@ -1039,11 +1041,15 @@ def _select_non_attachment_group_representatives(
         item: tuple[int, tuple[tuple[Any, ...], list[dict[str, Any]]]]
     ) -> dict[str, Any]:
         group_index, (group_key, group_frames) = item
-        kept: list[dict[str, Any]] = []
+        accepted: list[dict[str, Any]] = []
         attempts: list[dict[str, Any]] = []
         stopped_after_image_name: str | None = None
         stop_reason = "exhausted_group_frames"
-        for frame in group_frames:
+        group_frame_stride = max(1, int(NON_ATTACHMENT_GROUP_FRAME_STRIDE))
+        sampled_frames = list(group_frames[::group_frame_stride])
+        if not sampled_frames and group_frames:
+            sampled_frames = [group_frames[0]]
+        for frame in sampled_frames:
             image_name = str(frame.get("image_name", "")).strip()
             selector_score = int(
                 frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0
@@ -1064,6 +1070,9 @@ def _select_non_attachment_group_representatives(
                         "clarity_score": None,
                         "frame_quality_reason": None,
                         "frame_selection_score": None,
+                        "referable_object_count": 0,
+                        "referable_object_ids": [],
+                        "accepted_for_group": False,
                         "stop_after_this_frame": False,
                     }
                 )
@@ -1071,10 +1080,22 @@ def _select_non_attachment_group_representatives(
             frame_info = reviewed_frame.get("frame_info", {})
             frame_usable = bool(frame_info.get("frame_usable", True))
             clarity_score = int(frame_info.get("clarity_score", 0) or 0)
-            stop_after_this_frame = (
+            referable_entry = None
+            referable_object_ids: list[int] = []
+            if frame_usable and referability_entry_builder is not None:
+                referable_entry = referability_entry_builder(frame, reviewed_frame)
+                if isinstance(referable_entry, dict):
+                    referable_object_ids = _normalize_cached_object_ids(
+                        referable_entry.get("referable_object_ids")
+                    )
+            accepted_for_group = bool(
                 frame_usable
-                and clarity_score >= NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE
+                and (
+                    referability_entry_builder is None
+                    or referable_object_ids
+                )
             )
+            stop_after_this_frame = accepted_for_group
             attempts.append(
                 {
                     "image_name": image_name,
@@ -1084,14 +1105,20 @@ def _select_non_attachment_group_representatives(
                     "clarity_score": clarity_score,
                     "frame_quality_reason": str(frame_info.get("reason", "")).strip() or None,
                     "frame_selection_score": int(reviewed_frame.get("frame_selection_score", 0) or 0),
+                    "referable_object_count": len(referable_object_ids),
+                    "referable_object_ids": referable_object_ids,
+                    "accepted_for_group": accepted_for_group,
                     "stop_after_this_frame": stop_after_this_frame,
                 }
             )
-            if frame_usable:
-                kept.append(reviewed_frame)
             if stop_after_this_frame:
+                accepted_frame = dict(reviewed_frame)
+                if isinstance(referable_entry, dict):
+                    accepted_frame["_referability_entry"] = referable_entry
+                    accepted_frame["referable_object_ids"] = referable_object_ids
+                accepted.append(accepted_frame)
                 stopped_after_image_name = image_name
-                stop_reason = "usable_frame_clarity_ge_threshold"
+                stop_reason = "accepted_frame_has_referable_objects"
                 break
         return {
             "group_index": int(group_index),
@@ -1100,10 +1127,15 @@ def _select_non_attachment_group_representatives(
                 str(frame.get("image_name", "")).strip()
                 for frame in group_frames
             ],
+            "sampled_frame_image_names": [
+                str(frame.get("image_name", "")).strip()
+                for frame in sampled_frames
+            ],
+            "group_frame_stride": group_frame_stride,
             "attempts": attempts,
             "stopped_after_image_name": stopped_after_image_name,
             "stop_reason": stop_reason,
-            "_usable_frames": kept,
+            "_accepted_frames": accepted,
         }
 
     selected_groups = _run_in_thread_pool(
@@ -1117,36 +1149,43 @@ def _select_non_attachment_group_representatives(
         key=lambda doc: int(doc.get("group_index", 0)),
     )
     for doc in group_debug_docs:
-        usable_frames = [
-            frame for frame in doc.pop("_usable_frames", [])
+        accepted_frames = [
+            frame for frame in doc.pop("_accepted_frames", [])
             if isinstance(frame, dict)
         ]
-        selected_frames.extend(usable_frames)
+        selected_frames.extend(accepted_frames)
         if debug_groups_out is None:
             continue
-        usable_image_names = [
+        accepted_image_names = [
             str(frame.get("image_name", "")).strip()
-            for frame in usable_frames
+            for frame in accepted_frames
         ]
-        best_usable_clarity = max(
+        best_accepted_clarity = max(
             [
                 int(frame.get("frame_info", {}).get("clarity_score", 0) or 0)
-                for frame in usable_frames
+                for frame in accepted_frames
             ],
             default=None,
+        )
+        any_usable_frame = any(
+            bool(attempt.get("frame_usable", False))
+            for attempt in doc.get("attempts", [])
         )
         debug_groups_out.append(
             {
                 "group_index": int(doc.get("group_index", 0)),
                 "group_key_visible_object_ids": list(doc.get("group_key_visible_object_ids", [])),
                 "candidate_frame_image_names": list(doc.get("candidate_frame_image_names", [])),
+                "sampled_frame_image_names": list(doc.get("sampled_frame_image_names", [])),
+                "group_frame_stride": int(doc.get("group_frame_stride", NON_ATTACHMENT_GROUP_FRAME_STRIDE)),
                 "attempts": list(doc.get("attempts", [])),
-                "usable_frame_image_names": usable_image_names,
-                "usable_frame_count": len(usable_image_names),
-                "best_usable_clarity": best_usable_clarity,
+                "accepted_frame_image_names": accepted_image_names,
+                "accepted_frame_count": len(accepted_image_names),
+                "best_accepted_clarity": best_accepted_clarity,
                 "stopped_after_image_name": doc.get("stopped_after_image_name"),
                 "stop_reason": str(doc.get("stop_reason", "exhausted_group_frames")),
-                "group_exhausted_without_usable_frame": len(usable_image_names) == 0,
+                "group_exhausted_without_usable_frame": not any_usable_frame,
+                "group_exhausted_without_referable_frame": len(accepted_image_names) == 0,
             }
         )
     return selected_frames
@@ -3342,13 +3381,14 @@ def _select_and_rerank_frames(
     frame_candidates: list[dict[str, Any]],
     max_frames: int,
     vlm_workers: int = 1,
+    referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     debug_output: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not frame_candidates:
         return []
 
     reranked: list[dict[str, Any]] = []
-    usable_frame_count = 0
+    accepted_frame_count = 0
     group_count = _count_visible_object_frame_groups(frame_candidates)
     group_debug: list[dict[str, Any]] = [] if debug_output is not None else None
 
@@ -3364,10 +3404,11 @@ def _select_and_rerank_frames(
         scene_dir=scene_dir,
         frames=frame_candidates,
         vlm_workers=vlm_workers,
+        referability_entry_builder=referability_entry_builder,
         debug_groups_out=group_debug,
     )
     for reviewed_frame in reviewed_frames:
-        usable_frame_count += 1
+        accepted_frame_count += 1
         reranked.append(reviewed_frame)
 
     reranked.sort(
@@ -3385,19 +3426,22 @@ def _select_and_rerank_frames(
             for frame in reranked
         ]
         for group in group_debug or []:
-            usable_names = list(group.get("usable_frame_image_names", []))
+            accepted_names = list(group.get("accepted_frame_image_names", []))
             selected_before = [
-                image_name for image_name in usable_names
+                image_name for image_name in accepted_names
                 if image_name in selected_before_attachment_set
             ]
             dropped_by_group_rerank = [
-                image_name for image_name in usable_names
+                image_name for image_name in accepted_names
                 if image_name not in selected_before_attachment_set
             ]
             group["selected_before_attachment_slots_image_names"] = selected_before
             group["dropped_by_group_rerank_image_names"] = dropped_by_group_rerank
-            if not usable_names:
-                group["status_before_attachment_slots"] = "no_usable_frame"
+            if not accepted_names:
+                if bool(group.get("group_exhausted_without_usable_frame", False)):
+                    group["status_before_attachment_slots"] = "no_usable_frame"
+                else:
+                    group["status_before_attachment_slots"] = "no_referable_frame"
             elif selected_before:
                 group["status_before_attachment_slots"] = "selected_before_attachment_slots"
             else:
@@ -3408,8 +3452,8 @@ def _select_and_rerank_frames(
                 "scene_id": scene_dir.name,
                 "non_attachment_candidate_frame_count": len(frame_candidates),
                 "non_attachment_visible_object_group_count": group_count,
-                "usable_frame_count_after_group_scan": usable_frame_count,
-                "reranked_usable_frame_image_names": reranked_image_names,
+                "accepted_frame_count_after_group_scan": accepted_frame_count,
+                "reranked_accepted_frame_image_names": reranked_image_names,
                 "selected_before_attachment_slots_image_names": selected_before_attachment_slots,
                 "selected_before_attachment_slots_count": len(selected_before_attachment_slots),
                 "groups": group_debug or [],
@@ -3417,11 +3461,11 @@ def _select_and_rerank_frames(
         )
     if reranked:
         logger.info(
-            "VLM frame-usable filtering for %d geometric frame candidates across %d visible-object groups in %s: %d usable frame(s) passed frame_usable gate, selected %d fallback frame(s) (best clarity=%d)",
+            "VLM non-attachment group filtering for %d geometric frame candidates across %d visible-object groups in %s: %d accepted frame(s) with referable objects, selected %d fallback frame(s) (best clarity=%d)",
             len(frame_candidates),
             group_count,
             scene_dir.name,
-            usable_frame_count,
+            accepted_frame_count,
             len(selected),
             int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
         )
@@ -3630,33 +3674,7 @@ def main():
             scene_id,
         )
 
-        non_attachment_group_debug: dict[str, Any] | None = (
-            {} if non_attachment_group_debug_dir is not None else None
-        )
-        non_attachment_frames = _select_and_rerank_frames(
-            client=client,
-            model_name=model_name,
-            scene_dir=scene_dir,
-            frame_candidates=non_attachment_candidate_frames,
-            max_frames=int(args.max_frames),
-            vlm_workers=int(args.vlm_workers),
-            debug_output=non_attachment_group_debug,
-        ) if non_attachment_candidate_frames else []
-        if non_attachment_group_debug is not None and not non_attachment_candidate_frames:
-            non_attachment_group_debug.update(
-                {
-                    "scene_id": scene_id,
-                    "non_attachment_candidate_frame_count": 0,
-                    "non_attachment_visible_object_group_count": 0,
-                    "usable_frame_count_after_group_scan": 0,
-                    "reranked_usable_frame_image_names": [],
-                    "selected_before_attachment_slots_image_names": [],
-                    "selected_before_attachment_slots_count": 0,
-                    "groups": [],
-                }
-            )
-
-        def _build_attachment_entry(
+        def _build_frame_referability_entry(
             frame: dict[str, Any],
             reviewed_frame: dict[str, Any],
         ) -> dict[str, Any] | None:
@@ -3712,6 +3730,39 @@ def main():
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
 
+        non_attachment_group_debug: dict[str, Any] | None = (
+            {} if non_attachment_group_debug_dir is not None else None
+        )
+        non_attachment_frames = _select_and_rerank_frames(
+            client=client,
+            model_name=model_name,
+            scene_dir=scene_dir,
+            frame_candidates=non_attachment_candidate_frames,
+            max_frames=int(args.max_frames),
+            vlm_workers=int(args.vlm_workers),
+            referability_entry_builder=_build_frame_referability_entry,
+            debug_output=non_attachment_group_debug,
+        ) if non_attachment_candidate_frames else []
+        if non_attachment_group_debug is not None and not non_attachment_candidate_frames:
+            non_attachment_group_debug.update(
+                {
+                    "scene_id": scene_id,
+                    "non_attachment_candidate_frame_count": 0,
+                    "non_attachment_visible_object_group_count": 0,
+                    "accepted_frame_count_after_group_scan": 0,
+                    "reranked_accepted_frame_image_names": [],
+                    "selected_before_attachment_slots_image_names": [],
+                    "selected_before_attachment_slots_count": 0,
+                    "groups": [],
+                }
+            )
+
+        def _build_attachment_entry(
+            frame: dict[str, Any],
+            reviewed_frame: dict[str, Any],
+        ) -> dict[str, Any] | None:
+            return _build_frame_referability_entry(frame, reviewed_frame)
+
         attachment_selected_frames = _select_attachment_group_representatives(
             client=client,
             model_name=model_name,
@@ -3748,20 +3799,23 @@ def main():
             ]
             non_attachment_group_debug["selected_after_attachment_slots_count"] = len(selected_non_attachment_frames)
             for group in non_attachment_group_debug.get("groups", []):
-                usable_names = list(group.get("usable_frame_image_names", []))
+                accepted_names = list(group.get("accepted_frame_image_names", []))
                 selected_after = [
-                    image_name for image_name in usable_names
+                    image_name for image_name in accepted_names
                     if image_name in selected_after_attachment
                 ]
                 dropped_after_attachment = [
-                    image_name for image_name in usable_names
+                    image_name for image_name in accepted_names
                     if image_name in selected_before_attachment
                     and image_name not in selected_after_attachment
                 ]
                 group["selected_after_attachment_slots_image_names"] = selected_after
                 group["dropped_after_attachment_slots_image_names"] = dropped_after_attachment
-                if not usable_names:
-                    group["status_after_attachment_slots"] = "no_usable_frame"
+                if not accepted_names:
+                    if bool(group.get("group_exhausted_without_usable_frame", False)):
+                        group["status_after_attachment_slots"] = "no_usable_frame"
+                    else:
+                        group["status_after_attachment_slots"] = "no_referable_frame"
                 elif selected_after:
                     group["status_after_attachment_slots"] = "final_selected"
                 elif dropped_after_attachment:
@@ -3829,25 +3883,29 @@ def main():
                 except Exception as exc:
                     logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
 
-            entry = _compute_frame_referability_entry(
-                client=client,
-                model_name=model_name,
-                scene_objects=scene["objects"],
-                objects_by_id=objects_by_id,
-                image=image,
-                image_path=image_path,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-                selector_visible_object_ids=selector_visible_object_ids,
-                selector_score=int(frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0),
-                frame_info=dict(frame.get("frame_info", {})),
-                frame_selection_score=int(frame.get("frame_selection_score", 0) or 0),
-                vlm_workers=int(args.vlm_workers),
-                ray_caster_getter=ray_caster_getter,
-                instance_mesh_data_getter=instance_mesh_data_getter,
-            )
+            cached_entry = frame.get("_referability_entry")
+            if isinstance(cached_entry, dict):
+                entry = dict(cached_entry)
+            else:
+                entry = _compute_frame_referability_entry(
+                    client=client,
+                    model_name=model_name,
+                    scene_objects=scene["objects"],
+                    objects_by_id=objects_by_id,
+                    image=image,
+                    image_path=image_path,
+                    camera_pose=camera_pose,
+                    color_intrinsics=color_intrinsics,
+                    depth_image=depth_image,
+                    depth_intrinsics=depth_intrinsics,
+                    selector_visible_object_ids=selector_visible_object_ids,
+                    selector_score=int(frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0),
+                    frame_info=dict(frame.get("frame_info", {})),
+                    frame_selection_score=int(frame.get("frame_selection_score", 0) or 0),
+                    vlm_workers=int(args.vlm_workers),
+                    ray_caster_getter=ray_caster_getter,
+                    instance_mesh_data_getter=instance_mesh_data_getter,
+                )
             final_scene_entries[image_name] = _attach_selection_metadata(
                 entry,
                 attachment_graph,
