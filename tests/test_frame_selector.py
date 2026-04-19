@@ -273,15 +273,15 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(stats["zbuffer_full_mask_area_px"], 0.0)
         self.assertGreaterEqual(stats["zbuffer_mask_area_px"], 0.0)
 
-    def test_count_well_cropped_visible_objects_uses_70_percent_threshold(self) -> None:
+    def test_count_well_cropped_visible_objects_uses_60_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 
         with patch.object(
             frame_selector,
             "_project_object_roi",
             side_effect=[
-                {"bbox_in_frame_ratio": 0.70},
-                {"bbox_in_frame_ratio": 0.69},
+                {"bbox_in_frame_ratio": 0.60},
+                {"bbox_in_frame_ratio": 0.59},
                 {"bbox_in_frame_ratio": 0.95},
             ],
         ):
@@ -296,8 +296,8 @@ class FrameSelectorTests(unittest.TestCase):
     def test_count_well_cropped_visible_objects_reuses_precomputed_audits(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table")]
         audits = {
-            1: {"bbox_in_frame_ratio": 0.70},
-            2: {"bbox_in_frame_ratio": 0.69},
+            1: {"bbox_in_frame_ratio": 0.60},
+            2: {"bbox_in_frame_ratio": 0.59},
         }
 
         with patch.object(
@@ -362,8 +362,8 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(base_a, base_b)
         self.assertEqual(score_a, score_b)
 
-    def test_select_frames_prunes_ranked_nearby_viewpoints_without_attachment_exemption(self) -> None:
-        root = make_case_dir("frame_selector_prunes_nearby_views")
+    def test_select_frames_keeps_ranked_nearby_viewpoints_without_attachment_exemption(self) -> None:
+        root = make_case_dir("frame_selector_keeps_nearby_views")
         self.addCleanup(shutil.rmtree, root, True)
         scene_dir = root / "scene0000_00"
         (scene_dir / "pose").mkdir(parents=True)
@@ -390,8 +390,8 @@ class FrameSelectorTests(unittest.TestCase):
         ):
             results = frame_selector.select_frames(scene_dir, objects, max_frames=2)
 
-        self.assertEqual([entry["image_name"] for entry in results], ["000000.jpg"])
-        self.assertEqual([entry["score"] for entry in results], [5])
+        self.assertEqual([entry["image_name"] for entry in results], ["000000.jpg", "000003.jpg"])
+        self.assertEqual([entry["score"] for entry in results], [5, 4])
 
     def test_select_frames_keeps_ranked_nearby_viewpoints_for_attachment_exempt_frames(self) -> None:
         root = make_case_dir("frame_selector_attachment_nearby_views")

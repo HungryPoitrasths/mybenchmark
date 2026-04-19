@@ -74,7 +74,7 @@ QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
-REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.70
+REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.60
 ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.50
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
 SEGMENTATION_EXTREME_NOISE_MIN_SCORE = 0.10
@@ -91,7 +91,6 @@ REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
-NON_ATTACHMENT_GROUP_FRAME_STRIDE = 3
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -921,6 +920,23 @@ def _count_visible_object_frame_groups(frames: list[dict[str, Any]]) -> int:
     )
 
 
+def _group_frame_sampling_stride(group_frame_count: int) -> int:
+    count = max(0, int(group_frame_count))
+    if count <= 10:
+        return 1
+    if count <= 30:
+        return 2
+    return 3
+
+
+def _sample_group_frames(frames: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    group_frame_stride = _group_frame_sampling_stride(len(frames))
+    sampled_frames = list(frames[::group_frame_stride])
+    if not sampled_frames and frames:
+        sampled_frames = [frames[0]]
+    return sampled_frames, group_frame_stride
+
+
 def _select_attachment_group_representatives(
     *,
     client,
@@ -948,7 +964,8 @@ def _select_attachment_group_representatives(
             key=lambda frame: len(frame.get("visible_object_ids", []) or []),
             reverse=True,
         )
-        for frame in ordered_frames:
+        sampled_frames, _group_frame_stride = _sample_group_frames(ordered_frames)
+        for frame in sampled_frames:
             reviewed_frame = _review_frame_clarity(
                 client=client,
                 model_name=model_name,
@@ -1045,10 +1062,7 @@ def _select_non_attachment_group_representatives(
         attempts: list[dict[str, Any]] = []
         stopped_after_image_name: str | None = None
         stop_reason = "exhausted_group_frames"
-        group_frame_stride = max(1, int(NON_ATTACHMENT_GROUP_FRAME_STRIDE))
-        sampled_frames = list(group_frames[::group_frame_stride])
-        if not sampled_frames and group_frames:
-            sampled_frames = [group_frames[0]]
+        sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
         for frame in sampled_frames:
             image_name = str(frame.get("image_name", "")).strip()
             selector_score = int(
@@ -1177,7 +1191,7 @@ def _select_non_attachment_group_representatives(
                 "group_key_visible_object_ids": list(doc.get("group_key_visible_object_ids", [])),
                 "candidate_frame_image_names": list(doc.get("candidate_frame_image_names", [])),
                 "sampled_frame_image_names": list(doc.get("sampled_frame_image_names", [])),
-                "group_frame_stride": int(doc.get("group_frame_stride", NON_ATTACHMENT_GROUP_FRAME_STRIDE)),
+                "group_frame_stride": int(doc.get("group_frame_stride", 1)),
                 "attempts": list(doc.get("attempts", [])),
                 "accepted_frame_image_names": accepted_image_names,
                 "accepted_frame_count": len(accepted_image_names),
