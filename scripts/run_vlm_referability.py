@@ -92,6 +92,7 @@ REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
+NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT = 2
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -1114,7 +1115,13 @@ def _select_non_attachment_group_representatives(
                     or referable_object_ids
                 )
             )
-            stop_after_this_frame = accepted_for_group
+            stop_after_this_frame = bool(
+                frame_usable
+                and (
+                    referability_entry_builder is None
+                    or len(referable_object_ids) >= NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT
+                )
+            )
             attempts.append(
                 {
                     "image_name": image_name,
@@ -1130,15 +1137,32 @@ def _select_non_attachment_group_representatives(
                     "stop_after_this_frame": stop_after_this_frame,
                 }
             )
-            if stop_after_this_frame:
+            if accepted_for_group and fallback_frame is None:
                 accepted_frame = dict(reviewed_frame)
                 if isinstance(referable_entry, dict):
                     accepted_frame["_referability_entry"] = referable_entry
                     accepted_frame["referable_object_ids"] = referable_object_ids
-                accepted.append(accepted_frame)
+                current_accepted_frame = accepted_frame
+                fallback_frame = accepted_frame
+            elif accepted_for_group:
+                accepted_frame = dict(reviewed_frame)
+                if isinstance(referable_entry, dict):
+                    accepted_frame["_referability_entry"] = referable_entry
+                    accepted_frame["referable_object_ids"] = referable_object_ids
+                current_accepted_frame = accepted_frame
+            if stop_after_this_frame:
+                accepted.append(
+                    current_accepted_frame
+                    if current_accepted_frame is not None
+                    else (fallback_frame if fallback_frame is not None else dict(reviewed_frame))
+                )
                 stopped_after_image_name = image_name
-                stop_reason = "accepted_frame_has_referable_objects"
+                stop_reason = "accepted_frame_has_min_referable_objects"
                 break
+        if not accepted and fallback_frame is not None:
+            accepted.append(fallback_frame)
+            stopped_after_image_name = str(fallback_frame.get("image_name", "")).strip() or None
+            stop_reason = "group_exhausted_using_single_referable_fallback"
         return {
             "group_index": int(group_index),
             "group_key_visible_object_ids": [int(obj_id) for obj_id in group_key],
