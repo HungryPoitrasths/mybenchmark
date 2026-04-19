@@ -1918,6 +1918,69 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(stats_output["non_attachment_processed_group_count"], 2)
         self.assertEqual(stats_output["accepted_frame_count_after_group_scan"], 1)
 
+    def test_select_and_rerank_frames_stops_scanning_groups_after_collecting_max_frames(self) -> None:
+        frame_candidates = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
+            {"image_name": "000030.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [3, 4]},
+            {"image_name": "000060.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [5, 6]},
+            {"image_name": "000090.jpg", "score": 17, "n_visible": 3, "visible_object_ids": [7, 8]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 81,
+                "frame_usable": True,
+                "reason": "sharp enough",
+            },
+            {
+                "clear": True,
+                "clarity_score": 79,
+                "frame_usable": True,
+                "reason": "also sharp",
+            },
+        ]
+        stats_output: dict[str, Any] = {}
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"rerank_group_target_stop_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        build_calls: list[str] = []
+
+        def build_entry(frame: dict, reviewed_frame: dict) -> dict:
+            build_calls.append(frame["image_name"])
+            return {"referable_object_ids": [1]}
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ) as frame_decision_mock,
+        ):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=frame_candidates,
+                max_frames=2,
+                referability_entry_builder=build_entry,
+                stats_output=stats_output,
+            )
+
+        self.assertEqual(frame_decision_mock.call_count, 2)
+        self.assertEqual(build_calls, ["000000.jpg", "000030.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000030.jpg"])
+        self.assertEqual(stats_output["non_attachment_visible_object_group_count"], 4)
+        self.assertEqual(stats_output["non_attachment_processed_group_count"], 2)
+        self.assertEqual(stats_output["accepted_frame_count_after_group_scan"], 2)
+
     def test_select_attachment_group_representatives_groups_by_visible_attachment_pairs_and_orders_by_visible_object_count(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
