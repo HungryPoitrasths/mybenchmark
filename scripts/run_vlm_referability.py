@@ -68,7 +68,6 @@ DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
 REFERABILITY_CACHE_VERSION = "19.0"
-NON_ATTACHMENT_GROUPS_PER_SCENE_LIMIT = 5
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -3693,10 +3692,6 @@ def main():
     logger.info("Found %d candidate scenes", len(scene_dirs))
 
     processed = 0
-    remaining_non_attachment_group_budget = max(
-        0,
-        int(args.max_scenes) * NON_ATTACHMENT_GROUPS_PER_SCENE_LIMIT,
-    )
     for scene_dir in scene_dirs:
         if processed >= args.max_scenes:
             break
@@ -3778,17 +3773,21 @@ def main():
             non_attachment_group_count,
             scene_id,
         )
+        scene_non_attachment_group_budget = max(
+            0,
+            int(args.max_frames),
+        )
         non_attachment_group_limit_for_scene = min(
             non_attachment_group_count,
-            remaining_non_attachment_group_budget,
+            scene_non_attachment_group_budget,
         )
         if non_attachment_group_limit_for_scene < non_attachment_group_count:
             logger.info(
-                "Capping non-attachment review for %s to %d/%d groups (remaining global budget=%d)",
+                "Capping non-attachment review for %s to %d/%d groups (scene budget=%d)",
                 scene_id,
                 non_attachment_group_limit_for_scene,
                 non_attachment_group_count,
-                remaining_non_attachment_group_budget,
+                scene_non_attachment_group_budget,
             )
 
         def _build_frame_referability_entry(
@@ -3863,13 +3862,6 @@ def main():
             stats_output=non_attachment_group_stats,
             debug_output=non_attachment_group_debug,
         ) if non_attachment_candidate_frames else []
-        accepted_non_attachment_group_count = int(
-            non_attachment_group_stats.get("accepted_frame_count_after_group_scan", 0) or 0
-        )
-        remaining_non_attachment_group_budget = max(
-            0,
-            remaining_non_attachment_group_budget - accepted_non_attachment_group_count,
-        )
         if non_attachment_group_debug is not None and not non_attachment_candidate_frames:
             non_attachment_group_debug.update(
                 {
