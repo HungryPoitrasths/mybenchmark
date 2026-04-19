@@ -990,11 +990,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIs(captured["instance_mesh_data"], sentinel_instance_mesh_data)
         self.assertEqual(frame_entry["referable_object_ids"], [1])
 
-    def test_compute_frame_referability_entry_applies_60_percent_bbox_ratio_gate_to_final_referable_ids(self) -> None:
+    def test_compute_frame_referability_entry_applies_70_percent_bbox_ratio_gate_to_final_referable_ids(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.59),
+            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.69),
         }
 
         with (
@@ -1061,11 +1061,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["attachment_referable_object_ids"], [1])
         self.assertEqual(frame_entry["referable_object_ids"], [])
 
-    def test_compute_frame_referability_entry_keeps_final_referable_ids_at_60_percent_boundary(self) -> None:
+    def test_compute_frame_referability_entry_keeps_final_referable_ids_at_70_percent_boundary(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.60),
+            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.70),
         }
 
         with (

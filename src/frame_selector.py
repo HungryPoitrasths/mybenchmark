@@ -697,7 +697,7 @@ FRAME_STRIDE = 3
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 800.0
-FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.60
+FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.70
 ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN = 0.50
 ATTACHMENT_PAIR_BONUS_WEIGHT = 15
 
@@ -1007,7 +1007,7 @@ def select_frames(
     Algorithm:
         1. Coarsely reject only obviously blurry frames.
         2. If any frame has at least one well-cropped visible object
-           (bbox_in_frame_ratio >= 0.6), restrict selection to that subset.
+           (bbox_in_frame_ratio >= 0.7), restrict selection to that subset.
            Within the active candidate pool, rank frames by
            #attachment_objects + 15 × #well-cropped-attachment-pairs first,
            then by the number of well-cropped visible objects.
