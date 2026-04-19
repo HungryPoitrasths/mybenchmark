@@ -68,6 +68,7 @@ DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
 REFERABILITY_CACHE_VERSION = "19.0"
+NON_ATTACHMENT_GROUPS_PER_SCENE_LIMIT = 5
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -1039,6 +1040,7 @@ def _select_non_attachment_group_representatives(
     model_name: str,
     scene_dir: Path,
     frames: list[dict[str, Any]],
+    max_group_count: int | None = None,
     vlm_workers: int = 1,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     debug_groups_out: list[dict[str, Any]] | None = None,
@@ -1053,6 +1055,9 @@ def _select_non_attachment_group_representatives(
         if group_key is None:
             continue
         grouped_frames.setdefault(group_key, []).append(frame)
+    grouped_items = list(grouped_frames.items())
+    if max_group_count is not None:
+        grouped_items = grouped_items[:max(0, int(max_group_count))]
 
     def _select_group(
         item: tuple[int, tuple[tuple[Any, ...], list[dict[str, Any]]]]
@@ -1153,7 +1158,7 @@ def _select_non_attachment_group_representatives(
         }
 
     selected_groups = _run_in_thread_pool(
-        list(enumerate(grouped_frames.items())),
+        list(enumerate(grouped_items)),
         _select_group,
         max_workers=vlm_workers,
     )
@@ -3394,6 +3399,7 @@ def _select_and_rerank_frames(
     scene_dir: Path,
     frame_candidates: list[dict[str, Any]],
     max_frames: int,
+    max_group_count: int | None = None,
     vlm_workers: int = 1,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     debug_output: dict[str, Any] | None = None,
@@ -3404,6 +3410,9 @@ def _select_and_rerank_frames(
     reranked: list[dict[str, Any]] = []
     accepted_frame_count = 0
     group_count = _count_visible_object_frame_groups(frame_candidates)
+    effective_group_count = group_count
+    if max_group_count is not None:
+        effective_group_count = max(0, min(group_count, int(max_group_count)))
     group_debug: list[dict[str, Any]] = [] if debug_output is not None else None
 
     def _sort_key(entry: dict[str, Any]) -> tuple[int, str]:
@@ -3417,6 +3426,7 @@ def _select_and_rerank_frames(
         model_name=model_name,
         scene_dir=scene_dir,
         frames=frame_candidates,
+        max_group_count=effective_group_count,
         vlm_workers=vlm_workers,
         referability_entry_builder=referability_entry_builder,
         debug_groups_out=group_debug,
@@ -3466,6 +3476,7 @@ def _select_and_rerank_frames(
                 "scene_id": scene_dir.name,
                 "non_attachment_candidate_frame_count": len(frame_candidates),
                 "non_attachment_visible_object_group_count": group_count,
+                "non_attachment_processed_group_count": effective_group_count,
                 "accepted_frame_count_after_group_scan": accepted_frame_count,
                 "reranked_accepted_frame_image_names": reranked_image_names,
                 "selected_before_attachment_slots_image_names": selected_before_attachment_slots,
@@ -3477,11 +3488,18 @@ def _select_and_rerank_frames(
         logger.info(
             "VLM non-attachment group filtering for %d geometric frame candidates across %d visible-object groups in %s: %d accepted frame(s) with referable objects, selected %d fallback frame(s) (best clarity=%d)",
             len(frame_candidates),
-            group_count,
+            effective_group_count,
             scene_dir.name,
             accepted_frame_count,
             len(selected),
             int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
+        )
+    elif effective_group_count < group_count:
+        logger.info(
+            "VLM non-attachment group filtering capped %s to %d/%d visible-object groups before review",
+            scene_dir.name,
+            effective_group_count,
+            group_count,
         )
     return selected
 
@@ -3606,6 +3624,10 @@ def main():
     logger.info("Found %d candidate scenes", len(scene_dirs))
 
     processed = 0
+    remaining_non_attachment_group_budget = max(
+        0,
+        int(args.max_scenes) * NON_ATTACHMENT_GROUPS_PER_SCENE_LIMIT,
+    )
     for scene_dir in scene_dirs:
         if processed >= args.max_scenes:
             break
@@ -3687,6 +3709,18 @@ def main():
             non_attachment_group_count,
             scene_id,
         )
+        non_attachment_group_limit_for_scene = min(
+            non_attachment_group_count,
+            remaining_non_attachment_group_budget,
+        )
+        if non_attachment_group_limit_for_scene < non_attachment_group_count:
+            logger.info(
+                "Capping non-attachment review for %s to %d/%d groups (remaining global budget=%d)",
+                scene_id,
+                non_attachment_group_limit_for_scene,
+                non_attachment_group_count,
+                remaining_non_attachment_group_budget,
+            )
 
         def _build_frame_referability_entry(
             frame: dict[str, Any],
@@ -3753,16 +3787,22 @@ def main():
             scene_dir=scene_dir,
             frame_candidates=non_attachment_candidate_frames,
             max_frames=int(args.max_frames),
+            max_group_count=non_attachment_group_limit_for_scene,
             vlm_workers=int(args.vlm_workers),
             referability_entry_builder=_build_frame_referability_entry,
             debug_output=non_attachment_group_debug,
         ) if non_attachment_candidate_frames else []
+        remaining_non_attachment_group_budget = max(
+            0,
+            remaining_non_attachment_group_budget - non_attachment_group_limit_for_scene,
+        )
         if non_attachment_group_debug is not None and not non_attachment_candidate_frames:
             non_attachment_group_debug.update(
                 {
                     "scene_id": scene_id,
                     "non_attachment_candidate_frame_count": 0,
                     "non_attachment_visible_object_group_count": 0,
+                    "non_attachment_processed_group_count": 0,
                     "accepted_frame_count_after_group_scan": 0,
                     "reranked_accepted_frame_image_names": [],
                     "selected_before_attachment_slots_image_names": [],

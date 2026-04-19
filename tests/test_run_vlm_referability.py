@@ -1711,6 +1711,61 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_decision_mock.call_count, 1)
         self.assertEqual([entry["image_name"] for entry in selected], ["000030.jpg"])
 
+    def test_select_and_rerank_frames_limits_non_attachment_group_count(self) -> None:
+        frame_candidates = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
+            {"image_name": "000030.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [3, 4]},
+            {"image_name": "000060.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [5, 6]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 81,
+                "frame_usable": True,
+                "reason": "sharp enough",
+            },
+            {
+                "clear": True,
+                "clarity_score": 75,
+                "frame_usable": True,
+                "reason": "clear",
+            },
+        ]
+        debug_output: dict[str, Any] = {}
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"rerank_group_limit_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ) as frame_decision_mock,
+        ):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=frame_candidates,
+                max_frames=3,
+                max_group_count=2,
+                debug_output=debug_output,
+            )
+
+        self.assertEqual(frame_decision_mock.call_count, 2)
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000030.jpg"])
+        self.assertEqual(debug_output["non_attachment_visible_object_group_count"], 3)
+        self.assertEqual(debug_output["non_attachment_processed_group_count"], 2)
+        self.assertEqual(len(debug_output["groups"]), 2)
+
     def test_select_attachment_group_representatives_groups_by_visible_attachment_pairs_and_orders_by_visible_object_count(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
