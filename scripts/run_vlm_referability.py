@@ -831,6 +831,16 @@ def _normalize_attachment_pair_key(
     )
 
 
+def _attachment_pair_group_overlap(
+    expected_pairs: tuple[tuple[int, int], ...] | None,
+    actual_pairs: tuple[tuple[int, int], ...] | None,
+) -> tuple[tuple[int, int], ...]:
+    expected_pair_set = set(expected_pairs or ())
+    if not expected_pair_set:
+        return ()
+    return tuple(sorted(expected_pair_set.intersection(actual_pairs or ())))
+
+
 def _visible_attachment_pair_group_key(
     frame: dict[str, Any],
     attachment_graph: dict[int, list[int]] | None,
@@ -959,7 +969,7 @@ def _select_attachment_group_representatives(
 
     def _select_group(
         item: tuple[int, tuple[tuple[tuple[int, int], ...], list[dict[str, Any]]]]
-    ) -> dict[str, Any] | None:
+    ) -> list[dict[str, Any]]:
         group_id, (expected_attachment_pairs, group_frames) = item
         ordered_frames = sorted(
             group_frames,
@@ -967,6 +977,9 @@ def _select_attachment_group_representatives(
             reverse=True,
         )
         sampled_frames, _group_frame_stride = _sample_group_frames(ordered_frames)
+        accepted_frames: list[dict[str, Any]] = []
+        expected_pair_set = set(expected_attachment_pairs)
+        covered_expected_pairs: set[tuple[int, int]] = set()
         for frame in sampled_frames:
             reviewed_frame = _review_frame_clarity(
                 client=client,
@@ -980,7 +993,7 @@ def _select_attachment_group_representatives(
             if int(reviewed_frame.get("frame_info", {}).get("clarity_score", 0) or 0) < ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE:
                 continue
             if attachment_entry_builder is None:
-                return reviewed_frame
+                return [reviewed_frame]
             entry = attachment_entry_builder(frame, reviewed_frame)
             if not isinstance(entry, dict):
                 continue
@@ -992,22 +1005,40 @@ def _select_attachment_group_representatives(
                     combined.get("attachment_referable_object_ids"),
                 )
             )
-            if actual_attachment_pairs != expected_attachment_pairs:
-                continue
-            return _with_attachment_pair_metadata(
-                combined,
-                combined,
-                attachment_graph,
-                attachment_view_group_id=group_id,
+            matched_expected_pairs = set(
+                _attachment_pair_group_overlap(
+                    expected_attachment_pairs,
+                    actual_attachment_pairs,
+                )
             )
-        return None
+            new_expected_pairs = matched_expected_pairs - covered_expected_pairs
+            if not new_expected_pairs:
+                continue
+            accepted_frames.append(
+                _with_attachment_pair_metadata(
+                    combined,
+                    combined,
+                    attachment_graph,
+                    attachment_view_group_id=group_id,
+                )
+            )
+            covered_expected_pairs.update(matched_expected_pairs)
+            if covered_expected_pairs >= expected_pair_set:
+                break
+        return _compress_attachment_group_frames(accepted_frames)
 
     selected = _run_in_thread_pool(
         list(enumerate(grouped_frames.items())),
         _select_group,
         max_workers=vlm_workers,
     )
-    return [entry for entry in selected if entry is not None]
+    flattened: list[dict[str, Any]] = []
+    for entry in selected:
+        if isinstance(entry, dict):
+            flattened.append(entry)
+        elif isinstance(entry, list):
+            flattened.extend(item for item in entry if isinstance(item, dict))
+    return flattened
 
 
 def _run_frame_clarity_reviews(
@@ -1065,6 +1096,7 @@ def _select_non_attachment_group_representatives(
     ) -> dict[str, Any]:
         group_index, (group_key, group_frames) = item
         accepted: list[dict[str, Any]] = []
+        fallback_frame: dict[str, Any] | None = None
         attempts: list[dict[str, Any]] = []
         stopped_after_image_name: str | None = None
         stop_reason = "exhausted_group_frames"
@@ -1102,6 +1134,7 @@ def _select_non_attachment_group_representatives(
             clarity_score = int(frame_info.get("clarity_score", 0) or 0)
             referable_entry = None
             referable_object_ids: list[int] = []
+            current_accepted_frame: dict[str, Any] | None = None
             if frame_usable and referability_entry_builder is not None:
                 referable_entry = referability_entry_builder(frame, reviewed_frame)
                 if isinstance(referable_entry, dict):

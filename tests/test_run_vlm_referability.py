@@ -1952,6 +1952,75 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(build_calls, ["000010.jpg", "000020.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg", "000020.jpg"])
 
+    def test_select_attachment_group_representatives_continues_until_multi_pair_group_covers_other_pair(self) -> None:
+        frames = [
+            {"image_name": "000010.jpg", "score": 20, "n_visible": 6, "visible_object_ids": [1, 2, 3, 4, 9, 10]},
+            {"image_name": "000020.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [1, 2, 3, 4]},
+            {"image_name": "000030.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [1, 2, 3, 4]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 74,
+                "frame_usable": True,
+                "reason": "clear",
+            },
+            {
+                "clear": True,
+                "clarity_score": 73,
+                "frame_usable": True,
+                "reason": "also clear",
+            },
+        ]
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_group_any_pair_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ) as frame_decision_mock,
+        ):
+            build_calls: list[str] = []
+
+            def build_entry(frame: dict, reviewed_frame: dict) -> dict:
+                build_calls.append(frame["image_name"])
+                if frame["image_name"] == "000010.jpg":
+                    return {"attachment_referable_object_ids": [1, 2]}
+                if frame["image_name"] == "000020.jpg":
+                    return {"attachment_referable_object_ids": [3, 4]}
+                raise AssertionError(f"unexpected frame {frame['image_name']}")
+
+            selected = referability_module._select_attachment_group_representatives(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frames=frames,
+                attachment_graph={1: [2], 3: [4]},
+                attachment_entry_builder=build_entry,
+            )
+
+        self.assertEqual(frame_decision_mock.call_count, 2)
+        self.assertEqual(build_calls, ["000010.jpg", "000020.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg", "000020.jpg"])
+        self.assertEqual(
+            [entry["attachment_referable_pairs"] for entry in selected],
+            [[[1, 2]], [[3, 4]]],
+        )
+        self.assertEqual(
+            [entry["attachment_referable_pair_count"] for entry in selected],
+            [1, 1],
+        )
+
     def test_select_attachment_group_representatives_checks_all_frames_by_visible_object_count_until_pair_match(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
