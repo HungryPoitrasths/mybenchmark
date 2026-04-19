@@ -3459,6 +3459,7 @@ def _select_and_rerank_frames(
     max_group_count: int | None = None,
     vlm_workers: int = 1,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
+    stats_output: dict[str, Any] | None = None,
     debug_output: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if not frame_candidates:
@@ -3496,6 +3497,17 @@ def _select_and_rerank_frames(
         key=_sort_key,
     )
     selected = reranked[:max(0, int(max_frames))]
+    if stats_output is not None:
+        stats_output.clear()
+        stats_output.update(
+            {
+                "scene_id": scene_dir.name,
+                "non_attachment_candidate_frame_count": len(frame_candidates),
+                "non_attachment_visible_object_group_count": group_count,
+                "non_attachment_processed_group_count": effective_group_count,
+                "accepted_frame_count_after_group_scan": accepted_frame_count,
+            }
+        )
     if debug_output is not None:
         selected_before_attachment_slots = [
             str(frame.get("image_name", "")).strip()
@@ -3835,6 +3847,7 @@ def main():
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
 
+        non_attachment_group_stats: dict[str, Any] = {}
         non_attachment_group_debug: dict[str, Any] | None = (
             {} if non_attachment_group_debug_dir is not None else None
         )
@@ -3847,11 +3860,15 @@ def main():
             max_group_count=non_attachment_group_limit_for_scene,
             vlm_workers=int(args.vlm_workers),
             referability_entry_builder=_build_frame_referability_entry,
+            stats_output=non_attachment_group_stats,
             debug_output=non_attachment_group_debug,
         ) if non_attachment_candidate_frames else []
+        accepted_non_attachment_group_count = int(
+            non_attachment_group_stats.get("accepted_frame_count_after_group_scan", 0) or 0
+        )
         remaining_non_attachment_group_budget = max(
             0,
-            remaining_non_attachment_group_budget - non_attachment_group_limit_for_scene,
+            remaining_non_attachment_group_budget - accepted_non_attachment_group_count,
         )
         if non_attachment_group_debug is not None and not non_attachment_candidate_frames:
             non_attachment_group_debug.update(
