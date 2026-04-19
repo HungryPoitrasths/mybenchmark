@@ -1052,7 +1052,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                                 "attachment_referable_pair_count": 0,
                                 "final_selection_rank": 0,
                                 "candidate_visible_object_ids": [1],
-                                "candidate_visibility_source": "mesh_ray_depth_refined",
+                                "candidate_visibility_source": "mesh_ray_refined",
                                 "candidate_labels": ["lamp"],
                                 "label_to_object_ids": {"lamp": [1]},
                                 "selector_visible_object_ids": [1],

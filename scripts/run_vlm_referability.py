@@ -36,7 +36,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.frame_selector import (
     build_selector_visibility_audit_from_meta,
     compute_frame_object_visibility,
-    refine_visible_ids_with_depth,
     select_frames,
 )
 from src.alias_groups import ALIAS_CONFIG_VERSION
@@ -1497,25 +1496,10 @@ def _refine_candidate_visible_object_ids(
     if (
         selector_ids
         and color_intrinsics is not None
-        and depth_image is not None
-        and depth_intrinsics is not None
         and callable(ray_caster_getter)
         and callable(instance_mesh_data_getter)
     ):
         try:
-            # Depth filtering is much cheaper than mesh-ray visibility. Run it
-            # first and only spend mesh-ray work on objects that already pass
-            # the depth gate. The final decision still requires both backends.
-            depth_refined = refine_visible_ids_with_depth(
-                visible_object_ids=selector_ids,
-                objects=objects,
-                pose=camera_pose,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-            )
-            if not depth_refined:
-                return [], "mesh_ray_depth_refined"
-
             ray_caster = ray_caster_getter()
             if ray_caster is not None:
                 stage1_instance_mesh_data = instance_mesh_data_getter(
@@ -1523,7 +1507,7 @@ def _refine_candidate_visible_object_ids(
                 )
                 stage2_instance_mesh_data: InstanceMeshData | None = None
                 mesh_ray_refined: list[int] = []
-                for obj_id in depth_refined:
+                for obj_id in selector_ids:
                     stage1 = _evaluate_crop_unique_mesh_ray_stage(
                         obj_id=int(obj_id),
                         camera_pose=camera_pose,
@@ -1549,13 +1533,9 @@ def _refine_candidate_visible_object_ids(
                     )
                     if _ray_visibility_stage_passes(stage2):
                         mesh_ray_refined.append(int(obj_id))
-                refined_intersection = sorted(
-                    set(int(obj_id) for obj_id in mesh_ray_refined)
-                    & set(int(obj_id) for obj_id in depth_refined)
-                )
-                return refined_intersection, "mesh_ray_depth_refined"
+                return sorted(set(int(obj_id) for obj_id in mesh_ray_refined)), "mesh_ray_refined"
         except Exception as exc:
-            logger.warning("Mesh-ray/depth joint refine failed: %s", exc)
+            logger.warning("Mesh-ray refine failed: %s", exc)
     return selector_ids, "projection_fallback"
 
 
@@ -1588,7 +1568,9 @@ def _build_visibility_audit_by_object_id(
         if not candidate_considered:
             candidate_rejection_reasons.append("not_in_selector_pool")
         elif not candidate_passed:
-            if candidate_visibility_source == "mesh_ray_depth_refined":
+            if candidate_visibility_source == "mesh_ray_refined":
+                candidate_rejection_reasons.append("mesh_ray_not_visible")
+            elif candidate_visibility_source == "mesh_ray_depth_refined":
                 candidate_rejection_reasons.append("mesh_ray_or_depth_not_visible")
             elif candidate_visibility_source == "projection_fallback":
                 candidate_rejection_reasons.append("projection_not_promoted")

@@ -297,108 +297,77 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(crop["valid"])
         self.assertEqual(crop["local_outcome"], "reviewed")
 
-    def test_refine_candidate_visible_object_ids_requires_both_mesh_ray_and_depth(self) -> None:
-        with patch.object(
-            referability_module,
-            "refine_visible_ids_with_depth",
-            return_value=[1],
-        ) as depth_mock:
-            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-                [1],
-                [make_object(1, "chair")],
-                make_camera_pose(),
-                make_camera_intrinsics(),
-                np.ones((4, 4), dtype=np.float32),
-                make_camera_intrinsics(),
-                ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
-                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-            )
-
+    def test_refine_candidate_visible_object_ids_uses_mesh_ray_without_depth(self) -> None:
+        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+            [1],
+            [make_object(1, "chair")],
+            make_camera_pose(),
+            make_camera_intrinsics(),
+            None,
+            None,
+            ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
+            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+        )
         self.assertEqual(candidate_ids, [1])
-        self.assertEqual(source, "mesh_ray_depth_refined")
-        depth_mock.assert_called_once()
+        self.assertEqual(source, "mesh_ray_refined")
 
-    def test_refine_candidate_visible_object_ids_drops_when_depth_rejects(self) -> None:
-        with patch.object(
-            referability_module,
-            "refine_visible_ids_with_depth",
-            return_value=[],
-        ):
-            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-                [1],
-                [make_object(1, "chair")],
-                make_camera_pose(),
-                make_camera_intrinsics(),
-                np.ones((4, 4), dtype=np.float32),
-                make_camera_intrinsics(),
-                ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
-                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-            )
-
+    def test_refine_candidate_visible_object_ids_drops_when_mesh_ray_rejects(self) -> None:
+        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+            [1],
+            [make_object(1, "chair")],
+            make_camera_pose(),
+            make_camera_intrinsics(),
+            np.ones((4, 4), dtype=np.float32),
+            make_camera_intrinsics(),
+            ray_caster_getter=lambda: _SequenceVisibilityCaster([(0, 4), (0, 4)]),
+            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+        )
         self.assertEqual(candidate_ids, [])
-        self.assertEqual(source, "mesh_ray_depth_refined")
+        self.assertEqual(source, "mesh_ray_refined")
 
     def test_refine_candidate_visible_object_ids_uses_stage2_when_stage1_ratio_is_too_low(self) -> None:
         caster = _SequenceVisibilityCaster([(1, 20), (2, 8)])
-        with patch.object(
-            referability_module,
-            "refine_visible_ids_with_depth",
-            return_value=[1],
-        ):
-            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-                [1],
-                [make_object(1, "chair")],
-                make_camera_pose(),
-                make_camera_intrinsics(),
-                np.ones((4, 4), dtype=np.float32),
-                make_camera_intrinsics(),
-                ray_caster_getter=lambda: caster,
-                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-            )
-
+        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+            [1],
+            [make_object(1, "chair")],
+            make_camera_pose(),
+            make_camera_intrinsics(),
+            np.ones((4, 4), dtype=np.float32),
+            make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+        )
         self.assertEqual(candidate_ids, [1])
-        self.assertEqual(source, "mesh_ray_depth_refined")
+        self.assertEqual(source, "mesh_ray_refined")
         self.assertEqual(caster._responses, [])
 
     def test_refine_candidate_visible_object_ids_drops_when_stage2_ratio_is_too_low(self) -> None:
         caster = _SequenceVisibilityCaster([(1, 20), (1, 20)])
-        with patch.object(
-            referability_module,
-            "refine_visible_ids_with_depth",
-            return_value=[1],
-        ):
-            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-                [1],
-                [make_object(1, "chair")],
-                make_camera_pose(),
-                make_camera_intrinsics(),
-                np.ones((4, 4), dtype=np.float32),
-                make_camera_intrinsics(),
-                ray_caster_getter=lambda: caster,
-                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-            )
-
+        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+            [1],
+            [make_object(1, "chair")],
+            make_camera_pose(),
+            make_camera_intrinsics(),
+            np.ones((4, 4), dtype=np.float32),
+            make_camera_intrinsics(),
+            ray_caster_getter=lambda: caster,
+            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+        )
         self.assertEqual(candidate_ids, [])
-        self.assertEqual(source, "mesh_ray_depth_refined")
+        self.assertEqual(source, "mesh_ray_refined")
         self.assertEqual(caster._responses, [])
 
     def test_refine_candidate_visible_object_ids_falls_back_to_projection_when_mesh_ray_fails(self) -> None:
-        with patch.object(
-            referability_module,
-            "refine_visible_ids_with_depth",
-            return_value=[1],
-        ):
-            candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-                [1],
-                [make_object(1, "chair")],
-                make_camera_pose(),
-                make_camera_intrinsics(),
-                np.ones((4, 4), dtype=np.float32),
-                make_camera_intrinsics(),
-                ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
-                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-            )
-
+        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
+            [1],
+            [make_object(1, "chair")],
+            make_camera_pose(),
+            make_camera_intrinsics(),
+            np.ones((4, 4), dtype=np.float32),
+            make_camera_intrinsics(),
+            ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
+            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+        )
         self.assertEqual(candidate_ids, [1])
         self.assertEqual(source, "projection_fallback")
 
@@ -565,7 +534,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1, 2, 3], "mesh_ray_depth_refined"),
+                return_value=([1, 2, 3], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -611,7 +580,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["frame_usable"], True)
         self.assertEqual(frame_entry["frame_quality_clear"], True)
         self.assertEqual(frame_entry["frame_quality_score"], 82)
-        self.assertEqual(frame_entry["candidate_visibility_source"], "mesh_ray_depth_refined")
+        self.assertEqual(frame_entry["candidate_visibility_source"], "mesh_ray_refined")
         self.assertEqual(frame_entry["crop_label_statuses"], {"chair": "multiple", "lamp": "absent"})
         self.assertEqual(frame_entry["crop_label_counts"], {"chair": 2, "lamp": 0})
         self.assertEqual(frame_entry["crop_referable_object_ids"], [])
@@ -655,7 +624,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1, 2], "mesh_ray_depth_refined"),
+                return_value=([1, 2], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -730,7 +699,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([], "mesh_ray_depth_refined"),
+                return_value=([], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -796,7 +765,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "mesh_ray_depth_refined"),
+                return_value=([1], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -871,7 +840,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "mesh_ray_depth_refined"),
+                return_value=([1], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -943,7 +912,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "mesh_ray_depth_refined"),
+                return_value=([1], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -1011,7 +980,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "mesh_ray_depth_refined"),
+                return_value=([1], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -1082,7 +1051,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_refine_candidate_visible_object_ids",
-                return_value=([1], "mesh_ray_depth_refined"),
+                return_value=([1], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -1207,7 +1176,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "attachment_referable_pair_count": 0,
             "final_selection_rank": 0,
             "candidate_visible_object_ids": [1],
-            "candidate_visibility_source": "mesh_ray_depth_refined",
+            "candidate_visibility_source": "mesh_ray_refined",
             "candidate_labels": ["lamp"],
             "label_to_object_ids": {"lamp": [1]},
             "selector_visible_object_ids": [1],
@@ -1309,7 +1278,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "attachment_referable_pair_count": 0,
             "final_selection_rank": 0,
             "candidate_visible_object_ids": [1],
-            "candidate_visibility_source": "mesh_ray_depth_refined",
+            "candidate_visibility_source": "mesh_ray_refined",
             "candidate_labels": ["lamp"],
             "label_to_object_ids": {"lamp": [1]},
             "selector_visible_object_ids": [1],
@@ -1362,7 +1331,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "attachment_referable_pair_count": 0,
             "final_selection_rank": 0,
             "candidate_visible_object_ids": [1, 2, 3, 4],
-            "candidate_visibility_source": "mesh_ray_depth_refined",
+            "candidate_visibility_source": "mesh_ray_refined",
             "candidate_labels": ["stool"],
             "label_to_object_ids": {"stool": [1, 2, 3, 4]},
             "selector_visible_object_ids": [1, 2, 3, 4],
@@ -1415,7 +1384,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "attachment_referable_pair_count": 0,
             "final_selection_rank": 0,
             "candidate_visible_object_ids": [1],
-            "candidate_visibility_source": "mesh_ray_depth_refined",
+            "candidate_visibility_source": "mesh_ray_refined",
             "candidate_labels": ["chair"],
             "label_to_object_ids": {"chair": [1]},
             "selector_visible_object_ids": [1, 2],

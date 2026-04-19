@@ -79,7 +79,7 @@ def make_referability_entry() -> dict:
         "selector_visible_object_ids": [1, 2],
         "selector_visible_label_counts": {"cup": 1, "table": 1},
         "candidate_visible_object_ids": [1, 2],
-        "candidate_visibility_source": "mesh_ray_depth_refined",
+        "candidate_visibility_source": "mesh_ray_refined",
         "candidate_visible_label_counts": {"cup": 1, "table": 1},
         "candidate_labels": ["cup", "table"],
         "label_to_object_ids": {"cup": [1], "table": [2]},
