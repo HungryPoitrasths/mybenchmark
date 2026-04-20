@@ -20,9 +20,11 @@ from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE = (
     "Imagine you are {obj_query} and facing toward {obj_face}. "
     "If {obj_move_source} were moved along a {angle}-degree {rotation_direction} "
-    "(viewed from above) orbit around the center of {obj_face}, without changing "
-    "its own facing direction, from your perspective, in which direction would "
-    "{obj_ref} be?"
+    "(viewed from above) orbit around the center of {obj_face} in the horizontal "
+    "plane, without changing its own facing direction, from your perspective, in "
+    "which direction would {obj_ref} be? (For horizontal directions, compare "
+    "the objects' 3D bounding-box centers projected onto the floor plane; "
+    "above/below use the vertical spatial rule.)"
 )
 
 

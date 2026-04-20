@@ -38,7 +38,10 @@ from .relation_engine import (
     camera_cardinal_direction,
     compute_distance_details,
 )
-from .support_graph import compute_bottom_footprint_overlap_metrics
+from .support_graph import (
+    _bbox_axis_gaps,
+    compute_bottom_footprint_overlap_metrics,
+)
 from .referability_checks import (
     build_question_referability_audit,
     collect_question_mentions,
@@ -176,12 +179,24 @@ OCCLUSION_DEFINITION_NOTE = (
 CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B = (
     "(Use {obj_b} as the reference origin and align the axes with the camera "
     "coordinate frame: front means farther from the camera, back means toward "
-    "the camera, and left/right follow the image left/right.)"
+    "the camera, and left/right follow the image left/right. For horizontal "
+    "directions, compare the objects' 3D bounding-box centers projected onto "
+    "the floor plane; above/below use the vertical spatial rule.)"
 )
 CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C = (
     "(Use {obj_c} as the reference origin and align the axes with the camera "
     "coordinate frame: front means farther from the camera, back means toward "
-    "the camera, and left/right follow the image left/right.)"
+    "the camera, and left/right follow the image left/right. For horizontal "
+    "directions, compare the objects' 3D bounding-box centers projected onto "
+    "the floor plane; above/below use the vertical spatial rule.)"
+)
+OBJECT_RELATIVE_DIRECTION_NOTE = (
+    "For horizontal directions, compare the objects' 3D bounding-box centers "
+    "projected onto the floor plane; above/below use the vertical spatial rule."
+)
+ALLOCENTRIC_DIRECTION_NOTE = (
+    "For horizontal cardinal directions, compare the objects' 3D bounding-box "
+    "centers projected onto the floor plan."
 )
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.1
@@ -262,7 +277,7 @@ QUESTION_MENTION_MIN_RATIO_050_TYPES = {
 QUESTION_MENTION_TYPE_ALIASES = {
     "object_move_object_centric": "object_rotate_object_centric",
 }
-HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN = 0.10
+HORIZONTAL_DIRECTION_GEOM_EPS = 1e-8
 VERTICAL_DIRECTIONS = {"above", "below"}
 
 
@@ -334,11 +349,26 @@ def _direction_suppression_reason(
             },
         )
 
+    bbox_axis_gaps = _bbox_axis_gaps(obj_a, obj_b)
+    if not np.any(bbox_axis_gaps > HORIZONTAL_DIRECTION_GEOM_EPS):
+        return (
+            "horizontal_3d_bbox_contact",
+            "horizontal-answer direction questions require non-touching 3D bounding boxes",
+            {
+                "direction": answer_direction,
+                "bbox_gap_x": float(bbox_axis_gaps[0]),
+                "bbox_gap_y": float(bbox_axis_gaps[1]),
+                "bbox_gap_z": float(bbox_axis_gaps[2]),
+                "threshold": HORIZONTAL_DIRECTION_GEOM_EPS,
+                "attachment_edge_type": None,
+            },
+        )
+
     overlap_metrics = compute_bottom_footprint_overlap_metrics(obj_a, obj_b)
-    if overlap_metrics["coverage_small"] >= HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN:
+    if overlap_metrics["overlap_area"] > HORIZONTAL_DIRECTION_GEOM_EPS:
         return (
             "horizontal_projection_overlap",
-            "horizontal-answer direction questions require sufficiently separated floor-plane footprints",
+            "horizontal-answer direction questions require non-overlapping floor-plane footprints",
             {
                 "direction": answer_direction,
                 "overlap_area": float(overlap_metrics["overlap_area"]),
@@ -347,7 +377,7 @@ def _direction_suppression_reason(
                 "coverage_small": float(overlap_metrics["coverage_small"]),
                 "footprint_source_a": str(overlap_metrics["source_a"]),
                 "footprint_source_b": str(overlap_metrics["source_b"]),
-                "threshold": HORIZONTAL_DIRECTION_OVERLAP_SUPPRESS_MIN,
+                "threshold": HORIZONTAL_DIRECTION_GEOM_EPS,
                 "attachment_edge_type": None,
             },
         )
@@ -949,14 +979,14 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L1_direction_object_centric": [
-            "Imagine you are {obj_ref} and facing toward {obj_face}. From your perspective, in which direction is {obj_target}?",
-            "If you were {obj_ref}, looking toward {obj_face}, where would {obj_target} be?",
+            f"Imagine you are {{obj_ref}} and facing toward {{obj_face}}. From your perspective, in which direction is {{obj_target}}? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"If you were {{obj_ref}}, looking toward {{obj_face}}, where would {{obj_target}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
         "L1_direction_allocentric": [
-            "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
-            "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}?",
+            f"The camera is facing {{camera_cardinal}} in this scene. On the room's floor plan, in which cardinal direction is {{obj_a}} from {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
+            f"In this image the camera faces {{camera_cardinal}}. Viewed from above on the room's layout, {{obj_a}} is in which cardinal direction relative to {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
         ],
 
         # ==== L2 — Intervention ====
@@ -986,16 +1016,16 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L2_object_rotate_object_centric": [
-            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?",
+            f"Imagine you are {{obj_query}} and facing toward {{obj_face}}. If {{obj_move_source}} were moved along a {{angle}}-degree {{rotation_direction}} (viewed from above) orbit around the center of {{obj_face}} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
         "L2_object_move_object_centric": [
-            "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be?",
+            f"Imagine you are {{obj_query}} and facing toward {{obj_face}}. If {{obj_move_source}} were moved along a {{angle}}-degree {{rotation_direction}} (viewed from above) orbit around the center of {{obj_face}} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
         "L2_object_move_allocentric": [
-            "If {obj_move_source} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}?",
-            "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}?",
+            f"If {{obj_move_source}} is moved {{distance}} to the {{direction}}, the camera faces {{camera_cardinal}}. On the floor plan, in which cardinal direction would {{obj_query}} be from {{obj_ref}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
+            f"After moving {{obj_move_source}} {{distance}} to the {{direction}}, on the room's layout (camera facing {{camera_cardinal}}), in which cardinal direction is {{obj_query}} from {{obj_ref}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
         ],
 
         # ==== L3 — Counterfactual / multi-hop ====
@@ -1015,12 +1045,12 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L3_coordinate_rotation_object_centric": [
-            "Suppose this room had originally been oriented {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be?",
+            f"Suppose this room had originally been oriented {{angle}} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {{obj_ref}} at its rotated position and faced toward {{obj_face}}'s rotated position, in which direction would {{obj_target}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
         "L3_coordinate_rotation_allocentric": [
-            "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}?",
+            f"Imagine all furniture is rotated {{angle}} degrees clockwise around the room center (viewed from above). The camera, facing {{camera_cardinal}}, remains in place. On the floor plan, in which cardinal direction is {{obj_a}} from {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
         ],
     }
 
@@ -6236,11 +6266,13 @@ def generate_l3_coordinate_rotation(
 
     # Direction changes don't need depth/occlusion; skip it for speed.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
+    original_obj_map = {int(o["id"]): o for o in objects}
 
     for angle in (90, 180, 270):
         # rotation_matrix_z uses math convention (positive = counterclockwise).
         # Templates say "clockwise", so negate the angle for the actual rotation.
         rotated = apply_coordinate_rotation(objects, float(-angle))
+        rotated_obj_map = {int(o["id"]): o for o in rotated}
         # camera_pose intentionally unchanged — objects rotate, camera does not
         new_relations = compute_all_relations(rotated, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
@@ -6252,8 +6284,14 @@ def generate_l3_coordinate_rotation(
 
         for ch in changed_dir:
             vals = ch["changes"]["direction_b_rel_a"]
-            obj_a_label = next((o["label"] for o in objects if o["id"] == ch["obj_a_id"]), "object")
-            obj_b_label = next((o["label"] for o in objects if o["id"] == ch["obj_b_id"]), "object")
+            obj_a = original_obj_map.get(int(ch["obj_a_id"]))
+            obj_b = original_obj_map.get(int(ch["obj_b_id"]))
+            obj_a_rot = rotated_obj_map.get(int(ch["obj_a_id"]))
+            obj_b_rot = rotated_obj_map.get(int(ch["obj_b_id"]))
+            if obj_a is None or obj_b is None or obj_a_rot is None or obj_b_rot is None:
+                continue
+            obj_a_label = obj_a.get("label", "object")
+            obj_b_label = obj_b.get("label", "object")
 
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
@@ -6265,6 +6303,8 @@ def generate_l3_coordinate_rotation(
             # asks for "A relative to B", so invert the direction before use.
             old_dir = _invert_direction(vals["old"])
             new_dir = _invert_direction(vals["new"])
+            if _direction_suppression_reason(obj_a_rot, obj_b_rot, new_dir, None) is not None:
+                continue
             options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
 
             questions.append({
@@ -6352,6 +6392,8 @@ def generate_l3_coordinate_rotation_object_centric(
                         target_bbox_max=np.array(target_rot["bbox_max"], dtype=float),
                     )
                     if amb > 0.7:
+                        continue
+                    if _direction_suppression_reason(ref_rot, target_rot, new_dir, None) is not None:
                         continue
 
                     old_dir, _ = primary_direction_object_centric(
@@ -6460,6 +6502,8 @@ def generate_l3_coordinate_rotation_allocentric(
                 if amb > 0.7:
                     continue
                 if new_dir not in CARDINAL_DIRECTIONS_8:
+                    continue
+                if _direction_suppression_reason(a_rot, b_rot, new_dir, None) is not None:
                     continue
 
                 old_dir, _ = primary_direction_allocentric(

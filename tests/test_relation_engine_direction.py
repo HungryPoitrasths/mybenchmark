@@ -3,8 +3,8 @@ import unittest
 import numpy as np
 
 from src.relation_engine import (
-    _horizontal_reference_points_with_spine_override,
     compute_all_relations,
+    compute_pairwise_horizontal_direction,
     primary_direction,
     primary_direction_allocentric,
     primary_direction_object_centric,
@@ -79,7 +79,31 @@ def make_floorplan_camera_pose() -> CameraPose:
 
 
 class RelationEngineDirectionTests(unittest.TestCase):
-    def test_compute_all_relations_uses_spine_mid_section_for_bedside_table(self) -> None:
+    def test_pairwise_horizontal_direction_uses_bbox_centers_not_bottom_hulls(self) -> None:
+        camera_pose = make_floorplan_camera_pose()
+        night_stand = make_object(
+            1,
+            "night stand",
+            (-0.2, -0.2, 0.0),
+            (0.2, 0.2, 0.8),
+            bottom_hull_xy=_rect(-0.2, -0.2, 0.2, 0.2),
+        )
+        pillow = make_object(
+            2,
+            "pillow",
+            (-0.2, 1.8, 0.0),
+            (0.2, 2.2, 0.4),
+            bottom_hull_xy=_rect(1.4, 1.8, 2.0, 2.2),
+        )
+
+        direction, _ = compute_pairwise_horizontal_direction(night_stand, pillow, camera_pose)
+        relations = compute_all_relations([night_stand, pillow], camera_pose)
+
+        self.assertEqual(direction, "front")
+        self.assertEqual(relations[0]["direction_b_rel_a"], "front")
+        self.assertEqual(relations[0]["horizontal_direction_b_rel_a"], "front")
+
+    def test_compute_all_relations_uses_bbox_center_mid_section_for_bedside_table(self) -> None:
         camera_pose = make_floorplan_camera_pose()
         bed = make_object(
             1,
@@ -100,7 +124,7 @@ class RelationEngineDirectionTests(unittest.TestCase):
 
         self.assertEqual(relations[0]["direction_b_rel_a"], "left")
 
-    def test_compute_all_relations_uses_spine_endpoint_for_bed_corner_case(self) -> None:
+    def test_compute_all_relations_uses_bbox_center_for_bed_corner_case(self) -> None:
         camera_pose = make_floorplan_camera_pose()
         bed = make_object(
             1,
@@ -121,21 +145,36 @@ class RelationEngineDirectionTests(unittest.TestCase):
 
         self.assertEqual(relations[0]["direction_b_rel_a"], "front-left")
 
-    def test_square_anchor_keeps_default_footprint_behavior(self) -> None:
+    def test_allocentric_uses_bbox_centers_not_footprints(self) -> None:
         direction, _ = primary_direction_allocentric(
-            np.array([1.0, 2.0, 0.5], dtype=float),
-            np.array([-0.3, 3.0, 0.4], dtype=float),
-            obj_a_hull_xy=np.array(_rect(0.0, 1.0, 2.0, 3.0), dtype=float),
-            obj_b_hull_xy=np.array(_rect(-0.5, 2.8, -0.1, 3.2), dtype=float),
-            obj_a_bbox_min=np.array([0.0, 1.0, 0.0], dtype=float),
-            obj_a_bbox_max=np.array([2.0, 3.0, 1.0], dtype=float),
-            obj_b_bbox_min=np.array([-0.5, 2.8, 0.0], dtype=float),
-            obj_b_bbox_max=np.array([-0.1, 3.2, 0.8], dtype=float),
+            np.array([0.0, 2.0, 0.5], dtype=float),
+            np.array([0.0, 0.0, 0.4], dtype=float),
+            obj_a_hull_xy=np.array(_rect(1.0, 2.0, 2.0, 3.0), dtype=float),
+            obj_b_hull_xy=np.array(_rect(0.0, 0.0, 0.4, 0.4), dtype=float),
+            obj_a_bbox_min=np.array([-0.2, 1.8, 0.0], dtype=float),
+            obj_a_bbox_max=np.array([0.2, 2.2, 1.0], dtype=float),
+            obj_b_bbox_min=np.array([-0.2, -0.2, 0.0], dtype=float),
+            obj_b_bbox_max=np.array([0.2, 0.2, 0.8], dtype=float),
         )
 
-        self.assertEqual(direction, "east")
+        self.assertEqual(direction, "north")
 
-    def test_overlap_skips_spine_override_and_keeps_overlap_fallback(self) -> None:
+    def test_object_centric_horizontal_direction_uses_bbox_centers_not_footprints(self) -> None:
+        direction, _ = primary_direction_object_centric(
+            np.array([0.0, 0.0, 0.5], dtype=float),
+            np.array([0.0, 1.0, 0.5], dtype=float),
+            np.array([0.0, 2.0, 0.5], dtype=float),
+            anchor_hull_xy=np.array(_rect(-0.2, -0.2, 0.2, 0.2), dtype=float),
+            target_hull_xy=np.array(_rect(1.4, 1.8, 2.0, 2.2), dtype=float),
+            anchor_bbox_min=np.array([-0.2, -0.2, 0.0], dtype=float),
+            anchor_bbox_max=np.array([0.2, 0.2, 1.0], dtype=float),
+            target_bbox_min=np.array([-0.2, 1.8, 0.0], dtype=float),
+            target_bbox_max=np.array([0.2, 2.2, 1.0], dtype=float),
+        )
+
+        self.assertEqual(direction, "front")
+
+    def test_overlap_keeps_center_based_horizontal_direction(self) -> None:
         camera_pose = make_floorplan_camera_pose()
         bed = make_object(
             1,
@@ -156,7 +195,7 @@ class RelationEngineDirectionTests(unittest.TestCase):
 
         self.assertEqual(relations[0]["direction_b_rel_a"], "front-left")
 
-    def test_rotated_elongated_anchor_uses_obb_spine_orientation(self) -> None:
+    def test_rotated_elongated_anchor_uses_bbox_centers_for_horizontal_direction(self) -> None:
         camera_pose = make_floorplan_camera_pose()
         bed_hull = _rotated_rect(0.0, 0.0, 4.0, 1.0, 45.0)
         bed = {
@@ -205,7 +244,7 @@ class RelationEngineDirectionTests(unittest.TestCase):
         self.assertEqual(full_dir, "below")
         self.assertEqual(horiz_dir, "front")
 
-    def test_allocentric_uses_footprint_pair_for_parallel_side_edges(self) -> None:
+    def test_allocentric_parallel_side_edges_use_bbox_centers(self) -> None:
         obj_a = make_object(
             1,
             "sofa",
@@ -232,7 +271,7 @@ class RelationEngineDirectionTests(unittest.TestCase):
             obj_b_bbox_max=np.array(obj_b["bbox_max"], dtype=float),
         )
 
-        self.assertEqual(direction, "south")
+        self.assertEqual(direction, "southwest")
 
     def test_allocentric_vertical_requires_positive_footprint_overlap(self) -> None:
         direction, _ = primary_direction_allocentric(
@@ -276,17 +315,6 @@ class RelationEngineDirectionTests(unittest.TestCase):
         )
 
         self.assertEqual(direction, "front-left")
-
-    def test_spine_override_allows_degenerate_target_hull(self) -> None:
-        anchor_ref_xy, target_ref_xy = _horizontal_reference_points_with_spine_override(
-            np.array([1.0, 2.0], dtype=float),
-            np.array([-0.3, 3.4], dtype=float),
-            np.array(_rect(0.0, 0.0, 2.0, 4.0), dtype=float),
-            np.array([[-0.3, 3.4]], dtype=float),
-        )
-
-        self.assertTrue(np.allclose(anchor_ref_xy, np.array([1.0, 3.0], dtype=float)))
-        self.assertTrue(np.allclose(target_ref_xy, np.array([-0.3, 3.4], dtype=float)))
 
     def test_apply_movement_translates_support_geom(self) -> None:
         mover = make_object(

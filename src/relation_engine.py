@@ -598,7 +598,11 @@ def compute_pairwise_direction(
     obj_b: dict,
     camera_pose: CameraPose,
 ) -> tuple[str, float]:
-    """Direction of B relative to A using footprint geometry where available."""
+    """Direction of B relative to A.
+
+    Vertical above/below uses interval geometry; horizontal directions use the
+    objects' 3D bbox centers projected onto the floor plane.
+    """
     vertical_label, vertical_ambiguity = _vertical_interval_direction(
         np.asarray(obj_a.get("bbox_min", []), dtype=float) if "bbox_min" in obj_a else None,
         np.asarray(obj_a.get("bbox_max", []), dtype=float) if "bbox_max" in obj_a else None,
@@ -618,10 +622,11 @@ def compute_pairwise_horizontal_direction(
     obj_b: dict,
     camera_pose: CameraPose,
 ) -> tuple[str, float]:
-    """Horizontal direction of B relative to A using footprint geometry."""
-    a_ref_xy, b_ref_xy = _pairwise_horizontal_reference_points(obj_a, obj_b)
-    a_ref = np.array([a_ref_xy[0], a_ref_xy[1], 0.0], dtype=float)
-    b_ref = np.array([b_ref_xy[0], b_ref_xy[1], 0.0], dtype=float)
+    """Horizontal direction of B relative to A using bbox centers."""
+    a_center = np.asarray(obj_a.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    b_center = np.asarray(obj_b.get("center", [0.0, 0.0, 0.0]), dtype=float)
+    a_ref = np.array([a_center[0], a_center[1], 0.0], dtype=float)
+    b_ref = np.array([b_center[0], b_center[1], 0.0], dtype=float)
     return primary_direction(a_ref, b_ref, camera_pose, horizontal_only=True)
 
 
@@ -699,21 +704,8 @@ def primary_direction_object_centric(
 
     right_horiz = np.array([fwd_horiz[1], -fwd_horiz[0], 0.0], dtype=float)
 
-    if anchor_hull_xy is not None and target_hull_xy is not None:
-        anchor_ref_xy, target_ref_xy = footprint_nearest_pair(
-            anchor_hull_xy,
-            target_hull_xy,
-            anchor_center[:2],
-            target_center[:2],
-        )
-        delta = np.array([
-            target_ref_xy[0] - anchor_ref_xy[0],
-            target_ref_xy[1] - anchor_ref_xy[1],
-            0.0,
-        ], dtype=float)
-    else:
-        delta = target_center - anchor_center
-        delta[2] = 0.0
+    delta = target_center - anchor_center
+    delta[2] = 0.0
 
     fwd_comp = float(np.dot(delta, fwd_horiz))
     right_comp = float(np.dot(delta, right_horiz))
@@ -751,18 +743,8 @@ def primary_direction_allocentric(
         if vertical_label is not None:
             return vertical_label, vertical_ambiguity
 
-    if obj_a_hull_xy is not None and obj_b_hull_xy is not None:
-        a_ref_xy, b_ref_xy = _horizontal_reference_points_with_spine_override(
-            obj_a_center[:2],
-            obj_b_center[:2],
-            obj_a_hull_xy,
-            obj_b_hull_xy,
-        )
-        dx = float(a_ref_xy[0] - b_ref_xy[0])
-        dy = float(a_ref_xy[1] - b_ref_xy[1])
-    else:
-        delta = obj_a_center - obj_b_center
-        dx, dy = float(delta[0]), float(delta[1])
+    delta = obj_a_center - obj_b_center
+    dx, dy = float(delta[0]), float(delta[1])
 
     return _horizontal_direction_from_components(dy, dx, CARDINAL_DIRECTIONS_8)
 

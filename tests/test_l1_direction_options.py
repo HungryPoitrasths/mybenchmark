@@ -169,7 +169,7 @@ class L1DirectionOptionTests(unittest.TestCase):
         self.assertIsNotNone(question)
         self.assertEqual(question["correct_value"], "above")
 
-    def test_l1_direction_agent_suppresses_horizontal_overlap_without_attachment(self) -> None:
+    def test_l1_direction_agent_suppresses_touching_3d_bboxes_without_attachment(self) -> None:
         camera_pose = make_floorplan_camera_pose()
         table = make_object(
             1,
@@ -196,6 +196,65 @@ class L1DirectionOptionTests(unittest.TestCase):
         )
         self.assertIsNone(question)
 
+    def test_l1_direction_agent_suppresses_projection_overlap_when_3d_bboxes_are_separate(self) -> None:
+        camera_pose = make_floorplan_camera_pose()
+        table = make_object(
+            1,
+            "table",
+            (0.0, 0.0, 0.0),
+            (0.4, 0.4, 0.8),
+            bottom_hull_xy=_rect(0.0, 0.0, 0.4, 0.4),
+        )
+        chair = make_object(
+            2,
+            "chair",
+            (1.0, 0.0, 0.0),
+            (1.4, 0.4, 0.8),
+            bottom_hull_xy=_rect(0.2, 0.2, 0.6, 0.6),
+        )
+
+        relation = compute_all_relations([table, chair], camera_pose)[0]
+
+        self.assertEqual(relation["direction_b_rel_a"], "right")
+        question = generate_l1_direction(
+            relation,
+            templates={},
+            obj_a=table,
+            obj_b=chair,
+            attachment_edge_lookup={},
+        )
+        self.assertIsNone(question)
+
+    def test_l1_direction_agent_allows_xy_edge_touch_when_3d_bboxes_are_separate(self) -> None:
+        camera_pose = make_floorplan_camera_pose()
+        table = make_object(
+            1,
+            "table",
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+        )
+        lamp = make_object(
+            2,
+            "lamp",
+            (1.0, 0.0, 1.6),
+            (2.0, 1.0, 2.3),
+        )
+
+        relation = compute_all_relations([table, lamp], camera_pose)[0]
+
+        self.assertEqual(relation["direction_b_rel_a"], "right")
+        question = generate_l1_direction(
+            relation,
+            templates={},
+            obj_a=table,
+            obj_b=lamp,
+            attachment_edge_lookup={},
+        )
+        self.assertIsNotNone(question)
+        assert question is not None
+        self.assertEqual(question["correct_value"], "right")
+        self.assertIn("3D bounding-box centers", question["question"])
+
     def test_l1_direction_object_centric_excludes_adjacent_horizontal_directions(self) -> None:
         objects = [
             make_object(1, "chair", (-0.1, -0.1, 0.0), (0.1, 0.1, 1.0)),
@@ -213,7 +272,7 @@ class L1DirectionOptionTests(unittest.TestCase):
         self.assertNotIn("front", question["options"])
         self.assertNotIn("left", question["options"])
 
-    def test_l1_direction_object_centric_suppresses_overlapping_horizontal_target(self) -> None:
+    def test_l1_direction_object_centric_suppresses_touching_horizontal_target(self) -> None:
         objects = [
             make_object(1, "chair", (0.0, 0.0, 0.0), (0.3, 0.3, 1.0)),
             make_object(2, "lamp", (0.0, 1.0, 0.0), (0.3, 1.3, 1.0)),
