@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from src.qa_generator import (
     _l1_occlusion_question,
     _make_l1_occlusion_metrics,
     _normalize_template_aliases,
+    _removed_object_occludes_target_mesh,
     generate_l2_object_remove,
     generate_l2_viewpoint_move,
 )
@@ -87,6 +89,65 @@ def make_grayzone_metrics():
         in_frame_sample_count=512,
         backend="mesh_ray",
     )
+
+
+def make_removed_object_occlusion_probe_metrics(
+    *,
+    blocking_hit_count: int = 32,
+    valid_probe_count: int = 512,
+    passes_threshold: bool | None = None,
+    reason_code: str | None = None,
+):
+    valid_probe_count = max(int(valid_probe_count), 0)
+    blocking_hit_count = max(0, min(int(blocking_hit_count), valid_probe_count))
+    blocking_hit_ratio = (
+        float(blocking_hit_count / valid_probe_count)
+        if valid_probe_count > 0 else 0.0
+    )
+    if passes_threshold is None:
+        passes_threshold = valid_probe_count > 0 and blocking_hit_ratio > 0.05
+    if reason_code is None:
+        reason_code = (
+            "blocking_ratio_threshold_met"
+            if passes_threshold
+            else "blocking_ratio_below_threshold"
+        )
+    return {
+        "removed_obj_id": 1,
+        "target_obj_id": 2,
+        "probe_sample_budget": 512,
+        "threshold_ratio": 0.05,
+        "threshold_operator": ">",
+        "projected_area": 500.0,
+        "in_frame_ratio": 1.0,
+        "in_frame_sample_count": valid_probe_count,
+        "selected_probe_sample_count": valid_probe_count,
+        "valid_probe_count": valid_probe_count,
+        "blocking_hit_count": blocking_hit_count,
+        "blocking_hit_ratio": blocking_hit_ratio,
+        "removed_obj_triangle_count": 24,
+        "passes_threshold": bool(passes_threshold),
+        "reason_code": str(reason_code),
+    }
+
+
+class _SequenceFirstHitCaster:
+    def __init__(self, hit_tri_ids: list[int], blocker_tri_id: int) -> None:
+        self._hit_tri_ids = list(hit_tri_ids)
+        self._blocker_tri_id = int(blocker_tri_id)
+        self._index = 0
+
+    def first_visible_hit(self, origin, direction, ignored_tri_ids=None):
+        tri_id = self._hit_tri_ids[self._index]
+        self._index += 1
+        direction_arr = np.asarray(direction, dtype=np.float64)
+        dist = float(np.linalg.norm(direction_arr))
+        hit_dist = dist - 0.1 if int(tri_id) == self._blocker_tri_id else dist
+        return (
+            np.asarray(origin, dtype=np.float64) + direction_arr,
+            int(tri_id),
+            hit_dist,
+        )
 
 
 class QuestionTemplateTests(unittest.TestCase):
@@ -219,6 +280,10 @@ class QuestionTemplateTests(unittest.TestCase):
             patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
             patch("src.qa_generator._build_modified_scene", return_value=None),
             patch(
+                "src.qa_generator._removed_object_occludes_target_mesh",
+                return_value=make_removed_object_occlusion_probe_metrics(),
+            ),
+            patch(
                 "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
                 side_effect=[
                     (make_l1_metrics("not occluded"), "mesh_ray"),
@@ -251,6 +316,7 @@ class QuestionTemplateTests(unittest.TestCase):
             )
 
         self.assertEqual(len(questions), 2)
+        self.assertIn("removed_object_occlusion_probe_metrics", questions[0])
         for question in questions:
             self.assertEqual(
                 set(question["options"]),
@@ -311,7 +377,7 @@ class QuestionTemplateTests(unittest.TestCase):
 
         self.assertEqual(len(questions), 0)
 
-    def test_viewpoint_move_skips_visible_to_occluded_transition(self) -> None:
+    def test_viewpoint_move_allows_visible_to_occluded_transition(self) -> None:
         camera_pose = make_camera_pose()
         intrinsics = make_camera_intrinsics()
 
@@ -325,6 +391,41 @@ class QuestionTemplateTests(unittest.TestCase):
                     (make_l1_metrics("not occluded"), "mesh_ray"),
                     (make_l1_metrics("occluded"), "mesh_ray"),
                     *[(make_l1_metrics("not occluded"), "mesh_ray")] * 11,
+                ],
+            ),
+        ):
+            questions = generate_l2_viewpoint_move(
+                objects=[{"id": 1, "label": "curtain"}],
+                camera_pose=camera_pose,
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                templates={
+                    "L2_viewpoint_move": [
+                        "If the camera translates {direction_with_camera_hint} by {distance}, what happens to {obj_a}?"
+                    ]
+                },
+            )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "occluded")
+
+    def test_viewpoint_move_skips_not_visible_origin_transition(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch("src.qa_generator._build_modified_scene", return_value=None),
+            patch("src.qa_generator.apply_viewpoint_change", return_value=camera_pose),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not visible"), "mesh_ray"),
+                    *[(make_l1_metrics("occluded"), "mesh_ray")] * 12,
                 ],
             ),
         ):
@@ -358,6 +459,10 @@ class QuestionTemplateTests(unittest.TestCase):
         with (
             patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
             patch("src.qa_generator._build_modified_scene", return_value=None),
+            patch(
+                "src.qa_generator._removed_object_occludes_target_mesh",
+                return_value=make_removed_object_occlusion_probe_metrics(),
+            ),
             patch(
                 "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
                 side_effect=[
@@ -411,6 +516,10 @@ class QuestionTemplateTests(unittest.TestCase):
             patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
             patch("src.qa_generator._build_modified_scene", return_value=None),
             patch(
+                "src.qa_generator._removed_object_occludes_target_mesh",
+                return_value=make_removed_object_occlusion_probe_metrics(),
+            ),
+            patch(
                 "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
                 side_effect=[
                     (make_l1_metrics("not occluded"), "mesh_ray"),
@@ -450,6 +559,109 @@ class QuestionTemplateTests(unittest.TestCase):
             {question["correct_value"] for question in questions},
             {"occluded", "not visible"},
         )
+
+    def test_removed_object_occludes_target_mesh_requires_strictly_more_than_five_percent_hits(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        target_points = np.asarray(
+            [[float(x), 0.0, 2.0] for x in np.linspace(-0.2, 0.2, 20)],
+            dtype=np.float64,
+        )
+        barycentrics = np.tile(
+            np.asarray([[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64),
+            (20, 1),
+        )
+        instance_mesh_data = SimpleNamespace(
+            surface_points_by_instance={2: target_points},
+            surface_triangle_ids_by_instance={2: np.zeros(20, dtype=np.int64)},
+            surface_barycentrics_by_instance={2: barycentrics},
+            triangle_ids_by_instance={1: np.asarray([99], dtype=np.int64)},
+            boundary_triangle_ids_by_instance={},
+        )
+        removed_obj = {"id": 1, "label": "chair"}
+        target_obj = {
+            "id": 2,
+            "label": "lamp",
+            "bbox_min": [-0.2, -0.1, 1.9],
+            "bbox_max": [0.2, 0.1, 2.1],
+        }
+
+        equal_metrics = _removed_object_occludes_target_mesh(
+            removed_obj=removed_obj,
+            target_obj=target_obj,
+            camera_pose=camera_pose,
+            color_intrinsics=intrinsics,
+            ray_caster=_SequenceFirstHitCaster([99] + [0] * 19, blocker_tri_id=99),
+            instance_mesh_data=instance_mesh_data,
+        )
+        above_metrics = _removed_object_occludes_target_mesh(
+            removed_obj=removed_obj,
+            target_obj=target_obj,
+            camera_pose=camera_pose,
+            color_intrinsics=intrinsics,
+            ray_caster=_SequenceFirstHitCaster([99, 99] + [0] * 18, blocker_tri_id=99),
+            instance_mesh_data=instance_mesh_data,
+        )
+
+        self.assertEqual(equal_metrics["valid_probe_count"], 20)
+        self.assertEqual(equal_metrics["blocking_hit_count"], 1)
+        self.assertAlmostEqual(equal_metrics["blocking_hit_ratio"], 0.05)
+        self.assertFalse(equal_metrics["passes_threshold"])
+        self.assertEqual(equal_metrics["reason_code"], "blocking_ratio_below_threshold")
+
+        self.assertEqual(above_metrics["blocking_hit_count"], 2)
+        self.assertGreater(above_metrics["blocking_hit_ratio"], 0.05)
+        self.assertTrue(above_metrics["passes_threshold"])
+        self.assertEqual(above_metrics["reason_code"], "blocking_ratio_threshold_met")
+
+    def test_object_remove_skips_candidates_when_removed_object_not_occluding_target_mesh(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        objects = [
+            {"id": 1, "label": "chair", "center": [0.0, 0.0, 2.0]},
+            {"id": 2, "label": "lamp", "center": [1.0, 0.0, 2.0]},
+            {"id": 3, "label": "cabinet", "center": [2.0, 0.0, 2.0]},
+        ]
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch("src.qa_generator._build_modified_scene", return_value=None),
+            patch(
+                "src.qa_generator._removed_object_occludes_target_mesh",
+                return_value=make_removed_object_occlusion_probe_metrics(
+                    blocking_hit_count=25,
+                    valid_probe_count=512,
+                    passes_threshold=False,
+                ),
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                ],
+            ) as visibility_mock,
+        ):
+            questions = generate_l2_object_remove(
+                objects=objects,
+                attachment_graph={},
+                camera_pose=camera_pose,
+                templates={
+                    "L2_object_remove": [
+                        "If {obj_a} were removed, what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertEqual(questions, [])
+        self.assertEqual(visibility_mock.call_count, 3)
 
 
 if __name__ == "__main__":

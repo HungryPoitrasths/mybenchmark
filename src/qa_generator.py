@@ -211,6 +211,17 @@ L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT = 512
 L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
 
+def _is_l2_occlusion_state_transition(
+    old_status: str | None,
+    new_status: str | None,
+) -> bool:
+    return (
+        old_status in L1_VISIBLE_OCCLUSION_STATES
+        and new_status in L1_OCCLUSION_STATES
+        and old_status != new_status
+    )
+
+
 def _is_l2_occlusion_not_visible_transition(
     old_status: str | None,
     new_status: str | None,
@@ -224,6 +235,8 @@ L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
 L2_OBJECT_REMOVE_MIN_CHANGED_QUESTIONS = 2
 L2_OBJECT_REMOVE_MAX_UNCHANGED_RATIO = 0.25
 L2_OBJECT_REMOVE_MAX_UNCHANGED_FALLBACK = 1
+L2_OBJECT_REMOVE_OCCLUDER_PROBE_SAMPLE_COUNT = 512
+L2_OBJECT_REMOVE_OCCLUDER_MIN_BLOCKING_RATIO = 0.05
 QUESTION_MENTION_MIN_IN_FRAME_RATIO_DEFAULT = 0.60
 QUESTION_MENTION_MIN_IN_FRAME_RATIO_RELAXED = 0.50
 QUESTION_MENTION_POLICY_VISIBLE_ONLY = "visible_only"
@@ -1583,6 +1596,145 @@ def _surface_probe_subset(
         else np.empty((0, 3), dtype=np.float64)
     )
     return points[indices], tri_ids, barycentrics
+
+
+def _removed_object_occludes_target_mesh(
+    *,
+    removed_obj: dict[str, Any],
+    target_obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData | None,
+    max_probe_samples: int = L2_OBJECT_REMOVE_OCCLUDER_PROBE_SAMPLE_COUNT,
+    min_blocking_ratio: float = L2_OBJECT_REMOVE_OCCLUDER_MIN_BLOCKING_RATIO,
+    hit_epsilon: float = 0.05,
+) -> dict[str, Any]:
+    metrics = {
+        "removed_obj_id": int(removed_obj.get("id", -1)),
+        "target_obj_id": int(target_obj.get("id", -1)),
+        "probe_sample_budget": max(0, int(max_probe_samples)),
+        "threshold_ratio": float(min_blocking_ratio),
+        "threshold_operator": ">",
+        "projected_area": 0.0,
+        "in_frame_ratio": 0.0,
+        "in_frame_sample_count": 0,
+        "selected_probe_sample_count": 0,
+        "valid_probe_count": 0,
+        "blocking_hit_count": 0,
+        "blocking_hit_ratio": 0.0,
+        "removed_obj_triangle_count": 0,
+        "passes_threshold": False,
+        "reason_code": "missing_mesh_probe_inputs",
+    }
+    if (
+        color_intrinsics is None
+        or ray_caster is None
+        or instance_mesh_data is None
+        or metrics["probe_sample_budget"] <= 0
+    ):
+        return metrics
+
+    removed_tri_ids = _instance_triangle_id_set(
+        instance_mesh_data,
+        int(removed_obj["id"]),
+    )
+    metrics["removed_obj_triangle_count"] = int(len(removed_tri_ids))
+    if not removed_tri_ids:
+        metrics["reason_code"] = "removed_object_missing_triangles"
+        return metrics
+
+    target_obj_id = int(target_obj["id"])
+    sample_points = _instance_surface_samples(instance_mesh_data, target_obj_id)
+    if len(sample_points) == 0:
+        metrics["reason_code"] = "target_object_missing_surface_samples"
+        return metrics
+
+    sample_triangle_ids, sample_barycentrics = _instance_surface_sample_metadata(
+        instance_mesh_data,
+        target_obj_id,
+    )
+    (
+        projected_area,
+        in_frame_ratio,
+        in_frame_points,
+        in_frame_triangle_ids,
+        in_frame_barycentrics,
+    ) = _in_frame_surface_sample_subset(
+        sample_points,
+        camera_pose,
+        color_intrinsics,
+        sample_triangle_ids=sample_triangle_ids,
+        sample_barycentrics=sample_barycentrics,
+    )
+    metrics["projected_area"] = float(projected_area)
+    metrics["in_frame_ratio"] = float(in_frame_ratio)
+    metrics["in_frame_sample_count"] = int(len(in_frame_points))
+    if len(in_frame_points) == 0:
+        metrics["reason_code"] = "target_object_out_of_frame"
+        return metrics
+
+    probe_points, _probe_triangle_ids, _probe_barycentrics = _surface_probe_subset(
+        in_frame_points,
+        metrics["probe_sample_budget"],
+        sample_triangle_ids=in_frame_triangle_ids,
+        sample_barycentrics=in_frame_barycentrics,
+    )
+    metrics["selected_probe_sample_count"] = int(len(probe_points))
+    if len(probe_points) == 0:
+        metrics["reason_code"] = "target_object_missing_probe_samples"
+        return metrics
+
+    first_visible_hit = getattr(ray_caster, "first_visible_hit", None)
+    cast_ray = getattr(ray_caster, "cast_ray", None)
+    if not callable(first_visible_hit) and not callable(cast_ray):
+        metrics["reason_code"] = "ray_backend_missing_first_hit"
+        return metrics
+
+    origin = np.asarray(camera_pose.position, dtype=np.float64)
+    blocking_hit_count = 0
+    valid_probe_count = 0
+    for point in np.asarray(probe_points, dtype=np.float64):
+        direction = np.asarray(point, dtype=np.float64) - origin
+        target_dist = float(np.linalg.norm(direction))
+        if not np.isfinite(target_dist) or target_dist <= 1e-6:
+            continue
+        valid_probe_count += 1
+
+        hit = None
+        if callable(first_visible_hit):
+            hit = _invoke_method_with_supported_kwargs(
+                first_visible_hit,
+                origin=origin,
+                direction=direction,
+            )
+        else:
+            for hit_point, tri_id, dist in cast_ray(origin, direction):
+                hit = (hit_point, int(tri_id), float(dist))
+                break
+
+        if hit is None:
+            continue
+        tri_id = int(hit[1])
+        hit_dist = float(hit[2])
+        if tri_id in removed_tri_ids and hit_dist < target_dist - float(hit_epsilon):
+            blocking_hit_count += 1
+
+    metrics["valid_probe_count"] = int(valid_probe_count)
+    metrics["blocking_hit_count"] = int(blocking_hit_count)
+    if valid_probe_count <= 0:
+        metrics["reason_code"] = "no_valid_mesh_probe_rays"
+        return metrics
+
+    blocking_hit_ratio = float(blocking_hit_count / valid_probe_count)
+    metrics["blocking_hit_ratio"] = blocking_hit_ratio
+    metrics["passes_threshold"] = bool(blocking_hit_ratio > float(min_blocking_ratio))
+    metrics["reason_code"] = (
+        "blocking_ratio_threshold_met"
+        if metrics["passes_threshold"]
+        else "blocking_ratio_below_threshold"
+    )
+    return metrics
 
 
 def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
@@ -5132,8 +5284,8 @@ def generate_l2_viewpoint_move(
                     )
                     continue
 
-                if not _is_l2_occlusion_not_visible_transition(old_status, new_status):
-                    reason_counts["transition_not_visible_rule_failed"] += 1
+                if not _is_l2_occlusion_state_transition(old_status, new_status):
+                    reason_counts["visibility_transition_rule_failed"] += 1
                     _emit_generator_candidate(
                         trace_recorder,
                         trace_detail=trace_detail,
@@ -5142,10 +5294,10 @@ def generate_l2_viewpoint_move(
                         candidate_key=candidate_key,
                         object_ids=object_ids,
                         status="skipped",
-                        reason_code="requires_visible_to_not_visible_transition",
+                        reason_code="requires_visibility_state_change",
                         reason_detail=(
                             "L2 viewpoint occlusion questions require the target to be visible "
-                            "before the move and not visible after the move"
+                            "before the move and change to another valid L1-style occlusion state"
                         ),
                         evidence={
                             "camera_translation": prompt_direction,
@@ -5348,6 +5500,40 @@ def generate_l2_object_remove(
                 )
                 continue
 
+            occluder_metrics = _removed_object_occludes_target_mesh(
+                removed_obj=obj,
+                target_obj=other,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+            if not bool(occluder_metrics.get("passes_threshold")):
+                reason_counts["removed_object_not_occluding_target_mesh"] += 1
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l2_object_remove",
+                    candidate_kind="removal_pair",
+                    candidate_key=candidate_key,
+                    object_ids=object_ids,
+                    status="skipped",
+                    reason_code="removed_object_not_occluding_target_mesh",
+                    reason_detail=(
+                        "the removed object does not block enough target mesh probe rays "
+                        "from the current viewpoint"
+                    ),
+                    evidence={
+                        "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
+                        "original_status": old_status,
+                        "original_source": old_source,
+                        "original_resolution": old_reason_code,
+                        "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
+                        "removed_object_occlusion_probe_metrics": dict(occluder_metrics),
+                    },
+                )
+                continue
+
             new_metrics, new_source = _compute_l1_style_visibility_metrics_for_static_target(
                 obj=other,
                 camera_pose=camera_pose,
@@ -5380,6 +5566,7 @@ def generate_l2_object_remove(
                         "new_resolution": new_reason_code,
                         "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
                         "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                        "removed_object_occlusion_probe_metrics": dict(occluder_metrics),
                     },
                 )
                 continue
@@ -5407,6 +5594,7 @@ def generate_l2_object_remove(
                 "new_source": new_source,
                 "old_metrics": old_metrics,
                 "new_metrics": new_metrics,
+                "occluder_metrics": dict(occluder_metrics),
                 "relation_unchanged": relation_unchanged,
                 "question": {
                 "level": "L2",
@@ -5425,6 +5613,7 @@ def generate_l2_object_remove(
                 "new_visibility_source": new_source,
                 "old_visibility_metrics": _l1_occlusion_metrics_payload(old_metrics),
                 "new_visibility_metrics": _l1_occlusion_metrics_payload(new_metrics),
+                "removed_object_occlusion_probe_metrics": dict(occluder_metrics),
                 "removed_ids": sorted(int(removed_id) for removed_id in removed_ids),
                 "mentioned_objects": [
                     _mention("removed_object", obj["label"], obj["id"]),
@@ -5494,6 +5683,7 @@ def generate_l2_object_remove(
                 "new_source": record["new_source"],
                 "original_metrics": _l1_occlusion_metrics_payload(record["old_metrics"]),
                 "new_metrics": _l1_occlusion_metrics_payload(record["new_metrics"]),
+                "removed_object_occlusion_probe_metrics": dict(record["occluder_metrics"]),
             },
             question_preview=_question_preview_payload(question),
         )
@@ -5521,6 +5711,7 @@ def generate_l2_object_remove(
                 "new_source": record["new_source"],
                 "original_metrics": _l1_occlusion_metrics_payload(record["old_metrics"]),
                 "new_metrics": _l1_occlusion_metrics_payload(record["new_metrics"]),
+                "removed_object_occlusion_probe_metrics": dict(record["occluder_metrics"]),
                 "changed_candidate_count": int(len(changed_candidates)),
                 "selected_unchanged_count": int(selected_unchanged_count),
             },
