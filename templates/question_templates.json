@@ -19,8 +19,8 @@
     "If you were {obj_ref}, looking toward {obj_face}, where would {obj_target} be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)"
   ],
   "L1_direction_allocentric": [
-    "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}? (For horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
-    "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}? (For horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
+    "The camera is facing {camera_cardinal} in this scene. On the room's floor plan, in which cardinal direction is {obj_a} from {obj_b}? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "In this image the camera faces {camera_cardinal}. Viewed from above on the room's layout, {obj_a} is in which cardinal direction relative to {obj_b}? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
   ],
   "L2_object_move_agent": [
     "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the relative position of {obj_b} to {obj_c}? (Use {obj_c} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
@@ -53,8 +53,8 @@
     ]
   },
   "L2_object_move_allocentric": [
-    "If {obj_move_source} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}? (For horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
-    "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}? (For horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
+    "If {obj_move_source} is moved {distance} to the {direction}, the camera faces {camera_cardinal}. On the floor plan, in which cardinal direction would {obj_query} be from {obj_ref}? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
   ],
   "L2_viewpoint_move": [
     "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {obj_a}? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
@@ -80,6 +80,6 @@
     "Suppose this room had originally been oriented {angle} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {obj_ref} at its rotated position and faced toward {obj_face}'s rotated position, in which direction would {obj_target} be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)"
   ],
   "L3_coordinate_rotation_allocentric": [
-    "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}? (For horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
+    "Imagine all furniture is rotated {angle} degrees clockwise around the room center (viewed from above). The camera, facing {camera_cardinal}, remains in place. On the floor plan, in which cardinal direction is {obj_a} from {obj_b}? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
   ]
 }
