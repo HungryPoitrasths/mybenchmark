@@ -174,7 +174,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         with (
             patch(
                 "src.qa_generator._select_object_move_state",
-                side_effect=[None, selected_state],
+                side_effect=[selected_state, None],
             ),
             patch(
                 "src.qa_generator.compute_all_relations",
@@ -189,7 +189,10 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             ),
             patch(
                 "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
-                return_value=(make_l1_metrics("not visible"), "mesh_ray"),
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not visible"), "mesh_ray"),
+                ],
             ),
             patch(
                 "src.qa_generator._generate_l2_distance_questions_for_object",
@@ -224,6 +227,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(set(question["options"]), {"not occluded", "occluded", "not visible"})
         self.assertEqual(len(question["options"]), 3)
         self.assertEqual(question["moved_obj_label"], "sofa")
+        self.assertTrue(question["attachment_remapped"])
         self.assertEqual(question["query_obj_label"], "cushion")
         self.assertEqual(question["target_obj_label"], "cushion")
         self.assertEqual(question["obj_b_label"], "cushion")
@@ -527,7 +531,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             [tuple(q["delta"]) for q in questions if q.get("type") == "object_move_agent"],
             [(0.5, 0.0, 0.0), (1.0, 0.0, 0.0)],
         )
-        self.assertTrue(all(args.args[2] == 1 for args in mocked_helper.call_args_list))
+        self.assertEqual([args.args[2] for args in mocked_helper.call_args_list], [1, 2])
 
     def test_generate_l2_object_move_uses_relation_specific_agent_fallback_state(self) -> None:
         table = make_object(1, "table", (0.0, 0.0, 2.0))
@@ -555,21 +559,24 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             }
         ]
 
+        def select_state_for_source(*args, **kwargs):
+            return shared_state if args[2] == 2 else None
+
+        def fallback_states_for_source(*args, **kwargs):
+            return [fallback_state] if args[2] == 1 else []
+
         with patch(
             "src.qa_generator._select_object_move_state",
-            side_effect=[None, shared_state, None],
+            side_effect=select_state_for_source,
         ), patch(
             "src.qa_generator._iter_valid_object_move_states",
-            side_effect=[
-                [fallback_state],
-                [],
-            ],
+            side_effect=fallback_states_for_source,
         ), patch(
             "src.qa_generator.compute_all_relations",
             side_effect=[
                 base_relations,
-                [],
                 fallback_relations,
+                [],
             ],
         ), patch(
             "src.qa_generator._generate_l2_distance_questions_for_object",
@@ -592,6 +599,8 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         agent_questions = [q for q in questions if q.get("type") == "object_move_agent"]
         self.assertEqual(len(agent_questions), 1)
         self.assertTrue(agent_questions[0]["attachment_remapped"])
+        self.assertEqual(agent_questions[0]["moved_obj_id"], 1)
+        self.assertEqual(agent_questions[0]["query_obj_id"], 2)
         self.assertEqual(agent_questions[0]["delta"], [1.0, 0.0, 0.0])
         self.assertEqual(agent_questions[0]["correct_value"], "front-left")
 

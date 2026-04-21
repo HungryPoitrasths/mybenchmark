@@ -348,6 +348,29 @@ class MakeViewerTests(unittest.TestCase):
             summary,
         )
 
+    def test_task_summary_v2_counts_only_downward_attachment_propagation(self) -> None:
+        questions = [
+            {
+                "type": "object_move_agent",
+                "attachment_remapped": True,
+                "moved_obj_id": 1,
+                "query_obj_id": 2,
+            },
+            {
+                "type": "object_move_agent",
+                "attachment_remapped": False,
+                "moved_obj_id": 2,
+                "query_obj_id": 2,
+            },
+        ]
+
+        summary = build_task_summary_v2(questions)
+
+        self.assertIn(
+            "L2_object_move_agent: with_attachment=1, without_attachment=1",
+            summary,
+        )
+
     def test_question_review_notes_renders_referability_audit(self) -> None:
         notes = question_review_notes(
             {

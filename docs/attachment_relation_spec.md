@@ -425,6 +425,7 @@ Should use `attachment_graph`.
 Behavior:
 
 - moving a parent also moves all descendants in the attachment graph
+- L2 object-move/rotate interventions do not remap an attached child upward to its parent or root; the selected object is always the intervention source, and attachment only propagates that intervention downward to descendants
 
 ### 10.2 `support_chain`
 

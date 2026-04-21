@@ -4659,23 +4659,12 @@ def _generate_l2_distance_questions_for_object(
         "L2_object_move_distance",
         _default_templates()["L2_object_move_distance"],
     )
-    has_attachment_chain = len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0
+    moved_ids = get_moved_object_ids(move_source_id, attachment_graph)
+    has_attachment_chain = len(moved_ids) > 1
     questions: list[dict[str, Any]] = []
 
     for relation in relations:
         if query_obj["id"] not in (relation["obj_a_id"], relation["obj_b_id"]):
-            continue
-
-        delta, old_value, answer_value, relation_unchanged = _find_stable_distance_move_for_relation(
-            movement_scene_objects,
-            attachment_graph,
-            move_source_id,
-            relation,
-            room_bounds=room_bounds,
-            collision_objects=collision_objects,
-            allow_unchanged_fallback=attachment_remapped,
-        )
-        if delta is None or answer_value is None or old_value is None:
             continue
 
         if query_obj["id"] == relation["obj_b_id"]:
@@ -4684,6 +4673,22 @@ def _generate_l2_distance_questions_for_object(
         else:
             relation_obj_b_id = relation["obj_a_id"]
             relation_obj_c_id = relation["obj_b_id"]
+        attachment_relation_propagated = any(
+            participant_id in moved_ids and participant_id != move_source_id
+            for participant_id in (int(relation_obj_b_id), int(relation_obj_c_id))
+        )
+
+        delta, old_value, answer_value, relation_unchanged = _find_stable_distance_move_for_relation(
+            movement_scene_objects,
+            attachment_graph,
+            move_source_id,
+            relation,
+            room_bounds=room_bounds,
+            collision_objects=collision_objects,
+            allow_unchanged_fallback=attachment_relation_propagated,
+        )
+        if delta is None or answer_value is None or old_value is None:
+            continue
 
         moved_state = apply_movement(movement_scene_objects, attachment_graph, move_source_id, delta)
         moved_map = {int(obj["id"]): obj for obj in moved_state}
@@ -4940,20 +4945,21 @@ def generate_l2_object_move(
                 metrics,
             )
 
-    for obj in objects:
+    for source_obj in objects:
         # Skip structural room elements — they cannot be "moved" in any
         # meaningful physical sense and confuse human annotators.
-        if obj.get("label", "").lower() in EXCLUDED_LABELS:
+        if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        move_source_id = _resolve_attachment_root_id(obj["id"], attached_by)
+        move_source_id = int(source_obj["id"])
         move_source = obj_map.get(move_source_id)
         if move_source is None:
             continue
-        attachment_remapped = move_source_id != obj["id"]
-        if attachment_remapped and move_source_id not in attachment_referable_ids:
+        if move_source_id not in attachment_referable_ids:
             continue
-        has_attachment_chain = len(get_attachment_chain_ids(move_source_id, attachment_graph)) > 0
+        moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
+        attachment_remapped = len(moved_ids) > 1
+        has_attachment_chain = attachment_remapped
         selected_state = _select_object_move_state(
             movement_scene_objects,
             attachment_graph,
@@ -4961,16 +4967,15 @@ def generate_l2_object_move(
             camera_pose,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
-            allow_unchanged_attachment=attachment_remapped,
+            allow_unchanged_attachment=has_attachment_chain,
             color_intrinsics=color_intrinsics,
             occlusion_backend=occlusion_backend,
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
         )
-        obj_questions: list[dict] = []
         state_relation_cache: dict[tuple[float, ...], dict[tuple[int, int], dict[str, Any]]] = {}
         state_visibility_cache: dict[
-            tuple[float, ...],
+            tuple[int, tuple[float, ...]],
             tuple[
                 str | None,
                 str,
@@ -4983,6 +4988,10 @@ def generate_l2_object_move(
             ],
         ] = {}
         alternative_states: list[_SelectedObjectMoveState] | None = None
+        query_objects = [
+            candidate_obj for candidate_obj in objects
+            if int(candidate_obj["id"]) in moved_ids
+        ]
 
         def _relation_map_for_state(state: _SelectedObjectMoveState) -> dict[tuple[int, int], dict[str, Any]]:
             delta_key = _delta_key(state.delta)
@@ -4995,6 +5004,7 @@ def generate_l2_object_move(
             return relation_map
 
         def _visibility_for_state(
+            query_obj: dict[str, Any],
             state: _SelectedObjectMoveState,
         ) -> tuple[
             str | None,
@@ -5007,10 +5017,11 @@ def generate_l2_object_move(
             _L1OcclusionMetrics,
         ]:
             delta_key = _delta_key(state.delta)
-            visibility = state_visibility_cache.get(delta_key)
+            cache_key = (int(query_obj["id"]), delta_key)
+            visibility = state_visibility_cache.get(cache_key)
             if visibility is None:
                 visibility = _query_visibility_for_object_move_state(
-                    query_obj=obj,
+                    query_obj=query_obj,
                     original_objects=movement_scene_objects,
                     selected_state=state,
                     original_visibility=original_visibility,
@@ -5020,7 +5031,7 @@ def generate_l2_object_move(
                     ray_caster=ray_caster,
                     instance_mesh_data=instance_mesh_data,
                 )
-                state_visibility_cache[delta_key] = visibility
+                state_visibility_cache[cache_key] = visibility
             return visibility
 
         def _fallback_states() -> list[_SelectedObjectMoveState]:
@@ -5039,75 +5050,168 @@ def generate_l2_object_move(
                 )
             return alternative_states
 
-        for key, old_relation in base_relation_map.items():
-            if obj["id"] not in key:
-                continue
+        for query_obj in query_objects:
+            query_obj_id = int(query_obj["id"])
+            query_obj_questions: list[dict] = []
 
-            relation_obj_b_id = int(obj["id"])
-            relation_obj_c_id = _other_obj_id_for_query(obj["id"], old_relation)
-            if relation_obj_c_id is None:
-                continue
-            obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
-            obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+            for key, old_relation in base_relation_map.items():
+                if query_obj_id not in key:
+                    continue
 
-            agent_state: _SelectedObjectMoveState | None = None
-            old_value: str | None = None
-            new_value: str | None = None
-            relation_unchanged = False
-            if selected_state is not None:
-                new_relation = _relation_map_for_state(selected_state).get(key)
-                if new_relation is not None:
-                    direction_values = _direction_values_for_query_object(
-                        obj["id"],
-                        old_relation,
-                        new_relation,
+                relation_obj_b_id = query_obj_id
+                relation_obj_c_id = _other_obj_id_for_query(query_obj_id, old_relation)
+                if relation_obj_c_id is None:
+                    continue
+                attachment_relation_propagated = any(
+                    participant_id in moved_ids and participant_id != move_source_id
+                    for participant_id in (relation_obj_b_id, relation_obj_c_id)
+                )
+                obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
+                obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+
+                agent_state: _SelectedObjectMoveState | None = None
+                old_value: str | None = None
+                new_value: str | None = None
+                relation_unchanged = False
+                if selected_state is not None:
+                    new_relation = _relation_map_for_state(selected_state).get(key)
+                    if new_relation is not None:
+                        direction_values = _direction_values_for_query_object(
+                            query_obj_id,
+                            old_relation,
+                            new_relation,
+                        )
+                        if direction_values is not None:
+                            old_value, new_value = direction_values
+                            relation_unchanged = old_value == new_value
+                            if attachment_relation_propagated or not relation_unchanged:
+                                agent_state = selected_state
+
+                if agent_state is None:
+                    fallback_unchanged: tuple[_SelectedObjectMoveState, str, str] | None = None
+                    for candidate_state in _fallback_states():
+                        new_relation = _relation_map_for_state(candidate_state).get(key)
+                        if new_relation is None:
+                            continue
+                        direction_values = _direction_values_for_query_object(
+                            query_obj_id,
+                            old_relation,
+                            new_relation,
+                        )
+                        if direction_values is None:
+                            continue
+                        candidate_old_value, candidate_new_value = direction_values
+                        candidate_unchanged = candidate_old_value == candidate_new_value
+                        if candidate_unchanged:
+                            if attachment_relation_propagated and fallback_unchanged is None:
+                                fallback_unchanged = (
+                                    candidate_state,
+                                    candidate_old_value,
+                                    candidate_new_value,
+                                )
+                            continue
+                        agent_state = candidate_state
+                        old_value = candidate_old_value
+                        new_value = candidate_new_value
+                        relation_unchanged = False
+                        break
+
+                    if agent_state is None and fallback_unchanged is not None:
+                        agent_state, old_value, new_value = fallback_unchanged
+                        relation_unchanged = True
+
+                if agent_state is not None and old_value is not None and new_value is not None:
+                    delta = agent_state.delta
+                    direction_desc = _delta_to_description(delta, camera_pose)
+                    distance_desc = f"{np.linalg.norm(delta):.1f}m"
+                    tpl_list = templates.get(
+                        "L2_object_move_agent",
+                        _default_templates()["L2_object_move_agent"],
                     )
-                    if direction_values is not None:
-                        old_value, new_value = direction_values
-                        relation_unchanged = old_value == new_value
-                        if attachment_remapped or not relation_unchanged:
-                            agent_state = selected_state
-
-            if agent_state is None:
-                fallback_unchanged: tuple[_SelectedObjectMoveState, str, str] | None = None
-                for candidate_state in _fallback_states():
-                    new_relation = _relation_map_for_state(candidate_state).get(key)
-                    if new_relation is None:
-                        continue
-                    direction_values = _direction_values_for_query_object(
-                        obj["id"],
-                        old_relation,
-                        new_relation,
+                    tpl = random.choice(tpl_list)
+                    question_text = tpl.format(
+                        obj_a=_the(move_source["label"]),
+                        direction=direction_desc,
+                        direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
+                        distance=distance_desc,
+                        obj_b=_the(obj_b_label),
+                        obj_c=_the(obj_c_label),
                     )
-                    if direction_values is None:
-                        continue
-                    candidate_old_value, candidate_new_value = direction_values
-                    candidate_unchanged = candidate_old_value == candidate_new_value
-                    if candidate_unchanged:
-                        if attachment_remapped and fallback_unchanged is None:
-                            fallback_unchanged = (
-                                candidate_state,
-                                candidate_old_value,
-                                candidate_new_value,
-                            )
-                        continue
-                    agent_state = candidate_state
-                    old_value = candidate_old_value
-                    new_value = candidate_new_value
-                    relation_unchanged = False
-                    break
+                    options, answer = generate_options(new_value, ALL_DIRECTIONS)
+                    query_obj_questions.append({
+                        "level": "L2",
+                        "type": "object_move_agent",
+                        "question": question_text,
+                        "options": options,
+                        "answer": answer,
+                        "correct_value": new_value,
+                        "old_correct_value": old_value,
+                        "new_correct_value": new_value,
+                        "moved_obj_id": move_source_id,
+                        "moved_obj_label": move_source["label"],
+                        "query_obj_id": query_obj_id,
+                        "query_obj_label": query_obj["label"],
+                        "attachment_remapped": attachment_remapped,
+                        "obj_b_id": relation_obj_b_id,
+                        "obj_b_label": obj_b_label,
+                        "obj_c_id": relation_obj_c_id,
+                        "obj_c_label": obj_c_label,
+                        "mentioned_objects": [
+                            _mention("moved_object", move_source["label"], move_source_id),
+                            _mention("query_object", query_obj["label"], query_obj_id),
+                            _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
+                            _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
+                        ],
+                        "delta": delta.tolist(),
+                        "relation_unchanged": relation_unchanged,
+                        "has_attachment_chain": has_attachment_chain,
+                    })
 
-                if agent_state is None and fallback_unchanged is not None:
-                    agent_state, old_value, new_value = fallback_unchanged
-                    relation_unchanged = True
+            occlusion_state: _SelectedObjectMoveState | None = None
+            occlusion_visibility: tuple[
+                str | None,
+                str,
+                str,
+                _L1OcclusionMetrics,
+                str | None,
+                str,
+                str,
+                _L1OcclusionMetrics,
+            ] | None = None
+            if occlusion_enabled and compare_backend is not None:
+                if selected_state is not None:
+                    visibility = _visibility_for_state(query_obj, selected_state)
+                    if _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
+                        occlusion_state = selected_state
+                        occlusion_visibility = visibility
+                if occlusion_state is None:
+                    for candidate_state in _fallback_states():
+                        visibility = _visibility_for_state(query_obj, candidate_state)
+                        if not _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
+                            continue
+                        occlusion_state = candidate_state
+                        occlusion_visibility = visibility
+                        break
 
-            if agent_state is not None and old_value is not None and new_value is not None:
-                delta = agent_state.delta
+            if occlusion_state is not None and occlusion_visibility is not None:
+                (
+                    query_old_status,
+                    query_old_source,
+                    query_old_reason_code,
+                    query_old_metrics,
+                    query_new_status,
+                    query_new_source,
+                    query_new_reason_code,
+                    query_new_metrics,
+                ) = occlusion_visibility
+                assert query_old_status is not None
+                assert query_new_status is not None
+                delta = occlusion_state.delta
                 direction_desc = _delta_to_description(delta, camera_pose)
                 distance_desc = f"{np.linalg.norm(delta):.1f}m"
                 tpl_list = templates.get(
-                    "L2_object_move_agent",
-                    _default_templates()["L2_object_move_agent"],
+                    "L2_object_move_occlusion",
+                    _default_templates()["L2_object_move_occlusion"],
                 )
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
@@ -5115,155 +5219,69 @@ def generate_l2_object_move(
                     direction=direction_desc,
                     direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
                     distance=distance_desc,
-                    obj_b=_the(obj_b_label),
-                    obj_c=_the(obj_c_label),
+                    obj_b=_the(query_obj["label"]),
+                    obj_target=_the(query_obj["label"]),
                 )
-                options, answer = generate_options(new_value, ALL_DIRECTIONS)
-                obj_questions.append({
+                question_text = _with_occlusion_definition(question_text)
+                options, answer = generate_options(
+                    query_new_status,
+                    L1_OCCLUSION_STATES,
+                    n_options=3,
+                )
+                query_obj_questions.append({
                     "level": "L2",
-                    "type": "object_move_agent",
+                    "type": "object_move_occlusion",
                     "question": question_text,
                     "options": options,
                     "answer": answer,
-                    "correct_value": new_value,
-                    "old_correct_value": old_value,
-                    "new_correct_value": new_value,
+                    "correct_value": query_new_status,
+                    "old_correct_value": query_old_status,
+                    "new_correct_value": query_new_status,
+                    "old_visibility": query_old_status,
+                    "new_visibility": query_new_status,
+                    "old_visibility_source": query_old_source,
+                    "new_visibility_source": query_new_source,
+                    "old_visibility_resolution": query_old_reason_code,
+                    "new_visibility_resolution": query_new_reason_code,
+                    "old_visibility_metrics": _l1_occlusion_metrics_payload(query_old_metrics),
+                    "new_visibility_metrics": _l1_occlusion_metrics_payload(query_new_metrics),
                     "moved_obj_id": move_source_id,
                     "moved_obj_label": move_source["label"],
-                    "query_obj_id": obj["id"],
-                    "query_obj_label": obj["label"],
+                    "target_obj_id": query_obj_id,
+                    "target_obj_label": query_obj["label"],
+                    "query_obj_id": query_obj_id,
+                    "query_obj_label": query_obj["label"],
                     "attachment_remapped": attachment_remapped,
-                    "obj_b_id": relation_obj_b_id,
-                    "obj_b_label": obj_b_label,
-                    "obj_c_id": relation_obj_c_id,
-                    "obj_c_label": obj_c_label,
+                    "obj_b_id": query_obj_id,
+                    "obj_b_label": query_obj["label"],
                     "mentioned_objects": [
                         _mention("moved_object", move_source["label"], move_source_id),
-                        _mention("query_object", obj["label"], obj["id"]),
-                        _mention("relation_obj_b", obj_b_label, relation_obj_b_id),
-                        _mention("relation_obj_c", obj_c_label, relation_obj_c_id),
+                        _mention("target_object", query_obj["label"], query_obj_id),
                     ],
                     "delta": delta.tolist(),
-                    "relation_unchanged": relation_unchanged,
+                    "relation_unchanged": False,
                     "has_attachment_chain": has_attachment_chain,
                 })
 
-        occlusion_state: _SelectedObjectMoveState | None = None
-        occlusion_visibility: tuple[
-            str | None,
-            str,
-            str,
-            _L1OcclusionMetrics,
-            str | None,
-            str,
-            str,
-            _L1OcclusionMetrics,
-        ] | None = None
-        if occlusion_enabled and compare_backend is not None:
-            if selected_state is not None:
-                visibility = _visibility_for_state(selected_state)
-                if _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
-                    occlusion_state = selected_state
-                    occlusion_visibility = visibility
-            if occlusion_state is None:
-                for candidate_state in _fallback_states():
-                    visibility = _visibility_for_state(candidate_state)
-                    if not _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
-                        continue
-                    occlusion_state = candidate_state
-                    occlusion_visibility = visibility
-                    break
+            query_obj_questions.extend(
+                _generate_l2_distance_questions_for_object(
+                    query_obj=query_obj,
+                    move_source=move_source,
+                    move_source_id=move_source_id,
+                    attachment_remapped=attachment_remapped,
+                    relations=base_relations,
+                    movement_scene_objects=movement_scene_objects,
+                    attachment_graph=attachment_graph,
+                    camera_pose=camera_pose,
+                    templates=templates,
+                    obj_map=obj_map,
+                    room_bounds=room_bounds,
+                    collision_objects=collision_objects,
+                )
+            )
 
-        if occlusion_state is not None and occlusion_visibility is not None:
-            (
-                query_old_status,
-                query_old_source,
-                query_old_reason_code,
-                query_old_metrics,
-                query_new_status,
-                query_new_source,
-                query_new_reason_code,
-                query_new_metrics,
-            ) = occlusion_visibility
-            assert query_old_status is not None
-            assert query_new_status is not None
-            delta = occlusion_state.delta
-            direction_desc = _delta_to_description(delta, camera_pose)
-            distance_desc = f"{np.linalg.norm(delta):.1f}m"
-            tpl_list = templates.get(
-                "L2_object_move_occlusion",
-                _default_templates()["L2_object_move_occlusion"],
-            )
-            tpl = random.choice(tpl_list)
-            question_text = tpl.format(
-                obj_a=_the(move_source["label"]),
-                direction=direction_desc,
-                direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
-                distance=distance_desc,
-                obj_b=_the(obj["label"]),
-                obj_target=_the(obj["label"]),
-            )
-            question_text = _with_occlusion_definition(question_text)
-            options, answer = generate_options(
-                query_new_status,
-                L1_OCCLUSION_STATES,
-                n_options=3,
-            )
-            obj_questions.append({
-                "level": "L2",
-                "type": "object_move_occlusion",
-                "question": question_text,
-                "options": options,
-                "answer": answer,
-                "correct_value": query_new_status,
-                "old_correct_value": query_old_status,
-                "new_correct_value": query_new_status,
-                "old_visibility": query_old_status,
-                "new_visibility": query_new_status,
-                "old_visibility_source": query_old_source,
-                "new_visibility_source": query_new_source,
-                "old_visibility_resolution": query_old_reason_code,
-                "new_visibility_resolution": query_new_reason_code,
-                "old_visibility_metrics": _l1_occlusion_metrics_payload(query_old_metrics),
-                "new_visibility_metrics": _l1_occlusion_metrics_payload(query_new_metrics),
-                "moved_obj_id": move_source_id,
-                "moved_obj_label": move_source["label"],
-                "target_obj_id": obj["id"],
-                "target_obj_label": obj["label"],
-                "query_obj_id": obj["id"],
-                "query_obj_label": obj["label"],
-                "attachment_remapped": attachment_remapped,
-                "obj_b_id": obj["id"],
-                "obj_b_label": obj["label"],
-                "mentioned_objects": [
-                    _mention("moved_object", move_source["label"], move_source_id),
-                    _mention("target_object", obj["label"], obj["id"]),
-                ],
-                "delta": delta.tolist(),
-                "relation_unchanged": False,
-                "has_attachment_chain": has_attachment_chain,
-            })
-
-        obj_questions.extend(
-            _generate_l2_distance_questions_for_object(
-                query_obj=obj,
-                move_source=move_source,
-                move_source_id=move_source_id,
-                attachment_remapped=attachment_remapped,
-                relations=base_relations,
-                movement_scene_objects=movement_scene_objects,
-                attachment_graph=attachment_graph,
-                camera_pose=camera_pose,
-                templates=templates,
-                obj_map=obj_map,
-                room_bounds=room_bounds,
-                collision_objects=collision_objects,
-            )
-        )
-
-        if obj_questions:
-            object_key = int(obj["id"])
-            questions_by_object.setdefault(object_key, []).extend(obj_questions)
+            if query_obj_questions:
+                questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
 
     # Cap per query-object instance so repeated labels can still contribute.
     return _cap_question_groups(questions_by_object, max_per_object)
@@ -5909,144 +5927,151 @@ def generate_l2_object_rotate_object_centric(
     )
     horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
 
-    for obj in objects:
-        if obj.get("label", "").lower() in EXCLUDED_LABELS:
+    for source_obj in objects:
+        if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        move_source_id = _resolve_attachment_root_id(obj["id"], attached_by)
+        move_source_id = int(source_obj["id"])
         move_source = obj_map.get(move_source_id)
         if move_source is None:
             continue
+        if move_source_id not in attachment_referable_ids:
+            continue
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
-        if obj["id"] not in moved_ids:
-            continue
-        attachment_remapped = move_source_id != obj["id"]
-        if attachment_remapped and move_source_id not in attachment_referable_ids:
-            continue
-        has_attachment_chain = len(moved_ids) > 1
-        query_center = np.array(obj["center"], dtype=float)
+        attachment_remapped = len(moved_ids) > 1
+        has_attachment_chain = attachment_remapped
+        query_objects = [
+            candidate_obj for candidate_obj in objects
+            if int(candidate_obj["id"]) in moved_ids
+        ]
 
-        obj_questions: list[dict] = []
-        for face in objects:
-            if face["id"] in moved_ids:
-                continue
-            face_c = np.array(face["center"], dtype=float)
-            if not _has_stable_object_centric_facing(query_center, face_c):
-                continue
+        for query_obj in query_objects:
+            query_obj_id = int(query_obj["id"])
+            query_center = np.array(query_obj["center"], dtype=float)
+            query_questions: list[dict] = []
 
-            valid_rotations = find_meaningful_orbit_rotation(
-                movement_scene_objects,
-                attachment_graph,
-                move_source_id,
-                face["id"],
-                room_bounds=room_bounds,
-                collision_objects=collision_objects,
-            )
-            if not valid_rotations:
-                continue
-
-            for rotation in valid_rotations:
-                rotated_map = {o["id"]: o for o in rotation["objects"]}
-                rotated_query = rotated_map.get(obj["id"])
-                if rotated_query is None:
+            for face in objects:
+                if face["id"] in moved_ids:
                     continue
-                new_query_center = np.array(rotated_query["center"], dtype=float)
-                if not _has_stable_object_centric_facing(new_query_center, face_c):
+                face_c = np.array(face["center"], dtype=float)
+                if not _has_stable_object_centric_facing(query_center, face_c):
                     continue
-                query_delta = new_query_center - query_center
 
-                for ref in objects:
-                    if ref["id"] in moved_ids or ref["id"] == face["id"]:
-                        continue
+                valid_rotations = find_meaningful_orbit_rotation(
+                    movement_scene_objects,
+                    attachment_graph,
+                    move_source_id,
+                    face["id"],
+                    room_bounds=room_bounds,
+                    collision_objects=collision_objects,
+                )
+                if not valid_rotations:
+                    continue
 
-                    labels = [
-                        obj["label"],
-                        ref["label"],
-                        face["label"],
-                    ]
-                    if move_source_id != obj["id"]:
-                        labels.append(move_source["label"])
-                    if len(set(labels)) < len(labels):
+                for rotation in valid_rotations:
+                    rotated_map = {o["id"]: o for o in rotation["objects"]}
+                    rotated_query = rotated_map.get(query_obj_id)
+                    if rotated_query is None:
                         continue
+                    new_query_center = np.array(rotated_query["center"], dtype=float)
+                    if not _has_stable_object_centric_facing(new_query_center, face_c):
+                        continue
+                    query_delta = new_query_center - query_center
 
-                    ref_c = np.array(ref["center"], dtype=float)
-                    old_dir, old_amb = primary_direction_object_centric(
-                        query_center,
-                        face_c,
-                        ref_c,
-                        anchor_hull_xy=_object_bottom_hull_xy(obj),
-                        target_hull_xy=_object_bottom_hull_xy(ref),
-                        anchor_bbox_min=np.array(obj["bbox_min"], dtype=float),
-                        anchor_bbox_max=np.array(obj["bbox_max"], dtype=float),
-                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
-                    )
-                    new_dir, new_amb = primary_direction_object_centric(
-                        new_query_center,
-                        face_c,
-                        ref_c,
-                        anchor_hull_xy=_object_bottom_hull_xy(rotated_query),
-                        target_hull_xy=_object_bottom_hull_xy(ref),
-                        anchor_bbox_min=np.array(rotated_query["bbox_min"], dtype=float),
-                        anchor_bbox_max=np.array(rotated_query["bbox_max"], dtype=float),
-                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
-                    )
-                    if old_dir not in horizontal_answer_pool or new_dir not in horizontal_answer_pool:
-                        continue
-                    if max(old_amb, new_amb) > 0.7:
-                        continue
-                    relation_unchanged = old_dir == new_dir
-                    if relation_unchanged and not attachment_remapped:
-                        continue
+                    for ref in objects:
+                        if ref["id"] == query_obj_id or ref["id"] == face["id"]:
+                            continue
+                        if _has_duplicate_labels_for_distinct_objects(
+                            query_obj,
+                            ref,
+                            face,
+                            move_source,
+                        ):
+                            continue
 
-                    tpl = random.choice(tpl_list)
-                    question_text = tpl.format(
-                        obj_move_source=_the(move_source["label"]),
-                        obj_query=_the(obj["label"]),
-                        obj_ref=_the(ref["label"]),
-                        obj_face=_the(face["label"]),
-                        angle=rotation["angle"],
-                        rotation_direction=rotation["rotation_direction"],
-                    )
-                    options, answer = generate_options(new_dir, horizontal_answer_pool)
-                    obj_questions.append({
-                        "level": "L2",
-                        "type": "object_rotate_object_centric",
-                        "reference_frame": "object_centric",
-                        "question": question_text,
-                        "options": options,
-                        "answer": answer,
-                        "correct_value": new_dir,
-                        "old_correct_value": old_dir,
-                        "new_correct_value": new_dir,
-                        "moved_obj_id": move_source_id,
-                        "moved_obj_label": move_source["label"],
-                        "query_obj_id": obj["id"],
-                        "query_obj_label": obj["label"],
-                        "attachment_remapped": attachment_remapped,
-                        "obj_ref_id": ref["id"],
-                        "obj_ref_label": ref["label"],
-                        "obj_face_id": face["id"],
-                        "obj_face_label": face["label"],
-                        "facing_anchor_center": new_query_center.tolist(),
-                        "facing_target_center": face_c.tolist(),
-                        "rotation_angle": rotation["angle"],
-                        "rotation_direction": rotation["rotation_direction"],
-                        "mentioned_objects": [
-                            _mention("moved_object", move_source["label"], move_source_id),
-                            _mention("query_object", obj["label"], obj["id"]),
-                            _mention("reference_object", ref["label"], ref["id"]),
-                            _mention("reference_facing", face["label"], face["id"]),
-                        ],
-                        "delta": query_delta.tolist(),
-                        "relation_unchanged": relation_unchanged,
-                        "has_attachment_chain": has_attachment_chain,
-                    })
+                        rotated_ref = rotated_map.get(int(ref["id"]), ref)
+                        ref_c = np.array(ref["center"], dtype=float)
+                        rotated_ref_c = np.array(rotated_ref["center"], dtype=float)
+                        old_dir, old_amb = primary_direction_object_centric(
+                            query_center,
+                            face_c,
+                            ref_c,
+                            anchor_hull_xy=_object_bottom_hull_xy(query_obj),
+                            target_hull_xy=_object_bottom_hull_xy(ref),
+                            anchor_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
+                            anchor_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
+                            target_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                            target_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                        )
+                        new_dir, new_amb = primary_direction_object_centric(
+                            new_query_center,
+                            face_c,
+                            rotated_ref_c,
+                            anchor_hull_xy=_object_bottom_hull_xy(rotated_query),
+                            target_hull_xy=_object_bottom_hull_xy(rotated_ref),
+                            anchor_bbox_min=np.array(rotated_query["bbox_min"], dtype=float),
+                            anchor_bbox_max=np.array(rotated_query["bbox_max"], dtype=float),
+                            target_bbox_min=np.array(rotated_ref["bbox_min"], dtype=float),
+                            target_bbox_max=np.array(rotated_ref["bbox_max"], dtype=float),
+                        )
+                        if old_dir not in horizontal_answer_pool or new_dir not in horizontal_answer_pool:
+                            continue
+                        if max(old_amb, new_amb) > 0.7:
+                            continue
+                        attachment_relation_propagated = any(
+                            participant_id in moved_ids and participant_id != move_source_id
+                            for participant_id in (query_obj_id, int(ref["id"]))
+                        )
+                        relation_unchanged = old_dir == new_dir
+                        if relation_unchanged and not attachment_relation_propagated:
+                            continue
 
-        if obj_questions:
-            object_key = int(obj["id"])
-            questions_by_object.setdefault(object_key, []).extend(obj_questions)
+                        tpl = random.choice(tpl_list)
+                        question_text = tpl.format(
+                            obj_move_source=_the(move_source["label"]),
+                            obj_query=_the(query_obj["label"]),
+                            obj_ref=_the(ref["label"]),
+                            obj_face=_the(face["label"]),
+                            angle=rotation["angle"],
+                            rotation_direction=rotation["rotation_direction"],
+                        )
+                        options, answer = generate_options(new_dir, horizontal_answer_pool)
+                        query_questions.append({
+                            "level": "L2",
+                            "type": "object_rotate_object_centric",
+                            "reference_frame": "object_centric",
+                            "question": question_text,
+                            "options": options,
+                            "answer": answer,
+                            "correct_value": new_dir,
+                            "old_correct_value": old_dir,
+                            "new_correct_value": new_dir,
+                            "moved_obj_id": move_source_id,
+                            "moved_obj_label": move_source["label"],
+                            "query_obj_id": query_obj_id,
+                            "query_obj_label": query_obj["label"],
+                            "attachment_remapped": attachment_remapped,
+                            "obj_ref_id": ref["id"],
+                            "obj_ref_label": ref["label"],
+                            "obj_face_id": face["id"],
+                            "obj_face_label": face["label"],
+                            "facing_anchor_center": new_query_center.tolist(),
+                            "facing_target_center": face_c.tolist(),
+                            "rotation_angle": rotation["angle"],
+                            "rotation_direction": rotation["rotation_direction"],
+                            "mentioned_objects": [
+                                _mention("moved_object", move_source["label"], move_source_id),
+                                _mention("query_object", query_obj["label"], query_obj_id),
+                                _mention("reference_object", ref["label"], ref["id"]),
+                                _mention("reference_facing", face["label"], face["id"]),
+                            ],
+                            "delta": query_delta.tolist(),
+                            "relation_unchanged": relation_unchanged,
+                            "has_attachment_chain": has_attachment_chain,
+                        })
+
+            if query_questions:
+                questions_by_object.setdefault(query_obj_id, []).extend(query_questions)
 
     return _cap_question_groups(questions_by_object, max_per_object)
 
@@ -6114,20 +6139,18 @@ def generate_l2_object_move_allocentric(
         _default_templates()["L2_object_move_allocentric"],
     )
 
-    for obj in objects:
-        if obj.get("label", "").lower() in EXCLUDED_LABELS:
+    for source_obj in objects:
+        if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
-        move_source_id = _resolve_attachment_root_id(obj["id"], attached_by)
+        move_source_id = int(source_obj["id"])
         move_source = obj_map.get(move_source_id)
         if move_source is None:
             continue
+        if move_source_id not in attachment_referable_ids:
+            continue
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
-        if obj["id"] not in moved_ids:
-            continue
-        attachment_remapped = move_source_id != obj["id"]
-        if attachment_remapped and move_source_id not in attachment_referable_ids:
-            continue
+        attachment_remapped = len(moved_ids) > 1
 
         selected_state = _select_object_move_state(
             movement_scene_objects,
@@ -6144,86 +6167,102 @@ def generate_l2_object_move_allocentric(
         delta = selected_state.delta
         direction_desc = _delta_to_cardinal_description(delta)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
-        new_center = np.array(obj["center"]) + delta
+        moved_map = {int(obj["id"]): obj for obj in selected_state.moved_objects}
+        query_objects = [
+            candidate_obj for candidate_obj in objects
+            if int(candidate_obj["id"]) in moved_ids
+        ]
 
-        obj_questions: list[dict] = []
-        for ref in objects:
-            if ref["id"] in (obj["id"], move_source_id):
+        for query_obj in query_objects:
+            query_obj_id = int(query_obj["id"])
+            moved_query = moved_map.get(query_obj_id)
+            if moved_query is None:
                 continue
-            if ref["label"] == obj["label"]:
-                continue
+            query_questions: list[dict] = []
 
-            ref_c = np.array(ref["center"])
-            new_bbox_min, new_bbox_max = _translated_bbox(obj, delta)
-            new_dir, amb = primary_direction_allocentric(
-                new_center,
-                ref_c,
-                obj_a_hull_xy=_translated_bottom_hull_xy(obj, delta),
-                obj_b_hull_xy=_object_bottom_hull_xy(ref),
-                obj_a_bbox_min=new_bbox_min,
-                obj_a_bbox_max=new_bbox_max,
-                obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
-            )
-            if amb > 0.7:
-                continue
-            if new_dir not in CARDINAL_DIRECTIONS_8:
-                continue
+            for ref in objects:
+                if ref["id"] == query_obj_id:
+                    continue
+                if _has_duplicate_labels_for_distinct_objects(query_obj, ref, move_source):
+                    continue
 
-            old_dir, _ = primary_direction_allocentric(
-                np.array(obj["center"]),
-                ref_c,
-                obj_a_hull_xy=_object_bottom_hull_xy(obj),
-                obj_b_hull_xy=_object_bottom_hull_xy(ref),
-                obj_a_bbox_min=np.array(obj["bbox_min"], dtype=float),
-                obj_a_bbox_max=np.array(obj["bbox_max"], dtype=float),
-                obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
-            )
-            relation_unchanged = old_dir == new_dir
-            if relation_unchanged and not attachment_remapped:
-                continue
+                moved_ref = moved_map.get(int(ref["id"]), ref)
+                query_center = np.array(query_obj["center"], dtype=float)
+                moved_query_center = np.array(moved_query["center"], dtype=float)
+                ref_center = np.array(ref["center"], dtype=float)
+                moved_ref_center = np.array(moved_ref["center"], dtype=float)
+                new_dir, amb = primary_direction_allocentric(
+                    moved_query_center,
+                    moved_ref_center,
+                    obj_a_hull_xy=_object_bottom_hull_xy(moved_query),
+                    obj_b_hull_xy=_object_bottom_hull_xy(moved_ref),
+                    obj_a_bbox_min=np.array(moved_query["bbox_min"], dtype=float),
+                    obj_a_bbox_max=np.array(moved_query["bbox_max"], dtype=float),
+                    obj_b_bbox_min=np.array(moved_ref["bbox_min"], dtype=float),
+                    obj_b_bbox_max=np.array(moved_ref["bbox_max"], dtype=float),
+                )
+                if amb > 0.7:
+                    continue
+                if new_dir not in CARDINAL_DIRECTIONS_8:
+                    continue
 
-            tpl = random.choice(tpl_list)
-            question_text = tpl.format(
-                obj_move_source=_the(move_source["label"]),
-                obj_query=_the(obj["label"]),
-                direction=direction_desc,
-                distance=distance_desc,
-                camera_cardinal=cam_cardinal,
-                obj_ref=_the(ref["label"]),
-            )
-            options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
-            obj_questions.append({
-                "level": "L2",
-                "type": "object_move_allocentric",
-                "reference_frame": "allocentric",
-                "question": question_text,
-                "options": options,
-                "answer": answer,
-                "correct_value": new_dir,
-                "old_correct_value": old_dir,
-                "new_correct_value": new_dir,
-                "camera_cardinal": cam_cardinal,
-                "moved_obj_id": move_source_id,
-                "moved_obj_label": move_source["label"],
-                "query_obj_id": obj["id"],
-                "query_obj_label": obj["label"],
-                "attachment_remapped": attachment_remapped,
-                "obj_ref_id": ref["id"],
-                "obj_ref_label": ref["label"],
-                "mentioned_objects": [
-                    _mention("moved_object", move_source["label"], move_source_id),
-                    _mention("query_object", obj["label"], obj["id"]),
-                    _mention("reference_object", ref["label"], ref["id"]),
-                ],
-                "delta": delta.tolist(),
-                "relation_unchanged": relation_unchanged,
-            })
+                old_dir, _ = primary_direction_allocentric(
+                    query_center,
+                    ref_center,
+                    obj_a_hull_xy=_object_bottom_hull_xy(query_obj),
+                    obj_b_hull_xy=_object_bottom_hull_xy(ref),
+                    obj_a_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
+                    obj_a_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
+                    obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                    obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                )
+                attachment_relation_propagated = any(
+                    participant_id in moved_ids and participant_id != move_source_id
+                    for participant_id in (query_obj_id, int(ref["id"]))
+                )
+                relation_unchanged = old_dir == new_dir
+                if relation_unchanged and not attachment_relation_propagated:
+                    continue
 
-        if obj_questions:
-            object_key = int(obj["id"])
-            questions_by_object.setdefault(object_key, []).extend(obj_questions)
+                tpl = random.choice(tpl_list)
+                question_text = tpl.format(
+                    obj_move_source=_the(move_source["label"]),
+                    obj_query=_the(query_obj["label"]),
+                    direction=direction_desc,
+                    distance=distance_desc,
+                    camera_cardinal=cam_cardinal,
+                    obj_ref=_the(ref["label"]),
+                )
+                options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
+                query_questions.append({
+                    "level": "L2",
+                    "type": "object_move_allocentric",
+                    "reference_frame": "allocentric",
+                    "question": question_text,
+                    "options": options,
+                    "answer": answer,
+                    "correct_value": new_dir,
+                    "old_correct_value": old_dir,
+                    "new_correct_value": new_dir,
+                    "camera_cardinal": cam_cardinal,
+                    "moved_obj_id": move_source_id,
+                    "moved_obj_label": move_source["label"],
+                    "query_obj_id": query_obj_id,
+                    "query_obj_label": query_obj["label"],
+                    "attachment_remapped": attachment_remapped,
+                    "obj_ref_id": ref["id"],
+                    "obj_ref_label": ref["label"],
+                    "mentioned_objects": [
+                        _mention("moved_object", move_source["label"], move_source_id),
+                        _mention("query_object", query_obj["label"], query_obj_id),
+                        _mention("reference_object", ref["label"], ref["id"]),
+                    ],
+                    "delta": delta.tolist(),
+                    "relation_unchanged": relation_unchanged,
+                })
+
+            if query_questions:
+                questions_by_object.setdefault(query_obj_id, []).extend(query_questions)
 
     return _cap_question_groups(questions_by_object, max_per_object)
 
@@ -6675,22 +6714,19 @@ def get_attachment_chain_ids(obj_id: int, attachment_graph: dict) -> list[int]:
     return get_attachment_chain(obj_id, attachment_graph)
 
 
-def _resolve_attachment_root_id(obj_id: int, attached_by: dict[int, int]) -> int:
-    """Return the lowest attachment ancestor of *obj_id*, or itself if unattached."""
-    current = int(obj_id)
-    seen: set[int] = set()
+def _has_duplicate_labels_for_distinct_objects(*objects: dict[str, Any]) -> bool:
+    """Whether distinct object IDs would yield duplicate labels in one question."""
+    labels: list[str] = []
+    seen_ids: set[int] = set()
 
-    while current not in seen:
-        seen.add(current)
-        parent = attached_by.get(current)
-        if parent is None:
-            break
-        try:
-            current = int(parent)
-        except (TypeError, ValueError):
-            break
+    for obj in objects:
+        obj_id = int(obj["id"])
+        if obj_id in seen_ids:
+            continue
+        seen_ids.add(obj_id)
+        labels.append(str(obj.get("label", "object")))
 
-    return current
+    return len(labels) != len(set(labels))
 
 
 def _normalize_object_id_set(
@@ -7904,7 +7940,7 @@ def generate_all_questions(
     all_questions.extend(l1_dir_oc_qs)
     all_questions.extend(l1_dir_allo_qs)
     # Rebuild the movement graph for question-eligible objects plus any
-    # attachment-context ancestors kept to preserve attachment roots.
+    # attachment-context ancestors needed as static/moving context.
     attachment_graph_uniq = {
         k: [c for c in v if c in graph_eligible_ids]
         for k, v in attachment_graph.items()
