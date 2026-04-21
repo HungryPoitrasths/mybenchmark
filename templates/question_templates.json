@@ -5,9 +5,9 @@
     "From the current camera perspective, what is the spatial relationship of {obj_a} to {obj_b}? (Use {obj_b} as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)"
   ],
   "L1_occlusion": [
-    "What is the occlusion status of {obj_a} in the current view? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "From the current viewpoint, which best describes {obj_a}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "In the current image, is {obj_a} unoccluded, occluded by another object, or not visible? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion."
+    "What is the occlusion status of {obj_a} in the current view? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "From the current viewpoint, which best describes {obj_a}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "In the current image, is {obj_a} unoccluded, occluded by another object, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion."
   ],
   "L1_distance": [
     "What is the approximate shortest distance between {obj_a} and {obj_b}, measured from their closest points?",
@@ -32,8 +32,8 @@
     "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?"
   ],
   "L2_object_move_occlusion": [
-    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the occlusion status of {obj_b}? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, which best describes {obj_b}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion."
+    "From the camera's perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the occlusion status of {obj_b}? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "From the camera's perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, which best describes {obj_b}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion."
   ],
   "L2_object_rotate_object_centric": [
     "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)"
@@ -57,14 +57,14 @@
     "After moving {obj_move_source} {distance} to the {direction}, on the room's layout (camera facing {camera_cardinal}), in which cardinal direction is {obj_query} from {obj_ref}? (For horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)"
   ],
   "L2_viewpoint_move": [
-    "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {obj_a}? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, which best describes {obj_a}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, is {obj_a} not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion."
+    "If the camera translates {direction_with_camera_hint} by {distance} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {obj_a}? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "After the camera moves {direction_with_camera_hint} by {distance} without changing its viewing direction, which best describes {obj_a}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "If the camera shifts {direction_with_camera_hint} by {distance} with no change in intrinsics or orientation, is {obj_a} not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion."
   ],
   "L2_object_remove": [
-    "If {obj_a} were removed from the scene, what would be the occlusion status of {obj_b} from the current viewpoint? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "Suppose {obj_a} is taken away. Which best describes {obj_b}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion.",
-    "After removing {obj_a}, what is the occlusion status of {obj_b} from this viewpoint? Here, 'occluded' means blocked by another object; being partly outside the image frame does not count as occlusion."
+    "If {obj_a} were removed from the scene, what would be the occlusion status of {obj_b} from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "Suppose {obj_a} is taken away. Which best describes {obj_b}: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "After removing {obj_a}, what is the occlusion status of {obj_b} from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion."
   ],
   "L3_attachment_chain": [
     "Suppose {obj_a} were moved to a different location. Which of the following objects would also be displaced from their current positions?",
