@@ -44,50 +44,44 @@ _HORIZONTAL_DIRECTION_INDEX = {
 # ---------------------------------------------------------------------------
 
 _DIAGONAL_UNIT = 1.0 / np.sqrt(2.0)
+_MOVEMENT_SEARCH_MAGNITUDES_M = (3.0, 2.5, 2.0, 1.5, 1.0, 0.5)
+_MOVEMENT_AXIS_DIRECTIONS = (
+    np.array([1.0, 0.0, 0.0], dtype=np.float64),
+    np.array([-1.0, 0.0, 0.0], dtype=np.float64),
+    np.array([0.0, 1.0, 0.0], dtype=np.float64),
+    np.array([0.0, -1.0, 0.0], dtype=np.float64),
+)
+_MOVEMENT_DIAGONAL_DIRECTIONS = tuple(
+    np.array([dx * _DIAGONAL_UNIT, dy * _DIAGONAL_UNIT, 0.0], dtype=np.float64)
+    for dx, dy in ((1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0))
+)
 
-MOVEMENT_CANDIDATES = [
-    # Varied distances across all horizontal axes for movement diversity.
-    # Order is fixed so virtual operations remain reproducible.
-    np.array([0.5, 0.0, 0.0]),
-    np.array([-0.5, 0.0, 0.0]),
-    np.array([0.0, 0.5, 0.0]),
-    np.array([0.0, -0.5, 0.0]),
-    np.array([1.0, 0.0, 0.0]),
-    np.array([-1.0, 0.0, 0.0]),
-    np.array([0.0, 1.0, 0.0]),
-    np.array([0.0, -1.0, 0.0]),
-    np.array([1.5, 0.0, 0.0]),
-    np.array([-1.5, 0.0, 0.0]),
-    np.array([0.0, 1.5, 0.0]),
-    np.array([0.0, -1.5, 0.0]),
-    np.array([2.0, 0.0, 0.0]),
-    np.array([-2.0, 0.0, 0.0]),
-    np.array([0.0, 2.0, 0.0]),
-    np.array([0.0, -2.0, 0.0]),
-    np.array([2.5, 0.0, 0.0]),
-    np.array([-2.5, 0.0, 0.0]),
-    np.array([0.0, 2.5, 0.0]),
-    np.array([0.0, -2.5, 0.0]),
-    np.array([3.0, 0.0, 0.0]),
-    np.array([-3.0, 0.0, 0.0]),
-    np.array([0.0, 3.0, 0.0]),
-    np.array([0.0, -3.0, 0.0]),
-    *[
-        np.array(
-            [dx * magnitude * _DIAGONAL_UNIT, dy * magnitude * _DIAGONAL_UNIT, 0.0],
-            dtype=np.float64,
-        )
-        for magnitude in (0.5, 1.0, 1.5, 2.0, 2.5, 3.0)
-        for dx, dy in ((1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0))
-    ],
-]
 
-ORBIT_ROTATION_CANDIDATES = [
-    # Canonical representatives of the 3 unique horizontal orbit geometries.
-    (90, "clockwise", -90.0),
-    (90, "counterclockwise", 90.0),
-    (180, "clockwise", -180.0),
-]
+def _build_movement_candidates() -> list[np.ndarray]:
+    candidates: list[np.ndarray] = []
+    for magnitude in _MOVEMENT_SEARCH_MAGNITUDES_M:
+        for direction in itertools.chain(
+            _MOVEMENT_AXIS_DIRECTIONS,
+            _MOVEMENT_DIAGONAL_DIRECTIONS,
+        ):
+            candidates.append(np.round(direction * magnitude, 6).astype(np.float64))
+    return candidates
+
+
+MOVEMENT_CANDIDATES = _build_movement_candidates()
+
+
+def _build_orbit_rotation_candidates() -> list[tuple[int, str, float]]:
+    candidates = [(180, "clockwise", -180.0)]
+    for angle in (135, 90, 45):
+        candidates.extend([
+            (angle, "clockwise", -float(angle)),
+            (angle, "counterclockwise", float(angle)),
+        ])
+    return candidates
+
+
+ORBIT_ROTATION_CANDIDATES = _build_orbit_rotation_candidates()
 
 ROOM_BBOX_TOL = 1e-6
 
@@ -415,7 +409,11 @@ def find_meaningful_orbit_rotation(
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
-    """Enumerate physically valid orbit rotations around a static pivot."""
+    """Enumerate physically valid orbit rotations around a static pivot.
+
+    Candidates are evaluated from larger to smaller angles so downstream
+    generators can prefer higher-amplitude rotations deterministically.
+    """
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
     moved_ids = get_moved_object_ids(target_id, attachment_graph)
     if pivot_id in moved_ids:

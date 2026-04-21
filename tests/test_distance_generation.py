@@ -7,6 +7,7 @@ from src.qa_generator import (
     _default_templates,
     _find_stable_distance_move_for_relation,
     _generate_l2_distance_questions_for_object,
+    _iter_distance_move_deltas,
     generate_l1_distance,
     generate_l2_object_move,
 )
@@ -147,33 +148,92 @@ class DistanceRelationTests(unittest.TestCase):
 
 
 class DistanceMovementSearchTests(unittest.TestCase):
-    def test_find_stable_distance_move_picks_smallest_non_boundary_crossing(self) -> None:
+    def test_iter_distance_move_deltas_uses_descending_shared_move_order(self) -> None:
+        deltas = list(_iter_distance_move_deltas())
+
+        self.assertEqual(len(deltas), 48)
+        np.testing.assert_allclose(
+            deltas[:8],
+            [
+                np.array([3.0, 0.0, 0.0], dtype=np.float64),
+                np.array([-3.0, 0.0, 0.0], dtype=np.float64),
+                np.array([0.0, 3.0, 0.0], dtype=np.float64),
+                np.array([0.0, -3.0, 0.0], dtype=np.float64),
+                np.array([2.12132, 2.12132, 0.0], dtype=np.float64),
+                np.array([-2.12132, 2.12132, 0.0], dtype=np.float64),
+                np.array([2.12132, -2.12132, 0.0], dtype=np.float64),
+                np.array([-2.12132, -2.12132, 0.0], dtype=np.float64),
+            ],
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            deltas[-8:],
+            [
+                np.array([0.5, 0.0, 0.0], dtype=np.float64),
+                np.array([-0.5, 0.0, 0.0], dtype=np.float64),
+                np.array([0.0, 0.5, 0.0], dtype=np.float64),
+                np.array([0.0, -0.5, 0.0], dtype=np.float64),
+                np.array([0.353553, 0.353553, 0.0], dtype=np.float64),
+                np.array([-0.353553, 0.353553, 0.0], dtype=np.float64),
+                np.array([0.353553, -0.353553, 0.0], dtype=np.float64),
+                np.array([-0.353553, -0.353553, 0.0], dtype=np.float64),
+            ],
+            atol=1e-6,
+        )
+
+    def test_find_stable_distance_move_uses_first_descending_cross_bin_candidate(self) -> None:
         objects = [
             make_object(1, "box", (0.0, 0.0, 0.0)),
-            make_object(2, "chair", (1.35, 0.0, 0.0)),
+            make_object(2, "chair", (3.5, 0.0, 0.0)),
         ]
         relation = {
             "obj_a_id": 1,
             "obj_b_id": 2,
-            "distance_bin": "close (1.0-2.0m)",
-            "distance_bin_id": "close",
+            "distance_bin": "moderate (2.0-3.3m)",
+            "distance_bin_id": "moderate",
+            "distance_m": 2.5,
+            "distance_m_raw": 2.5,
         }
+        candidate_deltas = [
+            np.array([3.0, 0.0, 0.0], dtype=np.float64),
+            np.array([2.5, 0.0, 0.0], dtype=np.float64),
+        ]
 
-        delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
-            objects,
-            attachment_graph={},
-            target_id=1,
-            relation=relation,
-            room_bounds={
-                "bbox_min": [-2.0, -1.0, -1.0],
-                "bbox_max": [2.0, 1.0, 1.0],
-            },
-        )
+        with (
+            patch("src.qa_generator._iter_distance_move_deltas", return_value=candidate_deltas),
+            patch(
+                "src.qa_generator.compute_distance_details",
+                side_effect=[
+                    {
+                        "distance_bin": "close (1.0-2.0m)",
+                        "distance_bin_id": "close",
+                        "near_boundary": False,
+                    },
+                    {
+                        "distance_m": 1.4,
+                        "distance_bin": "close (1.0-2.0m)",
+                        "distance_bin_id": "close",
+                        "near_boundary": False,
+                    },
+                ],
+            ),
+        ):
+            delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                relation=relation,
+                room_bounds={
+                    "bbox_min": [-4.0, -4.0, -1.0],
+                    "bbox_max": [4.0, 4.0, 1.0],
+                },
+            )
 
         self.assertIsNotNone(delta)
-        self.assertEqual(delta.tolist(), [0.3, 0.0, 0.0])
-        self.assertEqual(old_label, "close (1.0-2.0m)")
-        self.assertEqual(new_label, "very close (<1.0m)")
+        assert delta is not None
+        self.assertEqual(delta.tolist(), [3.0, 0.0, 0.0])
+        self.assertEqual(old_label, "moderate (2.0-3.3m)")
+        self.assertEqual(new_label, "close (1.0-2.0m)")
         self.assertFalse(relation_unchanged)
 
     def test_find_stable_distance_move_skips_room_invalid_candidates(self) -> None:
@@ -379,8 +439,8 @@ class DistanceMovementSearchTests(unittest.TestCase):
 
         distance_questions = [q for q in questions if q.get("type") == "object_move_distance"]
         self.assertEqual(len(distance_questions), 1)
-        self.assertEqual(distance_questions[0]["correct_value"], "very close (<1.0m)")
-        self.assertEqual(distance_questions[0]["delta"], [0.3, 0.0, 0.0])
+        self.assertEqual(distance_questions[0]["correct_value"], "moderate (2.0-3.3m)")
+        self.assertEqual(distance_questions[0]["delta"], [-1.5, 0.0, 0.0])
 
     def test_generate_l2_distance_questions_skip_initial_pairs_below_threshold(self) -> None:
         mover = make_object(1, "box", (0.0, 0.0, 0.0))

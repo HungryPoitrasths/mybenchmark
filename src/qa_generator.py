@@ -199,15 +199,13 @@ ALLOCENTRIC_DIRECTION_NOTE = (
     "centers projected onto the floor plan."
 )
 YES_NO = ["Yes", "No"]
-DISTANCE_MOVE_SEARCH_STEP_M = 0.1
+DISTANCE_MOVE_SEARCH_STEP_M = 0.5
 DISTANCE_MOVE_SEARCH_MAX_M = 3.0
 MIN_DISTANCE_QUESTION_DISTANCE_M = 0.2
-DISTANCE_MOVE_DIRECTIONS = [
-    np.array([1.0, 0.0, 0.0], dtype=np.float64),
-    np.array([-1.0, 0.0, 0.0], dtype=np.float64),
-    np.array([0.0, 1.0, 0.0], dtype=np.float64),
-    np.array([0.0, -1.0, 0.0], dtype=np.float64),
-]
+DISTANCE_MOVE_DIRECTIONS = tuple(
+    np.asarray(delta / np.linalg.norm(delta), dtype=np.float64)
+    for delta in MOVEMENT_CANDIDATES[:8]
+)
 
 # Object-centric questions need a stable horizontal facing direction.
 MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE = 0.3
@@ -4501,11 +4499,9 @@ def _relation_distance_for_distance_questions(relation: dict[str, Any]) -> float
 
 
 def _iter_distance_move_deltas():
-    max_steps = int(round(DISTANCE_MOVE_SEARCH_MAX_M / DISTANCE_MOVE_SEARCH_STEP_M))
-    for step_idx in range(1, max_steps + 1):
-        magnitude = round(step_idx * DISTANCE_MOVE_SEARCH_STEP_M, 1)
-        for direction in DISTANCE_MOVE_DIRECTIONS:
-            yield np.round(direction * magnitude, 1)
+    for delta in MOVEMENT_CANDIDATES:
+        if np.allclose(delta[2], 0.0):
+            yield np.array(delta, dtype=np.float64, copy=True)
 
 
 def _find_stable_distance_move_for_relation(
@@ -4520,10 +4516,11 @@ def _find_stable_distance_move_for_relation(
 ) -> tuple[np.ndarray | None, str | None, str | None, bool]:
     """Find a valid move for distance questions.
 
-    Prefer the smallest stable one-bin crossing. If that fails and the relation
-    is attachment-mediated, fall back to the first physically valid move that
-    keeps the distance bin unchanged so the question can still be retained and
-    explicitly marked as unchanged.
+    Prefer the first stable one-bin crossing in canonical move order, which now
+    prioritizes larger horizontal moves before smaller ones. If that fails and
+    the relation is attachment-mediated, fall back to the first physically
+    valid move that keeps the distance bin unchanged so the question can still
+    be retained and explicitly marked as unchanged.
     """
     old_label = str(relation.get("distance_bin", "")).strip()
     old_bin_id = str(relation.get("distance_bin_id", "")).strip() or None
@@ -5968,6 +5965,9 @@ def generate_l2_object_rotate_object_centric(
                 if not valid_rotations:
                     continue
 
+                candidate_rotation_states: list[
+                    tuple[dict[str, Any], dict[int, dict[str, Any]], dict[str, Any], np.ndarray]
+                ] = []
                 for rotation in valid_rotations:
                     rotated_map = {o["id"]: o for o in rotation["objects"]}
                     rotated_query = rotated_map.get(query_obj_id)
@@ -5976,33 +5976,48 @@ def generate_l2_object_rotate_object_centric(
                     new_query_center = np.array(rotated_query["center"], dtype=float)
                     if not _has_stable_object_centric_facing(new_query_center, face_c):
                         continue
-                    query_delta = new_query_center - query_center
+                    candidate_rotation_states.append(
+                        (rotation, rotated_map, rotated_query, new_query_center)
+                    )
+                if not candidate_rotation_states:
+                    continue
 
-                    for ref in objects:
-                        if ref["id"] == query_obj_id or ref["id"] == face["id"]:
-                            continue
-                        if _has_duplicate_labels_for_distinct_objects(
-                            query_obj,
-                            ref,
-                            face,
-                            move_source,
-                        ):
-                            continue
+                for ref in objects:
+                    if ref["id"] == query_obj_id or ref["id"] == face["id"]:
+                        continue
+                    if _has_duplicate_labels_for_distinct_objects(
+                        query_obj,
+                        ref,
+                        face,
+                        move_source,
+                    ):
+                        continue
 
+                    ref_c = np.array(ref["center"], dtype=float)
+                    old_dir, old_amb = primary_direction_object_centric(
+                        query_center,
+                        face_c,
+                        ref_c,
+                        anchor_hull_xy=_object_bottom_hull_xy(query_obj),
+                        target_hull_xy=_object_bottom_hull_xy(ref),
+                        anchor_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                    )
+                    if old_dir not in horizontal_answer_pool or old_amb > 0.7:
+                        continue
+
+                    attachment_relation_propagated = any(
+                        participant_id in moved_ids and participant_id != move_source_id
+                        for participant_id in (query_obj_id, int(ref["id"]))
+                    )
+                    selected_question: dict[str, Any] | None = None
+                    fallback_question: dict[str, Any] | None = None
+
+                    for rotation, rotated_map, rotated_query, new_query_center in candidate_rotation_states:
                         rotated_ref = rotated_map.get(int(ref["id"]), ref)
-                        ref_c = np.array(ref["center"], dtype=float)
                         rotated_ref_c = np.array(rotated_ref["center"], dtype=float)
-                        old_dir, old_amb = primary_direction_object_centric(
-                            query_center,
-                            face_c,
-                            ref_c,
-                            anchor_hull_xy=_object_bottom_hull_xy(query_obj),
-                            target_hull_xy=_object_bottom_hull_xy(ref),
-                            anchor_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
-                            anchor_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
-                            target_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                            target_bbox_max=np.array(ref["bbox_max"], dtype=float),
-                        )
                         new_dir, new_amb = primary_direction_object_centric(
                             new_query_center,
                             face_c,
@@ -6014,18 +6029,15 @@ def generate_l2_object_rotate_object_centric(
                             target_bbox_min=np.array(rotated_ref["bbox_min"], dtype=float),
                             target_bbox_max=np.array(rotated_ref["bbox_max"], dtype=float),
                         )
-                        if old_dir not in horizontal_answer_pool or new_dir not in horizontal_answer_pool:
+                        if new_dir not in horizontal_answer_pool:
                             continue
                         if max(old_amb, new_amb) > 0.7:
                             continue
-                        attachment_relation_propagated = any(
-                            participant_id in moved_ids and participant_id != move_source_id
-                            for participant_id in (query_obj_id, int(ref["id"]))
-                        )
                         relation_unchanged = old_dir == new_dir
                         if relation_unchanged and not attachment_relation_propagated:
                             continue
 
+                        query_delta = new_query_center - query_center
                         tpl = random.choice(tpl_list)
                         question_text = tpl.format(
                             obj_move_source=_the(move_source["label"]),
@@ -6036,7 +6048,7 @@ def generate_l2_object_rotate_object_centric(
                             rotation_direction=rotation["rotation_direction"],
                         )
                         options, answer = generate_options(new_dir, horizontal_answer_pool)
-                        query_questions.append({
+                        question_payload = {
                             "level": "L2",
                             "type": "object_rotate_object_centric",
                             "reference_frame": "object_centric",
@@ -6068,7 +6080,18 @@ def generate_l2_object_rotate_object_centric(
                             "delta": query_delta.tolist(),
                             "relation_unchanged": relation_unchanged,
                             "has_attachment_chain": has_attachment_chain,
-                        })
+                        }
+                        if relation_unchanged:
+                            if fallback_question is None:
+                                fallback_question = question_payload
+                            continue
+                        selected_question = question_payload
+                        break
+
+                    if selected_question is not None:
+                        query_questions.append(selected_question)
+                    elif fallback_question is not None:
+                        query_questions.append(fallback_question)
 
             if query_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_questions)

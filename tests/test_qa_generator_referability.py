@@ -1440,28 +1440,140 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertTrue(question["attachment_remapped"])
         self.assertTrue(question["relation_unchanged"])
 
+    def test_rotate_generator_prefers_changed_rotation_over_larger_unchanged_attachment_fallback(self) -> None:
+        child = make_object(1, "cup")
+        parent = make_object(2, "table")
+        face = make_object(3, "lamp")
+        ref = make_object(4, "chair")
+        movement_objects = [child, parent, face, ref]
+        rotated_180 = [
+            {**child, "center": [1.0, 0.0, 1.0]},
+            {**parent, "center": [2.0, 0.0, 1.0]},
+            face,
+            ref,
+        ]
+        rotated_135 = [
+            {**child, "center": [0.0, 1.0, 1.0]},
+            {**parent, "center": [1.0, 1.0, 1.0]},
+            face,
+            ref,
+        ]
+        old_child_center = np.array(child["center"], dtype=np.float64)
+        changed_child_center = np.array(rotated_135[0]["center"], dtype=np.float64)
+        ref_center = np.array(ref["center"], dtype=np.float64)
+
+        def object_centric_direction(anchor_center, _face_center, target_center, **_kwargs):
+            anchor = np.asarray(anchor_center, dtype=np.float64)
+            target = np.asarray(target_center, dtype=np.float64)
+            if np.allclose(target, ref_center):
+                if np.allclose(anchor, changed_child_center):
+                    return "front", 0.1
+                if np.allclose(anchor, old_child_center):
+                    return "left", 0.1
+            return "left", 0.9
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator.find_meaningful_orbit_rotation",
+                side_effect=lambda _objects, _graph, target_id, pivot_id, **_kwargs: (
+                    [
+                        {
+                            "angle": 180,
+                            "rotation_direction": "clockwise",
+                            "signed_angle": -180,
+                            "objects": rotated_180,
+                        },
+                        {
+                            "angle": 135,
+                            "rotation_direction": "clockwise",
+                            "signed_angle": -135,
+                            "objects": rotated_135,
+                        },
+                    ]
+                    if target_id == 2 and pivot_id == 3
+                    else []
+                ),
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                side_effect=object_centric_direction,
+            ),
+        ):
+            questions = generate_l2_object_rotate_object_centric(
+                objects=[parent, child, face, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_rotate_object_centric": [
+                        "rotate {obj_move_source}: where is {obj_ref} from {obj_query} while facing {obj_face}?"
+                    ]
+                },
+                movement_objects=movement_objects,
+                object_map={obj["id"]: obj for obj in movement_objects},
+                attachment_referable_object_ids=[1, 2, 3, 4],
+            )
+
+        question = next(q for q in questions if q.get("query_obj_id") == 1)
+        self.assertEqual(question["rotation_angle"], 135)
+        self.assertEqual(question["rotation_direction"], "clockwise")
+        self.assertFalse(question["relation_unchanged"])
+
     def test_downward_propagated_rotate_questions_can_be_kept_when_answer_is_unchanged(self) -> None:
         child = make_object(1, "cup")
         parent = make_object(2, "table")
         face = make_object(3, "lamp")
         ref = make_object(4, "chair")
         objects = [child, parent, face, ref]
-        rotated_objects = [make_object(1, "cup"), make_object(2, "table"), face, ref]
+        rotated_180 = [
+            {**make_object(1, "cup"), "center": [1.0, 0.0, 1.0]},
+            {**make_object(2, "table"), "center": [2.0, 0.0, 1.0]},
+            face,
+            ref,
+        ]
+        rotated_135 = [
+            {**make_object(1, "cup"), "center": [0.0, 1.0, 1.0]},
+            {**make_object(2, "table"), "center": [1.0, 1.0, 1.0]},
+            face,
+            ref,
+        ]
+        old_child_center = np.array(child["center"], dtype=np.float64)
+        ref_center = np.array(ref["center"], dtype=np.float64)
+
+        def object_centric_direction(anchor_center, _face_center, target_center, **_kwargs):
+            anchor = np.asarray(anchor_center, dtype=np.float64)
+            target = np.asarray(target_center, dtype=np.float64)
+            if np.allclose(anchor, old_child_center) and np.allclose(target, ref_center):
+                return "left", 0.1
+            return "left", 0.9
 
         with (
             patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
             patch(
                 "src.qa_generator.find_meaningful_orbit_rotation",
-                return_value=[{
-                    "angle": 90,
-                    "rotation_direction": "clockwise",
-                    "signed_angle": -90,
-                    "objects": rotated_objects,
-                }],
+                side_effect=lambda _objects, _graph, target_id, pivot_id, **_kwargs: (
+                    [
+                        {
+                            "angle": 180,
+                            "rotation_direction": "clockwise",
+                            "signed_angle": -180,
+                            "objects": rotated_180,
+                        },
+                        {
+                            "angle": 135,
+                            "rotation_direction": "clockwise",
+                            "signed_angle": -135,
+                            "objects": rotated_135,
+                        },
+                    ]
+                    if target_id == 2 and pivot_id == 3
+                    else []
+                ),
             ),
             patch(
                 "src.qa_generator.primary_direction_object_centric",
-                return_value=("left", 0.1),
+                side_effect=object_centric_direction,
             ),
         ):
             questions = generate_l2_object_rotate_object_centric(
@@ -1487,6 +1599,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(question["old_correct_value"], "left")
         self.assertEqual(question["new_correct_value"], "left")
         self.assertTrue(question["has_attachment_chain"])
+        self.assertEqual(question["rotation_angle"], 180)
 
     def test_rotate_parent_source_can_query_attached_child_without_upward_remap(self) -> None:
         child = make_object(1, "cup")

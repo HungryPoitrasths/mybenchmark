@@ -261,13 +261,44 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
             atol=1e-6,
         )
 
-    def test_find_meaningful_movement_prefers_90_degree_direction_change(self) -> None:
+    def test_find_meaningful_movement_prefers_larger_90_degree_candidate_first(self) -> None:
         objects = [
             make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1), label="mover"),
             make_object(2, (5.0, 5.0, 0.0), (4.9, 4.9, -0.1), (5.1, 5.1, 0.1), label="ref"),
         ]
         candidates = [
+            np.array([3.0, 0.0, 0.0], dtype=np.float64),
             np.array([0.5, 0.0, 0.0], dtype=np.float64),
+        ]
+
+        with (
+            patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("right")],
+                ],
+            ),
+        ):
+            delta, changed = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-10.0, -10.0, -10.0], "bbox_max": [10.0, 10.0, 10.0]},
+            )
+
+        np.testing.assert_allclose(delta, candidates[0])
+        self.assertEqual(changed[0]["changes"]["direction_b_rel_a"]["new"], "right")
+
+    def test_find_meaningful_movement_prefers_90_degree_over_larger_45_degree_change(self) -> None:
+        objects = [
+            make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1), label="mover"),
+            make_object(2, (5.0, 5.0, 0.0), (4.9, 4.9, -0.1), (5.1, 5.1, 0.1), label="ref"),
+        ]
+        candidates = [
+            np.array([3.0, 0.0, 0.0], dtype=np.float64),
             np.array([0.0, 0.5, 0.0], dtype=np.float64),
         ]
 
@@ -491,9 +522,38 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
 
         self.assertEqual(
             without_collision_keys,
-            {(90, "counterclockwise"), (180, "clockwise")},
+            {
+                (180, "clockwise"),
+                (135, "clockwise"),
+                (135, "counterclockwise"),
+                (90, "counterclockwise"),
+                (45, "clockwise"),
+                (45, "counterclockwise"),
+            },
         )
-        self.assertEqual(with_collision_keys, {(180, "clockwise")})
+        self.assertEqual(
+            with_collision_keys,
+            {
+                (180, "clockwise"),
+                (135, "clockwise"),
+                (135, "counterclockwise"),
+                (45, "clockwise"),
+                (45, "counterclockwise"),
+            },
+        )
+        self.assertEqual(
+            [
+                (entry["angle"], entry["rotation_direction"])
+                for entry in rotations_with_collision
+            ],
+            [
+                (180, "clockwise"),
+                (135, "clockwise"),
+                (135, "counterclockwise"),
+                (45, "clockwise"),
+                (45, "counterclockwise"),
+            ],
+        )
 
 
 if __name__ == "__main__":
