@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -40,6 +41,21 @@ def make_camera_pose() -> CameraPose:
         rotation=np.eye(3, dtype=np.float64),
         translation=np.zeros(3, dtype=np.float64),
     )
+
+
+def make_direction_relation(
+    direction: str,
+    *,
+    distance_bin: str = "near",
+    distance_bin_id: str = "near",
+) -> dict:
+    return {
+        "obj_a_id": 1,
+        "obj_b_id": 2,
+        "direction_b_rel_a": direction,
+        "distance_bin": distance_bin,
+        "distance_bin_id": distance_bin_id,
+    }
 
 
 class VirtualOpsRoomAndCollisionTests(unittest.TestCase):
@@ -245,6 +261,102 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
             atol=1e-6,
         )
 
+    def test_find_meaningful_movement_prefers_90_degree_direction_change(self) -> None:
+        objects = [
+            make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1), label="mover"),
+            make_object(2, (5.0, 5.0, 0.0), (4.9, 4.9, -0.1), (5.1, 5.1, 0.1), label="ref"),
+        ]
+        candidates = [
+            np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            np.array([0.0, 0.5, 0.0], dtype=np.float64),
+        ]
+
+        with (
+            patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("front-right")],
+                    [make_direction_relation("right")],
+                ],
+            ),
+        ):
+            delta, changed = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-10.0, -10.0, -10.0], "bbox_max": [10.0, 10.0, 10.0]},
+            )
+
+        np.testing.assert_allclose(delta, candidates[1])
+        self.assertEqual(changed[0]["changes"]["direction_b_rel_a"]["new"], "right")
+
+    def test_find_meaningful_movement_falls_back_to_first_45_degree_change(self) -> None:
+        objects = [
+            make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1), label="mover"),
+            make_object(2, (5.0, 5.0, 0.0), (4.9, 4.9, -0.1), (5.1, 5.1, 0.1), label="ref"),
+        ]
+        candidates = [
+            np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            np.array([0.0, 0.5, 0.0], dtype=np.float64),
+        ]
+
+        with (
+            patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("front-right")],
+                    [make_direction_relation("front-left")],
+                ],
+            ),
+        ):
+            delta, changed = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-10.0, -10.0, -10.0], "bbox_max": [10.0, 10.0, 10.0]},
+            )
+
+        np.testing.assert_allclose(delta, candidates[0])
+        self.assertEqual(changed[0]["changes"]["direction_b_rel_a"]["new"], "front-right")
+
+    def test_find_meaningful_movement_ignores_non_horizontal_relation_changes(self) -> None:
+        objects = [
+            make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1), label="mover"),
+            make_object(2, (5.0, 5.0, 0.0), (4.9, 4.9, -0.1), (5.1, 5.1, 0.1), label="ref"),
+        ]
+        candidates = [
+            np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            np.array([0.0, 0.5, 0.0], dtype=np.float64),
+        ]
+
+        with (
+            patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front", distance_bin="near", distance_bin_id="near")],
+                    [make_direction_relation("front", distance_bin="moderate", distance_bin_id="moderate")],
+                    [make_direction_relation("above", distance_bin="near", distance_bin_id="near")],
+                ],
+            ),
+        ):
+            delta, changed = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-10.0, -10.0, -10.0], "bbox_max": [10.0, 10.0, 10.0]},
+            )
+
+        self.assertIsNone(delta)
+        self.assertEqual(changed, [])
+
     def test_find_meaningful_movement_skips_bbox_out_of_room_candidate(self) -> None:
         objects = [
             make_object(1, (0.75, 0.0, 0.0), (0.5, -0.1, -0.1), (1.0, 0.1, 0.1), label="mover"),
@@ -255,13 +367,29 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
             "bbox_max": [1.0, 1.0, 1.0],
         }
 
-        delta, changed = find_meaningful_movement(
-            objects,
-            attachment_graph={},
-            target_id=1,
-            camera_pose=make_camera_pose(),
-            room_bounds=room_bounds,
-        )
+        with (
+            patch(
+                "src.virtual_ops.MOVEMENT_CANDIDATES",
+                [
+                    np.array([0.5, 0.0, 0.0], dtype=np.float64),
+                    np.array([-0.5, 0.0, 0.0], dtype=np.float64),
+                ],
+            ),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("right")],
+                ],
+            ),
+        ):
+            delta, changed = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds=room_bounds,
+            )
 
         self.assertIsNotNone(delta)
         self.assertEqual(delta.tolist(), [-0.5, 0.0, 0.0])
@@ -277,19 +405,48 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
             make_object(4, (0.6, 0.0, 0.0), (0.45, -0.1, -0.1), (0.85, 0.1, 0.1), label="obstacle"),
         ]
 
-        delta_without_collision, _ = find_meaningful_movement(
-            objects,
-            attachment_graph={},
-            target_id=1,
-            camera_pose=make_camera_pose(),
-        )
-        delta_with_collision, _ = find_meaningful_movement(
-            objects,
-            attachment_graph={},
-            target_id=1,
-            camera_pose=make_camera_pose(),
-            collision_objects=collision_objects,
-        )
+        candidates = [
+            np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            np.array([-0.5, 0.0, 0.0], dtype=np.float64),
+        ]
+
+        with (
+            patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("front-right")],
+                    [make_direction_relation("front-left")],
+                ],
+            ),
+        ):
+            delta_without_collision, _ = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-3.0, -1.0, -1.0], "bbox_max": [3.0, 1.0, 1.0]},
+            )
+
+        with (
+            patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
+            patch(
+                "src.virtual_ops.compute_all_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("front-left")],
+                ],
+            ),
+        ):
+            delta_with_collision, _ = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-3.0, -1.0, -1.0], "bbox_max": [3.0, 1.0, 1.0]},
+                collision_objects=collision_objects,
+            )
 
         self.assertEqual(delta_without_collision.tolist(), [0.5, 0.0, 0.0])
         self.assertEqual(delta_with_collision.tolist(), [-0.5, 0.0, 0.0])

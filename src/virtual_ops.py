@@ -26,12 +26,17 @@ from .utils.coordinate_transform import (
 from .relation_engine import (
     DISTANCE_SURFACE_POINTS_KEY,
     DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
+    HORIZONTAL_DIRECTIONS,
     compute_all_relations,
     find_changed_relations,
 )
 from .support_graph import get_attachment_chain
 
 logger = logging.getLogger(__name__)
+
+_HORIZONTAL_DIRECTION_INDEX = {
+    label: idx for idx, label in enumerate(HORIZONTAL_DIRECTIONS)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +307,27 @@ def has_terminal_bbox_collision(
     return False
 
 
+def _horizontal_direction_change_steps(change: dict[str, Any]) -> int:
+    direction_change = change.get("changes", {}).get("direction_b_rel_a")
+    if not isinstance(direction_change, dict):
+        return 0
+
+    old_idx = _HORIZONTAL_DIRECTION_INDEX.get(str(direction_change.get("old")))
+    new_idx = _HORIZONTAL_DIRECTION_INDEX.get(str(direction_change.get("new")))
+    if old_idx is None or new_idx is None:
+        return 0
+
+    direct_steps = abs(new_idx - old_idx)
+    return min(direct_steps, len(HORIZONTAL_DIRECTIONS) - direct_steps)
+
+
+def _max_horizontal_direction_change_steps(changed_relations: list[dict]) -> int:
+    return max(
+        (_horizontal_direction_change_steps(change) for change in changed_relations),
+        default=0,
+    )
+
+
 def find_meaningful_movement(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -310,14 +336,16 @@ def find_meaningful_movement(
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
-    """Search for a movement vector that changes at least one spatial relation.
+    """Search for a movement vector with a meaningful horizontal direction change.
 
-    Returns (delta_vector, list_of_changed_relations) or (None, []).
+    Prefer the first legal delta with at least one >=90° horizontal direction
+    change, then the first legal delta with a 45° horizontal direction change.
+    Returns (None, []) if no legal delta meets either direction threshold.
     """
-    # No depth/occlusion needed — we only need direction/distance changes.
     original_relations = compute_all_relations(objects, camera_pose, None, None)
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
     moved_ids = get_moved_object_ids(target_id, attachment_graph)
+    first_45_degree_change: tuple[np.ndarray, list[dict]] | None = None
 
     for delta in MOVEMENT_CANDIDATES:
         new_objects = apply_movement(objects, attachment_graph, target_id, delta)
@@ -333,8 +361,14 @@ def find_meaningful_movement(
         new_relations = compute_all_relations(new_objects, camera_pose, None, None)
         changed = find_changed_relations(original_relations, new_relations)
         if changed:
-            return delta, changed
+            direction_steps = _max_horizontal_direction_change_steps(changed)
+            if direction_steps >= 2:
+                return delta, changed
+            if direction_steps == 1 and first_45_degree_change is None:
+                first_45_degree_change = (delta, changed)
 
+    if first_45_degree_change is not None:
+        return first_45_degree_change
     return None, []
 
 

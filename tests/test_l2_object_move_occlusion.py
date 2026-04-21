@@ -8,6 +8,7 @@ from src.qa_generator import (
     _counterfactual_occlusion_backend,
     _find_object_move_occlusion_changes,
     _make_l1_occlusion_metrics,
+    _select_object_move_state,
     generate_l2_object_move,
 )
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
@@ -137,6 +138,28 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(changes[0]["target_obj_label"], "sofa")
         self.assertEqual(changes[0]["old"]["visibility_status"], "not occluded")
         self.assertEqual(changes[0]["new"]["visibility_status"], "not visible")
+
+    def test_select_object_move_state_keeps_attachment_fallback_when_no_meaningful_delta(self) -> None:
+        objects = [
+            make_object(1, "bed", (0.0, 0.0, 2.0)),
+            make_object(2, "pillow", (0.2, 0.0, 2.1)),
+        ]
+        fallback_state = object()
+
+        with (
+            patch("src.qa_generator._find_object_move_delta_and_changes", return_value=(None, [])),
+            patch("src.qa_generator._first_valid_object_move_state", return_value=fallback_state) as fallback_mock,
+        ):
+            selected_state = _select_object_move_state(
+                objects,
+                attachment_graph={1: [2]},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                allow_unchanged_attachment=True,
+            )
+
+        self.assertIs(selected_state, fallback_state)
+        fallback_mock.assert_called_once()
 
     def test_generate_l2_object_move_emits_single_target_l1_style_occlusion_question(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
