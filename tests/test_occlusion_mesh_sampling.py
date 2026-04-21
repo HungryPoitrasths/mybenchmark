@@ -1064,7 +1064,7 @@ class L1OcclusionQuestionTests(unittest.TestCase):
             depth_image=None,
             depth_intrinsics=None,
             occlusion_backend="mesh_ray",
-            ray_caster=_FixedVisibilityStatsCaster(visible_count=507, valid_count=512),
+            ray_caster=_FixedVisibilityStatsCaster(visible_count=510, valid_count=512),
             instance_mesh_data=instance_mesh_data,
         )
         occluded_metrics = _compute_l1_occlusion_metrics(
@@ -1089,19 +1089,19 @@ class L1OcclusionQuestionTests(unittest.TestCase):
         )
 
         self.assertEqual(not_occluded_metrics.decision, "not occluded")
-        self.assertLess(not_occluded_metrics.occlusion_ratio_in_frame, 0.01)
-        self.assertEqual(not_occluded_metrics.occluded_in_frame_count, 5)
+        self.assertLess(not_occluded_metrics.occlusion_ratio_in_frame, 0.005)
+        self.assertEqual(not_occluded_metrics.occluded_in_frame_count, 2)
         self.assertEqual(occluded_metrics.decision, "occluded")
         self.assertGreater(occluded_metrics.occlusion_ratio_in_frame, 0.10)
         self.assertEqual(occluded_metrics.occluded_in_frame_count, 52)
         self.assertEqual(not_visible_metrics.decision, "not visible")
         self.assertEqual(not_visible_metrics.not_visible_probe_visible_count, 0)
 
-    def test_l1_occlusion_requires_strictly_less_than_one_percent_for_not_occluded(self) -> None:
+    def test_l1_occlusion_requires_strictly_less_than_half_percent_for_not_occluded(self) -> None:
         not_occluded_metrics = _make_l1_occlusion_metrics(
             projected_area=500.0,
             in_frame_ratio=1.0,
-            occlusion_ratio_in_frame=0.009,
+            occlusion_ratio_in_frame=0.004,
             valid_in_frame_count=512,
             sampled_point_count=512,
             in_frame_sample_count=512,
@@ -1110,7 +1110,7 @@ class L1OcclusionQuestionTests(unittest.TestCase):
         boundary_metrics = _make_l1_occlusion_metrics(
             projected_area=500.0,
             in_frame_ratio=1.0,
-            occlusion_ratio_in_frame=0.01,
+            occlusion_ratio_in_frame=0.005,
             valid_in_frame_count=512,
             sampled_point_count=512,
             in_frame_sample_count=512,
