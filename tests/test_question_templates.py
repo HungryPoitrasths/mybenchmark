@@ -133,23 +133,126 @@ def make_removed_object_occlusion_probe_metrics(
     }
 
 
-class _SequenceFirstHitCaster:
-    def __init__(self, hit_tri_ids: list[int], blocker_tri_id: int) -> None:
+_TARGET_TRI_ID = 0
+_REMOVED_TRI_ID = 99
+_OTHER_TRI_ID = 50
+
+
+def make_object_remove_probe_instance_mesh_data(target_points: np.ndarray) -> SimpleNamespace:
+    points = np.asarray(target_points, dtype=np.float64)
+    barycentrics = np.tile(
+        np.asarray([[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64),
+        (len(points), 1),
+    )
+    return SimpleNamespace(
+        vertices=np.asarray(
+            [
+                [-1.0, -1.0, 2.0],
+                [1.0, -1.0, 2.0],
+                [0.0, 1.0, 2.0],
+            ],
+            dtype=np.float64,
+        ),
+        faces=np.asarray([[0, 1, 2]], dtype=np.int64),
+        triangle_ids_by_instance={
+            1: np.asarray([_REMOVED_TRI_ID], dtype=np.int64),
+            2: np.asarray([_TARGET_TRI_ID], dtype=np.int64),
+        },
+        boundary_triangle_ids_by_instance={},
+        surface_points_by_instance={2: points},
+        surface_triangle_ids_by_instance={
+            2: np.full(len(points), _TARGET_TRI_ID, dtype=np.int64),
+        },
+        surface_barycentrics_by_instance={2: barycentrics},
+    )
+
+
+def make_object_remove_target_points(count: int = 20) -> np.ndarray:
+    return np.asarray(
+        [[float(x), 0.0, 2.0] for x in np.linspace(-0.2, 0.2, int(count))],
+        dtype=np.float64,
+    )
+
+
+def _visible_target_path(sample_dist: float) -> list[tuple[int, float]]:
+    return [(_TARGET_TRI_ID, float(sample_dist))]
+
+
+def _removed_blocking_path(sample_dist: float) -> list[tuple[int, float]]:
+    return [
+        (_REMOVED_TRI_ID, max(0.1, float(sample_dist) - 0.2)),
+        (_TARGET_TRI_ID, float(sample_dist)),
+    ]
+
+
+def _other_object_path(sample_dist: float) -> list[tuple[int, float]]:
+    return [
+        (_OTHER_TRI_ID, max(0.1, float(sample_dist) - 0.2)),
+        (_TARGET_TRI_ID, float(sample_dist)),
+    ]
+
+
+def _mixed_boundary_path(sample_dist: float) -> list[tuple[int, float]]:
+    return [
+        (_TARGET_TRI_ID, max(0.1, float(sample_dist) - 0.4)),
+        (_REMOVED_TRI_ID, max(0.2, float(sample_dist) - 0.2)),
+        (_TARGET_TRI_ID, float(sample_dist)),
+    ]
+
+
+def _local_refine_points(count: int = 12) -> np.ndarray:
+    return np.asarray(
+        [[-0.05 + 0.01 * idx, 0.0, 2.0] for idx in range(int(count))],
+        dtype=np.float64,
+    )
+
+
+class _SequenceHitPathCaster:
+    def __init__(
+        self,
+        hit_tri_ids: list[int],
+        blocker_tri_id: int,
+        target_tri_id: int = _TARGET_TRI_ID,
+    ) -> None:
         self._hit_tri_ids = list(hit_tri_ids)
         self._blocker_tri_id = int(blocker_tri_id)
+        self._target_tri_id = int(target_tri_id)
         self._index = 0
 
-    def first_visible_hit(self, origin, direction, ignored_tri_ids=None):
+    def _hits_up_to_distance(self, origin, direction, max_distance, ignored_tri_ids=None):
         tri_id = self._hit_tri_ids[self._index]
         self._index += 1
         direction_arr = np.asarray(direction, dtype=np.float64)
         dist = float(np.linalg.norm(direction_arr))
-        hit_dist = dist - 0.1 if int(tri_id) == self._blocker_tri_id else dist
-        return (
-            np.asarray(origin, dtype=np.float64) + direction_arr,
-            int(tri_id),
-            hit_dist,
-        )
+        if int(tri_id) == self._blocker_tri_id:
+            return [
+                (self._blocker_tri_id, max(0.1, dist - 0.1)),
+                (self._target_tri_id, dist),
+            ]
+        return [(self._target_tri_id, dist)]
+
+
+class _ScriptedHitPathCaster:
+    def __init__(self, path_builders) -> None:
+        self._path_builders = list(path_builders)
+        self._index = 0
+
+    def _hits_up_to_distance(self, origin, direction, max_distance, ignored_tri_ids=None):
+        direction_arr = np.asarray(direction, dtype=np.float64)
+        sample_dist = float(np.linalg.norm(direction_arr))
+        if not np.isfinite(sample_dist) or sample_dist <= 1e-12:
+            return []
+        if self._index >= len(self._path_builders):
+            builder = _visible_target_path
+        else:
+            builder = self._path_builders[self._index]
+        self._index += 1
+        ignored = set(ignored_tri_ids or set())
+        return [
+            (int(tri_id), float(dist))
+            for tri_id, dist in builder(sample_dist)
+            if float(dist) <= float(max_distance) and int(tri_id) not in ignored
+        ]
 
 
 class QuestionTemplateTests(unittest.TestCase):
@@ -565,21 +668,8 @@ class QuestionTemplateTests(unittest.TestCase):
     def test_removed_object_occludes_target_mesh_requires_strictly_more_than_five_percent_hits(self) -> None:
         camera_pose = make_camera_pose()
         intrinsics = make_camera_intrinsics()
-        target_points = np.asarray(
-            [[float(x), 0.0, 2.0] for x in np.linspace(-0.2, 0.2, 20)],
-            dtype=np.float64,
-        )
-        barycentrics = np.tile(
-            np.asarray([[1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]], dtype=np.float64),
-            (20, 1),
-        )
-        instance_mesh_data = SimpleNamespace(
-            surface_points_by_instance={2: target_points},
-            surface_triangle_ids_by_instance={2: np.zeros(20, dtype=np.int64)},
-            surface_barycentrics_by_instance={2: barycentrics},
-            triangle_ids_by_instance={1: np.asarray([99], dtype=np.int64)},
-            boundary_triangle_ids_by_instance={},
-        )
+        target_points = make_object_remove_target_points()
+        instance_mesh_data = make_object_remove_probe_instance_mesh_data(target_points)
         removed_obj = {"id": 1, "label": "chair"}
         target_obj = {
             "id": 2,
@@ -593,7 +683,10 @@ class QuestionTemplateTests(unittest.TestCase):
             target_obj=target_obj,
             camera_pose=camera_pose,
             color_intrinsics=intrinsics,
-            ray_caster=_SequenceFirstHitCaster([99] + [0] * 19, blocker_tri_id=99),
+            ray_caster=_SequenceHitPathCaster(
+                [_REMOVED_TRI_ID] + [_TARGET_TRI_ID] * 19,
+                blocker_tri_id=_REMOVED_TRI_ID,
+            ),
             instance_mesh_data=instance_mesh_data,
         )
         above_metrics = _removed_object_occludes_target_mesh(
@@ -601,7 +694,10 @@ class QuestionTemplateTests(unittest.TestCase):
             target_obj=target_obj,
             camera_pose=camera_pose,
             color_intrinsics=intrinsics,
-            ray_caster=_SequenceFirstHitCaster([99, 99] + [0] * 18, blocker_tri_id=99),
+            ray_caster=_SequenceHitPathCaster(
+                [_REMOVED_TRI_ID, _REMOVED_TRI_ID] + [_TARGET_TRI_ID] * 18,
+                blocker_tri_id=_REMOVED_TRI_ID,
+            ),
             instance_mesh_data=instance_mesh_data,
         )
 
@@ -615,6 +711,198 @@ class QuestionTemplateTests(unittest.TestCase):
         self.assertGreater(above_metrics["blocking_hit_ratio"], 0.05)
         self.assertTrue(above_metrics["passes_threshold"])
         self.assertEqual(above_metrics["reason_code"], "blocking_ratio_threshold_met")
+
+    def test_removed_object_occludes_target_mesh_refines_mixed_boundary_to_blocking(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        target_points = make_object_remove_target_points()
+        instance_mesh_data = make_object_remove_probe_instance_mesh_data(target_points)
+        removed_obj = {"id": 1, "label": "chair"}
+        target_obj = {
+            "id": 2,
+            "label": "lamp",
+            "bbox_min": [-0.2, -0.1, 1.9],
+            "bbox_max": [0.2, 0.1, 2.1],
+        }
+        ray_caster = _ScriptedHitPathCaster(
+            [_mixed_boundary_path] + [_visible_target_path] * 19
+            + [_removed_blocking_path] * 12
+        )
+
+        with patch(
+            "src.qa_generator._local_triangle_resamples",
+            return_value=(_local_refine_points(), np.empty((0, 3), dtype=np.float64)),
+        ) as resample_mock:
+            metrics = _removed_object_occludes_target_mesh(
+                removed_obj=removed_obj,
+                target_obj=target_obj,
+                camera_pose=camera_pose,
+                color_intrinsics=intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+
+        self.assertEqual(resample_mock.call_count, 1)
+        self.assertEqual(metrics["valid_probe_count"], 31)
+        self.assertEqual(metrics["blocking_hit_count"], 12)
+        self.assertGreater(metrics["blocking_hit_ratio"], 0.05)
+        self.assertTrue(metrics["passes_threshold"])
+
+    def test_removed_object_occludes_target_mesh_refines_mixed_boundary_below_threshold(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        target_points = make_object_remove_target_points()
+        instance_mesh_data = make_object_remove_probe_instance_mesh_data(target_points)
+        removed_obj = {"id": 1, "label": "chair"}
+        target_obj = {
+            "id": 2,
+            "label": "lamp",
+            "bbox_min": [-0.2, -0.1, 1.9],
+            "bbox_max": [0.2, 0.1, 2.1],
+        }
+        ray_caster = _ScriptedHitPathCaster(
+            [_mixed_boundary_path] + [_visible_target_path] * 19
+            + [_removed_blocking_path] + [_visible_target_path] * 11
+        )
+
+        with patch(
+            "src.qa_generator._local_triangle_resamples",
+            return_value=(_local_refine_points(), np.empty((0, 3), dtype=np.float64)),
+        ) as resample_mock:
+            metrics = _removed_object_occludes_target_mesh(
+                removed_obj=removed_obj,
+                target_obj=target_obj,
+                camera_pose=camera_pose,
+                color_intrinsics=intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+
+        self.assertEqual(resample_mock.call_count, 1)
+        self.assertEqual(metrics["valid_probe_count"], 31)
+        self.assertEqual(metrics["blocking_hit_count"], 1)
+        self.assertLess(metrics["blocking_hit_ratio"], 0.05)
+        self.assertFalse(metrics["passes_threshold"])
+        self.assertEqual(metrics["reason_code"], "blocking_ratio_below_threshold")
+
+    def test_object_remove_generation_keeps_candidate_when_refined_precheck_passes(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        target_points = make_object_remove_target_points()
+        instance_mesh_data = make_object_remove_probe_instance_mesh_data(target_points)
+        objects = [
+            {"id": 1, "label": "chair", "center": [0.0, 0.0, 2.0]},
+            {
+                "id": 2,
+                "label": "lamp",
+                "center": [1.0, 0.0, 2.0],
+                "bbox_min": [-0.2, -0.1, 1.9],
+                "bbox_max": [0.2, 0.1, 2.1],
+            },
+            {"id": 3, "label": "cabinet", "center": [2.0, 0.0, 2.0]},
+        ]
+        ray_caster = _ScriptedHitPathCaster(
+            [_mixed_boundary_path] + [_visible_target_path] * 19
+            + [_removed_blocking_path] * 12
+        )
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
+                ],
+            ) as visibility_mock,
+            patch(
+                "src.qa_generator._local_triangle_resamples",
+                return_value=(_local_refine_points(), np.empty((0, 3), dtype=np.float64)),
+            ),
+        ):
+            questions = generate_l2_object_remove(
+                objects=objects,
+                attachment_graph={},
+                camera_pose=camera_pose,
+                templates={
+                    "L2_object_remove": [
+                        "If {obj_a} were removed, what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+
+        self.assertEqual(visibility_mock.call_count, 4)
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["removed_obj_label"], "chair")
+        self.assertEqual(questions[0]["obj_b_label"], "lamp")
+        self.assertEqual(questions[0]["correct_value"], "occluded")
+        self.assertTrue(
+            questions[0]["removed_object_occlusion_probe_metrics"]["passes_threshold"],
+        )
+
+    def test_object_remove_generation_skips_candidate_when_refined_precheck_stays_below_threshold(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        target_points = make_object_remove_target_points()
+        instance_mesh_data = make_object_remove_probe_instance_mesh_data(target_points)
+        objects = [
+            {"id": 1, "label": "chair", "center": [0.0, 0.0, 2.0]},
+            {
+                "id": 2,
+                "label": "lamp",
+                "center": [1.0, 0.0, 2.0],
+                "bbox_min": [-0.2, -0.1, 1.9],
+                "bbox_max": [0.2, 0.1, 2.1],
+            },
+            {"id": 3, "label": "cabinet", "center": [2.0, 0.0, 2.0]},
+        ]
+        ray_caster = _ScriptedHitPathCaster(
+            [_mixed_boundary_path] + [_visible_target_path] * 19
+            + [_other_object_path] * 12
+        )
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                ],
+            ) as visibility_mock,
+            patch(
+                "src.qa_generator._local_triangle_resamples",
+                return_value=(_local_refine_points(), np.empty((0, 3), dtype=np.float64)),
+            ),
+        ):
+            questions = generate_l2_object_remove(
+                objects=objects,
+                attachment_graph={},
+                camera_pose=camera_pose,
+                templates={
+                    "L2_object_remove": [
+                        "If {obj_a} were removed, what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+
+        self.assertEqual(visibility_mock.call_count, 3)
+        self.assertEqual(questions, [])
 
     def test_object_remove_skips_candidates_when_removed_object_not_occluding_target_mesh(self) -> None:
         camera_pose = make_camera_pose()

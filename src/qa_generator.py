@@ -221,7 +221,7 @@ L1_OCCLUSION_NOT_OCCLUDED_MAX = 0.005
 L1_OCCLUSION_OCCLUDED_MIN = 0.10
 L1_OCCLUSION_OCCLUDED_MIN_COUNT = 16
 L1_OCCLUSION_SAMPLE_COUNT = 512
-L1_NOT_VISIBLE_PROBE_RAY_COUNT = 64
+L1_NOT_VISIBLE_PROBE_RAY_COUNT = 512
 L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT = 512
 L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
@@ -1628,6 +1628,44 @@ def _surface_probe_subset(
     return points[indices], tri_ids, barycentrics
 
 
+def _classify_removed_object_probe_hit_path(
+    hits: list[tuple[int, float]],
+    expected_dist: float,
+    target_tri_ids: set[int],
+    removed_tri_ids: set[int],
+    hit_epsilon: float,
+) -> str:
+    base_classification = _classify_hit_path(
+        hits,
+        expected_dist=float(expected_dist),
+        target_tri_ids=target_tri_ids,
+        hit_epsilon=float(hit_epsilon),
+    )
+    if base_classification == "invalid":
+        return "invalid"
+    if base_classification in {"visible", "self_occluded"}:
+        return "not_blocking"
+    if base_classification == "mixed_boundary":
+        return "mixed_boundary"
+
+    for tri_id, dist in hits:
+        tri_id_int = int(tri_id)
+        dist_float = float(dist)
+        if (
+            tri_id_int in target_tri_ids
+            and abs(dist_float - float(expected_dist)) <= float(hit_epsilon)
+        ):
+            break
+        if tri_id_int in target_tri_ids:
+            continue
+        if tri_id_int in removed_tri_ids:
+            if dist_float < float(expected_dist) - float(hit_epsilon):
+                return "blocking"
+            return "mixed_boundary"
+        return "not_blocking"
+    return "invalid"
+
+
 def _removed_object_occludes_target_mesh(
     *,
     removed_obj: dict[str, Any],
@@ -1684,6 +1722,13 @@ def _removed_object_occludes_target_mesh(
         instance_mesh_data,
         target_obj_id,
     )
+    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, target_obj_id)
+    if len(sample_triangle_ids) == len(sample_points):
+        target_tri_ids.update(int(tid) for tid in np.asarray(sample_triangle_ids, dtype=np.int64))
+    if not target_tri_ids:
+        metrics["reason_code"] = "target_object_missing_triangles"
+        return metrics
+
     (
         projected_area,
         in_frame_ratio,
@@ -1704,7 +1749,7 @@ def _removed_object_occludes_target_mesh(
         metrics["reason_code"] = "target_object_out_of_frame"
         return metrics
 
-    probe_points, _probe_triangle_ids, _probe_barycentrics = _surface_probe_subset(
+    probe_points, probe_triangle_ids, probe_barycentrics = _surface_probe_subset(
         in_frame_points,
         metrics["probe_sample_budget"],
         sample_triangle_ids=in_frame_triangle_ids,
@@ -1715,40 +1760,103 @@ def _removed_object_occludes_target_mesh(
         metrics["reason_code"] = "target_object_missing_probe_samples"
         return metrics
 
-    first_visible_hit = getattr(ray_caster, "first_visible_hit", None)
+    hits_helper = getattr(ray_caster, "_hits_up_to_distance", None)
     cast_ray = getattr(ray_caster, "cast_ray", None)
-    if not callable(first_visible_hit) and not callable(cast_ray):
-        metrics["reason_code"] = "ray_backend_missing_first_hit"
+    if not callable(hits_helper) and not callable(cast_ray):
+        metrics["reason_code"] = "ray_backend_missing_hit_path"
         return metrics
 
     origin = np.asarray(camera_pose.position, dtype=np.float64)
+    vertices_arr = (
+        np.asarray(getattr(instance_mesh_data, "vertices", None), dtype=np.float64)
+        if getattr(instance_mesh_data, "vertices", None) is not None else None
+    )
+    faces_arr = (
+        np.asarray(getattr(instance_mesh_data, "faces", None), dtype=np.int64)
+        if getattr(instance_mesh_data, "faces", None) is not None else None
+    )
     blocking_hit_count = 0
     valid_probe_count = 0
-    for point in np.asarray(probe_points, dtype=np.float64):
+    mixed_records: list[tuple[int, float]] = []
+    for probe_idx, point in enumerate(np.asarray(probe_points, dtype=np.float64)):
         direction = np.asarray(point, dtype=np.float64) - origin
         target_dist = float(np.linalg.norm(direction))
         if not np.isfinite(target_dist) or target_dist <= 1e-6:
             continue
-        valid_probe_count += 1
 
-        hit = None
-        if callable(first_visible_hit):
-            hit = _invoke_method_with_supported_kwargs(
-                first_visible_hit,
-                origin=origin,
-                direction=direction,
-            )
-        else:
-            for hit_point, tri_id, dist in cast_ray(origin, direction):
-                hit = (hit_point, int(tri_id), float(dist))
-                break
-
-        if hit is None:
-            continue
-        tri_id = int(hit[1])
-        hit_dist = float(hit[2])
-        if tri_id in removed_tri_ids and hit_dist < target_dist - float(hit_epsilon):
+        hit_path = _hits_up_to_distance_from_caster(
+            ray_caster,
+            origin=origin,
+            direction=direction,
+            max_distance=target_dist + float(hit_epsilon),
+        )
+        classification = _classify_removed_object_probe_hit_path(
+            hit_path,
+            expected_dist=target_dist,
+            target_tri_ids=target_tri_ids,
+            removed_tri_ids=removed_tri_ids,
+            hit_epsilon=hit_epsilon,
+        )
+        if classification == "blocking":
             blocking_hit_count += 1
+            valid_probe_count += 1
+        elif classification == "not_blocking":
+            valid_probe_count += 1
+        elif classification == "mixed_boundary":
+            mixed_records.append((probe_idx, target_dist))
+
+    can_refine_mixed = (
+        len(mixed_records) > 0
+        and len(probe_triangle_ids) == len(probe_points)
+        and len(probe_barycentrics) == len(probe_points)
+        and vertices_arr is not None
+        and faces_arr is not None
+        and int(_LOCAL_BOUNDARY_RESAMPLE_COUNT) > 0
+    )
+    if can_refine_mixed:
+        for probe_idx, _target_dist in mixed_records:
+            tri_id = int(probe_triangle_ids[probe_idx])
+            if tri_id < 0 or tri_id >= len(faces_arr):
+                continue
+            tri_vertices = vertices_arr[faces_arr[tri_id]]
+            local_points, _local_barys = _local_triangle_resamples(
+                triangle_vertices=tri_vertices,
+                barycentric=probe_barycentrics[probe_idx],
+                triangle_id=tri_id,
+                n_samples=int(_LOCAL_BOUNDARY_RESAMPLE_COUNT),
+            )
+            if len(local_points) == 0:
+                continue
+
+            local_blocking = 0
+            local_valid = 0
+            for local_point in np.asarray(local_points, dtype=np.float64):
+                local_direction = local_point - origin
+                local_dist = float(np.linalg.norm(local_direction))
+                if not np.isfinite(local_dist) or local_dist <= 1e-6:
+                    continue
+                local_hit_path = _hits_up_to_distance_from_caster(
+                    ray_caster,
+                    origin=origin,
+                    direction=local_direction,
+                    max_distance=local_dist + float(hit_epsilon),
+                )
+                local_classification = _classify_removed_object_probe_hit_path(
+                    local_hit_path,
+                    expected_dist=local_dist,
+                    target_tri_ids=target_tri_ids,
+                    removed_tri_ids=removed_tri_ids,
+                    hit_epsilon=hit_epsilon,
+                )
+                if local_classification == "blocking":
+                    local_blocking += 1
+                    local_valid += 1
+                elif local_classification == "not_blocking":
+                    local_valid += 1
+
+            if local_valid >= 2:
+                blocking_hit_count += local_blocking
+                valid_probe_count += local_valid
 
     metrics["valid_probe_count"] = int(valid_probe_count)
     metrics["blocking_hit_count"] = int(blocking_hit_count)
