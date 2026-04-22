@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import re
 
 
-ALIAS_CONFIG_VERSION = "2"
+ALIAS_CONFIG_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -44,10 +44,16 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
         "risk_level": "low_risk",
         "variants": (
             "wardrobe",
-            "wardrobes",
             "wardrobe closet",
             "wardrobe cabinet",
             "closet wardrobe",
+        ),
+    },
+    "wardrobes_family": {
+        "canonical_labels": ("wardrobes",),
+        "risk_level": "low_risk",
+        "variants": (
+            "wardrobes",
         ),
     },
     "ladder_family": {
@@ -73,8 +79,15 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
         "risk_level": "low_risk",
         "variants": (
             "washing machine",
-            "washing machines",
             "washer",
+        ),
+    },
+    "washing_machines_family": {
+        "canonical_labels": ("washing machines",),
+        "risk_level": "low_risk",
+        "variants": (
+            "washing machines",
+            "washers",
         ),
     },
     "clothes_dryer_family": {
@@ -82,8 +95,15 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
         "risk_level": "low_risk",
         "variants": (
             "clothes dryer",
-            "clothes dryers",
             "laundry dryer",
+        ),
+    },
+    "clothes_dryers_family": {
+        "canonical_labels": ("clothes dryers",),
+        "risk_level": "low_risk",
+        "variants": (
+            "clothes dryers",
+            "laundry dryers",
         ),
     },
     "refrigerator_family": {
@@ -113,6 +133,14 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
             "couch",
         ),
     },
+    "sofas_family": {
+        "canonical_labels": ("sofas",),
+        "risk_level": "low_risk",
+        "variants": (
+            "sofas",
+            "couches",
+        ),
+    },
     "bag_family": {
         "canonical_labels": ("bag",),
         "risk_level": "review_needed",
@@ -130,16 +158,32 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
             "storage bin",
         ),
     },
+    "storage_containers_family": {
+        "canonical_labels": ("storage containers",),
+        "risk_level": "review_needed",
+        "variants": (
+            "storage containers",
+            "plastic containers",
+        ),
+    },
     "cabinet_family": {
         "canonical_labels": ("cabinet",),
         "risk_level": "review_needed",
         "variants": (
             "cabinet",
-            "cabinets",
             "kitchen cabinet",
-            "kitchen cabinets",
             "bathroom cabinet",
             "file cabinet",
+        ),
+    },
+    "cabinets_family": {
+        "canonical_labels": ("cabinets",),
+        "risk_level": "review_needed",
+        "variants": (
+            "cabinets",
+            "kitchen cabinets",
+            "bathroom cabinets",
+            "file cabinets",
         ),
     },
     "counter_family": {
@@ -184,8 +228,15 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
         "risk_level": "low_risk",
         "variants": (
             "bookshelf",
-            "bookshelves",
             "book shelf",
+        ),
+    },
+    "bookshelves_family": {
+        "canonical_labels": ("bookshelves",),
+        "risk_level": "low_risk",
+        "variants": (
+            "bookshelves",
+            "book shelves",
         ),
     },
     "suitcase_family": {
@@ -193,8 +244,14 @@ _ALIAS_GROUP_CONFIG: dict[str, dict[str, tuple[str, ...] | str]] = {
         "risk_level": "review_needed",
         "variants": (
             "suitcase",
-            "suitcases",
             "luggage",
+        ),
+    },
+    "suitcases_family": {
+        "canonical_labels": ("suitcases",),
+        "risk_level": "review_needed",
+        "variants": (
+            "suitcases",
         ),
     },
 }

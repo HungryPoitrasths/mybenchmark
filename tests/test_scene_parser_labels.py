@@ -27,16 +27,18 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("bedside cabinet"), "night stand")
         self.assertEqual(scene_parser.normalize_label("bedside stand"), "night stand")
         self.assertEqual(scene_parser.normalize_label("tv"), "television")
-        self.assertEqual(scene_parser.normalize_label("books"), "book")
+        self.assertEqual(scene_parser.normalize_label("books"), "books")
         self.assertEqual(scene_parser.normalize_label("backpack"), "bag")
         self.assertEqual(scene_parser.normalize_label("mug"), "cup")
         self.assertEqual(scene_parser.normalize_label("coffee mug"), "cup")
         self.assertEqual(scene_parser.normalize_label("fridge"), "refrigerator")
         self.assertEqual(scene_parser.normalize_label("refridgerator"), "refrigerator")
-        self.assertEqual(scene_parser.normalize_label("washing machines"), "washing machine")
+        self.assertEqual(scene_parser.normalize_label("washing machines"), "washing machines")
         self.assertEqual(scene_parser.normalize_label("washer"), "washing machine")
-        self.assertEqual(scene_parser.normalize_label("clothes dryers"), "clothes dryer")
+        self.assertEqual(scene_parser.normalize_label("washers"), "washing machines")
+        self.assertEqual(scene_parser.normalize_label("clothes dryers"), "clothes dryers")
         self.assertEqual(scene_parser.normalize_label("laundry dryer"), "clothes dryer")
+        self.assertEqual(scene_parser.normalize_label("laundry dryers"), "clothes dryers")
         self.assertEqual(scene_parser.normalize_label("keyboard piano"), "piano")
         self.assertEqual(scene_parser.normalize_label("folded ladder"), "ladder")
         self.assertEqual(scene_parser.normalize_label("stepladder"), "ladder")
@@ -54,13 +56,20 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("laundry bag"), "laundry basket")
         self.assertEqual(scene_parser.normalize_label("container"), "storage container")
         self.assertEqual(scene_parser.normalize_label("plastic container"), "storage container")
-        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage containers")
         self.assertEqual(scene_parser.normalize_label("plastic storage bin"), "storage container")
         self.assertEqual(scene_parser.normalize_label("food container"), "storage container")
         self.assertEqual(scene_parser.normalize_label("tupperware"), "storage container")
         self.assertEqual(scene_parser.normalize_label("wardrobe closet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("wardrobe cabinet"), "wardrobe")
         self.assertEqual(scene_parser.normalize_label("closet wardrobe"), "wardrobe")
+        self.assertEqual(scene_parser.normalize_label("wardrobes"), "wardrobes")
+        self.assertEqual(scene_parser.normalize_label("bookshelves"), "bookshelves")
+        self.assertEqual(scene_parser.normalize_label("book shelves"), "bookshelves")
+        self.assertEqual(scene_parser.normalize_label("couches"), "sofas")
+        self.assertEqual(scene_parser.normalize_label("cabinets"), "cabinets")
+        self.assertEqual(scene_parser.normalize_label("kitchen cabinets"), "cabinets")
+        self.assertEqual(scene_parser.normalize_label("file cabinets"), "cabinets")
 
     def test_normalize_label_keeps_selected_otherprop_labels_specific(self) -> None:
         scene_parser._SCANNET_LABEL_MAP = {
@@ -75,6 +84,7 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
             "container": "otherprop",
             "plastic container": "otherprop",
             "plastic containers": "otherprop",
+            "storage containers": "otherprop",
             "plastic storage bin": "otherprop",
             "food container": "otherprop",
             "tupperware": "otherprop",
@@ -100,7 +110,8 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("storage container"), "storage container")
         self.assertEqual(scene_parser.normalize_label("container"), "storage container")
         self.assertEqual(scene_parser.normalize_label("plastic container"), "storage container")
-        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage container")
+        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage containers")
+        self.assertEqual(scene_parser.normalize_label("storage containers"), "storage containers")
         self.assertEqual(scene_parser.normalize_label("plastic storage bin"), "storage container")
         self.assertEqual(scene_parser.normalize_label("food container"), "storage container")
         self.assertEqual(scene_parser.normalize_label("tupperware"), "storage container")
@@ -119,8 +130,10 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
             "trash can": "otherfurniture",
             "washing machine": "otherfurniture",
             "washing machines": "otherfurniture",
+            "washers": "otherfurniture",
             "clothes dryer": "otherfurniture",
             "clothes dryers": "otherfurniture",
+            "laundry dryers": "otherfurniture",
             "piano": "otherfurniture",
             "keyboard piano": "otherfurniture",
             "ladder": "otherfurniture",
@@ -145,9 +158,11 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("radiator"), "radiator")
         self.assertEqual(scene_parser.normalize_label("trash can"), "trash can")
         self.assertEqual(scene_parser.normalize_label("washing machine"), "washing machine")
-        self.assertEqual(scene_parser.normalize_label("washing machines"), "washing machine")
+        self.assertEqual(scene_parser.normalize_label("washing machines"), "washing machines")
+        self.assertEqual(scene_parser.normalize_label("washers"), "washing machines")
         self.assertEqual(scene_parser.normalize_label("clothes dryer"), "clothes dryer")
-        self.assertEqual(scene_parser.normalize_label("clothes dryers"), "clothes dryer")
+        self.assertEqual(scene_parser.normalize_label("clothes dryers"), "clothes dryers")
+        self.assertEqual(scene_parser.normalize_label("laundry dryers"), "clothes dryers")
         self.assertEqual(scene_parser.normalize_label("piano"), "piano")
         self.assertEqual(scene_parser.normalize_label("keyboard piano"), "piano")
         self.assertEqual(scene_parser.normalize_label("ladder"), "ladder")
@@ -165,6 +180,33 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertEqual(scene_parser.normalize_label("footstool"), "ottoman")
         self.assertEqual(scene_parser.normalize_label("drawer"), "drawer")
         self.assertEqual(scene_parser.normalize_label("tv stand"), "tv stand")
+
+    def test_normalize_label_blocks_cross_number_scannet_tsv_mapping(self) -> None:
+        scene_parser._SCANNET_LABEL_MAP = {
+            "bookshelves": "bookshelf",
+            "cabinets": "cabinet",
+            "kitchen cabinets": "cabinet",
+            "washing machines": "washing machine",
+            "plastic containers": "container",
+            "doors": "door",
+            "papers": "paper",
+        }
+        scene_parser._SCANNET_LABEL_MAP_LOAD_ATTEMPTED = True
+        scene_parser._refresh_excluded_labels()
+
+        self.assertEqual(scene_parser.normalize_label("bookshelves"), "bookshelves")
+        self.assertEqual(scene_parser.normalize_label("cabinets"), "cabinets")
+        self.assertEqual(scene_parser.normalize_label("kitchen cabinets"), "cabinets")
+        self.assertEqual(scene_parser.normalize_label("washing machines"), "washing machines")
+        self.assertEqual(scene_parser.normalize_label("plastic containers"), "storage containers")
+        self.assertEqual(scene_parser.normalize_label("doors"), "doors")
+        self.assertEqual(scene_parser.normalize_label("papers"), "papers")
+
+    def test_excluded_labels_include_raw_plural_noise_terms(self) -> None:
+        self.assertIn("doors", scene_parser.EXCLUDED_LABELS)
+        self.assertIn("papers", scene_parser.EXCLUDED_LABELS)
+        self.assertIn("cloth", scene_parser.EXCLUDED_LABELS)
+        self.assertIn("clothes", scene_parser.EXCLUDED_LABELS)
 
     def test_alias_metadata_groups_bedside_table_family(self) -> None:
         alias = resolve_alias_metadata(
@@ -209,9 +251,33 @@ class SceneParserLabelNormalizationTests(unittest.TestCase):
         self.assertIn("step ladder", alias.alias_variants)
         self.assertIn("stepladder", alias.alias_variants)
 
+    def test_alias_metadata_uses_plural_sofa_family(self) -> None:
+        alias = resolve_alias_metadata(
+            raw_label="couches",
+            canonical_label="sofas",
+        )
+
+        self.assertEqual(alias.alias_group, "sofas_family")
+        self.assertEqual(alias.alias_source, "explicit")
+        self.assertIn("couches", alias.alias_variants)
+        self.assertIn("sofas", alias.alias_variants)
+
+    def test_alias_metadata_uses_plural_cabinet_family(self) -> None:
+        alias = resolve_alias_metadata(
+            raw_label="kitchen cabinets",
+            canonical_label="cabinets",
+        )
+
+        self.assertEqual(alias.alias_group, "cabinets_family")
+        self.assertEqual(alias.alias_source, "explicit")
+        self.assertIn("kitchen cabinets", alias.alias_variants)
+        self.assertIn("cabinets", alias.alias_variants)
+
     def test_alias_group_risk_level_marks_review_needed_families(self) -> None:
         self.assertEqual(get_alias_group_risk_level("chair_family"), "review_needed")
         self.assertEqual(get_alias_group_risk_level("bedside_table_family"), "low_risk")
+        self.assertEqual(get_alias_group_risk_level("cabinets_family"), "review_needed")
+        self.assertEqual(get_alias_group_risk_level("sofas_family"), "low_risk")
         self.assertEqual(get_alias_group_risk_level("unknown_family"), "singleton")
 
 

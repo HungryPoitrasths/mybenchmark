@@ -31,27 +31,11 @@ MIN_OBJECTS = 3
 
 # ---------------------------------------------------------------------------
 #  Label normalisation - applied before dedup / blacklist filtering.
-#  Maps plural forms, synonyms, and sub-categories to canonical labels so
-#  that the unique-label filter catches true duplicates.
+#  Preserves number (singular/plural) while collapsing explicit aliases and
+#  sub-categories onto a same-number canonical label.
 # ---------------------------------------------------------------------------
-LABEL_NORMALIZE: dict[str, str] = {
-    # Plural -> singular
-    "books": "book",
-    "doors": "door",
-    "curtains": "curtain",
-    "shoes": "shoe",
-    "clothes": "clothing",
-    "cabinets": "cabinet",
-    "papers": "paper",
-    "pipes": "pipe",
-    "mailboxes": "mailbox",
-    "suitcases": "suitcase",
-    "cloth": "clothing",
-    "bookshelves": "bookshelf",
-    "wardrobes": "wardrobe",
-    "washing machines": "washing machine",
-    "clothes dryers": "clothes dryer",
-    # Synonym -> canonical
+SINGULAR_LABEL_NORMALIZE: dict[str, str] = {
+    # Singular synonym -> singular canonical
     "couch": "sofa",
     "nightstand": "night stand",
     "bedside table": "night stand",
@@ -76,13 +60,11 @@ LABEL_NORMALIZE: dict[str, str] = {
     "paper towel": "towel",
     "paper towel roll": "towel",
     "washcloth": "towel",
-    # Wardrobe-family aliases -> canonical
+    # Singular sub-category -> singular canonical
     "wardrobe closet": "wardrobe",
     "wardrobe cabinet": "wardrobe",
     "closet wardrobe": "wardrobe",
-    # Sub-category -> canonical
     "kitchen cabinet": "cabinet",
-    "kitchen cabinets": "cabinet",
     "bathroom cabinet": "cabinet",
     "file cabinet": "cabinet",
     "kitchen counter": "counter",
@@ -103,13 +85,57 @@ LABEL_NORMALIZE: dict[str, str] = {
     "laundry bag": "laundry basket",
     "container": "storage container",
     "plastic container": "storage container",
-    "plastic containers": "storage container",
     "plastic storage bin": "storage container",
     "food container": "storage container",
     "tupperware": "storage container",
     "potted plant": "plant",
     "shower wall": "wall",
     "ceiling fan": "fan",
+}
+
+PLURAL_LABEL_NORMALIZE: dict[str, str] = {
+    # Plural synonym -> plural canonical
+    "couches": "sofas",
+    "washers": "washing machines",
+    "laundry dryers": "clothes dryers",
+    "book shelves": "bookshelves",
+    # Plural sub-category -> plural canonical
+    "kitchen cabinets": "cabinets",
+    "bathroom cabinets": "cabinets",
+    "file cabinets": "cabinets",
+    "plastic containers": "storage containers",
+}
+
+LABEL_NORMALIZE: dict[str, str] = {
+    **SINGULAR_LABEL_NORMALIZE,
+    **PLURAL_LABEL_NORMALIZE,
+}
+
+PRESERVED_PLURAL_LABELS: set[str] = {
+    "books",
+    "doors",
+    "curtains",
+    "shoes",
+    "clothes",
+    "cabinets",
+    "papers",
+    "pipes",
+    "mailboxes",
+    "suitcases",
+    "bookshelves",
+    "wardrobes",
+    "washing machines",
+    "clothes dryers",
+    "sofas",
+    "couches",
+    "washers",
+    "laundry dryers",
+    "book shelves",
+    "kitchen cabinets",
+    "bathroom cabinets",
+    "file cabinets",
+    "plastic containers",
+    "storage containers",
 }
 
 # Runtime label map loaded from scannetv2-labels.combined.tsv (raw_category -> nyu40class).
@@ -205,13 +231,21 @@ def _ensure_default_scannet_label_map_loaded() -> None:
     load_scannet_label_map(_DEFAULT_SCANNET_LABEL_MAP_PATH)
 
 
+def _normalize_builtin_label(label: str) -> str:
+    return LABEL_NORMALIZE.get(label, label)
+
+
+def _should_preserve_label_number(*, raw_label: str, builtin_label: str) -> bool:
+    return raw_label in PRESERVED_PLURAL_LABELS or builtin_label in PRESERVED_PLURAL_LABELS
+
+
 def normalize_label(label: str) -> str:
     """Return the canonical form of *label* (lowercase, mapped)."""
     low = label.strip().lower()
-    builtin = LABEL_NORMALIZE.get(low, low)
+    builtin = _normalize_builtin_label(low)
     _ensure_default_scannet_label_map_loaded()
     candidate = builtin
-    if _SCANNET_LABEL_MAP:
+    if _SCANNET_LABEL_MAP and not _should_preserve_label_number(raw_label=low, builtin_label=builtin):
         mapped = _SCANNET_LABEL_MAP.get(low)
         if mapped == "otherprop" and (low in _OTHERPROP_ALLOWLIST or builtin in _OTHERPROP_ALLOWLIST):
             candidate = builtin
@@ -221,7 +255,7 @@ def normalize_label(label: str) -> str:
             candidate = builtin
         elif mapped:
             candidate = mapped
-    return LABEL_NORMALIZE.get(candidate, candidate)
+    return _normalize_builtin_label(candidate)
 
 # Hard blacklist shared across parsing, question generation, and filtering.
 # Keep the effective blacklist closed under both built-in normalization and
@@ -251,20 +285,25 @@ _BASE_EXCLUDED_LABELS = {
     "can", "water bottle", "paper cutter",
 }
 
+_RAW_EXCLUDED_LABELS = {
+    "doors",
+    "papers",
+}
+
 def _excluded_label_closure() -> set[str]:
     closure: set[str] = set()
-    pending = [str(label).strip().lower() for label in _BASE_EXCLUDED_LABELS]
+    pending = [str(label).strip().lower() for label in (*_BASE_EXCLUDED_LABELS, *_RAW_EXCLUDED_LABELS)]
     while pending:
         label = pending.pop()
         if label in closure:
             continue
         closure.add(label)
 
-        builtin = LABEL_NORMALIZE.get(label, label)
+        builtin = _normalize_builtin_label(label)
         if builtin not in closure:
             pending.append(builtin)
 
-        if _SCANNET_LABEL_MAP:
+        if _SCANNET_LABEL_MAP and not _should_preserve_label_number(raw_label=label, builtin_label=builtin):
             mapped = _SCANNET_LABEL_MAP.get(label)
             if mapped and mapped not in closure:
                 pending.append(mapped)
