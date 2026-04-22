@@ -1142,6 +1142,39 @@ def _support_chain_edge_sort_key(edge: dict[str, Any]) -> tuple[int, float, floa
     )
 
 
+def _rank_attachment_candidates_by_child(
+    edges: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    ranked_edges: list[dict[str, Any]] = []
+    edges_by_child: dict[int, list[dict[str, Any]]] = {}
+    for edge in edges:
+        child_id = int(edge["child_id"])
+        edges_by_child.setdefault(child_id, []).append(edge)
+
+    for child_id in sorted(edges_by_child):
+        ranked_edges.extend(
+            sorted(edges_by_child[child_id], key=_edge_sort_key, reverse=True)
+        )
+    return ranked_edges
+
+
+def build_attachment_candidates(
+    objects: list[dict],
+    z_threshold: float | None = None,
+) -> list[dict[str, Any]]:
+    """Return all raw attachment candidates accepted by geometry/semantic rules."""
+    raw_edges: list[dict[str, Any]] = []
+    for obj_a in objects:
+        for obj_b in objects:
+            if obj_a["id"] == obj_b["id"]:
+                continue
+            edge = _attachment_candidate(obj_a, obj_b, z_threshold)
+            if edge is None:
+                continue
+            raw_edges.append(edge)
+    return _rank_attachment_candidates_by_child(raw_edges)
+
+
 def _derive_graph_from_edges(
     edges: list[dict[str, Any]],
     *,
@@ -1194,25 +1227,18 @@ def build_attachment_graph(
     candidates: dict[int, dict[str, Any]] = {}
     support_chain_candidates: dict[int, dict[str, Any]] = {}
 
-    for obj_a in objects:
-        for obj_b in objects:
-            if obj_a["id"] == obj_b["id"]:
-                continue
-            edge = _attachment_candidate(obj_a, obj_b, z_threshold)
-            if edge is None:
-                continue
-
-            child_id = int(edge["child_id"])
-            current = candidates.get(child_id)
-            if current is None or _edge_sort_key(edge) > _edge_sort_key(current):
-                candidates[child_id] = edge
-            if str(edge.get("type", "")) in SUPPORT_CHAIN_TYPES:
-                support_current = support_chain_candidates.get(child_id)
-                if (
-                    support_current is None
-                    or _support_chain_edge_sort_key(edge) > _support_chain_edge_sort_key(support_current)
-                ):
-                    support_chain_candidates[child_id] = edge
+    for edge in build_attachment_candidates(objects, z_threshold):
+        child_id = int(edge["child_id"])
+        current = candidates.get(child_id)
+        if current is None or _edge_sort_key(edge) > _edge_sort_key(current):
+            candidates[child_id] = edge
+        if str(edge.get("type", "")) in SUPPORT_CHAIN_TYPES:
+            support_current = support_chain_candidates.get(child_id)
+            if (
+                support_current is None
+                or _support_chain_edge_sort_key(edge) > _support_chain_edge_sort_key(support_current)
+            ):
+                support_chain_candidates[child_id] = edge
 
     final_edges: list[dict[str, Any]] = []
     attachment_graph: dict[int, list[int]] = {}

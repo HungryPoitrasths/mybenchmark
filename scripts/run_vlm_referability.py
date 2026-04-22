@@ -67,6 +67,9 @@ DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
 REFERABILITY_CACHE_VERSION = "19.0"
+ATTACHMENT_REVIEW_VERSION = "1.0"
+ATTACHMENT_REVIEW_NAME = "attachment_candidate_review"
+ATTACHMENT_REVIEW_STAGE = "post_attachment_enrichment"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -122,6 +125,116 @@ def _write_json_payload(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _attachment_review_output_path(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+
+
+def _scene_object_label(obj: dict[str, Any]) -> str:
+    for key in ("label", "canonical_label", "raw_label"):
+        label = str(obj.get(key, "")).strip()
+        if label:
+            return label
+    return "unknown"
+
+
+def _attachment_edge_key(edge: dict[str, Any]) -> tuple[int, int, str]:
+    return (
+        int(edge.get("parent_id", 0) or 0),
+        int(edge.get("child_id", 0) or 0),
+        str(edge.get("type", "")).strip(),
+    )
+
+
+def _build_attachment_review_scene_record(
+    *,
+    scene_id: str,
+    objects: list[dict[str, Any]],
+    raw_candidates: list[dict[str, Any]],
+    final_attachment_edges: list[dict[str, Any]],
+    pipeline_outcome: str,
+) -> dict[str, Any]:
+    object_labels = {
+        int(obj["id"]): _scene_object_label(obj)
+        for obj in objects
+        if "id" in obj
+    }
+    final_edge_keys = {
+        _attachment_edge_key(edge)
+        for edge in final_attachment_edges
+    }
+
+    candidate_rows: list[dict[str, Any]] = []
+    candidate_rank_for_child: dict[int, int] = defaultdict(int)
+    terminal_output_lines: list[str] = []
+
+    summary_line = (
+        f"[attachment-review] scene={scene_id} outcome={pipeline_outcome} "
+        f"objects={len(objects)} raw_candidates={len(raw_candidates)} "
+        f"final_attachment_edges={len(final_attachment_edges)}"
+    )
+    terminal_output_lines.append(summary_line)
+
+    for edge in raw_candidates:
+        parent_id = int(edge.get("parent_id", 0) or 0)
+        child_id = int(edge.get("child_id", 0) or 0)
+        candidate_rank_for_child[child_id] += 1
+        relation_type = str(edge.get("type", "")).strip()
+        selected = _attachment_edge_key(edge) in final_edge_keys
+        row = {
+            "parent_id": parent_id,
+            "parent_label": object_labels.get(parent_id, "unknown"),
+            "child_id": child_id,
+            "child_label": object_labels.get(child_id, "unknown"),
+            "relation_type": relation_type,
+            "confidence": float(edge.get("confidence", 0.0) or 0.0),
+            "candidate_rank_for_child": int(candidate_rank_for_child[child_id]),
+            "selected_for_attachment_graph": bool(selected),
+            "evidence": edge.get("evidence") or {},
+        }
+        candidate_rows.append(row)
+        terminal_output_lines.append(
+            f"[attachment-review] scene={scene_id} parent={parent_id}:{row['parent_label']} "
+            f"child={child_id}:{row['child_label']} rank={row['candidate_rank_for_child']} "
+            f"selected={int(selected)} relation={relation_type} confidence={row['confidence']:.4f}"
+        )
+
+    return {
+        "scene_id": scene_id,
+        "object_count": len(objects),
+        "pipeline_outcome": pipeline_outcome,
+        "raw_candidate_edge_count": len(raw_candidates),
+        "final_attachment_edge_count": len(final_attachment_edges),
+        "terminal_output_lines": terminal_output_lines,
+        "candidate_rows": candidate_rows,
+    }
+
+
+def _build_attachment_review_document(
+    *,
+    referability_cache_output: Path,
+    scenes: list[dict[str, Any]],
+    terminal_output_lines: list[str],
+) -> dict[str, Any]:
+    return {
+        "name": ATTACHMENT_REVIEW_NAME,
+        "version": ATTACHMENT_REVIEW_VERSION,
+        "generated_by": "scripts/run_vlm_referability.py",
+        "review_stage": ATTACHMENT_REVIEW_STAGE,
+        "referability_cache_output": str(referability_cache_output),
+        "scene_count": len(scenes),
+        "raw_candidate_edge_count": sum(
+            int(scene.get("raw_candidate_edge_count", 0) or 0)
+            for scene in scenes
+        ),
+        "final_attachment_edge_count": sum(
+            int(scene.get("final_attachment_edge_count", 0) or 0)
+            for scene in scenes
+        ),
+        "terminal_output_lines": list(terminal_output_lines),
+        "scenes": list(scenes),
+    }
 
 
 def _invoke_method_with_supported_kwargs(method, **kwargs):
@@ -3647,12 +3760,30 @@ def main():
         "--non_attachment_group_debug_dir", type=str, default=None,
         help="Optional directory to write per-scene JSON debug summaries for non-attachment group selection.",
     )
+    parser.add_argument(
+        "--write_attachment_review",
+        dest="write_attachment_review",
+        action="store_true",
+        help="Write a scene-level attachment candidate review JSON alongside the referability cache",
+    )
+    parser.add_argument(
+        "--no-write_attachment_review",
+        dest="write_attachment_review",
+        action="store_false",
+        help="Disable the attachment candidate review JSON output",
+    )
+    parser.set_defaults(write_attachment_review=True)
+    parser.add_argument(
+        "--attachment_review_output", type=str, default=None,
+        help="Optional path for the attachment candidate review JSON; defaults beside --output",
+    )
     args = parser.parse_args()
 
     global EXCLUDED_LABELS
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
     from src.scene_parser import load_scannet_label_map, parse_scene
     from src.support_graph import (
+        build_attachment_candidates,
         enrich_scene_with_attachment,
         get_scene_attachment_graph,
         has_nontrivial_attachment,
@@ -3684,10 +3815,16 @@ def main():
     logger.info("Using model: %s", model_name)
 
     output_path = Path(args.output)
+    attachment_review_output = (
+        Path(args.attachment_review_output)
+        if args.attachment_review_output else _attachment_review_output_path(output_path)
+    )
     non_attachment_group_debug_dir = (
         Path(args.non_attachment_group_debug_dir)
         if args.non_attachment_group_debug_dir else None
     )
+    attachment_review_scenes: list[dict[str, Any]] = []
+    attachment_review_terminal_lines: list[str] = []
     cache: dict[str, Any] = {
         "version": REFERABILITY_CACHE_VERSION,
         "model": model_name,
@@ -3711,6 +3848,25 @@ def main():
     cache["alias_config_version"] = ALIAS_CONFIG_VERSION
     cache["referability_backend"] = "crop_vlm_with_mesh_ray"
     cache["label_batch_size"] = 1
+
+    def _write_attachment_review() -> None:
+        if not args.write_attachment_review:
+            return
+        review_doc = _build_attachment_review_document(
+            referability_cache_output=output_path,
+            scenes=attachment_review_scenes,
+            terminal_output_lines=attachment_review_terminal_lines,
+        )
+        _write_json_payload(attachment_review_output, review_doc)
+
+    def _finalize_attachment_review_scene(record: dict[str, Any]) -> None:
+        if not args.write_attachment_review:
+            return
+        attachment_review_scenes.append(record)
+        attachment_review_terminal_lines.extend(record.get("terminal_output_lines", []))
+        for line in record.get("terminal_output_lines", []):
+            logger.info("%s", line)
+        _write_attachment_review()
 
     data_root = Path(args.data_root)
     scene_dirs = sorted(
@@ -3738,8 +3894,30 @@ def main():
 
         enrich_scene_with_attachment(scene)
         attachment_graph = get_scene_attachment_graph(scene, scene_id=scene_id)
+        raw_attachment_candidates = (
+            build_attachment_candidates(scene["objects"])
+            if args.write_attachment_review else []
+        )
+        final_attachment_edges = [
+            dict(edge)
+            for edge in scene.get("attachment_edges", [])
+            if isinstance(edge, dict)
+        ] if args.write_attachment_review else []
+
+        def _make_attachment_review_record(pipeline_outcome: str) -> dict[str, Any]:
+            return _build_attachment_review_scene_record(
+                scene_id=scene_id,
+                objects=scene["objects"],
+                raw_candidates=raw_attachment_candidates,
+                final_attachment_edges=final_attachment_edges,
+                pipeline_outcome=pipeline_outcome,
+            )
+
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)
+            _finalize_attachment_review_scene(
+                _make_attachment_review_record("no_attachment_relations")
+            )
             continue
         scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         if scene_cache and all(_frame_entry_has_debug_fields(entry) for entry in scene_cache.values()):
@@ -3748,6 +3926,9 @@ def main():
                 scene_id,
                 " (group debug JSON is only written for newly processed scenes)"
                 if non_attachment_group_debug_dir is not None else "",
+            )
+            _finalize_attachment_review_scene(
+                _make_attachment_review_record("already_cached")
             )
             processed += 1
             continue
@@ -3760,6 +3941,9 @@ def main():
             keep_all_attachment_frames=True,
         )
         if not frame_candidates:
+            _finalize_attachment_review_scene(
+                _make_attachment_review_record("no_frame_candidates")
+            )
             continue
 
         axis_align = load_axis_alignment(scene_dir)
@@ -3768,6 +3952,9 @@ def main():
             color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception as exc:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, exc)
+            _finalize_attachment_review_scene(
+                _make_attachment_review_record("color_intrinsics_load_failed")
+            )
             continue
         try:
             depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
@@ -3963,6 +4150,9 @@ def main():
                     non_attachment_group_debug,
                 )
             logger.info("Scene %s has no final referability frames -> skipping", scene_id)
+            _finalize_attachment_review_scene(
+                _make_attachment_review_record("no_final_referability_frames")
+            )
             continue
 
         logger.info(
@@ -4051,6 +4241,9 @@ def main():
                     non_attachment_group_debug,
                 )
             logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
+            _finalize_attachment_review_scene(
+                _make_attachment_review_record("no_cacheable_referability_entries")
+            )
             continue
 
         scene_cache.clear()
@@ -4072,10 +4265,14 @@ def main():
             )
 
         _write_json_payload(output_path, cache)
+        _finalize_attachment_review_scene(
+            _make_attachment_review_record("processed")
+        )
 
         processed += 1
 
     _write_json_payload(output_path, cache)
+    _write_attachment_review()
     logger.info("Saved referability cache to %s", output_path)
 
 

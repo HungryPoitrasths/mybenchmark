@@ -7,6 +7,7 @@ from src.support_graph import (
     _contained_in_metrics,
     _resting_on_soft_surface_metrics,
     _supported_by_metrics,
+    build_attachment_candidates,
     build_attachment_graph,
     compute_bottom_footprint_overlap_metrics,
 )
@@ -817,6 +818,53 @@ class SupportGraphHeuristicTests(unittest.TestCase):
         self.assertEqual(attached_by, {3: 1, 2: 1})
         self.assertEqual(support_chain_graph, {2: [3], 1: [2]})
         self.assertEqual(support_chain_by, {3: 2, 2: 1})
+
+    def test_build_attachment_candidates_returns_all_raw_candidates_per_child(self) -> None:
+        objects = [
+            make_object(1, "table", (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)),
+            make_object(2, "book", (0.0, 0.0, 1.0), (0.5, 0.5, 1.2)),
+            make_object(3, "shelf", (0.0, 0.0, 1.3), (1.0, 1.0, 1.6)),
+        ]
+
+        candidate_map = {
+            (2, 1): {
+                "parent_id": 1,
+                "child_id": 2,
+                "type": "supported_by",
+                "confidence": 0.70,
+                "evidence": {
+                    "geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.0},
+                    "xy_overlap": {"child_coverage": 0.80},
+                },
+            },
+            (2, 3): {
+                "parent_id": 3,
+                "child_id": 2,
+                "type": "supported_by",
+                "confidence": 0.92,
+                "evidence": {
+                    "geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.3},
+                    "xy_overlap": {"child_coverage": 0.95},
+                },
+            },
+        }
+
+        def fake_candidate(obj_a: dict, obj_b: dict, z_threshold=None):
+            return candidate_map.get((int(obj_a["id"]), int(obj_b["id"])))
+
+        with patch("src.support_graph._attachment_candidate", side_effect=fake_candidate):
+            raw_candidates = build_attachment_candidates(objects)
+            attachment_graph, attached_by, final_edges, _support_chain_graph, _support_chain_by = (
+                build_attachment_graph(objects)
+            )
+
+        self.assertEqual(
+            [(edge["parent_id"], edge["child_id"], edge["confidence"]) for edge in raw_candidates],
+            [(3, 2, 0.92), (1, 2, 0.70)],
+        )
+        self.assertEqual(attachment_graph, {3: [2]})
+        self.assertEqual(attached_by, {2: 3})
+        self.assertEqual([(edge["parent_id"], edge["child_id"]) for edge in final_edges], [(3, 2)])
 
     def test_build_attachment_graph_includes_containment_and_affixed_edges_in_support_chain(self) -> None:
         objects = [

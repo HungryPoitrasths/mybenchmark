@@ -1,5 +1,6 @@
 import json
 import shutil
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -193,6 +194,47 @@ def make_instance_mesh_data(
         surface_points_by_instance={int(obj_id): surface_points},
         surface_triangle_ids_by_instance={int(obj_id): triangle_ids},
         surface_barycentrics_by_instance={int(obj_id): barycentrics},
+    )
+
+
+def make_debug_cache_entry() -> dict:
+    return {
+        "frame_usable": True,
+        "frame_quality_clear": True,
+        "frame_quality_score": 82,
+        "frame_quality_reason": "clear enough",
+        "frame_selection_score": 100082,
+        "attachment_referable_pairs": [],
+        "attachment_referable_pair_count": 0,
+        "final_selection_rank": 0,
+        "candidate_visible_object_ids": [],
+        "candidate_visibility_source": "selector_visible_object_ids",
+        "candidate_labels": [],
+        "label_to_object_ids": {},
+        "selector_visible_object_ids": [],
+        "selector_visible_label_counts": {},
+        "visibility_audit_by_object_id": {},
+        "object_reviews": {},
+        "crop_label_statuses": {},
+        "crop_label_counts": {},
+        "crop_referable_object_ids": [],
+        "full_frame_label_reviews": [],
+        "full_frame_label_statuses": {},
+        "full_frame_label_counts": {},
+        "label_statuses": {},
+        "label_counts": {},
+        "referable_object_ids": [],
+    }
+
+
+def make_fake_openai_module(model_id: str = "fake-vlm") -> SimpleNamespace:
+    fake_client = SimpleNamespace(
+        models=SimpleNamespace(
+            list=lambda: SimpleNamespace(data=[SimpleNamespace(id=model_id)])
+        )
+    )
+    return SimpleNamespace(
+        OpenAI=lambda api_key, base_url: fake_client
     )
 
 
@@ -2237,6 +2279,158 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(frame_decision_mock.call_count, 4)
         self.assertEqual(selected, [])
+
+    def test_main_writes_attachment_review_json_for_already_cached_scene(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_cached_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        review_path = output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+        output_path.write_text(
+            json.dumps(
+                {
+                    "version": referability_module.REFERABILITY_CACHE_VERSION,
+                    "model": "fake-vlm",
+                    "alias_config_version": "test",
+                    "referability_backend": "crop_vlm_with_mesh_ray",
+                    "label_batch_size": 1,
+                    "frames": {
+                        "scene0001_00": {
+                            "000001.jpg": make_debug_cache_entry(),
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+                make_object(3, "shelf"),
+            ],
+        }
+        raw_candidates = [
+            {
+                "parent_id": 1,
+                "child_id": 2,
+                "type": "supported_by",
+                "confidence": 0.91,
+                "evidence": {"geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.0}},
+            },
+            {
+                "parent_id": 3,
+                "child_id": 2,
+                "type": "supported_by",
+                "confidence": 0.40,
+                "evidence": {"geometry_contact": {"z_gap": 0.0, "contact_z_parent": 1.3}},
+            },
+        ]
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [raw_candidates[0]]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=raw_candidates),
+            patch.object(referability_module, "select_frames", side_effect=AssertionError("select_frames should not run for cached scenes")),
+            patch.object(referability_module, "load_axis_alignment", side_effect=AssertionError("load_axis_alignment should not run for cached scenes")),
+            patch.object(referability_module, "load_scannet_poses", side_effect=AssertionError("load_scannet_poses should not run for cached scenes")),
+            patch.object(referability_module, "load_scannet_intrinsics", side_effect=AssertionError("load_scannet_intrinsics should not run for cached scenes")),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", side_effect=AssertionError("load_scannet_depth_intrinsics should not run for cached scenes")),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "5",
+                "--resume",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertTrue(review_path.exists())
+        review_doc = json.loads(review_path.read_text(encoding="utf-8"))
+        scene_review = review_doc["scenes"][0]
+        self.assertEqual(review_doc["scene_count"], 1)
+        self.assertEqual(review_doc["raw_candidate_edge_count"], 2)
+        self.assertEqual(review_doc["final_attachment_edge_count"], 1)
+        self.assertEqual(scene_review["scene_id"], "scene0001_00")
+        self.assertEqual(scene_review["pipeline_outcome"], "already_cached")
+        self.assertEqual(scene_review["raw_candidate_edge_count"], 2)
+        self.assertEqual(scene_review["final_attachment_edge_count"], 1)
+        self.assertTrue(scene_review["candidate_rows"][0]["selected_for_attachment_graph"])
+        self.assertFalse(scene_review["candidate_rows"][1]["selected_for_attachment_graph"])
+        self.assertIn("already_cached", review_doc["terminal_output_lines"][0])
+
+    def test_main_writes_attachment_review_json_for_scene_without_attachment_relations(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_empty_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        review_path = output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {}
+            scene_dict["attached_by"] = {}
+            scene_dict["attachment_edges"] = []
+            scene_dict["support_chain_graph"] = {}
+            scene_dict["support_chain_by"] = {}
+            return scene_dict
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "select_frames", side_effect=AssertionError("select_frames should not run without attachment relations")),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "5",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertTrue(review_path.exists())
+        review_doc = json.loads(review_path.read_text(encoding="utf-8"))
+        scene_review = review_doc["scenes"][0]
+        self.assertEqual(review_doc["scene_count"], 1)
+        self.assertEqual(review_doc["raw_candidate_edge_count"], 0)
+        self.assertEqual(review_doc["final_attachment_edge_count"], 0)
+        self.assertEqual(scene_review["pipeline_outcome"], "no_attachment_relations")
+        self.assertEqual(scene_review["candidate_rows"], [])
+        self.assertIn("no_attachment_relations", review_doc["terminal_output_lines"][0])
 
 
 if __name__ == "__main__":
