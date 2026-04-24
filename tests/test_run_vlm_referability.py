@@ -2280,6 +2280,323 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_decision_mock.call_count, 4)
         self.assertEqual(selected, [])
 
+    def test_main_persists_scene_grouping_summary_in_cache_and_debug_json(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        debug_dir = root / "output" / "group_debug"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+                make_object(3, "lamp"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def make_selected_frame(image_name: str, clarity_score: int, visible_object_ids: list[int]) -> dict:
+            entry = make_debug_cache_entry()
+            entry["selector_visible_object_ids"] = list(visible_object_ids)
+            entry["candidate_visible_object_ids"] = list(visible_object_ids)
+            entry["attachment_referable_object_ids"] = []
+            return {
+                "image_name": image_name,
+                "visible_object_ids": list(visible_object_ids),
+                "frame_info": {
+                    "clear": True,
+                    "clarity_score": clarity_score,
+                    "frame_usable": True,
+                    "reason": "clear",
+                },
+                "frame_selection_score": 100000 + clarity_score,
+                "_referability_entry": entry,
+            }
+
+        non_attachment_frames = [
+            make_selected_frame("000101.jpg", 92, [3]),
+            make_selected_frame("000102.jpg", 86, [3]),
+        ]
+        attachment_frame = make_debug_cache_entry()
+        attachment_frame["image_name"] = "000001.jpg"
+        attachment_frame["attachment_referable_object_ids"] = [1, 2]
+        attachment_frame["attachment_view_group_id"] = 7
+
+        def fake_select_and_rerank_frames(**kwargs):
+            debug_output = kwargs["debug_output"]
+            debug_output.clear()
+            debug_output.update(
+                {
+                    "scene_id": "scene0001_00",
+                    "pipeline_outcome": None,
+                    "grouping_available": True,
+                    "scene_skip_reason": None,
+                    "non_attachment_candidate_frame_count": 2,
+                    "non_attachment_visible_object_group_count": 2,
+                    "non_attachment_processed_group_count": 2,
+                    "accepted_frame_count_after_group_scan": 2,
+                    "reranked_accepted_frame_image_names": ["000101.jpg", "000102.jpg"],
+                    "selected_before_attachment_slots_image_names": ["000101.jpg", "000102.jpg"],
+                    "selected_before_attachment_slots_count": 2,
+                    "attachment_selected_frame_image_names": [],
+                    "attachment_selected_frame_count": 0,
+                    "remaining_slots_after_attachment_selection": None,
+                    "selected_after_attachment_slots_image_names": [],
+                    "selected_after_attachment_slots_count": 0,
+                    "final_cacheable_frame_image_names": [],
+                    "final_cacheable_frame_count": 0,
+                    "groups": [
+                        {
+                            "group_index": 0,
+                            "group_key_visible_object_ids": [3],
+                            "candidate_frame_image_names": ["000101.jpg"],
+                            "sampled_frame_image_names": ["000101.jpg"],
+                            "accepted_frame_image_names": ["000101.jpg"],
+                            "selected_before_attachment_slots_image_names": ["000101.jpg"],
+                            "selected_after_attachment_slots_image_names": [],
+                            "dropped_by_group_rerank_image_names": [],
+                            "dropped_after_attachment_slots_image_names": [],
+                            "group_frame_stride": 1,
+                            "stopped_after_image_name": "000101.jpg",
+                            "stop_reason": "accepted_frame_has_min_referable_objects",
+                            "status_before_attachment_slots": "selected_before_attachment_slots",
+                            "status_after_attachment_slots": None,
+                            "group_exhausted_without_usable_frame": False,
+                            "group_exhausted_without_referable_frame": False,
+                        },
+                        {
+                            "group_index": 1,
+                            "group_key_visible_object_ids": [3, 9],
+                            "candidate_frame_image_names": ["000102.jpg"],
+                            "sampled_frame_image_names": ["000102.jpg"],
+                            "accepted_frame_image_names": ["000102.jpg"],
+                            "selected_before_attachment_slots_image_names": ["000102.jpg"],
+                            "selected_after_attachment_slots_image_names": [],
+                            "dropped_by_group_rerank_image_names": [],
+                            "dropped_after_attachment_slots_image_names": [],
+                            "group_frame_stride": 1,
+                            "stopped_after_image_name": "000102.jpg",
+                            "stop_reason": "accepted_frame_has_min_referable_objects",
+                            "status_before_attachment_slots": "selected_before_attachment_slots",
+                            "status_after_attachment_slots": None,
+                            "group_exhausted_without_usable_frame": False,
+                            "group_exhausted_without_referable_frame": False,
+                        },
+                    ],
+                }
+            )
+            return list(non_attachment_frames)
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "select_frames",
+                return_value=[
+                    {
+                        "image_name": "000001.jpg",
+                        "visible_object_ids": [1, 2],
+                        "score": 10,
+                        "attachment_viewpoint_exempt": True,
+                    },
+                    {
+                        "image_name": "000101.jpg",
+                        "visible_object_ids": [3],
+                        "score": 9,
+                        "attachment_viewpoint_exempt": False,
+                    },
+                    {
+                        "image_name": "000102.jpg",
+                        "visible_object_ids": [3, 9],
+                        "score": 8,
+                        "attachment_viewpoint_exempt": False,
+                    },
+                ],
+            ),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={
+                    "000001.jpg": make_camera_pose(),
+                    "000101.jpg": make_camera_pose(),
+                    "000102.jpg": make_camera_pose(),
+                },
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(referability_module, "_select_and_rerank_frames", side_effect=fake_select_and_rerank_frames),
+            patch.object(
+                referability_module,
+                "_select_attachment_group_representatives",
+                return_value=[dict(attachment_frame)],
+            ),
+            patch.object(
+                referability_module,
+                "_select_attachment_frames_by_global_pair_coverage",
+                side_effect=lambda frames, max_frames: list(frames),
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "2",
+                "--non_attachment_group_debug_dir",
+                str(debug_dir),
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        scene_grouping = cache_doc["scene_grouping"]["scene0001_00"]
+        self.assertEqual(scene_grouping["pipeline_outcome"], "processed")
+        self.assertIsNone(scene_grouping["scene_skip_reason"])
+        self.assertEqual(scene_grouping["reranked_accepted_frame_image_names"], ["000101.jpg", "000102.jpg"])
+        self.assertEqual(scene_grouping["selected_before_attachment_slots_image_names"], ["000101.jpg", "000102.jpg"])
+        self.assertEqual(scene_grouping["attachment_selected_frame_image_names"], ["000001.jpg"])
+        self.assertEqual(scene_grouping["remaining_slots_after_attachment_selection"], 1)
+        self.assertEqual(scene_grouping["selected_after_attachment_slots_image_names"], ["000101.jpg"])
+        self.assertEqual(scene_grouping["final_cacheable_frame_image_names"], ["000001.jpg", "000101.jpg"])
+        self.assertEqual(scene_grouping["groups"][0]["status_after_attachment_slots"], "final_selected")
+        self.assertEqual(scene_grouping["groups"][1]["selected_after_attachment_slots_image_names"], [])
+        self.assertEqual(scene_grouping["groups"][1]["dropped_after_attachment_slots_image_names"], ["000102.jpg"])
+        self.assertEqual(
+            scene_grouping["groups"][1]["status_after_attachment_slots"],
+            "dropped_by_attachment_slot_limit",
+        )
+        self.assertEqual(
+            list(cache_doc["frames"]["scene0001_00"].keys()),
+            ["000001.jpg", "000101.jpg"],
+        )
+
+        debug_doc = json.loads((debug_dir / "scene0001_00.json").read_text(encoding="utf-8"))
+        self.assertEqual(debug_doc, scene_grouping)
+
+    def test_main_writes_empty_scene_grouping_summary_when_no_non_attachment_candidates(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_empty_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        attachment_entry = make_debug_cache_entry()
+        attachment_entry["attachment_referable_object_ids"] = [1, 2]
+        attachment_frame = {
+            "image_name": "000001.jpg",
+            "visible_object_ids": [1, 2],
+            "attachment_referable_object_ids": [1, 2],
+            "attachment_view_group_id": 3,
+            **attachment_entry,
+        }
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "select_frames",
+                return_value=[
+                    {
+                        "image_name": "000001.jpg",
+                        "visible_object_ids": [1, 2],
+                        "score": 10,
+                        "attachment_viewpoint_exempt": True,
+                    }
+                ],
+            ),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(
+                referability_module,
+                "_select_and_rerank_frames",
+                side_effect=AssertionError("_select_and_rerank_frames should not run without non-attachment candidates"),
+            ),
+            patch.object(
+                referability_module,
+                "_select_attachment_group_representatives",
+                return_value=[attachment_frame],
+            ),
+            patch.object(
+                referability_module,
+                "_select_attachment_frames_by_global_pair_coverage",
+                side_effect=lambda frames, max_frames: list(frames),
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "2",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        scene_grouping = cache_doc["scene_grouping"]["scene0001_00"]
+        self.assertEqual(scene_grouping["pipeline_outcome"], "processed")
+        self.assertEqual(scene_grouping["non_attachment_candidate_frame_count"], 0)
+        self.assertEqual(scene_grouping["non_attachment_visible_object_group_count"], 0)
+        self.assertEqual(scene_grouping["non_attachment_processed_group_count"], 0)
+        self.assertEqual(scene_grouping["groups"], [])
+        self.assertEqual(scene_grouping["selected_after_attachment_slots_image_names"], [])
+        self.assertEqual(scene_grouping["attachment_selected_frame_image_names"], ["000001.jpg"])
+        self.assertEqual(scene_grouping["final_cacheable_frame_image_names"], ["000001.jpg"])
+
     def test_main_writes_attachment_review_json_for_already_cached_scene(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_cached_{uuid.uuid4().hex}"
         data_root = root / "data"
@@ -2367,6 +2684,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(review_path.exists())
         review_doc = json.loads(review_path.read_text(encoding="utf-8"))
         scene_review = review_doc["scenes"][0]
+        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(review_doc["scene_count"], 1)
         self.assertEqual(review_doc["raw_candidate_edge_count"], 2)
         self.assertEqual(review_doc["final_attachment_edge_count"], 1)
@@ -2377,6 +2695,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(scene_review["candidate_rows"][0]["selected_for_attachment_graph"])
         self.assertFalse(scene_review["candidate_rows"][1]["selected_for_attachment_graph"])
         self.assertIn("already_cached", review_doc["terminal_output_lines"][0])
+        self.assertEqual(
+            cache_doc["scene_grouping"]["scene0001_00"]["pipeline_outcome"],
+            "already_cached",
+        )
+        self.assertFalse(
+            cache_doc["scene_grouping"]["scene0001_00"]["grouping_available"]
+        )
 
     def test_main_writes_attachment_review_json_for_scene_without_attachment_relations(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_empty_{uuid.uuid4().hex}"

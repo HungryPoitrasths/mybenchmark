@@ -1110,6 +1110,83 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(persisted_entry["label_statuses"], {"lamp": "absent"})
         self.assertEqual(persisted_entry["referable_object_ids"], [])
 
+    def test_load_referability_cache_accepts_scene_grouping_metadata(self) -> None:
+        case_dir = make_case_dir("cache_scene_grouping")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "19.0",
+                    "scene_grouping": {
+                        "scene0000_00": {
+                            "scene_id": "scene0000_00",
+                            "pipeline_outcome": "processed",
+                            "grouping_available": True,
+                            "groups": [],
+                        }
+                    },
+                    "frames": {
+                        "scene0000_00": {
+                            "000123.jpg": {
+                                "frame_usable": True,
+                                "frame_quality_clear": True,
+                                "frame_quality_score": 82,
+                                "frame_quality_reason": "clear enough",
+                                "frame_selection_score": 82001,
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_pair_count": 0,
+                                "final_selection_rank": 0,
+                                "candidate_visible_object_ids": [1],
+                                "candidate_visibility_source": "mesh_ray_refined",
+                                "candidate_labels": ["lamp"],
+                                "label_to_object_ids": {"lamp": [1]},
+                                "selector_visible_object_ids": [1],
+                                "selector_visible_label_counts": {"lamp": 1},
+                                "visibility_audit_by_object_id": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "lamp",
+                                        "candidate_considered": True,
+                                        "candidate_passed": True,
+                                        "candidate_rejection_reasons": [],
+                                    }
+                                },
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "lamp",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    }
+                                },
+                                "crop_label_statuses": {"lamp": "unique"},
+                                "crop_label_counts": {"lamp": 1},
+                                "crop_referable_object_ids": [1],
+                                "full_frame_label_reviews": [],
+                                "full_frame_label_statuses": {},
+                                "full_frame_label_counts": {},
+                                "label_statuses": {"lamp": "unique"},
+                                "label_counts": {"lamp": 1},
+                                "referable_object_ids": [1],
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        cache = run_pipeline_module._load_referability_cache(cache_path)
+        scene_frames = run_pipeline_module._get_referability_scene_frames(cache, "scene0000_00")
+        frames = run_pipeline_module._frames_from_referability_cache(scene_frames)
+
+        self.assertIn("scene_grouping", cache)
+        self.assertEqual(cache["scene_grouping"]["scene0000_00"]["pipeline_outcome"], "processed")
+        self.assertEqual([frame["image_name"] for frame in frames], ["000123.jpg"])
+        self.assertEqual(frames[0]["visible_object_ids"], [1])
+
     def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
         self.assertTrue(
             run_pipeline_module._has_l1_visibility_candidates({"lamp": "absent"})
@@ -1947,12 +2024,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 instance_mesh_data=object(),
             )
 
-        self.assertEqual(audit["status"], "visible_enough")
-        self.assertTrue(audit["keep_for_generation"])
+        self.assertEqual(audit["status"], "low_visible")
+        self.assertFalse(audit["keep_for_generation"])
         self.assertEqual(audit["dense_in_frame_sample_count"], 8)
         self.assertEqual(audit["dense_valid_count"], 4)
         self.assertAlmostEqual(float(audit["dense_visible_ratio"]), 0.25)
+        self.assertAlmostEqual(float(audit["dense_visible_ratio_threshold"]), 0.35)
         self.assertEqual(audit["dense_visible_ratio_denominator"], "valid_count")
+        self.assertEqual(audit["reason"], "dense_visible_ratio_below_threshold")
 
     def test_run_pipeline_drops_questions_with_ambiguous_nonreferable_mentions(self) -> None:
         root = make_case_dir("pipeline_referability_backstop")

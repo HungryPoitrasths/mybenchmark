@@ -3586,6 +3586,60 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
     return _frame_entry_has_consistent_final_fields(entry)
 
 
+def _build_scene_grouping_summary(scene_id: str) -> dict[str, Any]:
+    return {
+        "scene_id": str(scene_id),
+        "pipeline_outcome": None,
+        "grouping_available": True,
+        "scene_skip_reason": None,
+        "non_attachment_candidate_frame_count": 0,
+        "non_attachment_visible_object_group_count": 0,
+        "non_attachment_processed_group_count": 0,
+        "accepted_frame_count_after_group_scan": 0,
+        "reranked_accepted_frame_image_names": [],
+        "selected_before_attachment_slots_image_names": [],
+        "selected_before_attachment_slots_count": 0,
+        "attachment_selected_frame_image_names": [],
+        "attachment_selected_frame_count": 0,
+        "remaining_slots_after_attachment_selection": None,
+        "selected_after_attachment_slots_image_names": [],
+        "selected_after_attachment_slots_count": 0,
+        "final_cacheable_frame_image_names": [],
+        "final_cacheable_frame_count": 0,
+        "groups": [],
+    }
+
+
+def _scene_grouping_has_details(record: Any) -> bool:
+    if not isinstance(record, dict):
+        return False
+    return any(
+        key in record
+        for key in (
+            "non_attachment_candidate_frame_count",
+            "non_attachment_visible_object_group_count",
+            "non_attachment_processed_group_count",
+            "reranked_accepted_frame_image_names",
+            "selected_before_attachment_slots_image_names",
+            "selected_after_attachment_slots_image_names",
+            "attachment_selected_frame_image_names",
+            "remaining_slots_after_attachment_selection",
+            "final_cacheable_frame_image_names",
+            "groups",
+        )
+    )
+
+
+def _write_scene_grouping_summary(
+    scene_id: str,
+    summary: dict[str, Any] | None,
+    debug_dir: Path | None,
+) -> None:
+    if debug_dir is None or not isinstance(summary, dict):
+        return
+    _write_json_payload(debug_dir / f"{scene_id}.json", summary)
+
+
 def _select_and_rerank_frames(
     *,
     client,
@@ -3682,6 +3736,9 @@ def _select_and_rerank_frames(
         debug_output.update(
             {
                 "scene_id": scene_dir.name,
+                "pipeline_outcome": None,
+                "grouping_available": True,
+                "scene_skip_reason": None,
                 "non_attachment_candidate_frame_count": len(frame_candidates),
                 "non_attachment_visible_object_group_count": group_count,
                 "non_attachment_processed_group_count": processed_group_count,
@@ -3689,6 +3746,13 @@ def _select_and_rerank_frames(
                 "reranked_accepted_frame_image_names": reranked_image_names,
                 "selected_before_attachment_slots_image_names": selected_before_attachment_slots,
                 "selected_before_attachment_slots_count": len(selected_before_attachment_slots),
+                "attachment_selected_frame_image_names": [],
+                "attachment_selected_frame_count": 0,
+                "remaining_slots_after_attachment_selection": None,
+                "selected_after_attachment_slots_image_names": [],
+                "selected_after_attachment_slots_count": 0,
+                "final_cacheable_frame_image_names": [],
+                "final_cacheable_frame_count": 0,
                 "groups": group_debug,
             }
         )
@@ -3848,6 +3912,9 @@ def main():
     cache["alias_config_version"] = ALIAS_CONFIG_VERSION
     cache["referability_backend"] = "crop_vlm_with_mesh_ray"
     cache["label_batch_size"] = 1
+    if not isinstance(cache.get("scene_grouping"), dict):
+        cache["scene_grouping"] = {}
+    scene_grouping_cache = cache["scene_grouping"]
 
     def _write_attachment_review() -> None:
         if not args.write_attachment_review:
@@ -3921,10 +3988,29 @@ def main():
             continue
         scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
         if scene_cache and all(_frame_entry_has_debug_fields(entry) for entry in scene_cache.values()):
+            existing_summary = scene_grouping_cache.get(scene_id)
+            if isinstance(existing_summary, dict):
+                scene_grouping_summary = dict(existing_summary)
+                scene_grouping_summary["scene_id"] = scene_id
+                scene_grouping_summary["pipeline_outcome"] = "already_cached"
+                scene_grouping_summary["grouping_available"] = _scene_grouping_has_details(existing_summary)
+            else:
+                scene_grouping_summary = {
+                    "scene_id": scene_id,
+                    "pipeline_outcome": "already_cached",
+                    "grouping_available": False,
+                }
+            scene_grouping_cache[scene_id] = scene_grouping_summary
+            _write_scene_grouping_summary(
+                scene_id,
+                scene_grouping_summary,
+                non_attachment_group_debug_dir,
+            )
+            _write_json_payload(output_path, cache)
             logger.info(
                 "Scene %s already cached -> skipping%s",
                 scene_id,
-                " (group debug JSON is only written for newly processed scenes)"
+                " (group debug JSON mirrors the persisted scene_grouping summary)"
                 if non_attachment_group_debug_dir is not None else "",
             )
             _finalize_attachment_review_scene(
@@ -4044,10 +4130,10 @@ def main():
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
 
-        non_attachment_group_stats: dict[str, Any] = {}
-        non_attachment_group_debug: dict[str, Any] | None = (
-            {} if non_attachment_group_debug_dir is not None else None
-        )
+        scene_grouping_summary = _build_scene_grouping_summary(scene_id)
+        scene_grouping_summary["non_attachment_candidate_frame_count"] = len(non_attachment_candidate_frames)
+        scene_grouping_summary["non_attachment_visible_object_group_count"] = non_attachment_group_count
+        scene_grouping_cache[scene_id] = scene_grouping_summary
         non_attachment_frames = _select_and_rerank_frames(
             client=client,
             model_name=model_name,
@@ -4056,23 +4142,8 @@ def main():
             max_frames=int(args.max_frames),
             vlm_workers=int(args.vlm_workers),
             referability_entry_builder=_build_frame_referability_entry,
-            stats_output=non_attachment_group_stats,
-            debug_output=non_attachment_group_debug,
+            debug_output=scene_grouping_summary,
         ) if non_attachment_candidate_frames else []
-        if non_attachment_group_debug is not None and not non_attachment_candidate_frames:
-            non_attachment_group_debug.update(
-                {
-                    "scene_id": scene_id,
-                    "non_attachment_candidate_frame_count": 0,
-                    "non_attachment_visible_object_group_count": 0,
-                    "non_attachment_processed_group_count": 0,
-                    "accepted_frame_count_after_group_scan": 0,
-                    "reranked_accepted_frame_image_names": [],
-                    "selected_before_attachment_slots_image_names": [],
-                    "selected_before_attachment_slots_count": 0,
-                    "groups": [],
-                }
-            )
 
         def _build_attachment_entry(
             frame: dict[str, Any],
@@ -4096,59 +4167,60 @@ def main():
         )
         remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))
         selected_non_attachment_frames = non_attachment_frames[:remaining_slots]
-        if non_attachment_group_debug is not None:
-            selected_before_attachment = set(
-                non_attachment_group_debug.get("selected_before_attachment_slots_image_names", [])
-            )
-            selected_after_attachment = {
-                str(frame.get("image_name", "")).strip()
-                for frame in selected_non_attachment_frames
-            }
-            non_attachment_group_debug["attachment_selected_frame_image_names"] = [
-                str(frame.get("image_name", "")).strip()
-                for frame in selected_attachment_frames
+        selected_before_attachment = set(
+            scene_grouping_summary.get("selected_before_attachment_slots_image_names", [])
+        )
+        selected_after_attachment = {
+            str(frame.get("image_name", "")).strip()
+            for frame in selected_non_attachment_frames
+        }
+        scene_grouping_summary["attachment_selected_frame_image_names"] = [
+            str(frame.get("image_name", "")).strip()
+            for frame in selected_attachment_frames
+        ]
+        scene_grouping_summary["attachment_selected_frame_count"] = len(selected_attachment_frames)
+        scene_grouping_summary["remaining_slots_after_attachment_selection"] = remaining_slots
+        scene_grouping_summary["selected_after_attachment_slots_image_names"] = [
+            str(frame.get("image_name", "")).strip()
+            for frame in selected_non_attachment_frames
+        ]
+        scene_grouping_summary["selected_after_attachment_slots_count"] = len(selected_non_attachment_frames)
+        for group in scene_grouping_summary.get("groups", []):
+            accepted_names = list(group.get("accepted_frame_image_names", []))
+            selected_after = [
+                image_name for image_name in accepted_names
+                if image_name in selected_after_attachment
             ]
-            non_attachment_group_debug["attachment_selected_frame_count"] = len(selected_attachment_frames)
-            non_attachment_group_debug["remaining_slots_after_attachment_selection"] = remaining_slots
-            non_attachment_group_debug["selected_after_attachment_slots_image_names"] = [
-                str(frame.get("image_name", "")).strip()
-                for frame in selected_non_attachment_frames
+            dropped_after_attachment = [
+                image_name for image_name in accepted_names
+                if image_name in selected_before_attachment
+                and image_name not in selected_after_attachment
             ]
-            non_attachment_group_debug["selected_after_attachment_slots_count"] = len(selected_non_attachment_frames)
-            for group in non_attachment_group_debug.get("groups", []):
-                accepted_names = list(group.get("accepted_frame_image_names", []))
-                selected_after = [
-                    image_name for image_name in accepted_names
-                    if image_name in selected_after_attachment
-                ]
-                dropped_after_attachment = [
-                    image_name for image_name in accepted_names
-                    if image_name in selected_before_attachment
-                    and image_name not in selected_after_attachment
-                ]
-                group["selected_after_attachment_slots_image_names"] = selected_after
-                group["dropped_after_attachment_slots_image_names"] = dropped_after_attachment
-                if not accepted_names:
-                    if bool(group.get("group_exhausted_without_usable_frame", False)):
-                        group["status_after_attachment_slots"] = "no_usable_frame"
-                    else:
-                        group["status_after_attachment_slots"] = "no_referable_frame"
-                elif selected_after:
-                    group["status_after_attachment_slots"] = "final_selected"
-                elif dropped_after_attachment:
-                    group["status_after_attachment_slots"] = "dropped_by_attachment_slot_limit"
+            group["selected_after_attachment_slots_image_names"] = selected_after
+            group["dropped_after_attachment_slots_image_names"] = dropped_after_attachment
+            if not accepted_names:
+                if bool(group.get("group_exhausted_without_usable_frame", False)):
+                    group["status_after_attachment_slots"] = "no_usable_frame"
                 else:
-                    group["status_after_attachment_slots"] = str(
-                        group.get("status_before_attachment_slots", "dropped_by_group_rerank")
-                    )
+                    group["status_after_attachment_slots"] = "no_referable_frame"
+            elif selected_after:
+                group["status_after_attachment_slots"] = "final_selected"
+            elif dropped_after_attachment:
+                group["status_after_attachment_slots"] = "dropped_by_attachment_slot_limit"
+            else:
+                group["status_after_attachment_slots"] = str(
+                    group.get("status_before_attachment_slots", "dropped_by_group_rerank")
+                )
 
         if not selected_attachment_frames and not selected_non_attachment_frames:
-            if non_attachment_group_debug is not None:
-                non_attachment_group_debug["scene_skip_reason"] = "no_final_referability_frames"
-                _write_json_payload(
-                    non_attachment_group_debug_dir / f"{scene_id}.json",
-                    non_attachment_group_debug,
-                )
+            scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
+            scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
+            _write_scene_grouping_summary(
+                scene_id,
+                scene_grouping_summary,
+                non_attachment_group_debug_dir,
+            )
+            _write_json_payload(output_path, cache)
             logger.info("Scene %s has no final referability frames -> skipping", scene_id)
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_final_referability_frames")
@@ -4234,12 +4306,14 @@ def main():
             final_selection_rank += 1
 
         if not final_scene_entries:
-            if non_attachment_group_debug is not None:
-                non_attachment_group_debug["scene_skip_reason"] = "no_cacheable_referability_entries"
-                _write_json_payload(
-                    non_attachment_group_debug_dir / f"{scene_id}.json",
-                    non_attachment_group_debug,
-                )
+            scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
+            scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
+            _write_scene_grouping_summary(
+                scene_id,
+                scene_grouping_summary,
+                non_attachment_group_debug_dir,
+            )
+            _write_json_payload(output_path, cache)
             logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_cacheable_referability_entries")
@@ -4252,17 +4326,18 @@ def main():
             key=lambda item: int(item[1].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)),
         ):
             scene_cache[image_name] = entry
-        if non_attachment_group_debug is not None:
-            non_attachment_group_debug["scene_skip_reason"] = None
-            non_attachment_group_debug["final_cacheable_frame_image_names"] = [
-                str(image_name)
-                for image_name in scene_cache.keys()
-            ]
-            non_attachment_group_debug["final_cacheable_frame_count"] = len(scene_cache)
-            _write_json_payload(
-                non_attachment_group_debug_dir / f"{scene_id}.json",
-                non_attachment_group_debug,
-            )
+        scene_grouping_summary["pipeline_outcome"] = "processed"
+        scene_grouping_summary["scene_skip_reason"] = None
+        scene_grouping_summary["final_cacheable_frame_image_names"] = [
+            str(image_name)
+            for image_name in scene_cache.keys()
+        ]
+        scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
+        _write_scene_grouping_summary(
+            scene_id,
+            scene_grouping_summary,
+            non_attachment_group_debug_dir,
+        )
 
         _write_json_payload(output_path, cache)
         _finalize_attachment_review_scene(
