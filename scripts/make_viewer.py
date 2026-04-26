@@ -122,6 +122,174 @@ VIEWER_QTYPE_ORDER = [
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 ]
+SIMPLE_VIEWER_FIELD_SPECS: dict[
+    str,
+    dict[str, list[tuple[str, tuple[str, ...]]]],
+] = {
+    "direction_agent": {
+        "objects": [
+            ("query", ("obj_b_label",)),
+            ("reference", ("obj_a_label",)),
+        ],
+        "relations": [("direction", ("correct_value",))],
+    },
+    "occlusion": {
+        "objects": [("target", ("obj_a_label",))],
+        "relations": [("visibility", ("correct_value",))],
+    },
+    "distance": {
+        "objects": [
+            ("obj_a", ("obj_a_label",)),
+            ("obj_b", ("obj_b_label",)),
+        ],
+        "relations": [
+            ("distance_bin", ("correct_value",)),
+            ("distance_m", ("distance_m",)),
+        ],
+    },
+    "direction_object_centric": {
+        "objects": [
+            ("query", ("obj_target_label",)),
+            ("reference", ("obj_ref_label",)),
+            ("facing", ("obj_face_label",)),
+        ],
+        "relations": [("direction", ("correct_value",))],
+    },
+    "direction_allocentric": {
+        "objects": [
+            ("query", ("obj_a_label",)),
+            ("reference", ("obj_b_label",)),
+        ],
+        "relations": [
+            ("camera", ("camera_cardinal",)),
+            ("direction", ("correct_value",)),
+        ],
+    },
+    "object_move_agent": {
+        "objects": [
+            ("moved", ("moved_obj_label",)),
+            ("query", ("obj_b_label", "query_obj_label")),
+            ("reference", ("obj_c_label",)),
+        ],
+        "relations": [
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
+        ],
+    },
+    "object_move_distance": {
+        "objects": [
+            ("moved", ("moved_obj_label",)),
+            ("obj_b", ("obj_b_label", "query_obj_label")),
+            ("obj_c", ("obj_c_label",)),
+        ],
+        "relations": [
+            ("old_distance_bin", ("old_distance_bin", "old_correct_value")),
+            ("new_distance_bin", ("new_distance_bin", "new_correct_value", "correct_value")),
+            ("old_distance_m", ("old_distance_m",)),
+            ("new_distance_m", ("new_distance_m",)),
+        ],
+    },
+    "object_move_occlusion": {
+        "objects": [
+            ("moved", ("moved_obj_label",)),
+            ("target", ("query_obj_label", "target_obj_label")),
+        ],
+        "relations": [
+            ("old_visibility", ("old_visibility", "old_correct_value")),
+            ("new_visibility", ("new_visibility", "new_correct_value", "correct_value")),
+        ],
+    },
+    "viewpoint_move": {
+        "objects": [("target", ("obj_a_label",))],
+        "relations": [
+            ("old_visibility", ("old_visibility", "old_correct_value")),
+            ("new_visibility", ("new_visibility", "new_correct_value", "correct_value")),
+        ],
+    },
+    "object_remove": {
+        "objects": [
+            ("removed", ("removed_obj_label",)),
+            ("target", ("obj_b_label",)),
+        ],
+        "relations": [
+            ("old_visibility", ("old_visibility", "old_correct_value")),
+            ("new_visibility", ("new_visibility", "new_correct_value", "correct_value")),
+        ],
+    },
+    "object_rotate_object_centric": {
+        "objects": [
+            ("moved", ("moved_obj_label",)),
+            ("query", ("query_obj_label",)),
+            ("facing", ("obj_face_label",)),
+            ("reference", ("obj_ref_label",)),
+        ],
+        "relations": [
+            ("rotation_angle", ("rotation_angle",)),
+            ("rotation_direction", ("rotation_direction",)),
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
+        ],
+    },
+    "object_move_allocentric": {
+        "objects": [
+            ("moved", ("moved_obj_label",)),
+            ("query", ("query_obj_label",)),
+            ("reference", ("obj_ref_label",)),
+        ],
+        "relations": [
+            ("camera", ("camera_cardinal",)),
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
+        ],
+    },
+    "attachment_chain": {
+        "objects": [
+            ("moved", ("grandparent_label",)),
+            ("child", ("parent_label",)),
+            ("grandchild", ("grandchild_label",)),
+            ("contrast", ("neighbor_label",)),
+        ],
+        "relations": [
+            ("chain_depth", ("chain_depth",)),
+            ("displaced", ("correct_value",)),
+        ],
+    },
+    "coordinate_rotation_agent": {
+        "objects": [
+            ("query", ("obj_a_label",)),
+            ("reference", ("obj_b_label",)),
+        ],
+        "relations": [
+            ("rotation_angle", ("rotation_angle",)),
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
+        ],
+    },
+    "coordinate_rotation_object_centric": {
+        "objects": [
+            ("query", ("obj_target_label",)),
+            ("reference", ("obj_ref_label",)),
+            ("facing", ("obj_face_label",)),
+        ],
+        "relations": [
+            ("rotation_angle", ("rotation_angle",)),
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
+        ],
+    },
+    "coordinate_rotation_allocentric": {
+        "objects": [
+            ("query", ("obj_a_label",)),
+            ("reference", ("obj_b_label",)),
+        ],
+        "relations": [
+            ("camera", ("camera_cardinal",)),
+            ("rotation_angle", ("rotation_angle",)),
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
+        ],
+    },
+}
 
 
 def _canonical_qtype(qtype: str) -> str:
@@ -458,6 +626,14 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .review-title{{font-size:12px;font-weight:700;color:#9a3412;margin-bottom:6px;
               text-transform:uppercase;letter-spacing:.04em}}
 .review-line{{font-size:13px;color:#7c2d12;line-height:1.5}}
+.simple-panel{{margin-top:14px}}
+.simple-section + .simple-section{{margin-top:14px}}
+.simple-section-title{{font-size:12px;font-weight:700;color:#6b7280;margin-bottom:6px;
+                       text-transform:uppercase;letter-spacing:.04em}}
+.simple-list{{display:grid;gap:6px}}
+.simple-item{{padding:8px 10px;border-radius:8px;background:#f8fafc;
+              border:1px solid #e5e7eb;font-size:13px;color:#374151;line-height:1.45}}
+.simple-empty{{font-size:13px;color:#9ca3af}}
 .footer{{margin-top:14px;font-size:11px;color:#aaa}}
 .idx{{float:right;color:#ccc;font-size:12px}}
 </style>
@@ -483,6 +659,19 @@ CARD = """\
   </div>
 </div>"""
 
+SIMPLE_CARD = """\
+<div class="card">
+  <div class="img-wrap">{img}</div>
+  <div class="body">
+    {meta}
+    <div class="simple-panel">
+      {objects}
+      {relations}
+    </div>
+    {footer}
+  </div>
+</div>"""
+
 
 def build_stats_bar(displayed_questions: list[dict]) -> str:
     level_counter: Counter = Counter()
@@ -498,6 +687,29 @@ def build_stats_bar(displayed_questions: list[dict]) -> str:
     return '<div class="stats">' + " &nbsp;&middot;&nbsp; ".join(
         html.escape(part) for part in parts
     ) + "</div>"
+
+
+def prepare_viewer_questions(
+    questions: list[dict],
+    *,
+    requested_qtypes: set[str] | None = None,
+    attachment_only: bool = False,
+    include_attachment_unchanged: bool = True,
+    apply_filters: bool = False,
+    shuffle_seed: int = 42,
+) -> list[dict]:
+    displayed_questions = select_viewer_source_questions(
+        list(questions),
+        requested_qtypes=requested_qtypes,
+        attachment_only=attachment_only,
+    )
+    displayed_questions = apply_explicit_viewer_filters(
+        displayed_questions,
+        include_attachment_unchanged=include_attachment_unchanged,
+    )
+    if apply_filters:
+        displayed_questions = apply_auto_viewer_filters(displayed_questions)
+    return order_questions_for_viewer(displayed_questions, seed=shuffle_seed)
 
 
 def _stringify_review_value(value: object) -> str:
@@ -875,6 +1087,190 @@ def _build_footer_html(question: dict) -> str:
     )
 
 
+def _build_summary_html(displayed_questions: list[dict]) -> str:
+    return (
+        '<div class="summary">\n'
+        '  <h2>Task Summary</h2>\n'
+        f'  <div class="summary-block">{build_task_summary_v2(displayed_questions)}</div>\n'
+        '</div>'
+    )
+
+
+def _build_image_html(question: dict, image_root: Path, max_width: int) -> str:
+    scene = str(question.get("scene_id", ""))
+    frame = str(question.get("image_name", ""))
+    img_path = image_root / scene / "color" / frame
+    b64 = img_to_b64(img_path, max_width)
+    if b64:
+        return f'<img src="data:image/jpeg;base64,{b64}">'
+    return '<div class="no-img">image not found</div>'
+
+
+def _build_options_html(question: dict) -> str:
+    answer = str(question.get("answer", ""))
+    options = question.get("options", [])
+    opt_html = ""
+    if isinstance(options, list):
+        for i, opt in enumerate(options):
+            letter = chr(65 + i)
+            cls = "opt correct" if letter == answer else "opt"
+            opt_html += (
+                f'<div class="{cls}">{letter}.&nbsp; {html.escape(str(opt))}</div>\n    '
+            )
+    return opt_html
+
+
+def _simple_value_from_keys(question: dict, keys: tuple[str, ...]) -> str:
+    for key in keys:
+        rendered = _stringify_review_value(question.get(key))
+        if rendered != "-":
+            return rendered
+    return "-"
+
+
+def _build_simple_items(
+    question: dict,
+    specs: list[tuple[str, tuple[str, ...]]],
+) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    for label, keys in specs:
+        rendered = _simple_value_from_keys(question, keys)
+        if rendered != "-":
+            items.append((label, rendered))
+    return items
+
+
+def _build_simple_fallback_objects(question: dict) -> list[tuple[str, str]]:
+    mentioned_objects = question.get("mentioned_objects", [])
+    items: list[tuple[str, str]] = []
+    if not isinstance(mentioned_objects, list):
+        return items
+    for item in mentioned_objects:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "mentioned")).strip() or "mentioned"
+        label = str(item.get("label", "")).strip()
+        if not label:
+            label = _stringify_review_value(item.get("obj_id"))
+        if label and label != "-":
+            items.append((role, label))
+    return items
+
+
+def _build_simple_fallback_relations(question: dict) -> list[tuple[str, str]]:
+    items = [("correct_value", _stringify_review_value(question.get("correct_value")))]
+    for label, key in (
+        ("old_correct_value", "old_correct_value"),
+        ("new_correct_value", "new_correct_value"),
+    ):
+        rendered = _stringify_review_value(question.get(key))
+        if rendered != "-":
+            items.append((label, rendered))
+    return items
+
+
+def _build_simple_sections(question: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    qtype = _canonical_qtype(str(question.get("type", "")).strip())
+    specs = SIMPLE_VIEWER_FIELD_SPECS.get(qtype)
+    if specs is None:
+        return (
+            _build_simple_fallback_objects(question),
+            _build_simple_fallback_relations(question),
+        )
+    return (
+        _build_simple_items(question, specs["objects"]),
+        _build_simple_items(question, specs["relations"]),
+    )
+
+
+def _render_simple_section(title: str, items: list[tuple[str, str]]) -> str:
+    if items:
+        body = "".join(
+            '<div class="simple-item">'
+            f"{html.escape(label)}={html.escape(value)}"
+            "</div>"
+            for label, value in items
+        )
+        return (
+            '<div class="simple-section">'
+            f'<div class="simple-section-title">{html.escape(title)}</div>'
+            f'<div class="simple-list">{body}</div>'
+            "</div>"
+        )
+    return (
+        '<div class="simple-section">'
+        f'<div class="simple-section-title">{html.escape(title)}</div>'
+        '<div class="simple-empty">-</div>'
+        "</div>"
+    )
+
+
+def _build_full_viewer_html_from_displayed_questions(
+    displayed_questions: list[dict],
+    image_root: Path,
+    *,
+    max_width: int = 480,
+    title: str = "predictive spatial reasoning benchmark",
+    include_referability_audit: bool = False,
+) -> str:
+    summary_html = _build_summary_html(displayed_questions)
+    stats_html = build_stats_bar(displayed_questions)
+    cards: list[str] = []
+
+    for idx, question in enumerate(displayed_questions, start=1):
+        cards.append(
+            CARD.format(
+                img=_build_image_html(question, image_root, max_width),
+                meta=_build_meta_html(question, idx),
+                question=html.escape(str(question.get("question", ""))),
+                options=_build_options_html(question),
+                review_notes=_build_review_notes_html(
+                    question,
+                    include_referability_audit=include_referability_audit,
+                ),
+                footer=_build_footer_html(question),
+            )
+        )
+
+    return PAGE.format(
+        title=html.escape(title),
+        stats=stats_html,
+        summary=summary_html,
+        cards="\n".join(cards),
+    )
+
+
+def _build_simple_viewer_html_from_displayed_questions(
+    displayed_questions: list[dict],
+    image_root: Path,
+    *,
+    max_width: int = 480,
+    title: str = "predictive spatial reasoning benchmark (simple review)",
+) -> str:
+    summary_html = _build_summary_html(displayed_questions)
+    stats_html = build_stats_bar(displayed_questions)
+    cards: list[str] = []
+
+    for idx, question in enumerate(displayed_questions, start=1):
+        objects, relations = _build_simple_sections(question)
+        cards.append(
+            SIMPLE_CARD.format(
+                img=_build_image_html(question, image_root, max_width),
+                meta=_build_meta_html(question, idx),
+                objects=_render_simple_section("Objects", objects),
+                relations=_render_simple_section("Relations", relations),
+                footer=_build_footer_html(question),
+            )
+        )
+
+    return PAGE.format(
+        title=html.escape(title),
+        stats=stats_html,
+        summary=summary_html,
+        cards="\n".join(cards),
+    )
+
+
 def build_viewer_html(
     questions: list[dict],
     image_root: Path,
@@ -888,70 +1284,48 @@ def build_viewer_html(
     include_referability_audit: bool = False,
     apply_filters: bool = False,
 ) -> str:
-    displayed_questions = select_viewer_source_questions(
-        list(questions),
+    displayed_questions = prepare_viewer_questions(
+        questions,
         requested_qtypes=requested_qtypes,
         attachment_only=attachment_only,
-    )
-    displayed_questions = apply_explicit_viewer_filters(
-        displayed_questions,
         include_attachment_unchanged=include_attachment_unchanged,
+        apply_filters=apply_filters,
+        shuffle_seed=shuffle_seed,
     )
-    if apply_filters:
-        displayed_questions = apply_auto_viewer_filters(displayed_questions)
-    displayed_questions = order_questions_for_viewer(displayed_questions, seed=shuffle_seed)
-    summary_html = (
-        '<div class="summary">\n'
-        '  <h2>Task Summary</h2>\n'
-        f'  <div class="summary-block">{build_task_summary_v2(displayed_questions)}</div>\n'
-        '</div>'
+    return _build_full_viewer_html_from_displayed_questions(
+        displayed_questions,
+        image_root,
+        max_width=max_width,
+        title=title,
+        include_referability_audit=include_referability_audit,
     )
-    stats_html = build_stats_bar(displayed_questions)
 
-    cards: list[str] = []
 
-    for idx, q in enumerate(displayed_questions, start=1):
-        scene = str(q.get("scene_id", ""))
-        frame = str(q.get("image_name", ""))
-        answer = str(q.get("answer", ""))
-        opts = q.get("options", [])
-
-        img_path = image_root / scene / "color" / frame
-        b64 = img_to_b64(img_path, max_width)
-        img_html = (
-            f'<img src="data:image/jpeg;base64,{b64}">'
-            if b64
-            else '<div class="no-img">image not found</div>'
-        )
-
-        opt_html = ""
-        if isinstance(opts, list):
-            for i, opt in enumerate(opts):
-                letter = chr(65 + i)
-                cls = "opt correct" if letter == answer else "opt"
-                opt_html += (
-                    f'<div class="{cls}">{letter}.&nbsp; {html.escape(str(opt))}</div>\n    '
-                )
-
-        cards.append(
-            CARD.format(
-                img=img_html,
-                meta=_build_meta_html(q, idx),
-                question=html.escape(str(q.get("question", ""))),
-                options=opt_html,
-                review_notes=_build_review_notes_html(
-                    q,
-                    include_referability_audit=include_referability_audit,
-                ),
-                footer=_build_footer_html(q),
-            )
-        )
-
-    return PAGE.format(
-        title=html.escape(title),
-        stats=stats_html,
-        summary=summary_html,
-        cards="\n".join(cards),
+def build_simple_viewer_html(
+    questions: list[dict],
+    image_root: Path,
+    *,
+    max_width: int = 480,
+    shuffle_seed: int = 42,
+    title: str = "predictive spatial reasoning benchmark (simple review)",
+    requested_qtypes: set[str] | None = None,
+    attachment_only: bool = False,
+    include_attachment_unchanged: bool = True,
+    apply_filters: bool = False,
+) -> str:
+    displayed_questions = prepare_viewer_questions(
+        questions,
+        requested_qtypes=requested_qtypes,
+        attachment_only=attachment_only,
+        include_attachment_unchanged=include_attachment_unchanged,
+        apply_filters=apply_filters,
+        shuffle_seed=shuffle_seed,
+    )
+    return _build_simple_viewer_html_from_displayed_questions(
+        displayed_questions,
+        image_root,
+        max_width=max_width,
+        title=title,
     )
 
 
@@ -973,6 +1347,11 @@ def main():
         help="Root of ScanNet scans (parent of scene dirs)",
     )
     parser.add_argument("--output", default="viewer.html")
+    parser.add_argument(
+        "--simple_output",
+        default=None,
+        help="Optional second output path for a simple structured-review HTML page",
+    )
     parser.add_argument(
         "--qtypes",
         default="",
@@ -1036,16 +1415,19 @@ def main():
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )
     image_root = Path(args.image_root)
-    html_text = build_viewer_html(
+    displayed_questions = prepare_viewer_questions(
         questions,
-        image_root,
-        max_width=args.max_width,
-        shuffle_seed=args.shuffle_seed,
         requested_qtypes=requested_qtypes,
         attachment_only=args.attachment_only,
         include_attachment_unchanged=args.include_attachment_unchanged,
-        include_referability_audit=args.include_referability_audit,
         apply_filters=args.apply_auto_filters,
+        shuffle_seed=args.shuffle_seed,
+    )
+    html_text = _build_full_viewer_html_from_displayed_questions(
+        displayed_questions,
+        image_root,
+        max_width=args.max_width,
+        include_referability_audit=args.include_referability_audit,
     )
 
     out = Path(args.output)
@@ -1053,6 +1435,18 @@ def main():
     out.write_text(html_text, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
     print(f"Saved: {out}  ({size_kb} KB)")
+
+    if args.simple_output:
+        simple_html = _build_simple_viewer_html_from_displayed_questions(
+            displayed_questions,
+            image_root,
+            max_width=args.max_width,
+        )
+        simple_out = Path(args.simple_output)
+        simple_out.parent.mkdir(parents=True, exist_ok=True)
+        simple_out.write_text(simple_html, encoding="utf-8")
+        simple_size_kb = simple_out.stat().st_size // 1024
+        print(f"Saved: {simple_out}  ({simple_size_kb} KB)")
 
 
 if __name__ == "__main__":

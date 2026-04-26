@@ -1,10 +1,15 @@
+import json
 from pathlib import Path
+import sys
 import unittest
+from unittest import mock
 
 from scripts.make_viewer import (
+    build_simple_viewer_html,
     build_viewer_html,
     build_task_summary_v2,
     filter_viewer_questions,
+    main,
     question_review_notes,
     select_viewer_source_questions,
 )
@@ -27,6 +32,26 @@ def make_object_move_question(
         "relation_unchanged": unchanged,
         "question": text,
     }
+
+
+def write_questions_json(root: Path, questions: list[dict]) -> Path:
+    questions_path = root / "questions.json"
+    questions_path.write_text(
+        json.dumps({"questions": questions}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return questions_path
+
+
+def run_make_viewer_cli(argv: list[str]) -> None:
+    with mock.patch.object(sys, "argv", argv), mock.patch("scripts.make_viewer.Image", object()):
+        main()
+
+
+def workspace_case_dir(name: str) -> Path:
+    root = Path("tests") / "_tmp" / name
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 class MakeViewerTests(unittest.TestCase):
@@ -533,6 +558,238 @@ class MakeViewerTests(unittest.TestCase):
             notes,
         )
         self.assertIn("pillow#61：正常。2D 检测和 3D 网格检查都已通过。", notes)
+
+
+    def test_main_without_simple_output_matches_build_viewer_html(self) -> None:
+        questions = [
+            {
+                "type": "direction_agent",
+                "scene_id": "scene0000_00",
+                "image_name": "000.jpg",
+                "question": "Where is the lamp relative to the desk?",
+                "options": ["left", "right", "front"],
+                "answer": "A",
+                "correct_value": "left",
+                "obj_a_label": "desk",
+                "obj_b_label": "lamp",
+            }
+        ]
+
+        root = workspace_case_dir("make_viewer_main_only")
+        questions_path = write_questions_json(root, questions)
+        image_root = root / "images"
+        image_root.mkdir(exist_ok=True)
+        output_path = root / "viewer.html"
+
+        expected_html = build_viewer_html(questions, image_root)
+        run_make_viewer_cli(
+            [
+                "make_viewer.py",
+                "--questions",
+                str(questions_path),
+                "--image_root",
+                str(image_root),
+                "--output",
+                str(output_path),
+            ]
+        )
+
+        self.assertEqual(output_path.read_text(encoding="utf-8"), expected_html)
+
+    def test_main_with_simple_output_writes_both_html_files(self) -> None:
+        questions = [
+            {
+                "type": "direction_agent",
+                "scene_id": "scene0000_00",
+                "image_name": "000.jpg",
+                "question": "Where is the lamp relative to the desk?",
+                "options": ["left", "right", "front"],
+                "answer": "A",
+                "correct_value": "left",
+                "obj_a_label": "desk",
+                "obj_b_label": "lamp",
+            }
+        ]
+
+        root = workspace_case_dir("make_viewer_main_dual")
+        questions_path = write_questions_json(root, questions)
+        image_root = root / "images"
+        image_root.mkdir(exist_ok=True)
+        output_path = root / "viewer.html"
+        simple_output_path = root / "viewer_simple.html"
+
+        run_make_viewer_cli(
+            [
+                "make_viewer.py",
+                "--questions",
+                str(questions_path),
+                "--image_root",
+                str(image_root),
+                "--output",
+                str(output_path),
+                "--simple_output",
+                str(simple_output_path),
+            ]
+        )
+
+        full_html = output_path.read_text(encoding="utf-8")
+        simple_html = simple_output_path.read_text(encoding="utf-8")
+        self.assertTrue(output_path.exists())
+        self.assertTrue(simple_output_path.exists())
+        self.assertIn("Where is the lamp relative to the desk?", full_html)
+        self.assertIn("A.&nbsp; left", full_html)
+        self.assertIn("image not found", full_html)
+        self.assertIn("image not found", simple_html)
+        self.assertNotIn("Where is the lamp relative to the desk?", simple_html)
+        self.assertNotIn("A.&nbsp; left", simple_html)
+        self.assertIn("Objects", simple_html)
+        self.assertIn("Relations", simple_html)
+
+    def test_build_simple_viewer_html_direction_agent_uses_query_then_reference(self) -> None:
+        html_text = build_simple_viewer_html(
+            [
+                {
+                    "type": "direction_agent",
+                    "scene_id": "scene0000_00",
+                    "image_name": "000.jpg",
+                    "question": "Full text should stay hidden",
+                    "options": ["front", "left", "right"],
+                    "answer": "B",
+                    "correct_value": "left",
+                    "obj_a_label": "desk",
+                    "obj_b_label": "lamp",
+                }
+            ],
+            Path("."),
+        )
+
+        self.assertNotIn("Full text should stay hidden", html_text)
+        self.assertNotIn("A.&nbsp; front", html_text)
+        self.assertIn("direction=left", html_text)
+        self.assertLess(html_text.index("query=lamp"), html_text.index("reference=desk"))
+
+    def test_build_simple_viewer_html_renders_representative_qtypes(self) -> None:
+        questions = [
+            {
+                "type": "occlusion",
+                "scene_id": "scene0000_00",
+                "image_name": "000.jpg",
+                "correct_value": "occluded",
+                "obj_a_label": "chair",
+            },
+            {
+                "type": "distance",
+                "scene_id": "scene0000_00",
+                "image_name": "001.jpg",
+                "correct_value": "close (1.5-3m)",
+                "distance_m": 2.3,
+                "obj_a_label": "desk",
+                "obj_b_label": "lamp",
+            },
+            {
+                "type": "object_move_occlusion",
+                "scene_id": "scene0000_00",
+                "image_name": "002.jpg",
+                "moved_obj_label": "cart",
+                "query_obj_label": "box",
+                "old_visibility": "visible",
+                "new_visibility": "occluded",
+            },
+            {
+                "type": "object_move_allocentric",
+                "scene_id": "scene0000_00",
+                "image_name": "003.jpg",
+                "moved_obj_label": "table",
+                "query_obj_label": "bag",
+                "obj_ref_label": "door",
+                "camera_cardinal": "west",
+                "old_correct_value": "left",
+                "new_correct_value": "right",
+            },
+            {
+                "type": "object_rotate_object_centric",
+                "scene_id": "scene0000_00",
+                "image_name": "004.jpg",
+                "moved_obj_label": "desk",
+                "query_obj_label": "chair",
+                "obj_face_label": "monitor",
+                "obj_ref_label": "window",
+                "rotation_angle": 90,
+                "rotation_direction": "clockwise",
+                "old_correct_value": "front",
+                "new_correct_value": "left",
+            },
+            {
+                "type": "attachment_chain",
+                "scene_id": "scene0000_00",
+                "image_name": "005.jpg",
+                "grandparent_label": "desk",
+                "parent_label": "monitor",
+                "grandchild_label": "webcam",
+                "neighbor_label": "chair",
+                "chain_depth": 2,
+                "correct_value": "yes",
+            },
+        ]
+
+        html_text = build_simple_viewer_html(questions, Path("."))
+
+        self.assertIn("target=chair", html_text)
+        self.assertIn("visibility=occluded", html_text)
+        self.assertIn("distance_bin=close (1.5-3m)", html_text)
+        self.assertIn("distance_m=2.3", html_text)
+        self.assertIn("old_visibility=visible", html_text)
+        self.assertIn("new_visibility=occluded", html_text)
+        self.assertIn("camera=west", html_text)
+        self.assertIn("old_direction=left", html_text)
+        self.assertIn("new_direction=right", html_text)
+        self.assertIn("rotation_angle=90", html_text)
+        self.assertIn("rotation_direction=clockwise", html_text)
+        self.assertIn("chain_depth=2", html_text)
+        self.assertIn("displaced=yes", html_text)
+
+    def test_build_simple_viewer_html_unknown_qtype_falls_back_to_mentioned_objects(self) -> None:
+        html_text = build_simple_viewer_html(
+            [
+                {
+                    "type": "custom_unknown",
+                    "scene_id": "scene0000_00",
+                    "image_name": "000.jpg",
+                    "correct_value": "around",
+                    "mentioned_objects": [
+                        {"role": "anchor", "label": "lamp"},
+                        {"role": "target", "label": "chair"},
+                    ],
+                }
+            ],
+            Path("."),
+        )
+
+        self.assertIn("anchor=lamp", html_text)
+        self.assertIn("target=chair", html_text)
+        self.assertIn("correct_value=around", html_text)
+
+    def test_build_simple_viewer_html_missing_images_do_not_break_output(self) -> None:
+        html_text = build_simple_viewer_html(
+            [
+                {
+                    "type": "object_move_agent",
+                    "scene_id": "scene0000_00",
+                    "image_name": "missing.jpg",
+                    "moved_obj_label": "cart",
+                    "obj_b_label": "box",
+                    "obj_c_label": "wall",
+                    "old_correct_value": "left",
+                    "new_correct_value": "right",
+                }
+            ],
+            Path("."),
+        )
+
+        self.assertIn("image not found", html_text)
+        self.assertIn("moved=cart", html_text)
+        self.assertIn("query=box", html_text)
+        self.assertIn("reference=wall", html_text)
 
 
 if __name__ == "__main__":
