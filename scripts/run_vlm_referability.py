@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import sys
+import threading
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
@@ -119,6 +120,25 @@ LABEL_STATUS_ABSENT = "absent"
 LABEL_STATUS_UNSURE = "unsure"
 
 _DINOX_CLIENT_CACHE: Any | None = None
+_VLM_CALL_FAILURE_COUNT = 0
+_VLM_CALL_FAILURE_COUNT_LOCK = threading.Lock()
+
+
+def _reset_vlm_call_failure_count() -> None:
+    global _VLM_CALL_FAILURE_COUNT
+    with _VLM_CALL_FAILURE_COUNT_LOCK:
+        _VLM_CALL_FAILURE_COUNT = 0
+
+
+def _record_vlm_call_failure() -> None:
+    global _VLM_CALL_FAILURE_COUNT
+    with _VLM_CALL_FAILURE_COUNT_LOCK:
+        _VLM_CALL_FAILURE_COUNT += 1
+
+
+def _get_vlm_call_failure_count() -> int:
+    with _VLM_CALL_FAILURE_COUNT_LOCK:
+        return int(_VLM_CALL_FAILURE_COUNT)
 
 
 def _write_json_payload(path: Path, payload: object) -> None:
@@ -305,6 +325,7 @@ def _call_vlm_json(
             return default, text
         return parsed, text
     except Exception as exc:
+        _record_vlm_call_failure()
         logger.warning("VLM call failed: %s", exc)
         return default, ""
 
@@ -3640,6 +3661,237 @@ def _write_scene_grouping_summary(
     _write_json_payload(debug_dir / f"{scene_id}.json", summary)
 
 
+def _infer_default_split(data_root: Path) -> str:
+    if data_root.name == "scans_test":
+        return "test"
+    return "train"
+
+
+def _resolve_scannet_scene_dirs(data_root: Path, split: str) -> list[tuple[str, Path]]:
+    if data_root.name == "scans":
+        split_roots = {
+            "train": data_root,
+            "test": data_root.parent / "scans_test",
+        }
+    elif data_root.name == "scans_test":
+        split_roots = {
+            "train": data_root.parent / "scans",
+            "test": data_root,
+        }
+    else:
+        nested_train_root = data_root / "scans"
+        nested_test_root = data_root / "scans_test"
+        has_flat_scene_dirs = data_root.exists() and any(
+            path.is_dir() and (path / "pose").exists()
+            for path in data_root.iterdir()
+        )
+        if has_flat_scene_dirs and not nested_train_root.exists() and not nested_test_root.exists():
+            split_roots = {
+                "train": data_root,
+                "test": data_root.parent / "scans_test",
+            }
+        else:
+            split_roots = {
+                "train": nested_train_root,
+                "test": nested_test_root,
+            }
+
+    split_order = ["train", "test"] if split == "all" else [split]
+    scene_entries: list[tuple[str, Path]] = []
+    for split_name in split_order:
+        split_root = split_roots[split_name]
+        if not split_root.exists() or not split_root.is_dir():
+            logger.warning(
+                "ScanNet split root for %s does not exist: %s",
+                split_name,
+                split_root,
+            )
+            continue
+        split_scene_dirs = sorted(
+            path for path in split_root.iterdir()
+            if path.is_dir() and (path / "pose").exists()
+        )
+        scene_entries.extend((split_name, path) for path in split_scene_dirs)
+    return scene_entries
+
+
+def _build_scene_status_record(
+    scene_id: str,
+    *,
+    split: str | None,
+    pipeline_outcome: str,
+    has_cache_frames: bool,
+    final_cacheable_frame_count: int,
+    scene_skip_reason: str | None,
+) -> dict[str, Any]:
+    return {
+        "scene_id": str(scene_id),
+        "processed": True,
+        "pipeline_outcome": str(pipeline_outcome),
+        "split": None if split is None else str(split),
+        "has_cache_frames": bool(has_cache_frames),
+        "final_cacheable_frame_count": max(0, int(final_cacheable_frame_count)),
+        "scene_skip_reason": None if scene_skip_reason is None else str(scene_skip_reason),
+    }
+
+
+def _prepare_scene_grouping_summary(
+    scene_id: str,
+    split: str,
+    summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    scene_grouping_summary = (
+        dict(summary)
+        if isinstance(summary, dict)
+        else _build_scene_grouping_summary(scene_id)
+    )
+    scene_grouping_summary["scene_id"] = str(scene_id)
+    scene_grouping_summary["split"] = str(split)
+    if "grouping_available" not in scene_grouping_summary:
+        scene_grouping_summary["grouping_available"] = _scene_grouping_has_details(summary)
+    return scene_grouping_summary
+
+
+def _persist_scene_state(
+    *,
+    cache: dict[str, Any],
+    scene_grouping_cache: dict[str, Any],
+    scene_status_cache: dict[str, Any],
+    output_path: Path,
+    non_attachment_group_debug_dir: Path | None,
+    scene_id: str,
+    split: str,
+    pipeline_outcome: str,
+    scene_skip_reason: str | None,
+    scene_grouping_summary: dict[str, Any] | None,
+    scene_cache: dict[str, Any] | None,
+) -> None:
+    summary = _prepare_scene_grouping_summary(scene_id, split, scene_grouping_summary)
+    summary["pipeline_outcome"] = str(pipeline_outcome)
+    summary["scene_skip_reason"] = None if scene_skip_reason is None else str(scene_skip_reason)
+    final_cacheable_frame_count = int(
+        summary.get(
+            "final_cacheable_frame_count",
+            len(scene_cache) if isinstance(scene_cache, dict) else 0,
+        ) or 0
+    )
+    if "final_cacheable_frame_image_names" not in summary:
+        summary["final_cacheable_frame_image_names"] = (
+            [str(image_name) for image_name in scene_cache.keys()]
+            if isinstance(scene_cache, dict) and scene_cache
+            else []
+        )
+    scene_grouping_cache[scene_id] = summary
+    scene_status_cache[scene_id] = _build_scene_status_record(
+        scene_id,
+        split=split,
+        pipeline_outcome=pipeline_outcome,
+        has_cache_frames=bool(scene_cache) or final_cacheable_frame_count > 0,
+        final_cacheable_frame_count=final_cacheable_frame_count,
+        scene_skip_reason=scene_skip_reason,
+    )
+    _write_scene_grouping_summary(
+        scene_id,
+        summary,
+        non_attachment_group_debug_dir,
+    )
+    _write_json_payload(output_path, cache)
+
+
+def _migrate_scene_status_cache(cache: dict[str, Any]) -> bool:
+    changed = False
+    if not isinstance(cache.get("frames"), dict):
+        cache["frames"] = {}
+        changed = True
+    if not isinstance(cache.get("scene_grouping"), dict):
+        cache["scene_grouping"] = {}
+        changed = True
+    if not isinstance(cache.get("scene_status"), dict):
+        cache["scene_status"] = {}
+        changed = True
+
+    frames_cache = cache["frames"]
+    scene_grouping_cache = cache["scene_grouping"]
+    scene_status_cache = cache["scene_status"]
+
+    for scene_id, frame_entries in frames_cache.items():
+        if scene_id in scene_status_cache:
+            continue
+        frame_count = len(frame_entries) if isinstance(frame_entries, dict) else 0
+        grouping_summary = scene_grouping_cache.get(scene_id)
+        pipeline_outcome = "processed"
+        scene_skip_reason = None
+        split = None
+        if isinstance(grouping_summary, dict):
+            pipeline_outcome = str(grouping_summary.get("pipeline_outcome") or "processed")
+            scene_skip_reason = grouping_summary.get("scene_skip_reason")
+            split = grouping_summary.get("split")
+        scene_status_cache[scene_id] = _build_scene_status_record(
+            scene_id,
+            split=None if split is None else str(split),
+            pipeline_outcome=pipeline_outcome,
+            has_cache_frames=frame_count > 0,
+            final_cacheable_frame_count=frame_count,
+            scene_skip_reason=None if scene_skip_reason is None else str(scene_skip_reason),
+        )
+        changed = True
+
+    for scene_id, grouping_summary in scene_grouping_cache.items():
+        if scene_id in scene_status_cache or not isinstance(grouping_summary, dict):
+            continue
+        frame_entries = frames_cache.get(scene_id)
+        frame_count = len(frame_entries) if isinstance(frame_entries, dict) else 0
+        scene_status_cache[scene_id] = _build_scene_status_record(
+            scene_id,
+            split=(
+                None
+                if grouping_summary.get("split") is None
+                else str(grouping_summary.get("split"))
+            ),
+            pipeline_outcome=str(grouping_summary.get("pipeline_outcome") or "legacy_migrated"),
+            has_cache_frames=bool(frame_count or grouping_summary.get("final_cacheable_frame_count", 0)),
+            final_cacheable_frame_count=int(
+                grouping_summary.get("final_cacheable_frame_count", frame_count) or 0
+            ),
+            scene_skip_reason=(
+                None
+                if grouping_summary.get("scene_skip_reason") is None
+                else str(grouping_summary.get("scene_skip_reason"))
+            ),
+        )
+        changed = True
+    return changed
+
+
+def _log_final_batch_banner(
+    *,
+    split: str,
+    total_scene_count: int,
+    processed_scene_count: int,
+    remaining_scene_count: int,
+    completed: bool = False,
+) -> None:
+    if completed:
+        headline = f"ALL SCENES COMPLETED FOR SPLIT {split}"
+        body = "ALL SCENES PROCESSED AFTER THIS RUN"
+    else:
+        headline = f"FINAL BATCH FOR SPLIT {split}"
+        body = (
+            f"Only {remaining_scene_count} unprocessed scenes remain; "
+            "all remaining scenes will be processed in this run."
+        )
+    logger.warning("============================================================")
+    logger.warning("%s", headline)
+    logger.warning(
+        "Total scenes: %d | Already processed: %d | Remaining unprocessed: %d",
+        total_scene_count,
+        processed_scene_count,
+        remaining_scene_count,
+    )
+    logger.warning("%s", body)
+    logger.warning("============================================================")
+
+
 def _select_and_rerank_frames(
     *,
     client,
@@ -3782,7 +4034,13 @@ def main():
     parser.add_argument(
         "--data_root", type=str,
         default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
-        help="Root directory of ScanNet scans (contains scene subdirectories)",
+        help="ScanNet data root or split root; supports .../data, .../data/scans, or .../data/scans_test",
+    )
+    parser.add_argument(
+        "--split",
+        choices=("train", "test", "all"),
+        default=None,
+        help="ScanNet split to process; defaults to an inferred split based on --data_root",
     )
     parser.add_argument(
         "--output", type=str, required=True,
@@ -3790,7 +4048,11 @@ def main():
     )
     parser.add_argument(
         "--max_scenes", type=int, default=300,
-        help="Maximum number of scenes to process",
+        help="Legacy scene cap for non-batch runs; not recommended for long resume-heavy experiments",
+    )
+    parser.add_argument(
+        "--scene_batch_size", type=int, default=None,
+        help="Process the next N unprocessed scenes, skipping any scene already present in scene_status",
     )
     parser.add_argument(
         "--max_frames", type=int, default=5,
@@ -3842,6 +4104,9 @@ def main():
         help="Optional path for the attachment candidate review JSON; defaults beside --output",
     )
     args = parser.parse_args()
+    _reset_vlm_call_failure_count()
+    if args.scene_batch_size is not None and int(args.scene_batch_size) <= 0:
+        parser.error("--scene_batch_size must be >= 1")
 
     global EXCLUDED_LABELS
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
@@ -3878,6 +4143,8 @@ def main():
     model_name = args.vlm_model if args.vlm_model else available[0]
     logger.info("Using model: %s", model_name)
 
+    data_root = Path(args.data_root)
+    selected_split = args.split or _infer_default_split(data_root)
     output_path = Path(args.output)
     attachment_review_output = (
         Path(args.attachment_review_output)
@@ -3896,6 +4163,8 @@ def main():
         "referability_backend": "crop_vlm_with_mesh_ray",
         "label_batch_size": 1,
         "frames": {},
+        "scene_grouping": {},
+        "scene_status": {},
     }
     if args.resume and output_path.exists():
         with open(output_path, "r", encoding="utf-8") as f:
@@ -3909,12 +4178,19 @@ def main():
                 )
             cache = loaded
             logger.info("Resuming from %s", output_path)
+    migrated_scene_status = _migrate_scene_status_cache(cache)
     cache["alias_config_version"] = ALIAS_CONFIG_VERSION
     cache["referability_backend"] = "crop_vlm_with_mesh_ray"
     cache["label_batch_size"] = 1
+    if migrated_scene_status and args.resume and output_path.exists():
+        logger.info("Migrated legacy cache scene progress into scene_status")
+        _write_json_payload(output_path, cache)
     if not isinstance(cache.get("scene_grouping"), dict):
         cache["scene_grouping"] = {}
+    if not isinstance(cache.get("scene_status"), dict):
+        cache["scene_status"] = {}
     scene_grouping_cache = cache["scene_grouping"]
+    scene_status_cache = cache["scene_status"]
 
     def _write_attachment_review() -> None:
         if not args.write_attachment_review:
@@ -3935,28 +4211,87 @@ def main():
             logger.info("%s", line)
         _write_attachment_review()
 
-    data_root = Path(args.data_root)
-    scene_dirs = sorted(
-        path for path in data_root.iterdir()
-        if path.is_dir() and (path / "pose").exists()
+    scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
+    logger.info(
+        "Found %d candidate scenes for split=%s",
+        len(scene_entries),
+        selected_split,
     )
-    logger.info("Found %d candidate scenes", len(scene_dirs))
+    selected_scene_ids = [scene_dir.name for _, scene_dir in scene_entries]
+
+    def _processed_scene_count() -> int:
+        return sum(1 for scene_id in selected_scene_ids if scene_id in scene_status_cache)
+
+    batch_target = (
+        None
+        if args.scene_batch_size is None
+        else max(0, int(args.scene_batch_size))
+    )
+    final_batch_mode = False
+    if batch_target is not None:
+        remaining_unprocessed = max(0, len(scene_entries) - _processed_scene_count())
+        if 0 < remaining_unprocessed < batch_target:
+            final_batch_mode = True
+            _log_final_batch_banner(
+                split=selected_split,
+                total_scene_count=len(scene_entries),
+                processed_scene_count=len(scene_entries) - remaining_unprocessed,
+                remaining_scene_count=remaining_unprocessed,
+            )
 
     processed = 0
-    for scene_dir in scene_dirs:
-        if processed >= args.max_scenes:
+    newly_processed = 0
+    for scene_index, (scene_split, scene_dir) in enumerate(scene_entries, start=1):
+        if batch_target is None:
+            if processed >= args.max_scenes:
+                break
+        elif not final_batch_mode and newly_processed >= batch_target:
             break
 
         scene_id = scene_dir.name
+        existing_status = scene_status_cache.get(scene_id)
+        if isinstance(existing_status, dict):
+            if existing_status.get("split") != scene_split:
+                existing_status["split"] = scene_split
+                scene_status_cache[scene_id] = existing_status
+            existing_grouping = scene_grouping_cache.get(scene_id)
+            if isinstance(existing_grouping, dict) and existing_grouping.get("split") != scene_split:
+                existing_grouping["split"] = scene_split
+                scene_grouping_cache[scene_id] = existing_grouping
+            logger.info(
+                "Scene %s already recorded in scene_status (%s) -> skipping",
+                scene_id,
+                existing_status.get("pipeline_outcome", "processed"),
+            )
+            continue
+
         logger.info(
-            "=== Referability scene %s (%d/%d) ===",
+            "=== Referability scene %s [split=%s] (%d/%d) ===",
             scene_id,
-            processed + 1,
-            args.max_scenes,
+            scene_split,
+            scene_index,
+            len(scene_entries),
         )
 
         scene = parse_scene(scene_dir)
         if scene is None:
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="parse_scene_failed",
+                scene_skip_reason="parse_scene_failed",
+                scene_grouping_summary=_prepare_scene_grouping_summary(
+                    scene_id,
+                    scene_split,
+                ),
+                scene_cache=None,
+            )
+            newly_processed += 1
             continue
 
         enrich_scene_with_attachment(scene)
@@ -3982,31 +4317,53 @@ def main():
 
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_attachment_relations",
+                scene_skip_reason="no_attachment_relations",
+                scene_grouping_summary=_prepare_scene_grouping_summary(
+                    scene_id,
+                    scene_split,
+                ),
+                scene_cache=None,
+            )
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_attachment_relations")
             )
+            newly_processed += 1
             continue
-        scene_cache = cache.setdefault("frames", {}).setdefault(scene_id, {})
-        if scene_cache and all(_frame_entry_has_debug_fields(entry) for entry in scene_cache.values()):
-            existing_summary = scene_grouping_cache.get(scene_id)
-            if isinstance(existing_summary, dict):
-                scene_grouping_summary = dict(existing_summary)
-                scene_grouping_summary["scene_id"] = scene_id
-                scene_grouping_summary["pipeline_outcome"] = "already_cached"
-                scene_grouping_summary["grouping_available"] = _scene_grouping_has_details(existing_summary)
-            else:
-                scene_grouping_summary = {
-                    "scene_id": scene_id,
-                    "pipeline_outcome": "already_cached",
-                    "grouping_available": False,
-                }
-            scene_grouping_cache[scene_id] = scene_grouping_summary
-            _write_scene_grouping_summary(
+        frames_cache = cache.setdefault("frames", {})
+        existing_scene_cache = frames_cache.get(scene_id)
+        if isinstance(existing_scene_cache, dict) and existing_scene_cache and all(
+            _frame_entry_has_debug_fields(entry) for entry in existing_scene_cache.values()
+        ):
+            existing_summary = _prepare_scene_grouping_summary(
                 scene_id,
-                scene_grouping_summary,
-                non_attachment_group_debug_dir,
+                scene_split,
+                scene_grouping_cache.get(scene_id),
             )
-            _write_json_payload(output_path, cache)
+            existing_summary["grouping_available"] = _scene_grouping_has_details(
+                scene_grouping_cache.get(scene_id)
+            )
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="already_cached",
+                scene_skip_reason=None,
+                scene_grouping_summary=existing_summary,
+                scene_cache=existing_scene_cache,
+            )
             logger.info(
                 "Scene %s already cached -> skipping%s",
                 scene_id,
@@ -4016,7 +4373,6 @@ def main():
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("already_cached")
             )
-            processed += 1
             continue
 
         frame_candidates = select_frames(
@@ -4027,9 +4383,26 @@ def main():
             keep_all_attachment_frames=True,
         )
         if not frame_candidates:
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_frame_candidates",
+                scene_skip_reason="no_frame_candidates",
+                scene_grouping_summary=_prepare_scene_grouping_summary(
+                    scene_id,
+                    scene_split,
+                ),
+                scene_cache=None,
+            )
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_frame_candidates")
             )
+            newly_processed += 1
             continue
 
         axis_align = load_axis_alignment(scene_dir)
@@ -4038,9 +4411,26 @@ def main():
             color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception as exc:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, exc)
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="color_intrinsics_load_failed",
+                scene_skip_reason="color_intrinsics_load_failed",
+                scene_grouping_summary=_prepare_scene_grouping_summary(
+                    scene_id,
+                    scene_split,
+                ),
+                scene_cache=None,
+            )
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("color_intrinsics_load_failed")
             )
+            newly_processed += 1
             continue
         try:
             depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
@@ -4130,7 +4520,7 @@ def main():
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
 
-        scene_grouping_summary = _build_scene_grouping_summary(scene_id)
+        scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         scene_grouping_summary["non_attachment_candidate_frame_count"] = len(non_attachment_candidate_frames)
         scene_grouping_summary["non_attachment_visible_object_group_count"] = non_attachment_group_count
         scene_grouping_cache[scene_id] = scene_grouping_summary
@@ -4215,23 +4605,30 @@ def main():
         if not selected_attachment_frames and not selected_non_attachment_frames:
             scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
             scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
-            _write_scene_grouping_summary(
-                scene_id,
-                scene_grouping_summary,
-                non_attachment_group_debug_dir,
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_final_referability_frames",
+                scene_skip_reason="no_final_referability_frames",
+                scene_grouping_summary=scene_grouping_summary,
+                scene_cache=None,
             )
-            _write_json_payload(output_path, cache)
             logger.info("Scene %s has no final referability frames -> skipping", scene_id)
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_final_referability_frames")
             )
+            newly_processed += 1
             continue
 
         logger.info(
-            "Processing referability scene %s (%d/%d) with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
+            "Processing referability scene %s [split=%s] with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
             scene_id,
-            processed + 1,
-            args.max_scenes,
+            scene_split,
             len(selected_attachment_frames),
             len(selected_non_attachment_frames),
         )
@@ -4308,18 +4705,27 @@ def main():
         if not final_scene_entries:
             scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
             scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
-            _write_scene_grouping_summary(
-                scene_id,
-                scene_grouping_summary,
-                non_attachment_group_debug_dir,
+            _persist_scene_state(
+                cache=cache,
+                scene_grouping_cache=scene_grouping_cache,
+                scene_status_cache=scene_status_cache,
+                output_path=output_path,
+                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_cacheable_referability_entries",
+                scene_skip_reason="no_cacheable_referability_entries",
+                scene_grouping_summary=scene_grouping_summary,
+                scene_cache=None,
             )
-            _write_json_payload(output_path, cache)
             logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_cacheable_referability_entries")
             )
+            newly_processed += 1
             continue
 
+        scene_cache = frames_cache.setdefault(scene_id, {})
         scene_cache.clear()
         for image_name, entry in sorted(
             final_scene_entries.items(),
@@ -4333,22 +4739,39 @@ def main():
             for image_name in scene_cache.keys()
         ]
         scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
-        _write_scene_grouping_summary(
-            scene_id,
-            scene_grouping_summary,
-            non_attachment_group_debug_dir,
+        _persist_scene_state(
+            cache=cache,
+            scene_grouping_cache=scene_grouping_cache,
+            scene_status_cache=scene_status_cache,
+            output_path=output_path,
+            non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            scene_id=scene_id,
+            split=scene_split,
+            pipeline_outcome="processed",
+            scene_skip_reason=None,
+            scene_grouping_summary=scene_grouping_summary,
+            scene_cache=scene_cache,
         )
-
-        _write_json_payload(output_path, cache)
         _finalize_attachment_review_scene(
             _make_attachment_review_record("processed")
         )
 
         processed += 1
+        newly_processed += 1
 
     _write_json_payload(output_path, cache)
     _write_attachment_review()
+    if batch_target is not None and final_batch_mode:
+        remaining_unprocessed = max(0, len(scene_entries) - _processed_scene_count())
+        _log_final_batch_banner(
+            split=selected_split,
+            total_scene_count=len(scene_entries),
+            processed_scene_count=len(scene_entries) - remaining_unprocessed,
+            remaining_scene_count=remaining_unprocessed,
+            completed=True,
+        )
     logger.info("Saved referability cache to %s", output_path)
+    logger.info("VLM call failures: %d", _get_vlm_call_failure_count())
 
 
 if __name__ == "__main__":
