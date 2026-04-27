@@ -2862,7 +2862,7 @@ def generate_l1_occlusion_questions(
 
     questions: list[dict[str, Any]] = []
 
-    for label in normalized_out_of_frame_labels[:1]:
+    for label in normalized_out_of_frame_labels:
         object_ids = normalized_out_of_frame_label_to_ids.get(label, [])
         if not object_ids:
             continue

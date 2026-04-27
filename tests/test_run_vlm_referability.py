@@ -1091,7 +1091,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(label_to_ids, {"chair": [2], "lamp": [5, 6], "sofa": [3]})
         self.assertEqual(candidates[0]["representative"]["obj_id"], 6)
 
-    def test_compute_frame_referability_entry_reviews_only_top_out_of_frame_label(self) -> None:
+    def test_compute_frame_referability_entry_reviews_out_of_frame_candidates_until_not_visible(self) -> None:
         scene_objects = [
             make_object(1, "lamp", alias_group="lamp_family"),
             make_object(2, "lamp", alias_group="lamp_family"),
@@ -1128,10 +1128,16 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(
                 referability_module,
                 "_out_of_frame_label_vlm_review",
-                return_value={
-                    "status": "not_visible",
-                    "raw_response": '{"status":"not_visible"}',
-                },
+                side_effect=[
+                    {
+                        "status": "reject",
+                        "raw_response": '{"status":"reject"}',
+                    },
+                    {
+                        "status": "not_visible",
+                        "raw_response": '{"status":"not_visible"}',
+                    },
+                ],
             ) as out_of_frame_mock,
             patch.object(
                 referability_module,
@@ -1153,18 +1159,151 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 selector_visible_object_ids=[],
             )
 
-        out_of_frame_mock.assert_called_once()
-        self.assertEqual(out_of_frame_mock.call_args.kwargs["label"], "lamp")
+        self.assertEqual(out_of_frame_mock.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["label"] for call in out_of_frame_mock.call_args_list],
+            ["lamp", "chair"],
+        )
         self.assertEqual(
             frame_entry["out_of_frame_label_to_object_ids"],
             {"chair": [3], "lamp": [1, 2]},
         )
         self.assertEqual(
             frame_entry["out_of_frame_label_reviews"],
+            [
+                {"label": "lamp", "status": "reject", "raw_response": '{"status":"reject"}'},
+                {"label": "chair", "status": "not_visible", "raw_response": '{"status":"not_visible"}'},
+            ],
+        )
+        self.assertEqual(frame_entry["out_of_frame_not_visible_labels"], ["chair"])
+        self.assertTrue(frame_entry["out_of_frame_vlm_early_stop"])
+
+    def test_review_out_of_frame_label_candidates_keeps_fields_empty_without_not_visible(self) -> None:
+        scene_objects = [
+            make_object(1, "lamp", alias_group="lamp_family"),
+            make_object(2, "chair", alias_group="chair_family"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=1200.0, bbox_in_frame_ratio=0.0),
+            2: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.0),
+        }
+
+        with patch.object(
+            referability_module,
+            "_out_of_frame_label_vlm_review",
+            side_effect=[
+                {"status": "reject", "raw_response": '{"status":"reject"}'},
+                {"status": "unsure", "raw_response": '{"status":"unsure"}'},
+            ],
+        ):
+            review = referability_module._review_out_of_frame_label_candidates(
+                client=object(),
+                model_name="fake-vlm",
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                visibility_by_obj_id=visibility,
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+            )
+
+        self.assertEqual(review["out_of_frame_label_reviews"], [])
+        self.assertEqual(review["out_of_frame_not_visible_labels"], [])
+        self.assertEqual(review["out_of_frame_label_to_object_ids"], {})
+        self.assertFalse(review["out_of_frame_vlm_early_stop"])
+
+    def test_enrich_final_scene_entries_out_of_frame_populates_selected_frame(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"final_scene_out_of_frame_{uuid.uuid4().hex}"
+        scene_dir = root / "scene0001_00"
+        (scene_dir / "color").mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        scene_objects = [
+            make_object(1, "lamp", alias_group="lamp_family"),
+            make_object(2, "lamp", alias_group="lamp_family"),
+        ]
+        entry = make_debug_cache_entry()
+        entry["final_selection_rank"] = 0
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: make_visibility_meta(projected_area_px=1200.0, bbox_in_frame_ratio=0.0),
+                    2: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.0),
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_out_of_frame_label_vlm_review",
+                return_value={
+                    "status": "not_visible",
+                    "raw_response": '{"status":"not_visible"}',
+                },
+            ),
+        ):
+            enriched = referability_module._enrich_final_scene_entries_out_of_frame(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                final_scene_entries={"000001.jpg": entry},
+                scene_objects=scene_objects,
+                objects_by_id={int(obj["id"]): obj for obj in scene_objects},
+                poses={"000001.jpg": make_camera_pose()},
+                color_intrinsics=make_camera_intrinsics(),
+                depth_intrinsics=None,
+            )
+
+        frame_entry = enriched["000001.jpg"]
+        self.assertEqual(
+            frame_entry["out_of_frame_label_reviews"],
             [{"label": "lamp", "status": "not_visible", "raw_response": '{"status":"not_visible"}'}],
         )
         self.assertEqual(frame_entry["out_of_frame_not_visible_labels"], ["lamp"])
+        self.assertEqual(frame_entry["out_of_frame_label_to_object_ids"], {"lamp": [1, 2]})
         self.assertTrue(frame_entry["out_of_frame_vlm_early_stop"])
+
+    def test_enrich_final_scene_entries_out_of_frame_preserves_existing_review_data(self) -> None:
+        entry = make_debug_cache_entry()
+        entry["out_of_frame_label_reviews"] = [
+            {"label": "lamp", "status": "not_visible", "raw_response": '{"status":"not_visible"}'}
+        ]
+        entry["out_of_frame_not_visible_labels"] = ["lamp"]
+        entry["out_of_frame_label_to_object_ids"] = {"lamp": [1]}
+        entry["out_of_frame_vlm_early_stop"] = True
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                side_effect=AssertionError("existing out-of-frame review data should skip enrichment"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                side_effect=AssertionError("existing out-of-frame review data should skip enrichment"),
+            ),
+        ):
+            enriched = referability_module._enrich_final_scene_entries_out_of_frame(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=Path("."),
+                final_scene_entries={"000001.jpg": entry},
+                scene_objects=[make_object(1, "lamp", alias_group="lamp_family")],
+                objects_by_id={1: make_object(1, "lamp", alias_group="lamp_family")},
+                poses={"000001.jpg": make_camera_pose()},
+                color_intrinsics=make_camera_intrinsics(),
+                depth_intrinsics=None,
+            )
+
+        self.assertEqual(enriched["000001.jpg"]["out_of_frame_not_visible_labels"], ["lamp"])
 
     def test_compute_frame_referability_entry_skips_out_of_frame_review_for_ambiguous_alias_group(self) -> None:
         scene_objects = [

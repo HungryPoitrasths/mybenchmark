@@ -1157,6 +1157,43 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(questions, [])
 
+    def test_l1_occlusion_scans_out_of_frame_labels_until_it_finds_a_mapping(self) -> None:
+        questions = generate_l1_occlusion_questions(
+            objects=[make_object(1, "cup")],
+            camera_pose=make_camera_pose(),
+            color_intrinsics=None,
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend="mesh_ray",
+            ray_caster=None,
+            instance_mesh_data=None,
+            templates={},
+            out_of_frame_not_visible_labels=["bad", "cup"],
+            out_of_frame_label_to_object_ids={"cup": [1]},
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "not visible")
+        self.assertEqual(questions[0]["occlusion_decision_source"], "vlm_out_of_frame_label_review")
+
+    def test_l1_occlusion_emits_at_most_one_not_visible_question_from_out_of_frame_labels(self) -> None:
+        questions = generate_l1_occlusion_questions(
+            objects=[make_object(1, "cup"), make_object(2, "lamp")],
+            camera_pose=make_camera_pose(),
+            color_intrinsics=None,
+            depth_image=None,
+            depth_intrinsics=None,
+            occlusion_backend="mesh_ray",
+            ray_caster=None,
+            instance_mesh_data=None,
+            templates={},
+            out_of_frame_not_visible_labels=["cup", "lamp"],
+            out_of_frame_label_to_object_ids={"cup": [1], "lamp": [2]},
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "not visible")
+
     def test_leaf_attached_child_stays_its_own_l2_intervention_source(self) -> None:
         child = make_object(1, "cup")
         hidden_parent = make_object(2, "table")

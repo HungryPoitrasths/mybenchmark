@@ -810,7 +810,7 @@ def _normalize_cached_out_of_frame_label_reviews(value: object) -> list[dict[str
                 "raw_response": item.get("raw_response"),
             }
         )
-    return reviews[:1]
+    return reviews
 
 
 def _normalize_cached_out_of_frame_vlm_early_stop(value: object) -> bool:
@@ -2195,6 +2195,81 @@ def _build_out_of_frame_label_candidates(
         )
     )
     return candidates, out_of_frame_label_to_object_ids
+
+
+def _review_out_of_frame_label_candidates(
+    *,
+    client,
+    model_name: str,
+    image: np.ndarray,
+    scene_objects: list[dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    visibility_by_obj_id: dict[int, dict[str, Any]],
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
+) -> dict[str, Any]:
+    candidates, label_to_object_ids = _build_out_of_frame_label_candidates(
+        scene_objects=scene_objects,
+        objects_by_id=objects_by_id,
+        visibility_by_obj_id=visibility_by_obj_id,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        instance_mesh_data_getter=instance_mesh_data_getter,
+    )
+    if not candidates:
+        return {
+            "out_of_frame_label_reviews": [],
+            "out_of_frame_not_visible_labels": [],
+            "out_of_frame_label_to_object_ids": {},
+            "out_of_frame_vlm_early_stop": False,
+        }
+
+    image_b64 = _image_to_base64(image)
+    pending_reviews: list[dict[str, Any]] = []
+    not_visible_labels: list[str] = []
+    early_stop = False
+
+    for candidate in candidates:
+        label = str(candidate.get("label", "")).strip().lower()
+        if not label:
+            continue
+        vlm_review = _out_of_frame_label_vlm_review(
+            client=client,
+            model=model_name,
+            image_b64=image_b64,
+            label=label,
+        )
+        status = (
+            _normalize_out_of_frame_review_status(vlm_review.get("status"))
+            or OUT_OF_FRAME_REVIEW_STATUS_UNSURE
+        )
+        pending_reviews.append(
+            {
+                "label": label,
+                "status": status,
+                "raw_response": vlm_review.get("raw_response"),
+            }
+        )
+        if status == OUT_OF_FRAME_REVIEW_STATUS_NOT_VISIBLE:
+            not_visible_labels = [label]
+            early_stop = True
+            return {
+                "out_of_frame_label_reviews": pending_reviews,
+                "out_of_frame_not_visible_labels": not_visible_labels,
+                "out_of_frame_label_to_object_ids": {
+                    str(candidate_label): [int(obj_id) for obj_id in obj_ids]
+                    for candidate_label, obj_ids in sorted(label_to_object_ids.items())
+                },
+                "out_of_frame_vlm_early_stop": early_stop,
+            }
+
+    return {
+        "out_of_frame_label_reviews": [],
+        "out_of_frame_not_visible_labels": [],
+        "out_of_frame_label_to_object_ids": {},
+        "out_of_frame_vlm_early_stop": False,
+    }
 
 
 def _refine_candidate_visible_object_ids(
@@ -4020,35 +4095,26 @@ def _compute_frame_referability_entry(
             visibility_audit_by_object_id=visibility_audit_by_object_id,
             bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
         )
-        out_of_frame_label_candidates, out_of_frame_label_to_object_ids = (
-            _build_out_of_frame_label_candidates(
-                scene_objects=scene_objects,
-                objects_by_id=objects_by_id,
-                visibility_by_obj_id=visibility_by_obj_id,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                instance_mesh_data_getter=instance_mesh_data_getter,
-            )
+        out_of_frame_review = _review_out_of_frame_label_candidates(
+            client=client,
+            model_name=model_name,
+            image=image,
+            scene_objects=scene_objects,
+            objects_by_id=objects_by_id,
+            visibility_by_obj_id=visibility_by_obj_id,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            instance_mesh_data_getter=instance_mesh_data_getter,
         )
-        if out_of_frame_label_candidates:
-            if image_b64 is None:
-                image_b64 = _image_to_base64(image)
-            candidate = out_of_frame_label_candidates[0]
-            vlm_review = _out_of_frame_label_vlm_review(
-                client=client,
-                model=model_name,
-                image_b64=str(image_b64 or ""),
-                label=str(candidate["label"]),
+        out_of_frame_label_reviews = list(out_of_frame_review["out_of_frame_label_reviews"])
+        out_of_frame_not_visible_labels = list(out_of_frame_review["out_of_frame_not_visible_labels"])
+        out_of_frame_label_to_object_ids = {
+            str(label): [int(obj_id) for obj_id in obj_ids]
+            for label, obj_ids in sorted(
+                out_of_frame_review["out_of_frame_label_to_object_ids"].items()
             )
-            review_payload = {
-                "label": str(candidate["label"]),
-                "status": str(vlm_review.get("status", OUT_OF_FRAME_REVIEW_STATUS_UNSURE)),
-                "raw_response": vlm_review.get("raw_response"),
-            }
-            out_of_frame_label_reviews.append(review_payload)
-            if review_payload["status"] == OUT_OF_FRAME_REVIEW_STATUS_NOT_VISIBLE:
-                out_of_frame_not_visible_labels = [str(candidate["label"])]
-                out_of_frame_vlm_early_stop = True
+        }
+        out_of_frame_vlm_early_stop = bool(out_of_frame_review["out_of_frame_vlm_early_stop"])
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
         alias_group_to_reasons: dict[str, set[str]] = defaultdict(set)
@@ -4190,6 +4256,101 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
     if not required_keys.issubset(entry.keys()):
         return False
     return _frame_entry_has_consistent_final_fields(entry)
+
+
+def _frame_entry_has_out_of_frame_review_data(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return bool(
+        _normalize_cached_out_of_frame_label_reviews(entry.get("out_of_frame_label_reviews"))
+        or _normalize_cached_out_of_frame_not_visible_labels(
+            entry.get("out_of_frame_not_visible_labels")
+        )
+        or _shared_normalize_label_to_object_ids(entry.get("out_of_frame_label_to_object_ids"))
+        or _normalize_cached_out_of_frame_vlm_early_stop(entry.get("out_of_frame_vlm_early_stop"))
+    )
+
+
+def _enrich_final_scene_entries_out_of_frame(
+    *,
+    client,
+    model_name: str,
+    scene_dir: Path,
+    final_scene_entries: dict[str, dict[str, Any]],
+    scene_objects: list[dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    poses: dict[str, CameraPose],
+    color_intrinsics: CameraIntrinsics | None,
+    depth_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
+) -> dict[str, dict[str, Any]]:
+    enriched_entries: dict[str, dict[str, Any]] = {}
+    visibility_instance_mesh_data = None
+    if callable(instance_mesh_data_getter):
+        try:
+            visibility_instance_mesh_data = instance_mesh_data_getter(
+                REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
+            )
+        except Exception:
+            visibility_instance_mesh_data = None
+
+    for image_name, entry in final_scene_entries.items():
+        updated_entry = dict(entry)
+        if _frame_entry_has_out_of_frame_review_data(updated_entry):
+            enriched_entries[image_name] = updated_entry
+            continue
+
+        camera_pose = poses.get(image_name)
+        if camera_pose is None:
+            enriched_entries[image_name] = updated_entry
+            continue
+
+        image_path = scene_dir / "color" / image_name
+        image = cv2.imread(str(image_path))
+        if image is None:
+            logger.warning("Cannot read image %s for out-of-frame enrichment", image_path)
+            enriched_entries[image_name] = updated_entry
+            continue
+
+        depth_image = None
+        depth_path = scene_dir / "depth" / f"{Path(image_name).stem}.png"
+        if depth_intrinsics is not None and depth_path.exists():
+            try:
+                depth_image = load_depth_image(depth_path)
+            except Exception as exc:
+                logger.warning(
+                    "Depth load failed for out-of-frame enrichment %s/%s: %s",
+                    scene_dir.name,
+                    image_name,
+                    exc,
+                )
+
+        visibility_by_obj_id = compute_frame_object_visibility(
+            scene_objects,
+            camera_pose,
+            color_intrinsics,
+            image_path=image_path,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            instance_mesh_data=visibility_instance_mesh_data,
+            strict_mode=False,
+        )
+        updated_entry.update(
+            _review_out_of_frame_label_candidates(
+                client=client,
+                model_name=model_name,
+                image=image,
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                visibility_by_obj_id=visibility_by_obj_id,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+        )
+        enriched_entries[image_name] = updated_entry
+
+    return enriched_entries
 
 
 def _build_scene_grouping_summary(scene_id: str) -> dict[str, Any]:
@@ -5313,6 +5474,19 @@ def main():
             )
             newly_processed += 1
             continue
+
+        final_scene_entries = _enrich_final_scene_entries_out_of_frame(
+            client=client,
+            model_name=model_name,
+            scene_dir=scene_dir,
+            final_scene_entries=final_scene_entries,
+            scene_objects=scene["objects"],
+            objects_by_id=objects_by_id,
+            poses=poses,
+            color_intrinsics=color_intrinsics,
+            depth_intrinsics=depth_intrinsics,
+            instance_mesh_data_getter=instance_mesh_data_getter,
+        )
 
         scene_cache = frames_cache.setdefault(scene_id, {})
         scene_cache.clear()
