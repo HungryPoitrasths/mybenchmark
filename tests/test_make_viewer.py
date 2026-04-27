@@ -54,6 +54,11 @@ def workspace_case_dir(name: str) -> Path:
     return root
 
 
+def assert_simple_field(test_case: unittest.TestCase, html_text: str, key: str, value: object) -> None:
+    test_case.assertIn(f'<div class="simple-key">{key}</div>', html_text)
+    test_case.assertIn(f'<div class="simple-value">{value}</div>', html_text)
+
+
 class MakeViewerTests(unittest.TestCase):
     def test_attachment_only_keeps_attachment_chain_and_attached_object_moves(self) -> None:
         questions = [
@@ -640,12 +645,13 @@ class MakeViewerTests(unittest.TestCase):
         self.assertIn("A.&nbsp; left", full_html)
         self.assertIn("image not found", full_html)
         self.assertIn("image not found", simple_html)
-        self.assertNotIn("Where is the lamp relative to the desk?", simple_html)
-        self.assertNotIn("A.&nbsp; left", simple_html)
+        self.assertIn("Where is the lamp relative to the desk?", simple_html)
+        self.assertIn("A.&nbsp; left", simple_html)
         self.assertIn("Objects", simple_html)
         self.assertIn("Relations", simple_html)
+        self.assertIn('class="opt correct">A.&nbsp; left', simple_html)
 
-    def test_build_simple_viewer_html_direction_agent_uses_query_then_reference(self) -> None:
+    def test_build_simple_viewer_html_direction_agent_shows_answer_and_uses_column_layout(self) -> None:
         html_text = build_simple_viewer_html(
             [
                 {
@@ -663,10 +669,16 @@ class MakeViewerTests(unittest.TestCase):
             Path("."),
         )
 
-        self.assertNotIn("Full text should stay hidden", html_text)
-        self.assertNotIn("A.&nbsp; front", html_text)
-        self.assertIn("direction=left", html_text)
-        self.assertLess(html_text.index("query=lamp"), html_text.index("reference=desk"))
+        self.assertIn("Full text should stay hidden", html_text)
+        self.assertIn("A.&nbsp; front", html_text)
+        self.assertIn('class="opt correct">B.&nbsp; left', html_text)
+        assert_simple_field(self, html_text, "direction", "left")
+        assert_simple_field(self, html_text, "query", "lamp")
+        assert_simple_field(self, html_text, "reference", "desk")
+        self.assertLess(
+            html_text.index('<div class="simple-key">query</div>'),
+            html_text.index('<div class="simple-key">reference</div>'),
+        )
 
     def test_build_simple_viewer_html_renders_representative_qtypes(self) -> None:
         questions = [
@@ -734,19 +746,19 @@ class MakeViewerTests(unittest.TestCase):
 
         html_text = build_simple_viewer_html(questions, Path("."))
 
-        self.assertIn("target=chair", html_text)
-        self.assertIn("visibility=occluded", html_text)
-        self.assertIn("distance_bin=close (1.5-3m)", html_text)
-        self.assertIn("distance_m=2.3", html_text)
-        self.assertIn("old_visibility=visible", html_text)
-        self.assertIn("new_visibility=occluded", html_text)
-        self.assertIn("camera=west", html_text)
-        self.assertIn("old_direction=left", html_text)
-        self.assertIn("new_direction=right", html_text)
-        self.assertIn("rotation_angle=90", html_text)
-        self.assertIn("rotation_direction=clockwise", html_text)
-        self.assertIn("chain_depth=2", html_text)
-        self.assertIn("displaced=yes", html_text)
+        assert_simple_field(self, html_text, "target", "chair")
+        assert_simple_field(self, html_text, "visibility", "occluded")
+        assert_simple_field(self, html_text, "distance_bin", "close (1.5-3m)")
+        assert_simple_field(self, html_text, "distance_m", "2.3")
+        assert_simple_field(self, html_text, "old_visibility", "visible")
+        assert_simple_field(self, html_text, "new_visibility", "occluded")
+        assert_simple_field(self, html_text, "camera", "west")
+        assert_simple_field(self, html_text, "old_direction", "left")
+        assert_simple_field(self, html_text, "new_direction", "right")
+        assert_simple_field(self, html_text, "rotation_angle", "90")
+        assert_simple_field(self, html_text, "rotation_direction", "clockwise")
+        assert_simple_field(self, html_text, "chain_depth", "2")
+        assert_simple_field(self, html_text, "displaced", "yes")
 
     def test_build_simple_viewer_html_unknown_qtype_falls_back_to_mentioned_objects(self) -> None:
         html_text = build_simple_viewer_html(
@@ -765,9 +777,9 @@ class MakeViewerTests(unittest.TestCase):
             Path("."),
         )
 
-        self.assertIn("anchor=lamp", html_text)
-        self.assertIn("target=chair", html_text)
-        self.assertIn("correct_value=around", html_text)
+        assert_simple_field(self, html_text, "anchor", "lamp")
+        assert_simple_field(self, html_text, "target", "chair")
+        assert_simple_field(self, html_text, "correct_value", "around")
 
     def test_build_simple_viewer_html_missing_images_do_not_break_output(self) -> None:
         html_text = build_simple_viewer_html(
@@ -787,9 +799,9 @@ class MakeViewerTests(unittest.TestCase):
         )
 
         self.assertIn("image not found", html_text)
-        self.assertIn("moved=cart", html_text)
-        self.assertIn("query=box", html_text)
-        self.assertIn("reference=wall", html_text)
+        assert_simple_field(self, html_text, "moved", "cart")
+        assert_simple_field(self, html_text, "query", "box")
+        assert_simple_field(self, html_text, "reference", "wall")
 
 
 if __name__ == "__main__":

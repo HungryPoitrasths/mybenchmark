@@ -630,9 +630,12 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .simple-section + .simple-section{{margin-top:14px}}
 .simple-section-title{{font-size:12px;font-weight:700;color:#6b7280;margin-bottom:6px;
                        text-transform:uppercase;letter-spacing:.04em}}
-.simple-list{{display:grid;gap:6px}}
+.simple-list{{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}}
 .simple-item{{padding:8px 10px;border-radius:8px;background:#f8fafc;
               border:1px solid #e5e7eb;font-size:13px;color:#374151;line-height:1.45}}
+.simple-key{{font-size:11px;font-weight:700;color:#6b7280;letter-spacing:.04em;
+             text-transform:uppercase}}
+.simple-value{{margin-top:4px;font-size:14px;color:#111;word-break:break-word}}
 .simple-empty{{font-size:13px;color:#9ca3af}}
 .footer{{margin-top:14px;font-size:11px;color:#aaa}}
 .idx{{float:right;color:#ccc;font-size:12px}}
@@ -664,6 +667,8 @@ SIMPLE_CARD = """\
   <div class="img-wrap">{img}</div>
   <div class="body">
     {meta}
+    {question}
+    {options}
     <div class="simple-panel">
       {objects}
       {relations}
@@ -1187,7 +1192,8 @@ def _render_simple_section(title: str, items: list[tuple[str, str]]) -> str:
     if items:
         body = "".join(
             '<div class="simple-item">'
-            f"{html.escape(label)}={html.escape(value)}"
+            f'<div class="simple-key">{html.escape(label)}</div>'
+            f'<div class="simple-value">{html.escape(value)}</div>'
             "</div>"
             for label, value in items
         )
@@ -1257,6 +1263,12 @@ def _build_simple_viewer_html_from_displayed_questions(
             SIMPLE_CARD.format(
                 img=_build_image_html(question, image_root, max_width),
                 meta=_build_meta_html(question, idx),
+                question=(
+                    f'<p class="qtext">{html.escape(str(question.get("question", "")))}</p>'
+                    if str(question.get("question", "")).strip()
+                    else ""
+                ),
+                options=_build_options_html(question),
                 objects=_render_simple_section("Objects", objects),
                 relations=_render_simple_section("Relations", relations),
                 footer=_build_footer_html(question),
