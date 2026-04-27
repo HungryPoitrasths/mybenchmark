@@ -4773,7 +4773,8 @@ def _cap_question_groups(
     """
     groups = list(questions_by_key.values())
     if max_per_group is None or max_per_group <= 0:
-        return [q for group in groups for q in group]
+        flattened = [q for group in groups for q in group]
+        return [_annotate_attachment_trace_reason(question) for question in flattened]
 
     capped: list[dict] = []
     for group in groups:
@@ -4836,7 +4837,7 @@ def _cap_question_groups(
                 if id(question) in sampled_ids
             ]
         capped.extend(kept_unprotected)
-    return capped
+    return [_annotate_attachment_trace_reason(question) for question in capped]
 
 
 def _balance_l2_object_move_attachment_counts(
@@ -6391,7 +6392,7 @@ def generate_l3_attachment_chain(
                 random.shuffle(options)
                 answer_letter = chr(65 + options.index(opt_both))
 
-                questions.append({
+                questions.append(_annotate_attachment_trace_reason({
                     "level": "L3",
                     "type": "attachment_chain",
                     "question": question_text,
@@ -6414,7 +6415,7 @@ def generate_l3_attachment_chain(
                         _mention("neighbor", neighbor["label"], neighbor["id"]),
                     ],
                     "relation_unchanged": False,
-                })
+                }))
 
     return questions
 
@@ -6855,6 +6856,7 @@ def _question_preview_payload(question: dict[str, Any]) -> dict[str, Any]:
         "type": question.get("type"),
         "question": question.get("question"),
         "correct_value": question.get("correct_value"),
+        "trace_reason": question.get("trace_reason"),
     }
     object_fields = (
         "obj_a_id",
@@ -6965,6 +6967,51 @@ def _question_uses_attachment_referability(question: dict[str, Any]) -> bool:
         or question_type.startswith("attachment")
         or bool(question.get("attachment_remapped", False))
     )
+
+
+def _attachment_trace_reason(question: dict[str, Any]) -> str | None:
+    if not _question_uses_attachment_referability(question):
+        return None
+
+    qtype = str(question.get("type", "")).strip()
+    relation_unchanged = bool(question.get("relation_unchanged", False))
+
+    if qtype == "attachment_chain":
+        return "attachment_chain_two_hop_inference"
+    if qtype == "object_move_occlusion":
+        return "attachment_visibility_change"
+    if qtype == "object_move_distance":
+        return (
+            "attachment_distance_preserved_fallback"
+            if relation_unchanged else "attachment_distance_change"
+        )
+    if qtype == "object_move_agent":
+        return (
+            "attachment_agent_relation_preserved_fallback"
+            if relation_unchanged else "attachment_agent_relation_change"
+        )
+    if qtype == "object_move_allocentric":
+        return (
+            "attachment_allocentric_relation_preserved_fallback"
+            if relation_unchanged else "attachment_allocentric_relation_change"
+        )
+    if qtype in {"object_move_object_centric", "object_rotate_object_centric"}:
+        return (
+            "attachment_object_centric_relation_preserved_fallback"
+            if relation_unchanged else "attachment_object_centric_relation_change"
+        )
+    if qtype == "object_remove":
+        return "attachment_remove_visibility_change"
+    return "attachment_question_generated"
+
+
+def _annotate_attachment_trace_reason(question: dict[str, Any]) -> dict[str, Any]:
+    if str(question.get("trace_reason", "")).strip():
+        return question
+    trace_reason = _attachment_trace_reason(question)
+    if trace_reason:
+        question["trace_reason"] = trace_reason
+    return question
 
 
 def _enforce_referable_mentions(

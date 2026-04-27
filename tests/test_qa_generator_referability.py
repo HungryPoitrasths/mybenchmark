@@ -14,6 +14,7 @@ from src.qa_generator import (
     generate_l2_object_move,
     generate_l2_object_move_allocentric,
     generate_l2_object_rotate_object_centric,
+    generate_l3_attachment_chain,
 )
 from src.utils.colmap_loader import CameraPose
 
@@ -1384,6 +1385,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(move_question["moved_obj_id"], 2)
         self.assertEqual(move_question["query_obj_id"], 1)
         self.assertTrue(move_question["attachment_remapped"])
+        self.assertEqual(move_question["trace_reason"], "attachment_agent_relation_change")
 
         with (
             patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
@@ -1424,6 +1426,10 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(rotate_question["moved_obj_id"], 2)
         self.assertEqual(rotate_question["query_obj_id"], 1)
         self.assertTrue(rotate_question["attachment_remapped"])
+        self.assertEqual(
+            rotate_question["trace_reason"],
+            "attachment_object_centric_relation_change",
+        )
 
         with (
             patch("src.qa_generator._select_object_move_state", side_effect=select_parent_state),
@@ -1449,6 +1455,33 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(allocentric_question["moved_obj_id"], 2)
         self.assertEqual(allocentric_question["query_obj_id"], 1)
         self.assertTrue(allocentric_question["attachment_remapped"])
+        self.assertEqual(
+            allocentric_question["trace_reason"],
+            "attachment_allocentric_relation_change",
+        )
+
+    def test_attachment_chain_questions_include_trace_reason(self) -> None:
+        grandparent = make_object(1, "bed")
+        parent = make_object(2, "pillow")
+        grandchild = make_object(3, "book")
+        neighbor = make_object(4, "chair")
+
+        questions = generate_l3_attachment_chain(
+            objects=[grandparent, parent, grandchild, neighbor],
+            attachment_graph={1: [2], 2: [3]},
+            attached_by={2: 1, 3: 2},
+            camera_pose=make_camera_pose(),
+            templates={
+                "L3_attachment_chain": [
+                    "If {obj_a} moves, which objects move with it?"
+                ]
+            },
+        )
+
+        self.assertTrue(questions)
+        question = questions[0]
+        self.assertEqual(question["type"], "attachment_chain")
+        self.assertEqual(question["trace_reason"], "attachment_chain_two_hop_inference")
 
     def test_nonreferable_movement_source_is_still_filtered_out(self) -> None:
         child = make_object(1, "cup")
