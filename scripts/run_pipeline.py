@@ -3155,6 +3155,7 @@ def _build_frame_debug_entry(
 
 
 def _write_json_file(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
@@ -3939,8 +3940,7 @@ def run_pipeline(
         final_by_scene_frame[q["scene_id"]][q["image_name"]].append(q)
 
     for sid, qs in by_scene.items():
-        with open(questions_dir / f"{sid}.json", "w", encoding="utf-8") as f:
-            json.dump(qs, f, indent=2, ensure_ascii=False)
+        _write_json_file(questions_dir / f"{sid}.json", qs)
 
     if write_frame_debug:
         for scene_id, record in scene_debug_records.items():
