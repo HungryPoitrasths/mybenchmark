@@ -4954,7 +4954,7 @@ def generate_l2_object_move(
                 metrics,
             )
 
-    for source_obj in objects:
+    for source_obj in movement_scene_objects:
         # Skip structural room elements — they cannot be "moved" in any
         # meaningful physical sense and confuse human annotators.
         if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
@@ -5936,7 +5936,7 @@ def generate_l2_object_rotate_object_centric(
     )
     horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
 
-    for source_obj in objects:
+    for source_obj in movement_scene_objects:
         if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
@@ -6174,7 +6174,7 @@ def generate_l2_object_move_allocentric(
         _default_templates()["L2_object_move_allocentric"],
     )
 
-    for source_obj in objects:
+    for source_obj in movement_scene_objects:
         if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 

@@ -1284,6 +1284,248 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(allocentric_question["moved_obj_id"], 1)
         self.assertFalse(allocentric_question["attachment_remapped"])
 
+    def test_attachment_referable_parent_source_is_enumerated_from_movement_objects(self) -> None:
+        child = make_object(1, "cup")
+        hidden_parent = make_object(2, "table")
+        ref = make_object(3, "chair")
+        face = make_object(4, "lamp")
+        moved_child = {
+            **child,
+            "center": [1.5, 0.0, 1.0],
+            "bbox_min": [1.5, 0.0, 0.5],
+            "bbox_max": [1.7, 0.2, 1.5],
+        }
+        moved_parent = {
+            **hidden_parent,
+            "center": [2.5, 0.0, 1.0],
+            "bbox_min": [2.5, 0.0, 0.5],
+            "bbox_max": [2.7, 0.2, 1.5],
+        }
+        movement_objects = [child, hidden_parent, ref, face]
+        moved_scene_objects = [moved_child, moved_parent, ref, face]
+        object_map = {obj["id"]: obj for obj in movement_objects}
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=moved_scene_objects,
+            moved_ids={1, 2},
+        )
+
+        def select_parent_state(*args, **_kwargs):
+            return selected_state if args[2] == 2 else None
+
+        with (
+            patch("src.qa_generator._select_object_move_state", side_effect=select_parent_state),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                side_effect=[
+                    [{
+                        "obj_a_id": 1,
+                        "obj_b_id": 3,
+                        "direction_b_rel_a": "left",
+                    }],
+                    [{
+                        "obj_a_id": 1,
+                        "obj_b_id": 3,
+                        "direction_b_rel_a": "front-left",
+                    }],
+                ],
+            ),
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            move_questions = generate_l2_object_move(
+                objects=[child, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=movement_objects,
+                object_map=object_map,
+                attachment_referable_object_ids=[2],
+            )
+
+        move_question = next(q for q in move_questions if q.get("type") == "object_move_agent")
+        self.assertEqual(move_question["moved_obj_id"], 2)
+        self.assertEqual(move_question["query_obj_id"], 1)
+        self.assertTrue(move_question["attachment_remapped"])
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator.find_meaningful_orbit_rotation",
+                side_effect=lambda _objects, _graph, target_id, pivot_id, **_kwargs: (
+                    [{
+                        "angle": 90,
+                        "rotation_direction": "clockwise",
+                        "signed_angle": -90,
+                        "objects": moved_scene_objects,
+                    }]
+                    if target_id == 2 and pivot_id == 4
+                    else []
+                ),
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                side_effect=[("left", 0.1), ("front", 0.1)],
+            ),
+        ):
+            rotate_questions = generate_l2_object_rotate_object_centric(
+                objects=[child, ref, face],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_rotate_object_centric": [
+                        "rotate {obj_move_source}: where is {obj_ref} from {obj_query} while facing {obj_face}?"
+                    ]
+                },
+                movement_objects=movement_objects,
+                object_map=object_map,
+                attachment_referable_object_ids=[2],
+            )
+
+        rotate_question = next(q for q in rotate_questions if q.get("type") == "object_rotate_object_centric")
+        self.assertEqual(rotate_question["moved_obj_id"], 2)
+        self.assertEqual(rotate_question["query_obj_id"], 1)
+        self.assertTrue(rotate_question["attachment_remapped"])
+
+        with (
+            patch("src.qa_generator._select_object_move_state", side_effect=select_parent_state),
+            patch(
+                "src.qa_generator.primary_direction_allocentric",
+                side_effect=[("east", 0.1), ("north", 0.1)],
+            ),
+        ):
+            allocentric_questions = generate_l2_object_move_allocentric(
+                objects=[child, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=movement_objects,
+                object_map=object_map,
+                attachment_referable_object_ids=[2],
+            )
+
+        allocentric_question = next(
+            q for q in allocentric_questions if q.get("type") == "object_move_allocentric"
+        )
+        self.assertEqual(allocentric_question["moved_obj_id"], 2)
+        self.assertEqual(allocentric_question["query_obj_id"], 1)
+        self.assertTrue(allocentric_question["attachment_remapped"])
+
+    def test_nonreferable_movement_source_is_still_filtered_out(self) -> None:
+        child = make_object(1, "cup")
+        hidden_parent = make_object(2, "table")
+        ref = make_object(3, "chair")
+        face = make_object(4, "lamp")
+        moved_child = {
+            **child,
+            "center": [1.5, 0.0, 1.0],
+            "bbox_min": [1.5, 0.0, 0.5],
+            "bbox_max": [1.7, 0.2, 1.5],
+        }
+        moved_parent = {
+            **hidden_parent,
+            "center": [2.5, 0.0, 1.0],
+            "bbox_min": [2.5, 0.0, 0.5],
+            "bbox_max": [2.7, 0.2, 1.5],
+        }
+        movement_objects = [child, hidden_parent, ref, face]
+        moved_scene_objects = [moved_child, moved_parent, ref, face]
+        object_map = {obj["id"]: obj for obj in movement_objects}
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=moved_scene_objects,
+            moved_ids={1, 2},
+        )
+        move_source_calls: list[int] = []
+        rotate_source_calls: list[int] = []
+        allocentric_source_calls: list[int] = []
+
+        def record_move_source(*args, **_kwargs):
+            move_source_calls.append(args[2])
+            return selected_state
+
+        def record_allocentric_source(*args, **_kwargs):
+            allocentric_source_calls.append(args[2])
+            return selected_state
+
+        with (
+            patch("src.qa_generator._select_object_move_state", side_effect=record_move_source),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            move_questions = generate_l2_object_move(
+                objects=[child, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=movement_objects,
+                object_map=object_map,
+                attachment_referable_object_ids=[],
+            )
+
+        self.assertEqual(move_questions, [])
+        self.assertEqual(move_source_calls, [])
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator.find_meaningful_orbit_rotation",
+                side_effect=lambda _objects, _graph, target_id, _pivot_id, **_kwargs: (
+                    rotate_source_calls.append(target_id) or [{
+                        "angle": 90,
+                        "rotation_direction": "clockwise",
+                        "signed_angle": -90,
+                        "objects": moved_scene_objects,
+                    }]
+                ),
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                return_value=("left", 0.1),
+            ),
+        ):
+            rotate_questions = generate_l2_object_rotate_object_centric(
+                objects=[child, ref, face],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_rotate_object_centric": [
+                        "rotate {obj_move_source}: where is {obj_ref} from {obj_query} while facing {obj_face}?"
+                    ]
+                },
+                movement_objects=movement_objects,
+                object_map=object_map,
+                attachment_referable_object_ids=[],
+            )
+
+        self.assertEqual(rotate_questions, [])
+        self.assertEqual(rotate_source_calls, [])
+
+        with (
+            patch("src.qa_generator._select_object_move_state", side_effect=record_allocentric_source),
+            patch(
+                "src.qa_generator.primary_direction_allocentric",
+                return_value=("east", 0.1),
+            ),
+        ):
+            allocentric_questions = generate_l2_object_move_allocentric(
+                objects=[child, ref],
+                attachment_graph={2: [1]},
+                attached_by={1: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=movement_objects,
+                object_map=object_map,
+                attachment_referable_object_ids=[],
+            )
+
+        self.assertEqual(allocentric_questions, [])
+        self.assertEqual(allocentric_source_calls, [])
+
     def test_object_move_middle_node_source_only_moves_downward(self) -> None:
         root = make_object(1, "wardrobe")
         middle = make_object(2, "shelf")
