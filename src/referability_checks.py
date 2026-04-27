@@ -271,8 +271,14 @@ def is_static_occlusion_absent_target(
         and str(mention.get("role", "")).strip().lower() == "target"
         and mention.get("obj_id") is None
         and not bool(mention.get("obj_id_parse_failed", False))
-        and str(label_status or "").strip().lower() == "absent"
-        and not referable_label_ids
+        and (
+            (
+                str(label_status or "").strip().lower() == "absent"
+                and not referable_label_ids
+            )
+            or str(question.get("occlusion_decision_source", "")).strip().lower()
+            == "vlm_out_of_frame_label_review"
+        )
     )
 
 

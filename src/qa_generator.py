@@ -1329,6 +1329,21 @@ def _normalize_label_statuses(label_statuses: dict[str, Any] | None) -> dict[str
     return normalized
 
 
+def _normalize_label_list(labels: list[Any] | None) -> list[str]:
+    if not isinstance(labels, list):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in labels:
+        label = str(item or "").strip().lower()
+        if not label or label in EXCLUDED_LABELS or label in seen:
+            continue
+        seen.add(label)
+        normalized.append(label)
+    return normalized
+
+
 def _l1_occlusion_question(
     label: str,
     correct: str,
@@ -2810,9 +2825,21 @@ def generate_l1_occlusion_questions(
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     referable_object_ids: list[int] | None = None,
+    out_of_frame_not_visible_labels: list[Any] | None = None,
+    out_of_frame_label_to_object_ids: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_statuses = _normalize_label_statuses(label_statuses)
     normalized_counts = _normalize_label_counts(label_counts)
+    normalized_out_of_frame_labels = _normalize_label_list(out_of_frame_not_visible_labels)
+    normalized_out_of_frame_label_to_ids = normalize_label_to_object_ids(
+        out_of_frame_label_to_object_ids
+    )
+    has_label_guidance = bool(
+        normalized_statuses
+        or normalized_counts
+        or normalized_out_of_frame_labels
+        or normalized_out_of_frame_label_to_ids
+    )
     if not normalized_statuses and normalized_counts:
         for label, count in normalized_counts.items():
             if count == 0:
@@ -2834,6 +2861,23 @@ def generate_l1_occlusion_questions(
         label_to_objects.setdefault(label, []).append(obj)
 
     questions: list[dict[str, Any]] = []
+
+    for label in normalized_out_of_frame_labels[:1]:
+        object_ids = normalized_out_of_frame_label_to_ids.get(label, [])
+        if not object_ids:
+            continue
+        questions.append(
+            _l1_occlusion_question(
+                label=label,
+                correct="not visible",
+                templates=templates,
+                obj_id=None,
+                extra={
+                    "occlusion_decision_source": "vlm_out_of_frame_label_review",
+                },
+            )
+        )
+        break
 
     def _append_geometry_question(
         obj: dict[str, Any],
@@ -2891,41 +2935,6 @@ def generate_l1_occlusion_questions(
     if normalized_statuses:
         for label, status in sorted(normalized_statuses.items()):
             count = normalized_counts.get(label)
-            if status == "absent":
-                candidates = label_to_objects.get(label, [])
-                if not candidates:
-                    continue
-
-                candidate_reviews: list[dict[str, Any]] = []
-                all_not_visible = True
-                for candidate in candidates:
-                    strict_review = _evaluate_absent_label_strict_not_visible_candidate(
-                        obj=candidate,
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        ray_caster=ray_caster,
-                        instance_mesh_data=instance_mesh_data,
-                    )
-                    candidate_reviews.append(dict(strict_review))
-                    if not bool(strict_review.get("strict_not_visible", False)):
-                        all_not_visible = False
-
-                if all_not_visible:
-                    questions.append(
-                        _l1_occlusion_question(
-                            label=label,
-                            correct="not visible",
-                            templates=templates,
-                            obj_id=None,
-                            extra={
-                                "occlusion_decision_source": "strict_mesh_ray_review_from_vlm_absent",
-                                "vlm_label_status": status,
-                                "vlm_label_count": 0 if count is None else count,
-                                "geometry_candidate_reviews": candidate_reviews,
-                            },
-                        )
-                    )
-                continue
             if status != "unique":
                 continue
 
@@ -2963,6 +2972,9 @@ def generate_l1_occlusion_questions(
                     vlm_status=status,
                     vlm_count=count,
                 )
+        return questions
+
+    if has_label_guidance:
         return questions
 
     for obj in objects:
@@ -7268,6 +7280,8 @@ def generate_all_questions(
     label_statuses: dict[str, Any] | None = None,
     label_counts: dict[str, Any] | None = None,
     label_to_object_ids: dict[str, Any] | None = None,
+    out_of_frame_not_visible_labels: list[Any] | None = None,
+    out_of_frame_label_to_object_ids: dict[str, Any] | None = None,
     room_bounds: dict | None = None,
     wall_objects: list[dict] | None = None,
     attachment_edges: list[dict] | None = None,
@@ -7298,6 +7312,10 @@ def generate_all_questions(
     label_to_object_ids: optional candidate visible object ids per label from the
     referability stage. When omitted, a fallback mapping is built from the
     visible, non-excluded object pool.
+    out_of_frame_not_visible_labels: VLM-approved labels whose scene instances
+    are fully outside the image frame and should yield L1 not-visible questions.
+    out_of_frame_label_to_object_ids: scene-level label -> object ids mapping for
+    the out-of-frame review channel.
     room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
     wall_objects: visible filtering for ordinary objects does not touch these;
     they are only used to construct allocentric wall-anchor wording.
@@ -7632,9 +7650,15 @@ def generate_all_questions(
     ]
     movement_object_map = {int(o["id"]): o for o in movement_objects}
     attachment_edge_lookup = _build_attachment_edge_lookup(attachment_edges)
+    has_l1_occlusion_label_guidance = bool(
+        label_statuses
+        or label_counts
+        or out_of_frame_not_visible_labels
+        or out_of_frame_label_to_object_ids
+    )
     l1_occlusion_subject_ids = {
         int(obj["id"])
-        for obj in (l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq)
+        for obj in (l1_occlusion_objects if has_l1_occlusion_label_guidance else objects_uniq)
     }
     _emit_object_pool_snapshot(
         l1_occlusion_subject_ids=l1_occlusion_subject_ids,
@@ -7892,7 +7916,7 @@ def generate_all_questions(
         reason_counts=dict(l1_dist_reason_counts),
     )
 
-    l1_occlusion_subjects = l1_occlusion_objects if (label_statuses or label_counts) else objects_uniq
+    l1_occlusion_subjects = l1_occlusion_objects if has_l1_occlusion_label_guidance else objects_uniq
     _emit_generator_context(
         trace_recorder,
         "generate_l1_occlusion_questions",
@@ -7901,6 +7925,7 @@ def generate_all_questions(
             "question_object_count": len(objects_uniq),
             "label_status_count": len(label_statuses or {}),
             "label_count_count": len(label_counts or {}),
+            "out_of_frame_not_visible_label_count": len(out_of_frame_not_visible_labels or []),
             "referable_object_count": len(referable_set),
         },
     )
@@ -7917,6 +7942,8 @@ def generate_all_questions(
         label_statuses=label_statuses,
         label_counts=label_counts,
         referable_object_ids=referable_object_ids,
+        out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
+        out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
     )
     l1_occ_qs = _register_generated_questions("generate_l1_occlusion_questions", l1_occ_qs)
 

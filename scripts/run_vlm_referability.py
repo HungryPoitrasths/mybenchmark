@@ -67,7 +67,7 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
-REFERABILITY_CACHE_VERSION = "19.0"
+REFERABILITY_CACHE_VERSION = "20.0"
 ATTACHMENT_REVIEW_VERSION = "1.0"
 ATTACHMENT_REVIEW_NAME = "attachment_candidate_review"
 ATTACHMENT_REVIEW_STAGE = "post_attachment_enrichment"
@@ -118,6 +118,10 @@ LABEL_STATUS_UNIQUE = "unique"
 LABEL_STATUS_MULTIPLE = "multiple"
 LABEL_STATUS_ABSENT = "absent"
 LABEL_STATUS_UNSURE = "unsure"
+
+OUT_OF_FRAME_REVIEW_STATUS_NOT_VISIBLE = "not_visible"
+OUT_OF_FRAME_REVIEW_STATUS_REJECT = "reject"
+OUT_OF_FRAME_REVIEW_STATUS_UNSURE = "unsure"
 
 _DINOX_CLIENT_CACHE: Any | None = None
 _VLM_CALL_FAILURE_COUNT = 0
@@ -389,6 +393,20 @@ def _full_frame_label_count_prompt(label: str) -> str:
     )
 
 
+def _full_frame_out_of_frame_label_prompt(label: str) -> str:
+    return (
+        "You are given one full scene image. "
+        "Judge only whether the target label is completely not visible anywhere in this image. "
+        "The target label is "
+        f"{json.dumps(str(label), ensure_ascii=False)}. "
+        "Return status=not_visible only when no identifiable instance of that label can be seen at all, "
+        "and the absence is consistent with the object simply being outside the image frame. "
+        "Return status=reject if any identifiable instance is visible, or if the absence could be explained by another cause instead of being out of frame. "
+        "Return status=unsure if you cannot decide confidently. "
+        'Answer with strict JSON only using this schema: {"status": "not_visible"}'
+    )
+
+
 def _normalize_object_review_status(value: object) -> str | None:
     text = str(value or "").strip().lower()
     if text in {"clear", "present", "visible", "yes"}:
@@ -447,6 +465,40 @@ def _normalize_full_frame_label_status(value: object, *, count: object = None) -
     if count_int == 1:
         return LABEL_STATUS_UNIQUE
     return LABEL_STATUS_MULTIPLE
+
+
+def _normalize_out_of_frame_review_status(value: object) -> str | None:
+    text = str(value or "").strip().lower()
+    if text in {
+        OUT_OF_FRAME_REVIEW_STATUS_NOT_VISIBLE,
+        "not visible",
+        "not-visible",
+        "out_of_frame",
+        "out of frame",
+        "off_screen",
+        "off screen",
+        "off-frame",
+    }:
+        return OUT_OF_FRAME_REVIEW_STATUS_NOT_VISIBLE
+    if text in {
+        OUT_OF_FRAME_REVIEW_STATUS_REJECT,
+        "visible",
+        "present",
+        "in_frame",
+        "in frame",
+        "no",
+    }:
+        return OUT_OF_FRAME_REVIEW_STATUS_REJECT
+    if text in {
+        OUT_OF_FRAME_REVIEW_STATUS_UNSURE,
+        "uncertain",
+        "unknown",
+        "unclear",
+        "cannot_tell",
+        "can't tell",
+    }:
+        return OUT_OF_FRAME_REVIEW_STATUS_UNSURE
+    return None
 
 
 def _label_status_count(status: object) -> int | None:
@@ -616,6 +668,45 @@ def _normalize_cached_label_statuses(
     return dict(sorted(normalized.items()))
 
 
+def _normalize_cached_out_of_frame_not_visible_labels(value: object) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(value, list):
+        return labels
+    for item in value:
+        label = str(item or "").strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _normalize_cached_out_of_frame_label_reviews(value: object) -> list[dict[str, Any]]:
+    reviews: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return reviews
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "") or "").strip().lower()
+        status = _normalize_out_of_frame_review_status(item.get("status"))
+        if not label or status is None:
+            continue
+        reviews.append(
+            {
+                "label": label,
+                "status": status,
+                "raw_response": item.get("raw_response"),
+            }
+        )
+    return reviews[:1]
+
+
+def _normalize_cached_out_of_frame_vlm_early_stop(value: object) -> bool:
+    return _coerce_bool(value, default=False)
+
+
 def _infer_crop_unique_label_object_ids(
     *,
     label_to_object_ids: dict[str, list[int]],
@@ -775,7 +866,7 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
     )
 
-    return {
+    derived = {
         "label_to_object_ids": label_to_object_ids,
         "selector_visible_label_counts": selector_visible_label_counts,
         "crop_label_statuses": crop_label_statuses,
@@ -789,6 +880,30 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         "referable_object_ids": referable_object_ids,
         "vlm_unique_object_ids": list(referable_object_ids),
     }
+    out_of_frame_keys = {
+        "out_of_frame_label_reviews",
+        "out_of_frame_not_visible_labels",
+        "out_of_frame_label_to_object_ids",
+        "out_of_frame_vlm_early_stop",
+    }
+    if out_of_frame_keys.issubset(entry.keys()):
+        derived.update(
+            {
+                "out_of_frame_label_reviews": _normalize_cached_out_of_frame_label_reviews(
+                    entry.get("out_of_frame_label_reviews")
+                ),
+                "out_of_frame_not_visible_labels": _normalize_cached_out_of_frame_not_visible_labels(
+                    entry.get("out_of_frame_not_visible_labels")
+                ),
+                "out_of_frame_label_to_object_ids": _shared_normalize_label_to_object_ids(
+                    entry.get("out_of_frame_label_to_object_ids")
+                ),
+                "out_of_frame_vlm_early_stop": _normalize_cached_out_of_frame_vlm_early_stop(
+                    entry.get("out_of_frame_vlm_early_stop")
+                ),
+            }
+        )
+    return derived
 
 
 def _repair_final_referability_fields(entry: Any) -> dict[str, Any]:
@@ -815,6 +930,10 @@ def _frame_entry_has_consistent_final_fields(entry: Any) -> bool:
         "label_statuses",
         "label_counts",
         "referable_object_ids",
+        "out_of_frame_label_reviews",
+        "out_of_frame_not_visible_labels",
+        "out_of_frame_label_to_object_ids",
+        "out_of_frame_vlm_early_stop",
     }
     if not required_keys.issubset(entry.keys()):
         return False
@@ -838,6 +957,18 @@ def _frame_entry_has_consistent_final_fields(entry: Any) -> bool:
         ),
         "label_counts": _normalize_cached_label_counts(entry.get("label_counts")),
         "referable_object_ids": _normalize_cached_object_ids(entry.get("referable_object_ids")),
+        "out_of_frame_label_reviews": _normalize_cached_out_of_frame_label_reviews(
+            entry.get("out_of_frame_label_reviews")
+        ),
+        "out_of_frame_not_visible_labels": _normalize_cached_out_of_frame_not_visible_labels(
+            entry.get("out_of_frame_not_visible_labels")
+        ),
+        "out_of_frame_label_to_object_ids": _shared_normalize_label_to_object_ids(
+            entry.get("out_of_frame_label_to_object_ids")
+        ),
+        "out_of_frame_vlm_early_stop": _normalize_cached_out_of_frame_vlm_early_stop(
+            entry.get("out_of_frame_vlm_early_stop")
+        ),
     }
     if "attachment_referable_object_ids" in entry:
         normalized_entry["attachment_referable_object_ids"] = _normalize_cached_object_ids(
@@ -1639,6 +1770,47 @@ def _full_frame_label_vlm_review(
     return review
 
 
+def _out_of_frame_label_vlm_review(
+    *,
+    client,
+    model: str,
+    image_b64: str,
+    label: str,
+) -> dict[str, Any]:
+    normalized_label = str(label or "").strip().lower()
+    review = {
+        "status": OUT_OF_FRAME_REVIEW_STATUS_UNSURE,
+        "raw_response": None,
+    }
+    if not normalized_label:
+        return review
+
+    default = {
+        "status": OUT_OF_FRAME_REVIEW_STATUS_UNSURE,
+    }
+    parsed, raw_text = _call_vlm_json(
+        client,
+        model,
+        [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            {"type": "text", "text": _full_frame_out_of_frame_label_prompt(normalized_label)},
+        ],
+        default=default,
+        max_tokens=128,
+    )
+    status = (
+        _normalize_out_of_frame_review_status(parsed.get("status"))
+        or OUT_OF_FRAME_REVIEW_STATUS_UNSURE
+    )
+    review.update(
+        {
+            "status": status,
+            "raw_response": raw_text or None,
+        }
+    )
+    return review
+
+
 def _build_frame_label_candidates(
     visible_object_ids: list[int],
     objects_by_id: dict[int, dict[str, Any]],
@@ -1657,6 +1829,219 @@ def _build_frame_label_candidates(
         for label, obj_ids in sorted(label_to_ids.items())
     }
     return sorted(normalized.keys()), normalized
+
+
+def _object_bbox_projection_points(obj: dict[str, Any]) -> list[np.ndarray]:
+    bbox_min = np.asarray(obj.get("bbox_min", []), dtype=np.float64)
+    bbox_max = np.asarray(obj.get("bbox_max", []), dtype=np.float64)
+    if bbox_min.shape != (3,) or bbox_max.shape != (3,):
+        return []
+    points: list[np.ndarray] = []
+    for x in [bbox_min[0], bbox_max[0]]:
+        for y in [bbox_min[1], bbox_max[1]]:
+            for z in [bbox_min[2], bbox_max[2]]:
+                points.append(np.array([x, y, z], dtype=np.float64))
+    points.append((bbox_min + bbox_max) / 2.0)
+    return points
+
+
+def _projected_bbox_outside_distance_px(
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> float:
+    projected: list[tuple[float, float]] = []
+    for point in _object_bbox_projection_points(obj):
+        uv, depth = project_to_image(point, camera_pose, color_intrinsics)
+        if uv is None or depth <= 0:
+            continue
+        projected.append((float(uv[0]), float(uv[1])))
+    if not projected:
+        return float(max(color_intrinsics.width, color_intrinsics.height) * 4)
+
+    us = [item[0] for item in projected]
+    vs = [item[1] for item in projected]
+    u_min = float(min(us) - 5.0)
+    u_max = float(max(us) + 5.0)
+    v_min = float(min(vs) - 5.0)
+    v_max = float(max(vs) + 5.0)
+
+    if u_max < 0.0:
+        dx = float(-u_max)
+    elif u_min > float(color_intrinsics.width):
+        dx = float(u_min - float(color_intrinsics.width))
+    else:
+        dx = 0.0
+
+    if v_max < 0.0:
+        dy = float(-v_max)
+    elif v_min > float(color_intrinsics.height):
+        dy = float(v_min - float(color_intrinsics.height))
+    else:
+        dy = 0.0
+
+    if dx > 0.0 and dy > 0.0:
+        return float(np.hypot(dx, dy))
+    return float(max(dx, dy))
+
+
+def _evaluate_out_of_frame_geometry_for_object(
+    *,
+    obj: dict[str, Any],
+    visibility_meta: dict[str, Any] | None,
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
+) -> dict[str, Any]:
+    obj_id = int(obj.get("id", -1))
+    projected_area_px = _safe_float(
+        (visibility_meta or {}).get("projected_area_px"),
+        default=0.0,
+    )
+    in_frame_ratio = _safe_float(
+        (visibility_meta or {}).get("bbox_in_frame_ratio"),
+        default=0.0,
+    )
+    sample_count_available = False
+    in_frame_sample_count = 0
+
+    if (
+        obj_id >= 0
+        and camera_pose is not None
+        and color_intrinsics is not None
+        and callable(instance_mesh_data_getter)
+    ):
+        try:
+            instance_mesh_data = instance_mesh_data_getter(
+                REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
+            )
+        except Exception:
+            instance_mesh_data = None
+        sample_points = _instance_surface_samples(instance_mesh_data, obj_id)
+        if len(sample_points) > 0:
+            sample_count_available = True
+            in_frame_points, _unused_triangles, _unused_barycentrics = _in_frame_surface_sample_subset(
+                sample_points,
+                camera_pose,
+                color_intrinsics,
+            )
+            in_frame_sample_count = int(len(in_frame_points))
+            in_frame_ratio = float(in_frame_sample_count / len(sample_points))
+
+    outside_distance_px = 0.0
+    if camera_pose is not None and color_intrinsics is not None:
+        outside_distance_px = _projected_bbox_outside_distance_px(
+            obj,
+            camera_pose,
+            color_intrinsics,
+        )
+
+    is_out_of_frame = (
+        (sample_count_available and in_frame_sample_count == 0)
+        or in_frame_ratio <= 0.0
+    )
+    return {
+        "obj_id": obj_id,
+        "label": str(obj.get("label", "")).strip().lower(),
+        "projected_area_px": projected_area_px,
+        "in_frame_ratio": float(in_frame_ratio),
+        "in_frame_sample_count": int(in_frame_sample_count),
+        "outside_distance_px": float(outside_distance_px),
+        "is_out_of_frame": bool(is_out_of_frame),
+    }
+
+
+def _build_out_of_frame_label_candidates(
+    *,
+    scene_objects: list[dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    visibility_by_obj_id: dict[int, dict[str, Any]],
+    camera_pose: CameraPose | None,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, list[int]]]:
+    alias_group_to_labels: dict[str, set[str]] = defaultdict(set)
+    label_to_scene_object_ids: dict[str, list[int]] = defaultdict(list)
+    label_to_alias_groups: dict[str, set[str]] = defaultdict(set)
+
+    for raw_obj in scene_objects:
+        try:
+            obj_id = int(raw_obj.get("id", -1))
+        except (TypeError, ValueError):
+            continue
+        obj = objects_by_id.get(obj_id, raw_obj)
+        label = str(obj.get("label", "")).strip().lower()
+        alias_group = str(obj.get("alias_group", "")).strip().lower()
+        if not label or label in EXCLUDED_LABELS:
+            continue
+        label_to_scene_object_ids[label].append(obj_id)
+        label_to_alias_groups[label].add(alias_group)
+        if alias_group:
+            alias_group_to_labels[alias_group].add(label)
+
+    unique_alias_group_to_label = {
+        alias_group: next(iter(labels))
+        for alias_group, labels in alias_group_to_labels.items()
+        if len(labels) == 1
+    }
+
+    candidates: list[dict[str, Any]] = []
+    out_of_frame_label_to_object_ids: dict[str, list[int]] = {}
+    for label, obj_ids in sorted(label_to_scene_object_ids.items()):
+        normalized_obj_ids = sorted(set(int(obj_id) for obj_id in obj_ids))
+        alias_groups = label_to_alias_groups.get(label, set())
+        if not normalized_obj_ids or not alias_groups or "" in alias_groups:
+            continue
+        if any(unique_alias_group_to_label.get(alias_group) != label for alias_group in alias_groups):
+            continue
+
+        object_geometries: list[dict[str, Any]] = []
+        all_out_of_frame = True
+        for obj_id in normalized_obj_ids:
+            obj = objects_by_id.get(int(obj_id))
+            if obj is None:
+                all_out_of_frame = False
+                break
+            geometry = _evaluate_out_of_frame_geometry_for_object(
+                obj=obj,
+                visibility_meta=visibility_by_obj_id.get(int(obj_id)),
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+            object_geometries.append(geometry)
+            if not bool(geometry.get("is_out_of_frame", False)):
+                all_out_of_frame = False
+                break
+        if not all_out_of_frame or not object_geometries:
+            continue
+
+        representative = max(
+            object_geometries,
+            key=lambda item: (
+                float(item.get("projected_area_px", 0.0) or 0.0),
+                float(item.get("outside_distance_px", 0.0) or 0.0),
+                -int(item.get("obj_id", 0) or 0),
+            ),
+        )
+        candidates.append(
+            {
+                "label": label,
+                "object_ids": normalized_obj_ids,
+                "representative": representative,
+            }
+        )
+        out_of_frame_label_to_object_ids[label] = normalized_obj_ids
+
+    candidates.sort(
+        key=lambda item: (
+            -float(item["representative"].get("projected_area_px", 0.0) or 0.0),
+            -float(item["representative"].get("outside_distance_px", 0.0) or 0.0),
+            int(item["representative"].get("obj_id", 0) or 0),
+            str(item.get("label", "")),
+        )
+    )
+    return candidates, out_of_frame_label_to_object_ids
 
 
 def _refine_candidate_visible_object_ids(
@@ -3320,6 +3705,10 @@ def _compute_frame_referability_entry(
     full_frame_label_counts: dict[str, int] = {}
     label_statuses: dict[str, str] = {}
     label_counts: dict[str, int] = {}
+    out_of_frame_label_reviews: list[dict[str, Any]] = []
+    out_of_frame_not_visible_labels: list[str] = []
+    out_of_frame_label_to_object_ids: dict[str, list[int]] = {}
+    out_of_frame_vlm_early_stop = False
     attachment_referable_object_ids: list[int] = []
     referable_object_ids: list[int] = []
     alias_group_statuses: dict[str, str] = {}
@@ -3478,6 +3867,35 @@ def _compute_frame_referability_entry(
             visibility_audit_by_object_id=visibility_audit_by_object_id,
             bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
         )
+        out_of_frame_label_candidates, out_of_frame_label_to_object_ids = (
+            _build_out_of_frame_label_candidates(
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                visibility_by_obj_id=visibility_by_obj_id,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+        )
+        if out_of_frame_label_candidates:
+            if image_b64 is None:
+                image_b64 = _image_to_base64(image)
+            candidate = out_of_frame_label_candidates[0]
+            vlm_review = _out_of_frame_label_vlm_review(
+                client=client,
+                model=model_name,
+                image_b64=str(image_b64 or ""),
+                label=str(candidate["label"]),
+            )
+            review_payload = {
+                "label": str(candidate["label"]),
+                "status": str(vlm_review.get("status", OUT_OF_FRAME_REVIEW_STATUS_UNSURE)),
+                "raw_response": vlm_review.get("raw_response"),
+            }
+            out_of_frame_label_reviews.append(review_payload)
+            if review_payload["status"] == OUT_OF_FRAME_REVIEW_STATUS_NOT_VISIBLE:
+                out_of_frame_not_visible_labels = [str(candidate["label"])]
+                out_of_frame_vlm_early_stop = True
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
         alias_group_to_reasons: dict[str, set[str]] = defaultdict(set)
@@ -3561,6 +3979,13 @@ def _compute_frame_referability_entry(
         "vlm_label_reviews": list(alias_group_reviews),
         "label_statuses": dict(sorted(label_statuses.items())),
         "label_counts": dict(sorted(label_counts.items())),
+        "out_of_frame_label_reviews": list(out_of_frame_label_reviews),
+        "out_of_frame_not_visible_labels": list(out_of_frame_not_visible_labels),
+        "out_of_frame_label_to_object_ids": {
+            str(label): [int(obj_id) for obj_id in obj_ids]
+            for label, obj_ids in sorted(out_of_frame_label_to_object_ids.items())
+        },
+        "out_of_frame_vlm_early_stop": bool(out_of_frame_vlm_early_stop),
         "attachment_referable_pairs": [],
         "attachment_referable_pair_count": 0,
         "attachment_view_group_id": None,
@@ -3600,6 +4025,10 @@ def _frame_entry_has_debug_fields(entry: Any) -> bool:
         "full_frame_label_counts",
         "label_statuses",
         "label_counts",
+        "out_of_frame_label_reviews",
+        "out_of_frame_not_visible_labels",
+        "out_of_frame_label_to_object_ids",
+        "out_of_frame_vlm_early_stop",
         "referable_object_ids",
     }
     if not required_keys.issubset(entry.keys()):

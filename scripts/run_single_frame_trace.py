@@ -30,6 +30,7 @@ from scripts.run_pipeline import (
     _get_referability_entry,
     _has_l1_visibility_candidates,
     _load_referability_cache,
+    _normalize_label_list,
     _normalize_label_counts,
     _normalize_label_statuses,
     _normalize_object_ids,
@@ -794,6 +795,9 @@ def run_single_frame_trace(
         trace_doc["input"]["referability_source"] = referability_source
         label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
         label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
+        out_of_frame_not_visible_labels = _normalize_label_list(
+            referability_entry.get("out_of_frame_not_visible_labels")
+        )
         selector_visible_ids = _normalize_object_ids(
             referability_entry.get("selector_visible_object_ids")
             or referability_entry.get("candidate_visible_object_ids")
@@ -870,7 +874,10 @@ def run_single_frame_trace(
                 "referability_source": referability_source,
             }
             return trace_doc
-        if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
+        if not referable_ids and not _has_l1_visibility_candidates(
+            label_statuses,
+            out_of_frame_not_visible_labels,
+        ):
             trace_doc["status"] = "stopped"
             trace_doc["stop_reason"] = "no_referable_objects_or_l1_candidates"
             trace_doc["stop_details"] = {
@@ -949,7 +956,10 @@ def run_single_frame_trace(
             },
         )
         stage_started = time.perf_counter()
-        if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
+        if not referable_ids and not _has_l1_visibility_candidates(
+            label_statuses,
+            out_of_frame_not_visible_labels,
+        ):
             trace_doc["status"] = "stopped"
             trace_doc["stop_reason"] = "no_referable_objects_or_l1_candidates"
             trace_doc["stop_details"] = {
@@ -985,6 +995,8 @@ def run_single_frame_trace(
             label_statuses=label_statuses,
             label_counts=label_counts,
             label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
+            out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
+            out_of_frame_label_to_object_ids=(referability_entry or {}).get("out_of_frame_label_to_object_ids"),
             room_bounds=scene.get("room_bounds"),
             wall_objects=scene.get("wall_objects"),
             attachment_edges=scene.get("attachment_edges", []),

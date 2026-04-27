@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """One-click pipeline runner for CausalSpatial-Bench.
 
 Usage:
@@ -88,7 +88,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
-EXPECTED_REFERABILITY_CACHE_VERSION = "19.0"
+EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -105,7 +105,7 @@ QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 REFERABLE_OCCLUSION_VETO_DENSE_BASE_SAMPLE_COUNT = 512
 REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX = 400.0
 REFERABLE_OCCLUSION_VETO_DENSE_MAX_SAMPLE_COUNT = 4096
-REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO = 0.25
+REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO = 0.35
 REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE = 64
 
 
@@ -2356,13 +2356,26 @@ def _get_referability_scene_ids(cache: dict | None) -> set[str]:
     return scene_ids
 
 
-def _has_l1_visibility_candidates(label_statuses: object) -> bool:
-    if not isinstance(label_statuses, dict):
-        return False
-    for status in label_statuses.values():
-        if str(status or "").strip().lower() == "absent":
-            return True
-    return False
+def _normalize_label_list(value: object) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(value, list):
+        return labels
+    for item in value:
+        label = str(item or "").strip().lower()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _has_l1_visibility_candidates(
+    label_statuses: object,
+    out_of_frame_not_visible_labels: object = None,
+) -> bool:
+    _ = label_statuses
+    return bool(_normalize_label_list(out_of_frame_not_visible_labels))
 
 
 def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[str, object]]:
@@ -3102,6 +3115,21 @@ def _build_frame_debug_entry(
         "full_frame_label_counts": _normalize_label_counts((referability_entry or {}).get("full_frame_label_counts")),
         "vlm_label_statuses": _normalize_label_statuses((referability_entry or {}).get("label_statuses")),
         "vlm_label_counts": _normalize_label_counts((referability_entry or {}).get("label_counts")),
+        "out_of_frame_label_reviews": list((referability_entry or {}).get("out_of_frame_label_reviews", [])),
+        "out_of_frame_not_visible_labels": _normalize_label_list(
+            (referability_entry or {}).get("out_of_frame_not_visible_labels")
+        ),
+        "out_of_frame_label_to_object_ids": {
+            str(label): _normalize_object_ids(obj_ids)
+            for label, obj_ids in (
+                _shared_normalize_label_to_object_ids(
+                    (referability_entry or {}).get("out_of_frame_label_to_object_ids")
+                )
+            ).items()
+        },
+        "out_of_frame_vlm_early_stop": bool(
+            (referability_entry or {}).get("out_of_frame_vlm_early_stop", False)
+        ),
         "referable_object_ids": _normalize_object_ids((referability_entry or {}).get("referable_object_ids")),
         "referable_occlusion_veto": dict(referable_occlusion_veto or {}),
         "candidate_labels": list((referability_entry or {}).get("candidate_labels", [])),
@@ -3393,6 +3421,8 @@ def run_pipeline(
                 raw_referable_ids: list[int] = []
                 label_statuses = None
                 label_counts = None
+                out_of_frame_not_visible_labels: list[str] = []
+                out_of_frame_label_to_object_ids: dict[str, list[int]] | None = None
                 referable_occlusion_veto: dict[str, object] = {
                     "raw_object_ids": [],
                     "filtered_object_ids": [],
@@ -3427,6 +3457,12 @@ def run_pipeline(
                 if referability_entry is not None:
                     label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
                     label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
+                    out_of_frame_not_visible_labels = _normalize_label_list(
+                        referability_entry.get("out_of_frame_not_visible_labels")
+                    )
+                    out_of_frame_label_to_object_ids = _shared_normalize_label_to_object_ids(
+                        referability_entry.get("out_of_frame_label_to_object_ids")
+                    )
                     raw_referable_ids = [
                         int(obj_id)
                         for obj_id in referability_entry.get("referable_object_ids", [])
@@ -3456,7 +3492,10 @@ def run_pipeline(
                         for obj_id in (raw_attachment_referable_ids or [])
                         if int(obj_id) in visible_id_set
                     ]
-                    if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
+                    if not referable_ids and not _has_l1_visibility_candidates(
+                        label_statuses,
+                        out_of_frame_not_visible_labels,
+                    ):
                         if write_frame_debug:
                             frame_attachment_rows = _filter_frame_attachment_rows(
                                 scene_attachment_rows,
@@ -3505,6 +3544,8 @@ def run_pipeline(
                     label_statuses=label_statuses,
                     label_counts=label_counts,
                     label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
+                    out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
+                    out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
                     room_bounds=scene.get("room_bounds"),
                     wall_objects=scene.get("wall_objects"),
                     attachment_edges=scene.get("attachment_edges", []),
@@ -3756,6 +3797,8 @@ def run_pipeline(
             referable_ids = None
             label_statuses = None
             label_counts = None
+            out_of_frame_not_visible_labels: list[str] = []
+            out_of_frame_label_to_object_ids: dict[str, list[int]] | None = None
             referability_entry = _get_referability_entry(
                 referability_cache, scene_id, image_name,
             )
@@ -3773,11 +3816,20 @@ def run_pipeline(
             if referability_entry is not None:
                 label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
                 label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
+                out_of_frame_not_visible_labels = _normalize_label_list(
+                    referability_entry.get("out_of_frame_not_visible_labels")
+                )
+                out_of_frame_label_to_object_ids = _shared_normalize_label_to_object_ids(
+                    referability_entry.get("out_of_frame_label_to_object_ids")
+                )
                 referable_ids = [
                     int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
                     if int(obj_id) in visible_id_set
                 ]
-                if not referable_ids and not _has_l1_visibility_candidates(label_statuses):
+                if not referable_ids and not _has_l1_visibility_candidates(
+                    label_statuses,
+                    out_of_frame_not_visible_labels,
+                ):
                     if write_frame_debug:
                         frame_attachment_rows = _filter_frame_attachment_rows(
                             scene_attachment_rows,
@@ -3820,6 +3872,8 @@ def run_pipeline(
                 label_statuses=label_statuses,
                 label_counts=label_counts,
                 label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
+                out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
+                out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),

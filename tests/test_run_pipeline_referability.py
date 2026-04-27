@@ -984,7 +984,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        with self.assertRaisesRegex(ValueError, "expected 19.0"):
+        with self.assertRaisesRegex(ValueError, "expected 20.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
     def test_load_referability_cache_rejects_inconsistent_entry_without_repair_flag(self) -> None:
@@ -994,7 +994,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         cache_path.write_text(
             json.dumps(
                 {
-                    "version": "19.0",
+                    "version": "20.0",
                     "frames": {
                         "scene0000_00": {
                             "000123.jpg": {
@@ -1009,6 +1009,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                                 "full_frame_label_counts": {"lamp": 0},
                                 "label_statuses": {"lamp": "unique"},
                                 "label_counts": {"lamp": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
                                 "referable_object_ids": [1],
                                 "object_reviews": {
                                     "1": {
@@ -1039,7 +1043,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         cache_path.write_text(
             json.dumps(
                 {
-                    "version": "19.0",
+                    "version": "20.0",
                     "frames": {
                         scene_id: {
                             image_name: {
@@ -1082,6 +1086,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                                 "full_frame_label_counts": {"lamp": 0},
                                 "label_statuses": {"lamp": "unique"},
                                 "label_counts": {"lamp": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
                                 "referable_object_ids": [1],
                             }
                         }
@@ -1117,7 +1125,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         cache_path.write_text(
             json.dumps(
                 {
-                    "version": "19.0",
+                    "version": "20.0",
                     "scene_grouping": {
                         "scene0000_00": {
                             "scene_id": "scene0000_00",
@@ -1168,6 +1176,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                                 "full_frame_label_counts": {},
                                 "label_statuses": {"lamp": "unique"},
                                 "label_counts": {"lamp": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
                                 "referable_object_ids": [1],
                             }
                         }
@@ -1187,13 +1199,17 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual([frame["image_name"] for frame in frames], ["000123.jpg"])
         self.assertEqual(frames[0]["visible_object_ids"], [1])
 
-    def test_has_l1_visibility_candidates_only_keeps_absent_labels(self) -> None:
+    def test_has_l1_visibility_candidates_only_keeps_vlm_out_of_frame_labels(self) -> None:
         self.assertTrue(
-            run_pipeline_module._has_l1_visibility_candidates({"lamp": "absent"})
+            run_pipeline_module._has_l1_visibility_candidates(
+                {"lamp": "absent"},
+                ["lamp"],
+            )
         )
         self.assertFalse(
             run_pipeline_module._has_l1_visibility_candidates(
-                {"chair": "unique", "table": "multiple", "sofa": "unsure"}
+                {"chair": "unique", "table": "multiple", "sofa": "unsure"},
+                [],
             )
         )
 
@@ -1277,7 +1293,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1301,6 +1317,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1],
                         "label_statuses": {"lamp": "unique"},
                         "label_counts": {"lamp": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["lamp"],
                         "label_to_object_ids": {"lamp": [1]},
                     }
@@ -1352,7 +1372,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
             patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
         ):
-            with self.assertRaisesRegex(ValueError, "inconsistent with cache version 19.0"):
+            with self.assertRaisesRegex(ValueError, "inconsistent with cache version 20.0"):
                 run_pipeline_module.run_pipeline(
                     data_root=data_root,
                     output_dir=output_dir,
@@ -1392,7 +1412,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1408,6 +1428,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},
                     }
@@ -1515,7 +1539,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1531,6 +1555,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},
                     }
@@ -1632,7 +1660,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1647,6 +1675,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [2], "table": [1]},
                         "object_reviews": {
@@ -1744,7 +1776,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1759,6 +1791,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},
                     }
@@ -1873,7 +1909,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -1888,6 +1924,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"cup": "unique", "table": "unique"},
                         "label_counts": {"cup": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},
                     }
@@ -2045,7 +2085,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -2066,6 +2106,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                             "chair": 1,
                             "curtain": 2,
                         },
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["chair", "curtain"],
                         "label_to_object_ids": {
                             "chair": [1],
@@ -2152,7 +2196,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -2167,6 +2211,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"chair": "unique", "table": "unique"},
                         "label_counts": {"chair": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["chair", "table"],
                         "label_to_object_ids": {"chair": [1], "table": [2]},
                     }
@@ -2268,7 +2316,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
 
         referability_cache = {
-            "version": "19.0",
+            "version": "20.0",
             "frames": {
                 scene_id: {
                     image_name: {
@@ -2283,6 +2331,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "referable_object_ids": [1, 2],
                         "label_statuses": {"lamp": "unique", "table": "unique"},
                         "label_counts": {"lamp": 1, "table": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["lamp", "table"],
                         "label_to_object_ids": {"lamp": [1], "table": [2]},
                     }

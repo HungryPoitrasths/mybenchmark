@@ -223,6 +223,10 @@ def make_debug_cache_entry() -> dict:
         "full_frame_label_counts": {},
         "label_statuses": {},
         "label_counts": {},
+        "out_of_frame_label_reviews": [],
+        "out_of_frame_not_visible_labels": [],
+        "out_of_frame_label_to_object_ids": {},
+        "out_of_frame_vlm_early_stop": False,
         "referable_object_ids": [],
     }
 
@@ -710,6 +714,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["full_frame_label_counts"], {})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "multiple", "lamp": "absent"})
         self.assertEqual(frame_entry["label_counts"], {"chair": 2, "lamp": 0})
+        self.assertEqual(frame_entry["out_of_frame_label_reviews"], [])
+        self.assertEqual(frame_entry["out_of_frame_not_visible_labels"], [])
+        self.assertEqual(frame_entry["out_of_frame_label_to_object_ids"], {})
+        self.assertFalse(frame_entry["out_of_frame_vlm_early_stop"])
         self.assertEqual(frame_entry["referable_object_ids"], [])
         self.assertEqual(frame_entry["full_frame_label_reviews"], [])
         self.assertEqual(frame_entry["object_reviews"]["1"]["review_mode"], "selector_duplicate_shortcut")
@@ -1005,6 +1013,207 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["object_reviews"]["1"]["local_reason"], "projected_area_too_small")
         review_mock.assert_not_called()
         full_frame_mock.assert_not_called()
+
+    def test_build_out_of_frame_label_candidates_sorts_by_representative_geometry(self) -> None:
+        scene_objects = [
+            make_object(2, "chair", alias_group="chair_family"),
+            make_object(3, "sofa", alias_group="sofa_family"),
+            make_object(5, "lamp", alias_group="lamp_family"),
+            make_object(6, "lamp", alias_group="lamp_family"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        fake_geometry = {
+            2: {
+                "obj_id": 2,
+                "label": "chair",
+                "projected_area_px": 100.0,
+                "in_frame_ratio": 0.0,
+                "in_frame_sample_count": 0,
+                "outside_distance_px": 4.0,
+                "is_out_of_frame": True,
+            },
+            3: {
+                "obj_id": 3,
+                "label": "sofa",
+                "projected_area_px": 80.0,
+                "in_frame_ratio": 0.0,
+                "in_frame_sample_count": 0,
+                "outside_distance_px": 100.0,
+                "is_out_of_frame": True,
+            },
+            5: {
+                "obj_id": 5,
+                "label": "lamp",
+                "projected_area_px": 100.0,
+                "in_frame_ratio": 0.0,
+                "in_frame_sample_count": 0,
+                "outside_distance_px": 3.0,
+                "is_out_of_frame": True,
+            },
+            6: {
+                "obj_id": 6,
+                "label": "lamp",
+                "projected_area_px": 100.0,
+                "in_frame_ratio": 0.0,
+                "in_frame_sample_count": 0,
+                "outside_distance_px": 5.0,
+                "is_out_of_frame": True,
+            },
+        }
+
+        with patch.object(
+            referability_module,
+            "_evaluate_out_of_frame_geometry_for_object",
+            side_effect=lambda **kwargs: dict(fake_geometry[int(kwargs["obj"]["id"])]),
+        ):
+            candidates, label_to_ids = referability_module._build_out_of_frame_label_candidates(
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                visibility_by_obj_id={},
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+            )
+
+        self.assertEqual([item["label"] for item in candidates], ["lamp", "chair", "sofa"])
+        self.assertEqual(label_to_ids, {"chair": [2], "lamp": [5, 6], "sofa": [3]})
+        self.assertEqual(candidates[0]["representative"]["obj_id"], 6)
+
+    def test_compute_frame_referability_entry_reviews_only_top_out_of_frame_label(self) -> None:
+        scene_objects = [
+            make_object(1, "lamp", alias_group="lamp_family"),
+            make_object(2, "lamp", alias_group="lamp_family"),
+            make_object(3, "chair", alias_group="chair_family"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=1200.0, bbox_in_frame_ratio=0.0),
+            2: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.0),
+            3: make_visibility_meta(projected_area_px=800.0, bbox_in_frame_ratio=0.0),
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clear": True,
+                    "clarity_score": 82,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([], "mesh_ray_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_out_of_frame_label_vlm_review",
+                return_value={
+                    "status": "not_visible",
+                    "raw_response": '{"status":"not_visible"}',
+                },
+            ) as out_of_frame_mock,
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_quality_review",
+                return_value={},
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[],
+            )
+
+        out_of_frame_mock.assert_called_once()
+        self.assertEqual(out_of_frame_mock.call_args.kwargs["label"], "lamp")
+        self.assertEqual(
+            frame_entry["out_of_frame_label_to_object_ids"],
+            {"chair": [3], "lamp": [1, 2]},
+        )
+        self.assertEqual(
+            frame_entry["out_of_frame_label_reviews"],
+            [{"label": "lamp", "status": "not_visible", "raw_response": '{"status":"not_visible"}'}],
+        )
+        self.assertEqual(frame_entry["out_of_frame_not_visible_labels"], ["lamp"])
+        self.assertTrue(frame_entry["out_of_frame_vlm_early_stop"])
+
+    def test_compute_frame_referability_entry_skips_out_of_frame_review_for_ambiguous_alias_group(self) -> None:
+        scene_objects = [
+            make_object(1, "lamp", alias_group="shared_family"),
+            make_object(2, "chair", alias_group="shared_family"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=1200.0, bbox_in_frame_ratio=0.0),
+            2: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.0),
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clear": True,
+                    "clarity_score": 82,
+                    "frame_usable": True,
+                    "reason": "clear enough",
+                },
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([], "mesh_ray_refined"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value=visibility,
+            ),
+            patch.object(
+                referability_module,
+                "_out_of_frame_label_vlm_review",
+            ) as out_of_frame_mock,
+            patch.object(
+                referability_module,
+                "_apply_crop_unique_mesh_quality_review",
+                return_value={},
+            ),
+        ):
+            frame_entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("image.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[],
+            )
+
+        out_of_frame_mock.assert_not_called()
+        self.assertEqual(frame_entry["out_of_frame_label_reviews"], [])
+        self.assertEqual(frame_entry["out_of_frame_not_visible_labels"], [])
+        self.assertEqual(frame_entry["out_of_frame_label_to_object_ids"], {})
+        self.assertFalse(frame_entry["out_of_frame_vlm_early_stop"])
 
     def test_compute_frame_referability_entry_passes_instance_mesh_data_to_visibility(self) -> None:
         scene_objects = [make_object(1, "chair")]
@@ -1328,6 +1537,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "full_frame_label_counts": {"lamp": 0},
             "label_statuses": {"lamp": "unique"},
             "label_counts": {"lamp": 1},
+            "out_of_frame_label_reviews": [],
+            "out_of_frame_not_visible_labels": [],
+            "out_of_frame_label_to_object_ids": {},
+            "out_of_frame_vlm_early_stop": False,
             "referable_object_ids": [1],
         }
 
@@ -1430,6 +1643,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "full_frame_label_counts": {"lamp": 0},
             "label_statuses": {"lamp": "unique"},
             "label_counts": {"lamp": 1},
+            "out_of_frame_label_reviews": [],
+            "out_of_frame_not_visible_labels": [],
+            "out_of_frame_label_to_object_ids": {},
+            "out_of_frame_vlm_early_stop": False,
             "referable_object_ids": [1],
         }
 
@@ -1487,6 +1704,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "full_frame_label_counts": {},
             "label_statuses": {"stool": "multiple"},
             "label_counts": {"stool": 2},
+            "out_of_frame_label_reviews": [],
+            "out_of_frame_not_visible_labels": [],
+            "out_of_frame_label_to_object_ids": {},
+            "out_of_frame_vlm_early_stop": False,
             "referable_object_ids": [],
             "vlm_unique_object_ids": [],
         }
@@ -1540,6 +1761,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "full_frame_label_counts": {},
             "label_statuses": {"chair": "multiple"},
             "label_counts": {"chair": 2},
+            "out_of_frame_label_reviews": [],
+            "out_of_frame_not_visible_labels": [],
+            "out_of_frame_label_to_object_ids": {},
+            "out_of_frame_vlm_early_stop": False,
             "referable_object_ids": [],
             "vlm_unique_object_ids": [],
         }
