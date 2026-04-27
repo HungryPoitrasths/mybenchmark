@@ -204,9 +204,22 @@ def make_debug_cache_entry() -> dict:
         "frame_quality_score": 82,
         "frame_quality_reason": "clear enough",
         "frame_selection_score": 100082,
+        "attachment_selector_signal": {
+            "well_cropped_pair_count": 0,
+            "viewpoint_exempt": False,
+        },
         "attachment_referable_pairs": [],
         "attachment_referable_pair_count": 0,
+        "attachment_final_referability": {
+            "object_ids": [],
+            "pairs": [],
+            "pair_count": 0,
+        },
         "final_selection_rank": 0,
+        "attachment_final_frame_selection": {
+            "selected_for_final_cache": True,
+            "selection_rank": 0,
+        },
         "candidate_visible_object_ids": [],
         "candidate_visibility_source": "selector_visible_object_ids",
         "candidate_labels": [],
@@ -1772,6 +1785,18 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(referability_module._frame_entry_has_debug_fields(entry))
         repaired = referability_module._repair_final_referability_fields(entry)
         self.assertEqual(repaired["crop_label_counts"], {"chair": 1})
+        self.assertEqual(
+            repaired["attachment_selector_signal"],
+            {"well_cropped_pair_count": 0, "viewpoint_exempt": False},
+        )
+        self.assertEqual(
+            repaired["attachment_final_referability"],
+            {"object_ids": [], "pairs": [], "pair_count": 0},
+        )
+        self.assertEqual(
+            repaired["attachment_final_frame_selection"],
+            {"selected_for_final_cache": True, "selection_rank": 0},
+        )
 
     def test_compress_attachment_group_frames_keeps_distinct_referable_pairs(self) -> None:
         frames = [
@@ -2969,7 +2994,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(review_doc["scene_count"], 0)
         self.assertEqual(review_doc["raw_candidate_edge_count"], 0)
+        self.assertEqual(review_doc["raw_attachment_candidate_edge_count"], 0)
         self.assertEqual(review_doc["final_attachment_edge_count"], 0)
+        self.assertEqual(review_doc["final_attachment_graph_edge_count"], 0)
+        self.assertEqual(review_doc["attachment_graph_layers"]["raw_candidates"]["edge_count"], 0)
+        self.assertEqual(review_doc["attachment_graph_layers"]["final_attachment_graph"]["edge_count"], 0)
         self.assertEqual(review_doc["terminal_output_lines"], [])
         self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"], "processed")
         self.assertTrue(cache_doc["scene_status"]["scene0001_00"]["has_cache_frames"])
@@ -3024,8 +3053,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
         scene_review = review_doc["scenes"][0]
         self.assertEqual(review_doc["scene_count"], 1)
         self.assertEqual(review_doc["raw_candidate_edge_count"], 0)
+        self.assertEqual(review_doc["raw_attachment_candidate_edge_count"], 0)
         self.assertEqual(review_doc["final_attachment_edge_count"], 0)
+        self.assertEqual(review_doc["final_attachment_graph_edge_count"], 0)
         self.assertEqual(scene_review["pipeline_outcome"], "no_attachment_relations")
+        self.assertEqual(scene_review["raw_attachment_candidate_edge_count"], 0)
+        self.assertEqual(scene_review["final_attachment_graph_edge_count"], 0)
         self.assertEqual(scene_review["candidate_rows"], [])
         self.assertIn("no_attachment_relations", review_doc["terminal_output_lines"][0])
         self.assertEqual(

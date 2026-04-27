@@ -171,6 +171,91 @@ def _attachment_edge_key(edge: dict[str, Any]) -> tuple[int, int, str]:
     )
 
 
+def _build_attachment_selector_signal_payload(
+    *,
+    well_cropped_pair_count: object,
+    viewpoint_exempt: object,
+) -> dict[str, Any]:
+    pair_count = int(well_cropped_pair_count or 0)
+    return {
+        "well_cropped_pair_count": pair_count,
+        "viewpoint_exempt": bool(viewpoint_exempt),
+    }
+
+
+def _build_attachment_final_referability_payload(
+    *,
+    attachment_referable_object_ids: object,
+    attachment_pairs: object,
+) -> dict[str, Any]:
+    object_ids = sorted(
+        {
+            int(obj_id)
+            for obj_id in (attachment_referable_object_ids or [])
+        }
+    )
+    normalized_pairs = [
+        [int(pair[0]), int(pair[1])]
+        for pair in (attachment_pairs or [])
+        if isinstance(pair, (list, tuple)) and len(pair) == 2
+    ]
+    return {
+        "object_ids": object_ids,
+        "pairs": normalized_pairs,
+        "pair_count": len(normalized_pairs),
+    }
+
+
+def _build_attachment_final_frame_selection_payload(
+    *,
+    final_selection_rank: object,
+) -> dict[str, Any]:
+    rank = int(final_selection_rank if final_selection_rank is not None else FRAME_SELECTION_FALLBACK_RANK)
+    selected_for_final_cache = rank < FRAME_SELECTION_FALLBACK_RANK
+    return {
+        "selected_for_final_cache": selected_for_final_cache,
+        "selection_rank": rank if selected_for_final_cache else None,
+    }
+
+
+def _apply_attachment_layer_payloads(
+    entry: dict[str, Any],
+    *,
+    attachment_pairs: list[list[int]] | None = None,
+    selector_pair_count: object | None = None,
+    selector_viewpoint_exempt: object | None = None,
+    final_selection_rank: object | None = None,
+) -> dict[str, Any]:
+    updated = dict(entry)
+    pair_count = selector_pair_count
+    if pair_count is None:
+        pair_count = updated.get("attachment_pair_ge_50_count", 0) or 0
+    viewpoint_exempt = selector_viewpoint_exempt
+    if viewpoint_exempt is None:
+        viewpoint_exempt = updated.get("attachment_viewpoint_exempt", False)
+    if attachment_pairs is None:
+        attachment_pairs = [
+            [int(pair[0]), int(pair[1])]
+            for pair in (updated.get("attachment_referable_pairs") or [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+    if final_selection_rank is None:
+        final_selection_rank = updated.get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)
+
+    updated["attachment_selector_signal"] = _build_attachment_selector_signal_payload(
+        well_cropped_pair_count=pair_count,
+        viewpoint_exempt=viewpoint_exempt,
+    )
+    updated["attachment_final_referability"] = _build_attachment_final_referability_payload(
+        attachment_referable_object_ids=updated.get("attachment_referable_object_ids"),
+        attachment_pairs=attachment_pairs,
+    )
+    updated["attachment_final_frame_selection"] = _build_attachment_final_frame_selection_payload(
+        final_selection_rank=final_selection_rank,
+    )
+    return updated
+
+
 def _build_attachment_review_scene_record(
     *,
     scene_id: str,
@@ -215,6 +300,7 @@ def _build_attachment_review_scene_record(
             "confidence": float(edge.get("confidence", 0.0) or 0.0),
             "candidate_rank_for_child": int(candidate_rank_for_child[child_id]),
             "selected_for_attachment_graph": bool(selected),
+            "selected_for_final_attachment_graph": bool(selected),
             "evidence": edge.get("evidence") or {},
         }
         candidate_rows.append(row)
@@ -229,7 +315,17 @@ def _build_attachment_review_scene_record(
         "object_count": len(objects),
         "pipeline_outcome": pipeline_outcome,
         "raw_candidate_edge_count": len(raw_candidates),
+        "raw_attachment_candidate_edge_count": len(raw_candidates),
         "final_attachment_edge_count": len(final_attachment_edges),
+        "final_attachment_graph_edge_count": len(final_attachment_edges),
+        "attachment_graph_layers": {
+            "raw_candidates": {
+                "edge_count": len(raw_candidates),
+            },
+            "final_attachment_graph": {
+                "edge_count": len(final_attachment_edges),
+            },
+        },
         "terminal_output_lines": terminal_output_lines,
         "candidate_rows": candidate_rows,
     }
@@ -241,6 +337,14 @@ def _build_attachment_review_document(
     scenes: list[dict[str, Any]],
     terminal_output_lines: list[str],
 ) -> dict[str, Any]:
+    raw_candidate_edge_count = sum(
+        int(scene.get("raw_candidate_edge_count", 0) or 0)
+        for scene in scenes
+    )
+    final_attachment_edge_count = sum(
+        int(scene.get("final_attachment_edge_count", 0) or 0)
+        for scene in scenes
+    )
     return {
         "name": ATTACHMENT_REVIEW_NAME,
         "version": ATTACHMENT_REVIEW_VERSION,
@@ -248,14 +352,20 @@ def _build_attachment_review_document(
         "review_stage": ATTACHMENT_REVIEW_STAGE,
         "referability_cache_output": str(referability_cache_output),
         "scene_count": len(scenes),
-        "raw_candidate_edge_count": sum(
-            int(scene.get("raw_candidate_edge_count", 0) or 0)
-            for scene in scenes
-        ),
-        "final_attachment_edge_count": sum(
-            int(scene.get("final_attachment_edge_count", 0) or 0)
-            for scene in scenes
-        ),
+        "raw_candidate_edge_count": raw_candidate_edge_count,
+        "raw_attachment_candidate_edge_count": raw_candidate_edge_count,
+        "final_attachment_edge_count": final_attachment_edge_count,
+        "final_attachment_graph_edge_count": final_attachment_edge_count,
+        "attachment_graph_layers": {
+            "raw_candidates": {
+                "scene_count": len(scenes),
+                "edge_count": raw_candidate_edge_count,
+            },
+            "final_attachment_graph": {
+                "scene_count": len(scenes),
+                "edge_count": final_attachment_edge_count,
+            },
+        },
         "terminal_output_lines": list(terminal_output_lines),
         "scenes": list(scenes),
     }
@@ -880,6 +990,13 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         "referable_object_ids": referable_object_ids,
         "vlm_unique_object_ids": list(referable_object_ids),
     }
+    derived = _apply_attachment_layer_payloads(
+        derived,
+        attachment_pairs=entry.get("attachment_referable_pairs"),
+        selector_pair_count=entry.get("attachment_pair_ge_50_count", 0),
+        selector_viewpoint_exempt=entry.get("attachment_viewpoint_exempt", False),
+        final_selection_rank=entry.get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK),
+    )
     out_of_frame_keys = {
         "out_of_frame_label_reviews",
         "out_of_frame_not_visible_labels",
@@ -981,6 +1098,23 @@ def _frame_entry_has_consistent_final_fields(entry: Any) -> bool:
     if "vlm_unique_object_ids" in entry:
         normalized_entry["vlm_unique_object_ids"] = _normalize_cached_object_ids(
             entry.get("vlm_unique_object_ids")
+        )
+    if "attachment_selector_signal" in entry:
+        normalized_entry["attachment_selector_signal"] = _build_attachment_selector_signal_payload(
+            well_cropped_pair_count=(entry.get("attachment_selector_signal") or {}).get("well_cropped_pair_count", 0),
+            viewpoint_exempt=(entry.get("attachment_selector_signal") or {}).get("viewpoint_exempt", False),
+        )
+    if "attachment_final_referability" in entry:
+        normalized_entry["attachment_final_referability"] = _build_attachment_final_referability_payload(
+            attachment_referable_object_ids=(entry.get("attachment_final_referability") or {}).get("object_ids", []),
+            attachment_pairs=(entry.get("attachment_final_referability") or {}).get("pairs", []),
+        )
+    if "attachment_final_frame_selection" in entry:
+        normalized_entry["attachment_final_frame_selection"] = _build_attachment_final_frame_selection_payload(
+            final_selection_rank=(entry.get("attachment_final_frame_selection") or {}).get(
+                "selection_rank",
+                FRAME_SELECTION_FALLBACK_RANK,
+            ),
         )
     expected_entry = _derive_final_referability_fields(entry)
     for key, actual_value in normalized_entry.items():
@@ -1131,7 +1265,13 @@ def _with_attachment_pair_metadata(
     enriched["attachment_referable_pairs"] = list(attachment_pairs)
     enriched["attachment_referable_pair_count"] = len(attachment_pairs)
     enriched["attachment_view_group_id"] = attachment_view_group_id
-    return enriched
+    return _apply_attachment_layer_payloads(
+        enriched,
+        attachment_pairs=attachment_pairs,
+        selector_pair_count=enriched.get("attachment_pair_ge_50_count", 0),
+        selector_viewpoint_exempt=enriched.get("attachment_viewpoint_exempt", False),
+        final_selection_rank=enriched.get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK),
+    )
 
 
 def _compress_attachment_group_frames(
@@ -1656,16 +1796,29 @@ def _attach_selection_metadata(
     *,
     final_selection_rank: int,
     attachment_view_group_id: int | None = None,
+    attachment_selector_pair_count: object | None = None,
+    attachment_selector_viewpoint_exempt: object | None = None,
 ) -> dict[str, Any]:
     updated = dict(entry)
-    updated["attachment_referable_pairs"] = _build_attachment_referable_pairs(
+    if attachment_selector_pair_count is not None:
+        updated["attachment_pair_ge_50_count"] = int(attachment_selector_pair_count or 0)
+    if attachment_selector_viewpoint_exempt is not None:
+        updated["attachment_viewpoint_exempt"] = bool(attachment_selector_viewpoint_exempt)
+    attachment_pairs = _build_attachment_referable_pairs(
         attachment_graph,
         updated.get("attachment_referable_object_ids"),
     )
+    updated["attachment_referable_pairs"] = attachment_pairs
     updated["attachment_referable_pair_count"] = len(updated["attachment_referable_pairs"])
     updated["attachment_view_group_id"] = attachment_view_group_id
     updated["final_selection_rank"] = int(final_selection_rank)
-    return updated
+    return _apply_attachment_layer_payloads(
+        updated,
+        attachment_pairs=attachment_pairs,
+        selector_pair_count=attachment_selector_pair_count,
+        selector_viewpoint_exempt=attachment_selector_viewpoint_exempt,
+        final_selection_rank=final_selection_rank,
+    )
 
 
 def _frame_decision(
@@ -3921,7 +4074,7 @@ def _compute_frame_referability_entry(
             for alias_group in alias_group_statuses
         }
 
-    return {
+    entry = {
         "frame_usable": normalized_frame_info["frame_usable"],
         "frame_reject_reason": None if normalized_frame_info["frame_usable"] else normalized_frame_info["reason"],
         "selector_score": selector_score_value,
@@ -3996,6 +4149,9 @@ def _compute_frame_referability_entry(
         "referable_object_ids": sorted(set(int(obj_id) for obj_id in referable_object_ids)),
         "vlm_unique_object_ids": sorted(set(int(obj_id) for obj_id in referable_object_ids)),
     }
+    return _apply_attachment_layer_payloads(
+        entry,
+    )
 
 
 def _frame_entry_has_debug_fields(entry: Any) -> bool:
@@ -5072,6 +5228,8 @@ def main():
                 attachment_graph,
                 final_selection_rank=final_selection_rank,
                 attachment_view_group_id=frame.get("attachment_view_group_id"),
+                attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
+                attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
             )
             final_selection_rank += 1
 
@@ -5128,6 +5286,8 @@ def main():
                 entry,
                 attachment_graph,
                 final_selection_rank=final_selection_rank,
+                attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
+                attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
             )
             final_selection_rank += 1
 

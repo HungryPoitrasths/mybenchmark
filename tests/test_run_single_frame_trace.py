@@ -73,9 +73,22 @@ def make_referability_entry() -> dict:
         "frame_quality_score": 78,
         "frame_quality_reason": "clear enough with minor softness",
         "frame_selection_score": 78002,
+        "attachment_selector_signal": {
+            "well_cropped_pair_count": 0,
+            "viewpoint_exempt": False,
+        },
         "attachment_referable_pairs": [],
         "attachment_referable_pair_count": 0,
+        "attachment_final_referability": {
+            "object_ids": [1, 2],
+            "pairs": [],
+            "pair_count": 0,
+        },
         "final_selection_rank": 0,
+        "attachment_final_frame_selection": {
+            "selected_for_final_cache": True,
+            "selection_rank": 0,
+        },
         "selector_visible_object_ids": [1, 2],
         "selector_visible_label_counts": {"cup": 1, "table": 1},
         "candidate_visible_object_ids": [1, 2],
