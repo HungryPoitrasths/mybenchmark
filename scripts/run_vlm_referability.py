@@ -1185,13 +1185,6 @@ def _selector_quality_pass_frame_info() -> dict[str, Any]:
     }
 
 
-def _attachment_frame_sort_key(frame: dict[str, Any]) -> tuple[int, int, str]:
-    return (
-        -int(frame.get("attachment_referable_pair_count", 0) or 0),
-        -int(frame.get("crop_ge_70_count", 0) or 0),
-        str(frame.get("image_name", "")),
-    )
-
 def _build_attachment_referable_pairs(
     attachment_graph: dict[int, list[int]] | None,
     attachment_referable_object_ids: list[int] | None,
@@ -1212,42 +1205,6 @@ def _build_attachment_referable_pairs(
             if child_id in referable_ids:
                 pairs.append([parent_id_int, child_id])
     return pairs
-
-
-def _normalize_attachment_pair_key(
-    pairs: list[list[int]] | tuple[tuple[int, int], ...] | None,
-) -> tuple[tuple[int, int], ...]:
-    return tuple(
-        sorted(
-            {
-                (int(pair[0]), int(pair[1]))
-                for pair in (pairs or [])
-                if isinstance(pair, (list, tuple)) and len(pair) == 2
-            }
-        )
-    )
-
-
-def _attachment_pair_group_overlap(
-    expected_pairs: tuple[tuple[int, int], ...] | None,
-    actual_pairs: tuple[tuple[int, int], ...] | None,
-) -> tuple[tuple[int, int], ...]:
-    expected_pair_set = set(expected_pairs or ())
-    if not expected_pair_set:
-        return ()
-    return tuple(sorted(expected_pair_set.intersection(actual_pairs or ())))
-
-
-def _visible_attachment_pair_group_key(
-    frame: dict[str, Any],
-    attachment_graph: dict[int, list[int]] | None,
-) -> tuple[tuple[int, int], ...]:
-    return _normalize_attachment_pair_key(
-        _build_attachment_referable_pairs(
-            attachment_graph,
-            frame.get("visible_object_ids"),
-        )
-    )
 
 
 def _with_attachment_pair_metadata(
@@ -1272,25 +1229,6 @@ def _with_attachment_pair_metadata(
         selector_viewpoint_exempt=enriched.get("attachment_viewpoint_exempt", False),
         final_selection_rank=enriched.get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK),
     )
-
-
-def _compress_attachment_group_frames(
-    frames: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    covered_pairs: set[tuple[int, int]] = set()
-    kept: list[dict[str, Any]] = []
-    for frame in sorted(frames, key=_attachment_frame_sort_key):
-        pairs = {
-            (int(pair[0]), int(pair[1]))
-            for pair in frame.get("attachment_referable_pairs", [])
-            if isinstance(pair, list) and len(pair) == 2
-        }
-        if not pairs:
-            continue
-        if pairs - covered_pairs:
-            kept.append(frame)
-            covered_pairs.update(pairs)
-    return kept
 
 
 def _review_frame_clarity(
@@ -1360,29 +1298,31 @@ def _select_attachment_group_representatives(
     frames: list[dict[str, Any]],
     attachment_graph: dict[int, list[int]] | None,
     attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
+    max_accepted_frame_count: int | None = None,
     vlm_workers: int = 1,
 ) -> list[dict[str, Any]]:
+    if not frames:
+        return []
+
     color_dir = scene_dir / "color"
-    grouped_frames: dict[tuple[tuple[int, int], ...], list[dict[str, Any]]] = {}
+    grouped_frames: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for frame in frames:
-        group_key = _visible_attachment_pair_group_key(frame, attachment_graph)
-        if not group_key:
+        group_key = _visible_object_frame_group_key(frame)
+        if group_key is None:
             continue
         grouped_frames.setdefault(group_key, []).append(frame)
+    grouped_items = list(grouped_frames.items())
+    accepted_target: int | None = None
+    if max_accepted_frame_count is not None:
+        accepted_target = max(0, int(max_accepted_frame_count))
+        if accepted_target <= 0:
+            return []
 
     def _select_group(
-        item: tuple[int, tuple[tuple[tuple[int, int], ...], list[dict[str, Any]]]]
-    ) -> list[dict[str, Any]]:
-        group_id, (expected_attachment_pairs, group_frames) = item
-        ordered_frames = sorted(
-            group_frames,
-            key=lambda frame: len(frame.get("visible_object_ids", []) or []),
-            reverse=True,
-        )
-        sampled_frames, _group_frame_stride = _sample_group_frames(ordered_frames)
-        accepted_frames: list[dict[str, Any]] = []
-        expected_pair_set = set(expected_attachment_pairs)
-        covered_expected_pairs: set[tuple[int, int]] = set()
+        item: tuple[int, tuple[tuple[Any, ...], list[dict[str, Any]]]]
+    ) -> dict[str, Any] | None:
+        group_id, (_group_key, group_frames) = item
+        sampled_frames, _group_frame_stride = _sample_group_frames(group_frames)
         for frame in sampled_frames:
             reviewed_frame = _review_frame_clarity(
                 client=client,
@@ -1395,53 +1335,58 @@ def _select_attachment_group_representatives(
             reviewed_frame["attachment_view_group_id"] = group_id
             if int(reviewed_frame.get("frame_info", {}).get("clarity_score", 0) or 0) < ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE:
                 continue
-            if attachment_entry_builder is None:
-                return [reviewed_frame]
-            entry = attachment_entry_builder(frame, reviewed_frame)
-            if not isinstance(entry, dict):
-                continue
             combined = dict(reviewed_frame)
-            combined.update(entry)
-            actual_attachment_pairs = _normalize_attachment_pair_key(
-                _build_attachment_referable_pairs(
-                    attachment_graph,
-                    combined.get("attachment_referable_object_ids"),
-                )
+            if attachment_entry_builder is not None:
+                entry = attachment_entry_builder(frame, reviewed_frame)
+                if not isinstance(entry, dict):
+                    continue
+                combined.update(entry)
+            attachment_pairs = _build_attachment_referable_pairs(
+                attachment_graph,
+                combined.get("attachment_referable_object_ids"),
             )
-            matched_expected_pairs = set(
-                _attachment_pair_group_overlap(
-                    expected_attachment_pairs,
-                    actual_attachment_pairs,
-                )
-            )
-            new_expected_pairs = matched_expected_pairs - covered_expected_pairs
-            if not new_expected_pairs:
+            if not attachment_pairs:
                 continue
-            accepted_frames.append(
-                _with_attachment_pair_metadata(
-                    combined,
-                    combined,
-                    attachment_graph,
-                    attachment_view_group_id=group_id,
-                )
+            return _with_attachment_pair_metadata(
+                combined,
+                combined,
+                attachment_graph,
+                attachment_view_group_id=group_id,
             )
-            covered_expected_pairs.update(matched_expected_pairs)
-            if covered_expected_pairs >= expected_pair_set:
-                break
-        return _compress_attachment_group_frames(accepted_frames)
+        return None
 
-    selected = _run_in_thread_pool(
-        list(enumerate(grouped_frames.items())),
-        _select_group,
-        max_workers=vlm_workers,
-    )
-    flattened: list[dict[str, Any]] = []
-    for entry in selected:
-        if isinstance(entry, dict):
-            flattened.append(entry)
-        elif isinstance(entry, list):
-            flattened.extend(item for item in entry if isinstance(item, dict))
-    return flattened
+    selected_by_group: list[tuple[int, dict[str, Any]]] = []
+    next_group_index = 0
+    accepted_frame_count = 0
+    while next_group_index < len(grouped_items):
+        remaining_target = None
+        if accepted_target is not None:
+            remaining_target = accepted_target - accepted_frame_count
+            if remaining_target <= 0:
+                break
+        batch_size = (
+            max(1, remaining_target)
+            if remaining_target is not None
+            else len(grouped_items) - next_group_index
+        )
+        batch_items = list(
+            enumerate(
+                grouped_items[next_group_index : next_group_index + batch_size],
+                start=next_group_index,
+            )
+        )
+        batch_results = _run_in_thread_pool(
+            batch_items,
+            _select_group,
+            max_workers=vlm_workers,
+        )
+        for batch_item, reviewed_selection in zip(batch_items, batch_results):
+            if isinstance(reviewed_selection, dict):
+                selected_by_group.append((int(batch_item[0]), reviewed_selection))
+                accepted_frame_count += 1
+        next_group_index += len(batch_items)
+    selected_by_group.sort(key=lambda item: item[0])
+    return [frame for _, frame in selected_by_group]
 
 
 def _run_frame_clarity_reviews(
@@ -1711,61 +1656,6 @@ def _select_non_attachment_group_representatives(
             }
         )
     return selected_frames
-
-
-def _select_attachment_frames_by_global_pair_coverage(
-    frames: list[dict[str, Any]],
-    *,
-    max_frames: int,
-) -> list[dict[str, Any]]:
-    remaining = list(sorted(frames, key=_attachment_frame_sort_key))
-    if max_frames <= 0:
-        return []
-
-    selected: list[dict[str, Any]] = []
-    covered_pairs: set[tuple[int, int]] = set()
-    while remaining and len(selected) < max_frames:
-        best_idx = -1
-        best_key: tuple[int, int, int] | None = None
-        best_image_name = ""
-        for idx, frame in enumerate(remaining):
-            pairs = {
-                (int(pair[0]), int(pair[1]))
-                for pair in frame.get("attachment_referable_pairs", [])
-                if isinstance(pair, list) and len(pair) == 2
-            }
-            new_pair_count = len(pairs - covered_pairs)
-            key = (
-                new_pair_count,
-                int(frame.get("attachment_referable_pair_count", 0) or 0),
-                int(frame.get("crop_ge_70_count", 0) or 0),
-            )
-            image_name = str(frame.get("image_name", ""))
-            if (
-                best_key is None
-                or key > best_key
-                or (key == best_key and image_name < best_image_name)
-            ):
-                best_idx = idx
-                best_key = key
-                best_image_name = image_name
-        if best_idx < 0 or best_key is None or best_key[0] <= 0:
-            break
-        chosen = remaining.pop(best_idx)
-        selected.append(chosen)
-        covered_pairs.update(
-            {
-                (int(pair[0]), int(pair[1]))
-                for pair in chosen.get("attachment_referable_pairs", [])
-                if isinstance(pair, list) and len(pair) == 2
-            }
-        )
-
-    for frame in remaining:
-        if len(selected) >= max_frames:
-            break
-        selected.append(frame)
-    return selected
 
 
 def _apply_frame_review_to_entry(
@@ -5294,13 +5184,10 @@ def main():
             frames=attachment_candidate_frames,
             attachment_graph=attachment_graph,
             attachment_entry_builder=_build_attachment_entry,
+            max_accepted_frame_count=int(args.max_frames),
             vlm_workers=int(args.vlm_workers),
         ) if attachment_candidate_frames else []
-
-        selected_attachment_frames = _select_attachment_frames_by_global_pair_coverage(
-            attachment_selected_frames,
-            max_frames=int(args.max_frames),
-        )
+        selected_attachment_frames = attachment_selected_frames
         remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))
         selected_non_attachment_frames = non_attachment_frames[:remaining_slots]
         selected_before_attachment = set(
