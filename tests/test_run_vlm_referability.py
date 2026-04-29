@@ -244,6 +244,64 @@ def make_debug_cache_entry() -> dict:
     }
 
 
+def make_attachment_pair_salvage_entry(
+    *,
+    candidate_visible_object_ids: list[int],
+    object_reviews: dict[int, dict] | None = None,
+    crop_label_statuses: dict[str, str] | None = None,
+    full_frame_label_statuses: dict[str, str] | None = None,
+    label_statuses: dict[str, str] | None = None,
+    attachment_referable_pairs: list[list[int]] | None = None,
+) -> dict:
+    entry = make_debug_cache_entry()
+    entry["candidate_visible_object_ids"] = list(candidate_visible_object_ids)
+    normalized_reviews: dict[str, dict] = {}
+    review_overrides = object_reviews or {}
+    for obj_id in sorted({*candidate_visible_object_ids, *review_overrides.keys()}):
+        review = {
+            "obj_id": int(obj_id),
+            "local_outcome": "reviewed",
+            "vlm_status": None,
+            "bbox_in_frame_ratio": 0.9,
+            "projected_area_px": 900.0,
+            "roi_bounds_px": [20, 60, 20, 60],
+            "crop_bounds_px": [16, 64, 16, 64],
+        }
+        review.update(review_overrides.get(int(obj_id), {}))
+        normalized_reviews[str(int(obj_id))] = review
+    entry["object_reviews"] = normalized_reviews
+    entry["crop_label_statuses"] = dict(crop_label_statuses or {})
+    entry["full_frame_label_statuses"] = dict(full_frame_label_statuses or {})
+    entry["label_statuses"] = dict(label_statuses or {})
+    entry["crop_label_counts"] = {
+        label: (0 if status == "absent" else 2 if status == "multiple" else 1)
+        for label, status in entry["crop_label_statuses"].items()
+    }
+    entry["full_frame_label_counts"] = {
+        label: (0 if status == "absent" else 2 if status == "multiple" else 1)
+        for label, status in entry["full_frame_label_statuses"].items()
+    }
+    entry["label_counts"] = {
+        label: (0 if status == "absent" else 2 if status == "multiple" else 1)
+        for label, status in entry["label_statuses"].items()
+    }
+    entry["attachment_referable_pairs"] = [list(pair) for pair in (attachment_referable_pairs or [])]
+    entry["attachment_referable_pair_count"] = len(entry["attachment_referable_pairs"])
+    entry["attachment_referable_object_ids"] = sorted(
+        {
+            int(obj_id)
+            for pair in entry["attachment_referable_pairs"]
+            for obj_id in pair
+        }
+    )
+    entry["attachment_final_referability"] = {
+        "object_ids": list(entry["attachment_referable_object_ids"]),
+        "pairs": [list(pair) for pair in entry["attachment_referable_pairs"]],
+        "pair_count": len(entry["attachment_referable_pairs"]),
+    }
+    return entry
+
+
 def make_scene_dir(root: Path, relative_path: str) -> Path:
     scene_dir = root / relative_path
     (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
@@ -2705,6 +2763,298 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg", "000020.jpg"])
         self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [1, 2])
 
+    def test_build_attachment_pair_salvage_scene_review_uses_single_cover_image_when_one_image_covers_pair(self) -> None:
+        objects = [make_object(1, "table"), make_object(2, "book")]
+        frames = [
+            {
+                "image_name": "000001.jpg",
+                "visible_object_ids": [1, 2],
+                "score": 10,
+                "attachment_viewpoint_exempt": True,
+            }
+        ]
+        entry = make_attachment_pair_salvage_entry(
+            candidate_visible_object_ids=[1, 2],
+            crop_label_statuses={"table": "unique", "book": "unique"},
+            full_frame_label_statuses={"table": "unique", "book": "unique"},
+            label_statuses={"table": "unique", "book": "unique"},
+            attachment_referable_pairs=[[1, 2]],
+        )
+        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_single_cover_{uuid.uuid4().hex}"
+        scene_dir = make_scene_dir(root, "scene0001_00")
+        self.addCleanup(shutil.rmtree, root, True)
+
+        with (
+            patch.object(
+                referability_module,
+                "_review_frame_clarity",
+                return_value={
+                    "image_name": "000001.jpg",
+                    "frame_info": {"clear": True, "clarity_score": 84, "frame_usable": True, "reason": "clear"},
+                },
+            ),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+            ),
+        ):
+            scene_review = referability_module._build_attachment_pair_salvage_scene_review(
+                client=object(),
+                model_name="fake-vlm",
+                scene_id="scene0001_00",
+                split="train",
+                scene_dir=scene_dir,
+                objects=objects,
+                objects_by_id={1: objects[0], 2: objects[1]},
+                attachment_graph={1: [2]},
+                attachment_edges=[{"parent_id": 1, "child_id": 2, "type": "supported_by"}],
+                frames=frames,
+                attachment_entry_builder=lambda frame, reviewed_frame: dict(entry),
+                bbox_hard_fail_min=0.15,
+                projected_area_hard_fail_min=800.0,
+            )
+
+        group = scene_review["groups"][0]
+        self.assertEqual(group["selected_cover_image_names"], ["000001.jpg"])
+        self.assertEqual(group["clarity_pass_image_names"], ["000001.jpg"])
+        self.assertEqual(scene_review["pair_count_kept"], 1)
+
+    def test_build_attachment_pair_salvage_scene_review_uses_multi_image_cover_when_needed(self) -> None:
+        objects = [make_object(1, "table"), make_object(2, "book"), make_object(3, "lamp")]
+        frames = [
+            {"image_name": "000001.jpg", "visible_object_ids": [1, 2, 3], "score": 10, "attachment_viewpoint_exempt": True},
+            {"image_name": "000002.jpg", "visible_object_ids": [1, 2, 3], "score": 9, "attachment_viewpoint_exempt": True},
+        ]
+        entries = {
+            "000001.jpg": make_attachment_pair_salvage_entry(
+                candidate_visible_object_ids=[1, 2],
+                crop_label_statuses={"table": "unique", "book": "multiple"},
+                label_statuses={"table": "unique", "book": "multiple"},
+            ),
+            "000002.jpg": make_attachment_pair_salvage_entry(
+                candidate_visible_object_ids=[1, 3],
+                crop_label_statuses={"table": "unique", "lamp": "multiple"},
+                label_statuses={"table": "unique", "lamp": "multiple"},
+            ),
+        }
+        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_multi_cover_{uuid.uuid4().hex}"
+        scene_dir = make_scene_dir(root, "scene0001_00")
+        self.addCleanup(shutil.rmtree, root, True)
+
+        with (
+            patch.object(
+                referability_module,
+                "_review_frame_clarity",
+                side_effect=[
+                    {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 81, "frame_usable": True, "reason": "clear"}},
+                    {"image_name": "000002.jpg", "frame_info": {"clear": True, "clarity_score": 80, "frame_usable": True, "reason": "clear"}},
+                ],
+            ),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+            ),
+        ):
+            scene_review = referability_module._build_attachment_pair_salvage_scene_review(
+                client=object(),
+                model_name="fake-vlm",
+                scene_id="scene0001_00",
+                split="train",
+                scene_dir=scene_dir,
+                objects=objects,
+                objects_by_id={obj["id"]: obj for obj in objects},
+                attachment_graph={1: [2, 3]},
+                attachment_edges=[
+                    {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                    {"parent_id": 1, "child_id": 3, "type": "next_to"},
+                ],
+                frames=frames,
+                attachment_entry_builder=lambda frame, reviewed_frame: dict(entries[frame["image_name"]]),
+                bbox_hard_fail_min=0.15,
+                projected_area_hard_fail_min=800.0,
+            )
+
+        group = scene_review["groups"][0]
+        self.assertEqual(group["selected_cover_image_names"], ["000001.jpg", "000002.jpg"])
+        self.assertEqual(scene_review["group_count_with_multi_image_cover"], 1)
+
+    def test_attachment_pair_salvage_pair_row_does_not_mark_hard_fail_when_any_clarity_image_covers_pair(self) -> None:
+        objects = {1: make_object(1, "table"), 2: make_object(2, "book")}
+        clarity_pass_frames = [
+            {
+                "image_name": "000001.jpg",
+                "entry": make_attachment_pair_salvage_entry(
+                    candidate_visible_object_ids=[1],
+                    object_reviews={1: {"bbox_in_frame_ratio": 0.9}},
+                    crop_label_statuses={"table": "unique"},
+                    label_statuses={"table": "unique"},
+                ),
+            },
+            {
+                "image_name": "000002.jpg",
+                "entry": make_attachment_pair_salvage_entry(
+                    candidate_visible_object_ids=[1, 2],
+                    crop_label_statuses={"table": "unique", "book": "multiple"},
+                    label_statuses={"table": "unique", "book": "multiple"},
+                ),
+            },
+        ]
+
+        pair_row = referability_module._build_attachment_pair_salvage_pair_row(
+            parent_id=1,
+            child_id=2,
+            relation_types=["supported_by"],
+            clarity_pass_frames=clarity_pass_frames,
+            objects_by_id=objects,
+            bbox_hard_fail_min=0.15,
+            projected_area_hard_fail_min=800.0,
+        )
+
+        self.assertNotEqual(
+            pair_row["program_decision"],
+            referability_module.ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+        )
+        self.assertEqual(
+            pair_row["program_decision"],
+            referability_module.ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW,
+        )
+
+    def test_attachment_pair_salvage_pair_row_marks_hard_fail_when_all_clarity_images_fail_object_gate(self) -> None:
+        objects = {1: make_object(1, "table"), 2: make_object(2, "book")}
+        clarity_pass_frames = [
+            {
+                "image_name": "000001.jpg",
+                "entry": make_attachment_pair_salvage_entry(
+                    candidate_visible_object_ids=[1, 2],
+                    object_reviews={2: {"vlm_status": "absent"}},
+                    crop_label_statuses={"table": "unique", "book": "absent"},
+                    label_statuses={"table": "unique", "book": "absent"},
+                ),
+            },
+            {
+                "image_name": "000002.jpg",
+                "entry": make_attachment_pair_salvage_entry(
+                    candidate_visible_object_ids=[1, 2],
+                    object_reviews={2: {"bbox_in_frame_ratio": 0.10}},
+                    crop_label_statuses={"table": "unique", "book": "unique"},
+                    label_statuses={"table": "unique", "book": "unique"},
+                ),
+            },
+        ]
+
+        pair_row = referability_module._build_attachment_pair_salvage_pair_row(
+            parent_id=1,
+            child_id=2,
+            relation_types=["supported_by"],
+            clarity_pass_frames=clarity_pass_frames,
+            objects_by_id=objects,
+            bbox_hard_fail_min=0.15,
+            projected_area_hard_fail_min=800.0,
+        )
+
+        self.assertEqual(
+            pair_row["program_decision"],
+            referability_module.ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+        )
+
+    def test_attachment_pair_salvage_pair_row_marks_crop_unique_full_frame_multiple_as_salvage_review(self) -> None:
+        objects = {1: make_object(1, "table"), 2: make_object(2, "book")}
+        clarity_pass_frames = [
+            {
+                "image_name": "000001.jpg",
+                "entry": make_attachment_pair_salvage_entry(
+                    candidate_visible_object_ids=[1, 2],
+                    crop_label_statuses={"table": "unique", "book": "unique"},
+                    full_frame_label_statuses={"table": "multiple", "book": "unique"},
+                    label_statuses={"table": "multiple", "book": "unique"},
+                ),
+            },
+        ]
+
+        pair_row = referability_module._build_attachment_pair_salvage_pair_row(
+            parent_id=1,
+            child_id=2,
+            relation_types=["supported_by"],
+            clarity_pass_frames=clarity_pass_frames,
+            objects_by_id=objects,
+            bbox_hard_fail_min=0.15,
+            projected_area_hard_fail_min=800.0,
+        )
+
+        self.assertEqual(
+            pair_row["program_decision"],
+            referability_module.ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW,
+        )
+
+    def test_attachment_pair_salvage_group_vlm_review_normalizes_multiple_pair_reviews(self) -> None:
+        parsed = {
+            "group_id": "scene0001_00:group_0",
+            "pair_reviews": [
+                {
+                    "pair_id": "1->2",
+                    "decision": "salvageable",
+                    "parent_visibility": "visible",
+                    "child_visibility": "partial",
+                    "pair_unique_with_modifiers": "yes",
+                    "parent_modifier_candidates": ["round"],
+                    "child_modifier_candidates": ["wooden"],
+                    "pair_reference_phrase_candidates": ["the round item on the wooden table"],
+                    "reason": "distinct modifiers",
+                },
+                {
+                    "pair_id": "1->3",
+                    "decision": "not_salvageable",
+                    "parent_visibility": "visible",
+                    "child_visibility": "visible",
+                    "pair_unique_with_modifiers": "no",
+                    "parent_modifier_candidates": [],
+                    "child_modifier_candidates": [],
+                    "pair_reference_phrase_candidates": [],
+                    "reason": "still ambiguous",
+                },
+            ],
+        }
+        with patch.object(
+            referability_module,
+            "_call_vlm_json",
+            return_value=(parsed, '{"ok":true}'),
+        ):
+            review = referability_module._attachment_pair_salvage_group_vlm_review(
+                client=object(),
+                model_name="fake-vlm",
+                group_id="scene0001_00:group_0",
+                cover_images=[{"image_name": "000001.jpg", "data_url": "data:image/jpeg;base64,ZmFrZQ=="}],
+                pair_rows=[
+                    {
+                        "pair_id": "1->2",
+                        "parent_id": 1,
+                        "parent_label": "table",
+                        "child_id": 2,
+                        "child_label": "book",
+                        "first_covered_image_name": "000001.jpg",
+                        "parent_crop_image_data_url": "data:image/jpeg;base64,ZmFrZQ==",
+                        "child_crop_image_data_url": "data:image/jpeg;base64,ZmFrZQ==",
+                    },
+                    {
+                        "pair_id": "1->3",
+                        "parent_id": 1,
+                        "parent_label": "table",
+                        "child_id": 3,
+                        "child_label": "lamp",
+                        "first_covered_image_name": "000001.jpg",
+                        "parent_crop_image_data_url": "data:image/jpeg;base64,ZmFrZQ==",
+                        "child_crop_image_data_url": "data:image/jpeg;base64,ZmFrZQ==",
+                    },
+                ],
+            )
+
+        self.assertEqual(review["group_id"], "scene0001_00:group_0")
+        self.assertEqual([item["pair_id"] for item in review["pair_reviews"]], ["1->2", "1->3"])
+        self.assertEqual(review["pair_reviews"][0]["decision"], "salvageable")
+        self.assertEqual(review["pair_reviews"][1]["decision"], "not_salvageable")
+
     def test_main_persists_scene_grouping_summary_in_cache_and_debug_json(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"
         data_root = root / "data"
@@ -3150,6 +3500,160 @@ class RunVlmReferabilityTests(unittest.TestCase):
             json.loads(output_path.read_text(encoding="utf-8"))["scene_status"]["scene0001_00"]["pipeline_outcome"],
             "no_attachment_relations",
         )
+
+    def test_main_writes_attachment_pair_salvage_review_json_and_html(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_pair_salvage_main_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        review_path = output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.json"
+        review_html_path = output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.html"
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        attachment_frame = make_debug_cache_entry()
+        attachment_frame["image_name"] = "000001.jpg"
+        attachment_frame["attachment_referable_object_ids"] = [1, 2]
+        attachment_frame["attachment_view_group_id"] = 0
+        salvage_pair = {
+            "pair_id": "1->2",
+            "parent_id": 1,
+            "parent_label": "table",
+            "child_id": 2,
+            "child_label": "book",
+            "relation_types": ["supported_by"],
+            "program_decision": "needs_vlm_salvage_review",
+            "program_status": "salvage_review",
+            "program_reason_codes": ["child_final_multiple"],
+            "current_attachment_referable": False,
+            "cover_image_names": ["000001.jpg"],
+            "kept_image_names": [],
+            "first_covered_image_name": "000001.jpg",
+            "coverage_by_image_name": [{"image_name": "000001.jpg", "covered": True, "uncertain": False, "reason_codes": []}],
+            "vlm_review": {
+                "pair_id": "1->2",
+                "decision": "salvageable",
+                "parent_visibility": "visible",
+                "child_visibility": "visible",
+                "pair_unique_with_modifiers": "yes",
+                "parent_modifier_candidates": ["round"],
+                "child_modifier_candidates": ["blue"],
+                "pair_reference_phrase_candidates": ["the round table with the blue book"],
+                "reason": "clear modifiers",
+            },
+            "human_decision": None,
+            "human_notes": "",
+        }
+        salvage_scene_review = {
+            "scene_id": "scene0001_00",
+            "split": "train",
+            "pipeline_outcome": None,
+            "object_count": 2,
+            "group_count_total": 1,
+            "group_count_with_clarity_pass_images": 1,
+            "group_count_with_multi_image_cover": 0,
+            "pair_count_total": 1,
+            "pair_count_kept": 0,
+            "pair_count_auto_drop_hard_fail": 0,
+            "pair_count_needs_vlm_salvage_review": 1,
+            "pair_count_uncertain": 0,
+            "pair_count_vlm_salvageable": 1,
+            "pair_count_vlm_not_salvageable": 0,
+            "pair_count_vlm_uncertain": 0,
+            "terminal_output_lines": ["[attachment-pair-salvage] scene=scene0001_00 group=0 pairs=1"],
+            "groups": [
+                {
+                    "group_id": "scene0001_00:group_0",
+                    "group_index": 0,
+                    "visible_object_ids": [1, 2],
+                    "visible_object_labels": ["table#1", "book#2"],
+                    "group_frame_image_names": ["000001.jpg", "000002.jpg"],
+                    "sampled_frame_image_names": ["000001.jpg"],
+                    "clarity_pass_image_names": ["000001.jpg"],
+                    "selected_cover_image_names": ["000001.jpg"],
+                    "selected_cover_images": [],
+                    "group_frame_stride": 1,
+                    "pair_count_total": 1,
+                    "kept_pair_ids": [],
+                    "dropped_pair_ids": ["1->2"],
+                    "pairs": [salvage_pair],
+                    "dropped_pairs": [salvage_pair],
+                    "vlm_group_review": None,
+                }
+            ],
+        }
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "select_frames",
+                return_value=[
+                    {
+                        "image_name": "000001.jpg",
+                        "visible_object_ids": [1, 2],
+                        "score": 10,
+                        "attachment_viewpoint_exempt": True,
+                    }
+                ],
+            ),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(referability_module, "load_scannet_poses", return_value={"000001.jpg": make_camera_pose()}),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(
+                referability_module,
+                "_select_attachment_group_representatives",
+                return_value=[attachment_frame],
+            ),
+            patch.object(
+                referability_module,
+                "_build_attachment_pair_salvage_scene_review",
+                return_value=salvage_scene_review,
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--write_attachment_pair_salvage_review",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertTrue(review_path.exists())
+        self.assertTrue(review_html_path.exists())
+        review_doc = json.loads(review_path.read_text(encoding="utf-8"))
+        html_text = review_html_path.read_text(encoding="utf-8")
+        self.assertEqual(review_doc["name"], referability_module.ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME)
+        self.assertEqual(review_doc["pair_count_needs_vlm_salvage_review"], 1)
+        self.assertIn("Attachment Pair Salvage Review", html_text)
+        self.assertIn("scene0001_00:group_0", html_text)
+        self.assertIn("000001", html_text)
+        self.assertIn("1-&gt;2", html_text)
 
     def test_main_writes_scene_status_for_no_frame_candidates(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_no_frames_{uuid.uuid4().hex}"

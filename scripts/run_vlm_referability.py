@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
+import html
 import inspect
 import json
 import logging
@@ -71,6 +72,9 @@ REFERABILITY_CACHE_VERSION = "20.0"
 ATTACHMENT_REVIEW_VERSION = "1.0"
 ATTACHMENT_REVIEW_NAME = "attachment_candidate_review"
 ATTACHMENT_REVIEW_STAGE = "post_attachment_enrichment"
+ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION = "1.0"
+ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME = "attachment_pair_salvage_review"
+ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE = "post_attachment_referability"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -97,6 +101,26 @@ NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT = 2
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
+
+ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT = "kept"
+ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL = "auto_drop_hard_fail"
+ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW = "needs_vlm_salvage_review"
+ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN = "uncertain"
+
+ATTACHMENT_PAIR_PROGRAM_STATUS_KEPT = "kept"
+ATTACHMENT_PAIR_PROGRAM_STATUS_HARD_FAIL = "hard_fail"
+ATTACHMENT_PAIR_PROGRAM_STATUS_SALVAGE_REVIEW = "salvage_review"
+ATTACHMENT_PAIR_PROGRAM_STATUS_UNCERTAIN = "uncertain"
+
+ATTACHMENT_PAIR_VLM_DECISION_SALVAGEABLE = "salvageable"
+ATTACHMENT_PAIR_VLM_DECISION_NOT_SALVAGEABLE = "not_salvageable"
+ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN = "uncertain"
+ATTACHMENT_PAIR_VLM_VISIBILITY_VISIBLE = "visible"
+ATTACHMENT_PAIR_VLM_VISIBILITY_PARTIAL = "partial"
+ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE = "not_visible"
+ATTACHMENT_PAIR_VLM_UNIQUENESS_YES = "yes"
+ATTACHMENT_PAIR_VLM_UNIQUENESS_NO = "no"
+ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN = "uncertain"
 
 OBJECT_STATUS_CLEAR = "clear"
 OBJECT_STATUS_ABSENT = "absent"
@@ -153,6 +177,14 @@ def _write_json_payload(path: Path, payload: object) -> None:
 
 def _attachment_review_output_path(output_path: Path) -> Path:
     return output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+
+
+def _attachment_pair_salvage_review_output_path(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.json"
+
+
+def _attachment_pair_salvage_review_html_output_path(output_path: Path) -> Path:
+    return output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.html"
 
 
 def _scene_object_label(obj: dict[str, Any]) -> str:
@@ -370,6 +402,633 @@ def _build_attachment_review_document(
         "scenes": list(scenes),
     }
 
+
+def _attachment_pair_id(parent_id: int, child_id: int) -> str:
+    return f"{int(parent_id)}->{int(child_id)}"
+
+
+def _attachment_pair_program_status(program_decision: object) -> str:
+    decision = str(program_decision or "").strip().lower()
+    if decision == ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT:
+        return ATTACHMENT_PAIR_PROGRAM_STATUS_KEPT
+    if decision == ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL:
+        return ATTACHMENT_PAIR_PROGRAM_STATUS_HARD_FAIL
+    if decision == ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW:
+        return ATTACHMENT_PAIR_PROGRAM_STATUS_SALVAGE_REVIEW
+    return ATTACHMENT_PAIR_PROGRAM_STATUS_UNCERTAIN
+
+
+def _attachment_edge_relation_type_map(
+    final_attachment_edges: list[dict[str, Any]],
+) -> dict[tuple[int, int], list[str]]:
+    relation_types: dict[tuple[int, int], set[str]] = defaultdict(set)
+    for edge in final_attachment_edges:
+        try:
+            parent_id = int(edge.get("parent_id", 0) or 0)
+            child_id = int(edge.get("child_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        relation_type = str(edge.get("type", "")).strip()
+        if parent_id <= 0 or child_id <= 0 or not relation_type:
+            continue
+        relation_types[(parent_id, child_id)].add(relation_type)
+    return {
+        pair_key: sorted(types)
+        for pair_key, types in sorted(relation_types.items())
+    }
+
+
+def _attachment_pairs_for_visible_group(
+    attachment_graph: dict[int, list[int]] | None,
+    visible_object_ids: list[int] | tuple[int, ...],
+) -> list[tuple[int, int]]:
+    visible_set = {int(obj_id) for obj_id in visible_object_ids}
+    pairs: list[tuple[int, int]] = []
+    for parent_id, child_ids in (attachment_graph or {}).items():
+        try:
+            parent_id_int = int(parent_id)
+        except (TypeError, ValueError):
+            continue
+        if parent_id_int not in visible_set:
+            continue
+        for child_id in child_ids or []:
+            try:
+                child_id_int = int(child_id)
+            except (TypeError, ValueError):
+                continue
+            if child_id_int not in visible_set:
+                continue
+            pairs.append((parent_id_int, child_id_int))
+    return sorted(set(pairs))
+
+
+def _lookup_object_payload(container: object, obj_id: int) -> dict[str, Any] | None:
+    if isinstance(container, dict):
+        payload = container.get(str(obj_id))
+        if payload is None:
+            payload = container.get(int(obj_id))
+        return payload if isinstance(payload, dict) else None
+    if isinstance(container, list):
+        for item in container:
+            if not isinstance(item, dict):
+                continue
+            try:
+                item_obj_id = int(item.get("obj_id"))
+            except (TypeError, ValueError):
+                continue
+            if item_obj_id == int(obj_id):
+                return item
+    return None
+
+
+def _normalize_attachment_pair_string_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
+def _attachment_pair_vlm_decision(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {
+        ATTACHMENT_PAIR_VLM_DECISION_SALVAGEABLE,
+        ATTACHMENT_PAIR_VLM_DECISION_NOT_SALVAGEABLE,
+        ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN,
+    }:
+        return normalized
+    return ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN
+
+
+def _attachment_pair_vlm_visibility(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {
+        ATTACHMENT_PAIR_VLM_VISIBILITY_VISIBLE,
+        ATTACHMENT_PAIR_VLM_VISIBILITY_PARTIAL,
+        ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
+    }:
+        return normalized
+    return ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE
+
+
+def _attachment_pair_vlm_uniqueness(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {
+        ATTACHMENT_PAIR_VLM_UNIQUENESS_YES,
+        ATTACHMENT_PAIR_VLM_UNIQUENESS_NO,
+        ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN,
+    }:
+        return normalized
+    return ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN
+
+
+def _image_name_stem(image_name: object) -> str:
+    text = str(image_name or "").strip()
+    return Path(text).stem if text else ""
+
+
+def _image_to_data_url(image: np.ndarray) -> str:
+    return f"data:image/jpeg;base64,{_image_to_base64(image)}"
+
+
+def _normalize_bounds(bounds: object) -> list[int] | None:
+    if not isinstance(bounds, (list, tuple)) or len(bounds) != 4:
+        return None
+    try:
+        values = [int(value) for value in bounds]
+    except (TypeError, ValueError):
+        return None
+    return values
+
+
+def _crop_image_from_bounds(image: np.ndarray, bounds: object) -> np.ndarray | None:
+    normalized_bounds = _normalize_bounds(bounds)
+    if normalized_bounds is None:
+        return None
+    u_min, u_max, v_min, v_max = normalized_bounds
+    u_min = max(0, min(int(image.shape[1]), u_min))
+    u_max = max(0, min(int(image.shape[1]), u_max))
+    v_min = max(0, min(int(image.shape[0]), v_min))
+    v_max = max(0, min(int(image.shape[0]), v_max))
+    if u_max <= u_min or v_max <= v_min:
+        return None
+    crop = image[v_min:v_max, u_min:u_max]
+    if crop.size == 0:
+        return None
+    return crop
+
+
+def _attachment_pair_object_color(obj_id: int) -> tuple[int, int, int]:
+    palette = [
+        (236, 100, 75),
+        (52, 152, 219),
+        (46, 204, 113),
+        (241, 196, 15),
+        (155, 89, 182),
+        (26, 188, 156),
+        (230, 126, 34),
+        (231, 76, 60),
+    ]
+    return palette[int(obj_id) % len(palette)]
+
+
+def _annotate_attachment_pair_salvage_frame(
+    image: np.ndarray,
+    *,
+    entry: dict[str, Any],
+    visible_object_ids: list[int],
+    objects_by_id: dict[int, dict[str, Any]],
+) -> np.ndarray:
+    annotated = image.copy()
+    for obj_id in visible_object_ids:
+        review = _lookup_object_payload(entry.get("object_reviews"), int(obj_id))
+        visibility = _lookup_object_payload(entry.get("visibility_audit_by_object_id"), int(obj_id))
+        bounds = (
+            _normalize_bounds((review or {}).get("roi_bounds_px"))
+            or _normalize_bounds((visibility or {}).get("roi_bounds_px"))
+            or _normalize_bounds((review or {}).get("crop_bounds_px"))
+        )
+        if bounds is None:
+            continue
+        u_min, u_max, v_min, v_max = bounds
+        color = _attachment_pair_object_color(int(obj_id))
+        cv2.rectangle(annotated, (u_min, v_min), (u_max, v_max), color, 2)
+        obj = objects_by_id.get(int(obj_id), {})
+        label = str(obj.get("label", "")).strip().lower() or "object"
+        text = f"{label}#{int(obj_id)}"
+        text_origin = (u_min, max(14, v_min - 6))
+        cv2.putText(
+            annotated,
+            text,
+            text_origin,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+    return annotated
+
+
+def _attachment_pair_object_gate(
+    *,
+    entry: dict[str, Any],
+    obj_id: int,
+    bbox_hard_fail_min: float,
+    projected_area_hard_fail_min: float,
+) -> dict[str, Any]:
+    if "candidate_visible_object_ids" not in entry:
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN,
+            "reason_codes": ["missing_candidate_visible_object_ids"],
+        }
+    candidate_visible_ids = set(_normalize_cached_object_ids(entry.get("candidate_visible_object_ids")))
+    if int(obj_id) not in candidate_visible_ids:
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+            "reason_codes": ["candidate_not_visible"],
+        }
+    review = _lookup_object_payload(entry.get("object_reviews"), int(obj_id))
+    if not isinstance(review, dict):
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN,
+            "reason_codes": ["missing_object_review"],
+        }
+
+    local_outcome = str(review.get("local_outcome", "")).strip().lower()
+    if local_outcome in {
+        LOCAL_OUTCOME_OUT_OF_FRAME,
+        LOCAL_OUTCOME_EXCLUDED,
+        "not_visible",
+        "empty_or_invalid_crop",
+    }:
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+            "reason_codes": [f"local_outcome_{local_outcome or 'missing'}"],
+        }
+
+    object_status = _normalize_object_review_status(review.get("vlm_status"))
+    if object_status == OBJECT_STATUS_ABSENT:
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+            "reason_codes": ["vlm_status_absent"],
+        }
+
+    bbox_in_frame_ratio = _safe_float(review.get("bbox_in_frame_ratio"), default=0.0)
+    if bbox_in_frame_ratio < float(bbox_hard_fail_min):
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+            "reason_codes": ["bbox_in_frame_ratio_too_small"],
+        }
+
+    projected_area_px = _safe_float(review.get("projected_area_px"), default=0.0)
+    if projected_area_px < float(projected_area_hard_fail_min):
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL,
+            "reason_codes": ["projected_area_too_small"],
+        }
+
+    return {
+        "decision": "pass",
+        "reason_codes": [],
+    }
+
+
+def _attachment_pair_coverage_for_entry(
+    *,
+    entry: dict[str, Any],
+    parent_id: int,
+    child_id: int,
+    bbox_hard_fail_min: float,
+    projected_area_hard_fail_min: float,
+) -> dict[str, Any]:
+    parent_gate = _attachment_pair_object_gate(
+        entry=entry,
+        obj_id=int(parent_id),
+        bbox_hard_fail_min=bbox_hard_fail_min,
+        projected_area_hard_fail_min=projected_area_hard_fail_min,
+    )
+    child_gate = _attachment_pair_object_gate(
+        entry=entry,
+        obj_id=int(child_id),
+        bbox_hard_fail_min=bbox_hard_fail_min,
+        projected_area_hard_fail_min=projected_area_hard_fail_min,
+    )
+
+    covered = (
+        parent_gate["decision"] == "pass"
+        and child_gate["decision"] == "pass"
+    )
+    uncertain = (
+        parent_gate["decision"] == ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN
+        or child_gate["decision"] == ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN
+    )
+
+    reason_codes = [
+        f"parent_{reason}"
+        for reason in parent_gate.get("reason_codes", [])
+    ] + [
+        f"child_{reason}"
+        for reason in child_gate.get("reason_codes", [])
+    ]
+    return {
+        "covered": bool(covered),
+        "uncertain": bool(uncertain),
+        "reason_codes": reason_codes,
+        "parent_gate": parent_gate,
+        "child_gate": child_gate,
+    }
+
+
+def _entry_has_attachment_pair(
+    entry: dict[str, Any],
+    *,
+    parent_id: int,
+    child_id: int,
+) -> bool:
+    for pair in entry.get("attachment_referable_pairs", []):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        try:
+            pair_parent_id = int(pair[0])
+            pair_child_id = int(pair[1])
+        except (TypeError, ValueError):
+            continue
+        if pair_parent_id == int(parent_id) and pair_child_id == int(child_id):
+            return True
+    return False
+
+
+def _attachment_pair_failure_category_for_entry(
+    *,
+    entry: dict[str, Any],
+    parent_id: int,
+    child_id: int,
+    objects_by_id: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    if _entry_has_attachment_pair(entry, parent_id=parent_id, child_id=child_id):
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT,
+            "reason_codes": ["attachment_pair_referable"],
+        }
+
+    reason_codes: list[str] = []
+    salvageable_failure = False
+    uncertain = False
+    status_containers = {
+        "crop": entry.get("crop_label_statuses"),
+        "full_frame": entry.get("full_frame_label_statuses"),
+        "final": entry.get("label_statuses"),
+    }
+
+    for role, obj_id in (("parent", int(parent_id)), ("child", int(child_id))):
+        obj = objects_by_id.get(int(obj_id))
+        if obj is None:
+            uncertain = True
+            reason_codes.append(f"{role}_object_missing")
+            continue
+        label = str(obj.get("label", "")).strip().lower()
+        if not label:
+            uncertain = True
+            reason_codes.append(f"{role}_label_missing")
+            continue
+
+        crop_status = str((status_containers["crop"] or {}).get(label, "")).strip().lower()
+        full_frame_status = str((status_containers["full_frame"] or {}).get(label, "")).strip().lower()
+        final_status = str((status_containers["final"] or {}).get(label, "")).strip().lower()
+
+        if crop_status in {LABEL_STATUS_MULTIPLE, LABEL_STATUS_UNSURE}:
+            salvageable_failure = True
+            reason_codes.append(f"{role}_crop_{crop_status}")
+        elif crop_status not in {LABEL_STATUS_UNIQUE, LABEL_STATUS_ABSENT, ""}:
+            uncertain = True
+            reason_codes.append(f"{role}_crop_status_{crop_status}")
+
+        if full_frame_status in {LABEL_STATUS_MULTIPLE, LABEL_STATUS_UNSURE}:
+            salvageable_failure = True
+            reason_codes.append(f"{role}_full_frame_{full_frame_status}")
+        elif full_frame_status not in {LABEL_STATUS_UNIQUE, LABEL_STATUS_ABSENT, ""}:
+            uncertain = True
+            reason_codes.append(f"{role}_full_frame_status_{full_frame_status}")
+
+        if final_status in {LABEL_STATUS_MULTIPLE, LABEL_STATUS_UNSURE}:
+            salvageable_failure = True
+            reason_codes.append(f"{role}_final_{final_status}")
+        elif not final_status:
+            uncertain = True
+            reason_codes.append(f"{role}_final_status_missing")
+        elif final_status not in {LABEL_STATUS_UNIQUE, LABEL_STATUS_ABSENT}:
+            uncertain = True
+            reason_codes.append(f"{role}_final_status_{final_status}")
+
+    if salvageable_failure and not uncertain:
+        return {
+            "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW,
+            "reason_codes": reason_codes,
+        }
+    return {
+        "decision": ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN,
+        "reason_codes": reason_codes or ["status_conflict"],
+    }
+
+
+def _select_attachment_pair_cover_images(
+    clarity_pass_frames: list[dict[str, Any]],
+    pair_rows: list[dict[str, Any]],
+) -> list[str]:
+    image_to_pair_ids: dict[str, set[str]] = defaultdict(set)
+    clarity_scores: dict[str, int] = {}
+    for frame in clarity_pass_frames:
+        image_name = str(frame.get("image_name", "")).strip()
+        if not image_name:
+            continue
+        clarity_scores[image_name] = int(frame.get("clarity_score", 0) or 0)
+    for pair_row in pair_rows:
+        pair_id = str(pair_row.get("pair_id", "")).strip()
+        if not pair_id:
+            continue
+        for image_name in pair_row.get("cover_image_names", []):
+            image_to_pair_ids[str(image_name)].add(pair_id)
+
+    uncovered = {
+        pair_id
+        for pair_ids in image_to_pair_ids.values()
+        for pair_id in pair_ids
+    }
+    selected: list[str] = []
+    remaining_images = set(image_to_pair_ids.keys())
+    while uncovered and remaining_images:
+        best_image_name = max(
+            remaining_images,
+            key=lambda image_name: (
+                len(image_to_pair_ids.get(image_name, set()) & uncovered),
+                clarity_scores.get(image_name, 0),
+                image_name,
+            ),
+        )
+        covered_here = image_to_pair_ids.get(best_image_name, set()) & uncovered
+        if not covered_here:
+            break
+        selected.append(best_image_name)
+        uncovered -= covered_here
+        remaining_images.remove(best_image_name)
+    return selected
+
+
+def _attachment_pair_salvage_prompt(group_id: str, pair_rows: list[dict[str, Any]]) -> str:
+    pair_lines: list[str] = []
+    for pair_row in pair_rows:
+        pair_lines.append(
+            f'- pair_id={pair_row["pair_id"]}: '
+            f'parent={pair_row["parent_label"]}#{pair_row["parent_id"]}, '
+            f'child={pair_row["child_label"]}#{pair_row["child_id"]}'
+        )
+    return (
+        "You are reviewing attachment pairs in a scene. "
+        "You will see one or more full-frame images with consistent object-id annotations, "
+        "followed by parent/child crops for specific dropped attachment pairs. "
+        "For each pair, judge only two things: "
+        "1) whether both objects are visible in the provided imagery, and "
+        "2) whether the pair can be uniquely referred to using visible modifiers such as color, material, text, or other local appearance cues. "
+        "Do not generate a final question. "
+        "Do not rely on hidden, off-screen, or otherwise invisible information. "
+        f"This group's id is {json.dumps(group_id)}. "
+        "Return strict JSON only using this schema: "
+        '{"group_id":"...",'
+        '"pair_reviews":[{"pair_id":"1->2","decision":"salvageable","parent_visibility":"visible",'
+        '"child_visibility":"visible","pair_unique_with_modifiers":"yes",'
+        '"parent_modifier_candidates":["red"],"child_modifier_candidates":["wooden"],'
+        '"pair_reference_phrase_candidates":["the red mug on the wooden table"],'
+        '"reason":"short reason"}]}. '
+        "Review every listed pair exactly once:\n"
+        + "\n".join(pair_lines)
+    )
+
+
+def _attachment_pair_salvage_group_vlm_review(
+    *,
+    client,
+    model_name: str,
+    group_id: str,
+    cover_images: list[dict[str, Any]],
+    pair_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    default = {
+        "group_id": group_id,
+        "pair_reviews": [],
+    }
+    content: list[dict[str, Any]] = []
+    for index, image_payload in enumerate(cover_images, start=1):
+        data_url = str(image_payload.get("data_url", "")).strip()
+        if not data_url:
+            continue
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Full-frame cover image {index}: image_name={image_payload.get('image_name')} "
+                    "with object-id annotations."
+                ),
+            }
+        )
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": data_url},
+            }
+        )
+
+    eligible_pair_rows: list[dict[str, Any]] = []
+    for pair_row in pair_rows:
+        parent_crop = str(pair_row.get("parent_crop_image_data_url", "")).strip()
+        child_crop = str(pair_row.get("child_crop_image_data_url", "")).strip()
+        if not parent_crop or not child_crop:
+            continue
+        eligible_pair_rows.append(pair_row)
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"Pair {pair_row['pair_id']}: parent={pair_row['parent_label']}#{pair_row['parent_id']}, "
+                    f"child={pair_row['child_label']}#{pair_row['child_id']}. "
+                    f"The next two images are the parent crop then the child crop from image "
+                    f"{pair_row.get('first_covered_image_name') or pair_row.get('cover_image_names', ['-'])[0]}."
+                ),
+            }
+        )
+        content.append({"type": "image_url", "image_url": {"url": parent_crop}})
+        content.append({"type": "image_url", "image_url": {"url": child_crop}})
+
+    if not cover_images or not eligible_pair_rows:
+        return {
+            "group_id": group_id,
+            "pair_reviews": [
+                {
+                    "pair_id": str(pair_row.get("pair_id", "")),
+                    "decision": ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN,
+                    "parent_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
+                    "child_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
+                    "pair_unique_with_modifiers": ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN,
+                    "parent_modifier_candidates": [],
+                    "child_modifier_candidates": [],
+                    "pair_reference_phrase_candidates": [],
+                    "reason": "missing_group_cover_or_pair_crops",
+                }
+                for pair_row in pair_rows
+            ],
+            "raw_response": None,
+        }
+
+    content.append(
+        {
+            "type": "text",
+            "text": _attachment_pair_salvage_prompt(group_id, eligible_pair_rows),
+        }
+    )
+    parsed, raw_text = _call_vlm_json(
+        client,
+        model_name,
+        content,
+        default=default,
+        max_tokens=1024,
+    )
+    reviews_by_pair_id: dict[str, dict[str, Any]] = {}
+    for raw_review in parsed.get("pair_reviews", []):
+        if not isinstance(raw_review, dict):
+            continue
+        pair_id = str(raw_review.get("pair_id", "")).strip()
+        if not pair_id:
+            continue
+        reviews_by_pair_id[pair_id] = {
+            "pair_id": pair_id,
+            "decision": _attachment_pair_vlm_decision(raw_review.get("decision")),
+            "parent_visibility": _attachment_pair_vlm_visibility(raw_review.get("parent_visibility")),
+            "child_visibility": _attachment_pair_vlm_visibility(raw_review.get("child_visibility")),
+            "pair_unique_with_modifiers": _attachment_pair_vlm_uniqueness(
+                raw_review.get("pair_unique_with_modifiers")
+            ),
+            "parent_modifier_candidates": _normalize_attachment_pair_string_list(
+                raw_review.get("parent_modifier_candidates")
+            ),
+            "child_modifier_candidates": _normalize_attachment_pair_string_list(
+                raw_review.get("child_modifier_candidates")
+            ),
+            "pair_reference_phrase_candidates": _normalize_attachment_pair_string_list(
+                raw_review.get("pair_reference_phrase_candidates")
+            ),
+            "reason": str(raw_review.get("reason", "")).strip() or "missing_reason",
+        }
+
+    normalized_reviews: list[dict[str, Any]] = []
+    for pair_row in pair_rows:
+        pair_id = str(pair_row.get("pair_id", "")).strip()
+        normalized_reviews.append(
+            reviews_by_pair_id.get(
+                pair_id,
+                {
+                    "pair_id": pair_id,
+                    "decision": ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN,
+                    "parent_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
+                    "child_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
+                    "pair_unique_with_modifiers": ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN,
+                    "parent_modifier_candidates": [],
+                    "child_modifier_candidates": [],
+                    "pair_reference_phrase_candidates": [],
+                    "reason": "missing_pair_review_in_vlm_response",
+                },
+            )
+        )
+    return {
+        "group_id": str(parsed.get("group_id", group_id) or group_id),
+        "pair_reviews": normalized_reviews,
+        "raw_response": raw_text or None,
+    }
 
 def _invoke_method_with_supported_kwargs(method, **kwargs):
     signature = inspect.signature(method)
@@ -1412,6 +2071,670 @@ def _run_frame_clarity_reviews(
             continue
         reviewed.append(reviewed_frame)
     return reviewed
+
+
+def _build_attachment_pair_salvage_pair_row(
+    *,
+    parent_id: int,
+    child_id: int,
+    relation_types: list[str],
+    clarity_pass_frames: list[dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    bbox_hard_fail_min: float,
+    projected_area_hard_fail_min: float,
+) -> dict[str, Any]:
+    pair_id = _attachment_pair_id(parent_id, child_id)
+    parent_label = _scene_object_label(objects_by_id.get(int(parent_id), {})).lower()
+    child_label = _scene_object_label(objects_by_id.get(int(child_id), {})).lower()
+    cover_image_names: list[str] = []
+    kept_image_names: list[str] = []
+    coverage_by_image_name: list[dict[str, Any]] = []
+    covered_failure_categories: list[dict[str, Any]] = []
+    saw_uncertain_coverage = False
+    reason_codes: list[str] = []
+
+    for frame in clarity_pass_frames:
+        image_name = str(frame.get("image_name", "")).strip()
+        entry = frame.get("entry")
+        if not isinstance(entry, dict):
+            coverage_by_image_name.append(
+                {
+                    "image_name": image_name,
+                    "covered": False,
+                    "uncertain": True,
+                    "reason_codes": ["missing_referability_entry"],
+                }
+            )
+            saw_uncertain_coverage = True
+            reason_codes.append("missing_referability_entry")
+            continue
+
+        coverage = _attachment_pair_coverage_for_entry(
+            entry=entry,
+            parent_id=int(parent_id),
+            child_id=int(child_id),
+            bbox_hard_fail_min=bbox_hard_fail_min,
+            projected_area_hard_fail_min=projected_area_hard_fail_min,
+        )
+        coverage_by_image_name.append(
+            {
+                "image_name": image_name,
+                "covered": bool(coverage["covered"]),
+                "uncertain": bool(coverage["uncertain"]),
+                "reason_codes": list(coverage.get("reason_codes", [])),
+            }
+        )
+        reason_codes.extend(coverage.get("reason_codes", []))
+        if coverage["uncertain"]:
+            saw_uncertain_coverage = True
+        if not coverage["covered"]:
+            continue
+
+        cover_image_names.append(image_name)
+        if _entry_has_attachment_pair(entry, parent_id=parent_id, child_id=child_id):
+            kept_image_names.append(image_name)
+            continue
+        failure_category = _attachment_pair_failure_category_for_entry(
+            entry=entry,
+            parent_id=parent_id,
+            child_id=child_id,
+            objects_by_id=objects_by_id,
+        )
+        covered_failure_categories.append(failure_category)
+        reason_codes.extend(failure_category.get("reason_codes", []))
+
+    dedup_reason_codes = sorted({str(code) for code in reason_codes if str(code).strip()})
+    if kept_image_names:
+        program_decision = ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT
+    elif not clarity_pass_frames:
+        program_decision = ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL
+        dedup_reason_codes = dedup_reason_codes or ["no_clarity_pass_images"]
+    elif not cover_image_names:
+        if saw_uncertain_coverage:
+            program_decision = ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN
+            dedup_reason_codes = dedup_reason_codes or ["coverage_uncertain"]
+        else:
+            program_decision = ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL
+            dedup_reason_codes = dedup_reason_codes or ["no_coverable_clarity_pass_image"]
+    elif covered_failure_categories and all(
+        item.get("decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW
+        for item in covered_failure_categories
+    ):
+        program_decision = ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW
+    else:
+        program_decision = ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN
+        dedup_reason_codes = dedup_reason_codes or ["status_conflict"]
+
+    return {
+        "pair_id": pair_id,
+        "parent_id": int(parent_id),
+        "parent_label": parent_label,
+        "child_id": int(child_id),
+        "child_label": child_label,
+        "relation_types": list(relation_types),
+        "program_decision": program_decision,
+        "program_status": _attachment_pair_program_status(program_decision),
+        "program_reason_codes": dedup_reason_codes,
+        "current_attachment_referable": bool(kept_image_names),
+        "cover_image_names": cover_image_names,
+        "kept_image_names": kept_image_names,
+        "first_covered_image_name": cover_image_names[0] if cover_image_names else None,
+        "coverage_by_image_name": coverage_by_image_name,
+        "vlm_review": None,
+        "human_decision": None,
+        "human_notes": "",
+    }
+
+
+def _build_attachment_pair_salvage_scene_review(
+    *,
+    client,
+    model_name: str,
+    scene_id: str,
+    split: str,
+    scene_dir: Path,
+    objects: list[dict[str, Any]],
+    objects_by_id: dict[int, dict[str, Any]],
+    attachment_graph: dict[int, list[int]] | None,
+    attachment_edges: list[dict[str, Any]],
+    frames: list[dict[str, Any]],
+    attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None,
+    bbox_hard_fail_min: float,
+    projected_area_hard_fail_min: float,
+) -> dict[str, Any]:
+    grouped_frames: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for frame in frames:
+        group_key = _visible_object_frame_group_key(frame)
+        if group_key is None:
+            continue
+        grouped_frames.setdefault(group_key, []).append(frame)
+
+    relation_type_map = _attachment_edge_relation_type_map(attachment_edges)
+    color_dir = scene_dir / "color"
+    image_cache: dict[str, np.ndarray | None] = {}
+    terminal_output_lines: list[str] = []
+
+    def _load_scene_image(image_name: str) -> np.ndarray | None:
+        if image_name not in image_cache:
+            image_cache[image_name] = cv2.imread(str(color_dir / image_name))
+        return image_cache[image_name]
+
+    groups: list[dict[str, Any]] = []
+    for group_index, (group_key, group_frames) in enumerate(grouped_frames.items()):
+        group_pairs = _attachment_pairs_for_visible_group(attachment_graph, group_key)
+        if not group_pairs:
+            continue
+
+        sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
+        clarity_pass_frames: list[dict[str, Any]] = []
+        clarity_pass_image_names: list[str] = []
+        frame_records_by_image_name: dict[str, dict[str, Any]] = {}
+        for frame in sampled_frames:
+            reviewed_frame = _review_frame_clarity(
+                client=client,
+                model_name=model_name,
+                color_dir=color_dir,
+                frame=frame,
+            )
+            if reviewed_frame is None:
+                continue
+            frame_info = reviewed_frame.get("frame_info", {})
+            image_name = str(frame.get("image_name", "")).strip()
+            clarity_score = int(frame_info.get("clarity_score", 0) or 0)
+            if not bool(frame_info.get("frame_usable", True)):
+                continue
+            if clarity_score < ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE:
+                continue
+            clarity_pass_image_names.append(image_name)
+            entry = None
+            if attachment_entry_builder is not None:
+                entry = attachment_entry_builder(frame, reviewed_frame)
+                if isinstance(entry, dict):
+                    entry = _with_attachment_pair_metadata(
+                        entry,
+                        entry,
+                        attachment_graph,
+                        attachment_view_group_id=group_index,
+                    )
+            frame_record = {
+                "image_name": image_name,
+                "image_stem": _image_name_stem(image_name),
+                "clarity_score": clarity_score,
+                "frame_info": dict(frame_info),
+                "entry": dict(entry) if isinstance(entry, dict) else None,
+            }
+            clarity_pass_frames.append(frame_record)
+            frame_records_by_image_name[image_name] = frame_record
+
+        pair_rows = [
+            _build_attachment_pair_salvage_pair_row(
+                parent_id=parent_id,
+                child_id=child_id,
+                relation_types=relation_type_map.get((parent_id, child_id), []),
+                clarity_pass_frames=clarity_pass_frames,
+                objects_by_id=objects_by_id,
+                bbox_hard_fail_min=bbox_hard_fail_min,
+                projected_area_hard_fail_min=projected_area_hard_fail_min,
+            )
+            for parent_id, child_id in group_pairs
+        ]
+        selected_cover_image_names = _select_attachment_pair_cover_images(
+            [
+                frame
+                for frame in clarity_pass_frames
+                if isinstance(frame.get("entry"), dict)
+            ],
+            pair_rows,
+        )
+
+        selected_cover_images: list[dict[str, Any]] = []
+        for image_name in selected_cover_image_names:
+            frame_record = frame_records_by_image_name.get(image_name)
+            if not isinstance(frame_record, dict):
+                continue
+            entry = frame_record.get("entry")
+            image = _load_scene_image(image_name)
+            if image is None or not isinstance(entry, dict):
+                continue
+            annotated = _annotate_attachment_pair_salvage_frame(
+                image,
+                entry=entry,
+                visible_object_ids=[int(obj_id) for obj_id in group_key],
+                objects_by_id=objects_by_id,
+            )
+            selected_cover_images.append(
+                {
+                    "image_name": image_name,
+                    "image_stem": _image_name_stem(image_name),
+                    "clarity_score": int(frame_record.get("clarity_score", 0) or 0),
+                    "covered_pair_ids": [
+                        str(pair_row.get("pair_id", ""))
+                        for pair_row in pair_rows
+                        if image_name in pair_row.get("cover_image_names", [])
+                    ],
+                    "data_url": _image_to_data_url(annotated),
+                }
+            )
+
+        dropped_pairs = [
+            pair_row
+            for pair_row in pair_rows
+            if pair_row.get("program_decision") != ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT
+        ]
+        for pair_row in dropped_pairs:
+            first_covered_image_name = str(pair_row.get("first_covered_image_name", "") or "").strip()
+            if not first_covered_image_name:
+                continue
+            frame_record = frame_records_by_image_name.get(first_covered_image_name)
+            entry = (frame_record or {}).get("entry")
+            if not isinstance(entry, dict):
+                continue
+            image = _load_scene_image(first_covered_image_name)
+            if image is None:
+                continue
+            parent_review = _lookup_object_payload(entry.get("object_reviews"), int(pair_row["parent_id"]))
+            child_review = _lookup_object_payload(entry.get("object_reviews"), int(pair_row["child_id"]))
+            parent_crop = _crop_image_from_bounds(image, (parent_review or {}).get("crop_bounds_px"))
+            child_crop = _crop_image_from_bounds(image, (child_review or {}).get("crop_bounds_px"))
+            if parent_crop is not None:
+                pair_row["parent_crop_image_data_url"] = _image_to_data_url(parent_crop)
+            if child_crop is not None:
+                pair_row["child_crop_image_data_url"] = _image_to_data_url(child_crop)
+
+        vlm_candidate_pairs = [
+            pair_row
+            for pair_row in dropped_pairs
+            if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW
+        ]
+        group_vlm_review = None
+        if vlm_candidate_pairs:
+            group_vlm_review = _attachment_pair_salvage_group_vlm_review(
+                client=client,
+                model_name=model_name,
+                group_id=f"{scene_id}:group_{group_index}",
+                cover_images=selected_cover_images,
+                pair_rows=vlm_candidate_pairs,
+            )
+            pair_vlm_reviews = {
+                str(review.get("pair_id", "")): review
+                for review in group_vlm_review.get("pair_reviews", [])
+                if isinstance(review, dict)
+            }
+            for pair_row in vlm_candidate_pairs:
+                pair_row["vlm_review"] = pair_vlm_reviews.get(pair_row["pair_id"])
+
+        terminal_output_lines.append(
+            (
+                f"[attachment-pair-salvage] scene={scene_id} group={group_index} "
+                f"pairs={len(pair_rows)} clarity_pass={len(clarity_pass_image_names)} "
+                f"cover={len(selected_cover_image_names)} dropped={len(dropped_pairs)}"
+            )
+        )
+        groups.append(
+            {
+                "group_id": f"{scene_id}:group_{group_index}",
+                "group_index": int(group_index),
+                "visible_object_ids": [int(obj_id) for obj_id in group_key],
+                "visible_object_labels": [
+                    f"{_scene_object_label(objects_by_id.get(int(obj_id), {})).lower()}#{int(obj_id)}"
+                    for obj_id in group_key
+                ],
+                "group_frame_image_names": [
+                    str(frame.get("image_name", "")).strip()
+                    for frame in group_frames
+                ],
+                "sampled_frame_image_names": [
+                    str(frame.get("image_name", "")).strip()
+                    for frame in sampled_frames
+                ],
+                "clarity_pass_image_names": clarity_pass_image_names,
+                "selected_cover_image_names": selected_cover_image_names,
+                "selected_cover_images": selected_cover_images,
+                "group_frame_stride": int(group_frame_stride),
+                "pair_count_total": len(pair_rows),
+                "kept_pair_ids": [
+                    str(pair_row.get("pair_id", ""))
+                    for pair_row in pair_rows
+                    if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT
+                ],
+                "dropped_pair_ids": [
+                    str(pair_row.get("pair_id", ""))
+                    for pair_row in dropped_pairs
+                ],
+                "pairs": pair_rows,
+                "dropped_pairs": dropped_pairs,
+                "vlm_group_review": group_vlm_review,
+            }
+        )
+
+    scene_record = {
+        "scene_id": str(scene_id),
+        "split": str(split),
+        "pipeline_outcome": None,
+        "object_count": len(objects),
+        "group_count_total": len(groups),
+        "group_count_with_clarity_pass_images": sum(
+            1 for group in groups if group.get("clarity_pass_image_names")
+        ),
+        "group_count_with_multi_image_cover": sum(
+            1
+            for group in groups
+            if len(group.get("selected_cover_image_names", [])) > 1
+        ),
+        "pair_count_total": sum(int(group.get("pair_count_total", 0) or 0) for group in groups),
+        "pair_count_kept": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT
+        ),
+        "pair_count_auto_drop_hard_fail": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL
+        ),
+        "pair_count_needs_vlm_salvage_review": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW
+        ),
+        "pair_count_uncertain": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN
+        ),
+        "pair_count_vlm_salvageable": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if isinstance(pair_row.get("vlm_review"), dict)
+            and pair_row["vlm_review"].get("decision") == ATTACHMENT_PAIR_VLM_DECISION_SALVAGEABLE
+        ),
+        "pair_count_vlm_not_salvageable": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if isinstance(pair_row.get("vlm_review"), dict)
+            and pair_row["vlm_review"].get("decision") == ATTACHMENT_PAIR_VLM_DECISION_NOT_SALVAGEABLE
+        ),
+        "pair_count_vlm_uncertain": sum(
+            1
+            for group in groups
+            for pair_row in group.get("pairs", [])
+            if isinstance(pair_row.get("vlm_review"), dict)
+            and pair_row["vlm_review"].get("decision") == ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN
+        ),
+        "terminal_output_lines": terminal_output_lines,
+        "groups": groups,
+    }
+    return scene_record
+
+
+def _build_attachment_pair_salvage_review_scene_record(
+    *,
+    scene_id: str,
+    split: str,
+    pipeline_outcome: str,
+    scene_review: dict[str, Any] | None,
+) -> dict[str, Any]:
+    base = {
+        "scene_id": str(scene_id),
+        "split": str(split),
+        "pipeline_outcome": str(pipeline_outcome),
+        "object_count": 0,
+        "group_count_total": 0,
+        "group_count_with_clarity_pass_images": 0,
+        "group_count_with_multi_image_cover": 0,
+        "pair_count_total": 0,
+        "pair_count_kept": 0,
+        "pair_count_auto_drop_hard_fail": 0,
+        "pair_count_needs_vlm_salvage_review": 0,
+        "pair_count_uncertain": 0,
+        "pair_count_vlm_salvageable": 0,
+        "pair_count_vlm_not_salvageable": 0,
+        "pair_count_vlm_uncertain": 0,
+        "terminal_output_lines": [],
+        "groups": [],
+    }
+    if not isinstance(scene_review, dict):
+        base["terminal_output_lines"] = [
+            f"[attachment-pair-salvage] scene={scene_id} outcome={pipeline_outcome} groups=0 pairs=0"
+        ]
+        return base
+    record = dict(scene_review)
+    record["scene_id"] = str(scene_id)
+    record["split"] = str(split)
+    record["pipeline_outcome"] = str(pipeline_outcome)
+    record["terminal_output_lines"] = list(scene_review.get("terminal_output_lines", []))
+    if not record["terminal_output_lines"]:
+        record["terminal_output_lines"] = [
+            f"[attachment-pair-salvage] scene={scene_id} outcome={pipeline_outcome} "
+            f"groups={record.get('group_count_total', 0)} pairs={record.get('pair_count_total', 0)}"
+        ]
+    return record
+
+
+def _build_attachment_pair_salvage_review_document(
+    *,
+    referability_cache_output: Path,
+    scenes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    scene_count = len(scenes)
+    return {
+        "name": ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME,
+        "version": ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION,
+        "generated_by": "scripts/run_vlm_referability.py",
+        "review_stage": ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE,
+        "referability_cache_output": str(referability_cache_output),
+        "scene_count": scene_count,
+        "group_count_total": sum(int(scene.get("group_count_total", 0) or 0) for scene in scenes),
+        "group_count_with_clarity_pass_images": sum(
+            int(scene.get("group_count_with_clarity_pass_images", 0) or 0)
+            for scene in scenes
+        ),
+        "group_count_with_multi_image_cover": sum(
+            int(scene.get("group_count_with_multi_image_cover", 0) or 0)
+            for scene in scenes
+        ),
+        "pair_count_total": sum(int(scene.get("pair_count_total", 0) or 0) for scene in scenes),
+        "pair_count_kept": sum(int(scene.get("pair_count_kept", 0) or 0) for scene in scenes),
+        "pair_count_auto_drop_hard_fail": sum(
+            int(scene.get("pair_count_auto_drop_hard_fail", 0) or 0)
+            for scene in scenes
+        ),
+        "pair_count_needs_vlm_salvage_review": sum(
+            int(scene.get("pair_count_needs_vlm_salvage_review", 0) or 0)
+            for scene in scenes
+        ),
+        "pair_count_uncertain": sum(
+            int(scene.get("pair_count_uncertain", 0) or 0)
+            for scene in scenes
+        ),
+        "pair_count_vlm_salvageable": sum(
+            int(scene.get("pair_count_vlm_salvageable", 0) or 0)
+            for scene in scenes
+        ),
+        "pair_count_vlm_not_salvageable": sum(
+            int(scene.get("pair_count_vlm_not_salvageable", 0) or 0)
+            for scene in scenes
+        ),
+        "pair_count_vlm_uncertain": sum(
+            int(scene.get("pair_count_vlm_uncertain", 0) or 0)
+            for scene in scenes
+        ),
+        "terminal_output_lines": [
+            line
+            for scene in scenes
+            for line in scene.get("terminal_output_lines", [])
+        ],
+        "scenes": scenes,
+    }
+
+
+def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
+    def _render_image_name_list(image_names: list[str]) -> str:
+        if not image_names:
+            return "-"
+        return ", ".join(html.escape(_image_name_stem(name) or str(name)) for name in image_names)
+
+    def _render_simple_list(values: list[str]) -> str:
+        if not values:
+            return "-"
+        return ", ".join(html.escape(str(value)) for value in values)
+
+    pair_cards: list[str] = []
+    scene_sections: list[str] = []
+    for scene in review_doc.get("scenes", []):
+        group_cards: list[str] = []
+        for group in scene.get("groups", []):
+            cover_gallery = "".join(
+                (
+                    '<div class="cover-item">'
+                    f'<div class="cover-title">{html.escape(item.get("image_stem", ""))}</div>'
+                    f'<img src="{html.escape(item.get("data_url", ""))}" alt="{html.escape(item.get("image_name", ""))}">'
+                    f'<div class="cover-subtitle">covers: {html.escape(", ".join(item.get("covered_pair_ids", [])) or "-")}</div>'
+                    "</div>"
+                )
+                for item in group.get("selected_cover_images", [])
+                if str(item.get("data_url", "")).strip()
+            )
+            if not cover_gallery:
+                cover_gallery = '<div class="empty-state">No selected cover images.</div>'
+
+            pair_cards.clear()
+            for pair_row in group.get("dropped_pairs", []):
+                vlm_review = pair_row.get("vlm_review") if isinstance(pair_row.get("vlm_review"), dict) else None
+                parent_crop = str(pair_row.get("parent_crop_image_data_url", "")).strip()
+                child_crop = str(pair_row.get("child_crop_image_data_url", "")).strip()
+                crop_gallery = ""
+                if parent_crop:
+                    crop_gallery += (
+                        '<div class="crop-item">'
+                        f'<div class="crop-title">parent {html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)}</div>'
+                        f'<img src="{html.escape(parent_crop)}" alt="parent crop">'
+                        "</div>"
+                    )
+                if child_crop:
+                    crop_gallery += (
+                        '<div class="crop-item">'
+                        f'<div class="crop-title">child {html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)}</div>'
+                        f'<img src="{html.escape(child_crop)}" alt="child crop">'
+                        "</div>"
+                    )
+                if not crop_gallery:
+                    crop_gallery = '<div class="empty-state">No pair crops available.</div>'
+
+                vlm_html = (
+                    '<div class="pair-meta">'
+                    f'<div><strong>vlm decision:</strong> {html.escape(str(vlm_review.get("decision", "-")))}</div>'
+                    f'<div><strong>parent visibility:</strong> {html.escape(str(vlm_review.get("parent_visibility", "-")))}</div>'
+                    f'<div><strong>child visibility:</strong> {html.escape(str(vlm_review.get("child_visibility", "-")))}</div>'
+                    f'<div><strong>unique with modifiers:</strong> {html.escape(str(vlm_review.get("pair_unique_with_modifiers", "-")))}</div>'
+                    f'<div><strong>parent modifiers:</strong> {html.escape(", ".join(vlm_review.get("parent_modifier_candidates", [])) or "-")}</div>'
+                    f'<div><strong>child modifiers:</strong> {html.escape(", ".join(vlm_review.get("child_modifier_candidates", [])) or "-")}</div>'
+                    f'<div><strong>phrase candidates:</strong> {html.escape(", ".join(vlm_review.get("pair_reference_phrase_candidates", [])) or "-")}</div>'
+                    f'<div><strong>reason:</strong> {html.escape(str(vlm_review.get("reason", "-")))}</div>'
+                    "</div>"
+                ) if vlm_review else '<div class="pair-meta"><div><strong>vlm decision:</strong> -</div></div>'
+
+                pair_cards.append(
+                    '<div class="pair-card">'
+                    f'<div class="pair-title">{html.escape(pair_row.get("pair_id", ""))} '
+                    f'({html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)} -> '
+                    f'{html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)})</div>'
+                    '<div class="pair-meta">'
+                    f'<div><strong>program status:</strong> {html.escape(str(pair_row.get("program_status", "-")))}</div>'
+                    f'<div><strong>program decision:</strong> {html.escape(str(pair_row.get("program_decision", "-")))}</div>'
+                    f'<div><strong>reason codes:</strong> {html.escape(", ".join(pair_row.get("program_reason_codes", [])) or "-")}</div>'
+                    f'<div><strong>cover images:</strong> {html.escape(", ".join(_image_name_stem(name) for name in pair_row.get("cover_image_names", [])) or "-")}</div>'
+                    f'<div><strong>human_decision:</strong> {html.escape(str(pair_row.get("human_decision") or "-"))}</div>'
+                    f'<div><strong>human_notes:</strong> {html.escape(str(pair_row.get("human_notes", "") or "-"))}</div>'
+                    "</div>"
+                    f"{vlm_html}"
+                    f'<div class="crop-grid">{crop_gallery}</div>'
+                    "</div>"
+                )
+            dropped_pairs_html = "".join(pair_cards) or '<div class="empty-state">No dropped pairs in this group.</div>'
+            group_cards.append(
+                '<section class="group-card">'
+                f'<h3>{html.escape(group.get("group_id", ""))}</h3>'
+                '<div class="group-meta">'
+                f'<div><strong>visible ids:</strong> {_render_simple_list(group.get("visible_object_labels", []))}</div>'
+                f'<div><strong>group frames:</strong> {_render_image_name_list(group.get("group_frame_image_names", []))}</div>'
+                f'<div><strong>clarity pass:</strong> {_render_image_name_list(group.get("clarity_pass_image_names", []))}</div>'
+                f'<div><strong>selected cover:</strong> {_render_image_name_list(group.get("selected_cover_image_names", []))}</div>'
+                f'<div><strong>kept pairs:</strong> {_render_simple_list(group.get("kept_pair_ids", []))}</div>'
+                "</div>"
+                f'<div class="cover-grid">{cover_gallery}</div>'
+                f'<div class="pair-list">{dropped_pairs_html}</div>'
+                "</section>"
+            )
+        scene_sections.append(
+            '<section class="scene-card">'
+            f'<h2>{html.escape(scene.get("scene_id", ""))} [{html.escape(scene.get("pipeline_outcome", ""))}]</h2>'
+            '<div class="scene-meta">'
+            f'<div><strong>groups:</strong> {int(scene.get("group_count_total", 0) or 0)}</div>'
+            f'<div><strong>pairs:</strong> {int(scene.get("pair_count_total", 0) or 0)}</div>'
+            f'<div><strong>kept:</strong> {int(scene.get("pair_count_kept", 0) or 0)}</div>'
+            f'<div><strong>hard fail:</strong> {int(scene.get("pair_count_auto_drop_hard_fail", 0) or 0)}</div>'
+            f'<div><strong>salvage review:</strong> {int(scene.get("pair_count_needs_vlm_salvage_review", 0) or 0)}</div>'
+            f'<div><strong>uncertain:</strong> {int(scene.get("pair_count_uncertain", 0) or 0)}</div>'
+            "</div>"
+            + "".join(group_cards)
+            + "</section>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attachment Pair Salvage Review</title>
+  <style>
+    body{{margin:0;background:#f4f1ea;color:#1f2937;font:14px/1.5 Georgia, 'Times New Roman', serif;}}
+    .page{{max-width:1400px;margin:0 auto;padding:28px 20px 60px;}}
+    h1,h2,h3{{margin:0 0 12px;color:#111827;}}
+    .summary,.scene-card,.group-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
+    .summary{{padding:18px 20px;margin-bottom:22px;}}
+    .summary-grid,.scene-meta,.group-meta,.pair-meta{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
+    .scene-card{{padding:18px 20px;margin-bottom:24px;}}
+    .group-card{{padding:16px 18px;margin:18px 0;}}
+    .cover-grid,.crop-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:14px 0;}}
+    .cover-item,.crop-item{{background:#f8f6f1;border:1px solid #e7dfd1;border-radius:12px;padding:10px;}}
+    img{{width:100%;display:block;border-radius:10px;background:#d1d5db;}}
+    .cover-title,.crop-title,.pair-title{{font-weight:700;color:#111827;}}
+    .cover-subtitle{{font-size:12px;color:#6b7280;margin-top:6px;}}
+    .pair-list{{display:grid;gap:14px;margin-top:16px;}}
+    .pair-card{{padding:14px 16px;}}
+    .empty-state{{padding:14px;border:1px dashed #c7bba7;border-radius:12px;background:#faf7f2;color:#6b7280;}}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="summary">
+      <h1>Attachment Pair Salvage Review</h1>
+      <div class="summary-grid">
+        <div><strong>scene count:</strong> {int(review_doc.get("scene_count", 0) or 0)}</div>
+        <div><strong>group count:</strong> {int(review_doc.get("group_count_total", 0) or 0)}</div>
+        <div><strong>groups with clarity pass:</strong> {int(review_doc.get("group_count_with_clarity_pass_images", 0) or 0)}</div>
+        <div><strong>multi-image cover groups:</strong> {int(review_doc.get("group_count_with_multi_image_cover", 0) or 0)}</div>
+        <div><strong>pair count:</strong> {int(review_doc.get("pair_count_total", 0) or 0)}</div>
+        <div><strong>kept pairs:</strong> {int(review_doc.get("pair_count_kept", 0) or 0)}</div>
+        <div><strong>hard fail pairs:</strong> {int(review_doc.get("pair_count_auto_drop_hard_fail", 0) or 0)}</div>
+        <div><strong>salvage review pairs:</strong> {int(review_doc.get("pair_count_needs_vlm_salvage_review", 0) or 0)}</div>
+        <div><strong>uncertain pairs:</strong> {int(review_doc.get("pair_count_uncertain", 0) or 0)}</div>
+        <div><strong>VLM salvageable:</strong> {int(review_doc.get("pair_count_vlm_salvageable", 0) or 0)}</div>
+        <div><strong>VLM not salvageable:</strong> {int(review_doc.get("pair_count_vlm_not_salvageable", 0) or 0)}</div>
+        <div><strong>VLM uncertain:</strong> {int(review_doc.get("pair_count_vlm_uncertain", 0) or 0)}</div>
+      </div>
+    </section>
+    {''.join(scene_sections) or '<div class="empty-state">No attachment pair salvage scenes recorded.</div>'}
+  </div>
+</body>
+</html>"""
 
 
 def _select_non_attachment_group_representatives(
@@ -4739,6 +6062,23 @@ def main():
         "--attachment_review_output", type=str, default=None,
         help="Optional path for the attachment candidate review JSON; defaults beside --output",
     )
+    parser.add_argument(
+        "--write_attachment_pair_salvage_review",
+        action="store_true",
+        help="Write group-level attachment pair salvage review JSON and HTML alongside the referability cache",
+    )
+    parser.add_argument(
+        "--attachment_pair_salvage_bbox_hard_fail_min",
+        type=float,
+        default=0.15,
+        help="Object-level bbox_in_frame_ratio hard-fail threshold for attachment pair salvage review",
+    )
+    parser.add_argument(
+        "--attachment_pair_salvage_projected_area_hard_fail_min",
+        type=float,
+        default=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+        help="Object-level projected_area_px hard-fail threshold for attachment pair salvage review",
+    )
     args = parser.parse_args()
     _reset_vlm_call_failure_count()
     if args.scene_batch_size is not None and int(args.scene_batch_size) <= 0:
@@ -4786,12 +6126,15 @@ def main():
         Path(args.attachment_review_output)
         if args.attachment_review_output else _attachment_review_output_path(output_path)
     )
+    attachment_pair_salvage_review_output = _attachment_pair_salvage_review_output_path(output_path)
+    attachment_pair_salvage_review_html_output = _attachment_pair_salvage_review_html_output_path(output_path)
     non_attachment_group_debug_dir = (
         Path(args.non_attachment_group_debug_dir)
         if args.non_attachment_group_debug_dir else None
     )
     attachment_review_scenes: list[dict[str, Any]] = []
     attachment_review_terminal_lines: list[str] = []
+    attachment_pair_salvage_review_scenes: list[dict[str, Any]] = []
     cache: dict[str, Any] = {
         "version": REFERABILITY_CACHE_VERSION,
         "model": model_name,
@@ -4846,6 +6189,39 @@ def main():
         for line in record.get("terminal_output_lines", []):
             logger.info("%s", line)
         _write_attachment_review()
+
+    def _write_attachment_pair_salvage_review() -> None:
+        if not args.write_attachment_pair_salvage_review:
+            return
+        review_doc = _build_attachment_pair_salvage_review_document(
+            referability_cache_output=output_path,
+            scenes=attachment_pair_salvage_review_scenes,
+        )
+        _write_json_payload(attachment_pair_salvage_review_output, review_doc)
+        attachment_pair_salvage_review_html_output.write_text(
+            _render_attachment_pair_salvage_review_html(review_doc),
+            encoding="utf-8",
+        )
+
+    def _finalize_attachment_pair_salvage_review_scene(
+        *,
+        scene_id: str,
+        split: str,
+        pipeline_outcome: str,
+        scene_review: dict[str, Any] | None,
+    ) -> None:
+        if not args.write_attachment_pair_salvage_review:
+            return
+        record = _build_attachment_pair_salvage_review_scene_record(
+            scene_id=scene_id,
+            split=split,
+            pipeline_outcome=pipeline_outcome,
+            scene_review=scene_review,
+        )
+        attachment_pair_salvage_review_scenes.append(record)
+        for line in record.get("terminal_output_lines", []):
+            logger.info("%s", line)
+        _write_attachment_pair_salvage_review()
 
     scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
     logger.info(
@@ -4909,6 +6285,7 @@ def main():
             len(scene_entries),
         )
 
+        attachment_pair_salvage_scene_review: dict[str, Any] | None = None
         scene = parse_scene(scene_dir)
         if scene is None:
             _persist_scene_state(
@@ -4927,6 +6304,12 @@ def main():
                 ),
                 scene_cache=None,
             )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="parse_scene_failed",
+                scene_review=None,
+            )
             newly_processed += 1
             continue
 
@@ -4940,7 +6323,7 @@ def main():
             dict(edge)
             for edge in scene.get("attachment_edges", [])
             if isinstance(edge, dict)
-        ] if args.write_attachment_review else []
+        ]
 
         def _make_attachment_review_record(pipeline_outcome: str) -> dict[str, Any]:
             return _build_attachment_review_scene_record(
@@ -4971,6 +6354,12 @@ def main():
             )
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_attachment_relations")
+            )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_attachment_relations",
+                scene_review=None,
             )
             newly_processed += 1
             continue
@@ -5009,6 +6398,12 @@ def main():
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("already_cached")
             )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="already_cached",
+                scene_review=None,
+            )
             continue
 
         frame_candidates = select_frames(
@@ -5038,6 +6433,12 @@ def main():
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_frame_candidates")
             )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_frame_candidates",
+                scene_review=None,
+            )
             newly_processed += 1
             continue
 
@@ -5065,6 +6466,12 @@ def main():
             )
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("color_intrinsics_load_failed")
+            )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="color_intrinsics_load_failed",
+                scene_review=None,
             )
             newly_processed += 1
             continue
@@ -5187,6 +6594,24 @@ def main():
             max_accepted_frame_count=int(args.max_frames),
             vlm_workers=int(args.vlm_workers),
         ) if attachment_candidate_frames else []
+        if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
+            attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
+                client=client,
+                model_name=model_name,
+                scene_id=scene_id,
+                split=scene_split,
+                scene_dir=scene_dir,
+                objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                attachment_graph=attachment_graph,
+                attachment_edges=final_attachment_edges,
+                frames=attachment_candidate_frames,
+                attachment_entry_builder=_build_attachment_entry,
+                bbox_hard_fail_min=float(args.attachment_pair_salvage_bbox_hard_fail_min),
+                projected_area_hard_fail_min=float(
+                    args.attachment_pair_salvage_projected_area_hard_fail_min
+                ),
+            )
         selected_attachment_frames = attachment_selected_frames
         remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))
         selected_non_attachment_frames = non_attachment_frames[:remaining_slots]
@@ -5254,6 +6679,12 @@ def main():
             logger.info("Scene %s has no final referability frames -> skipping", scene_id)
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_final_referability_frames")
+            )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_final_referability_frames",
+                scene_review=attachment_pair_salvage_scene_review,
             )
             newly_processed += 1
             continue
@@ -5359,6 +6790,12 @@ def main():
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("no_cacheable_referability_entries")
             )
+            _finalize_attachment_pair_salvage_review_scene(
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome="no_cacheable_referability_entries",
+                scene_review=attachment_pair_salvage_scene_review,
+            )
             newly_processed += 1
             continue
 
@@ -5405,12 +6842,19 @@ def main():
         _finalize_attachment_review_scene(
             _make_attachment_review_record("processed")
         )
+        _finalize_attachment_pair_salvage_review_scene(
+            scene_id=scene_id,
+            split=scene_split,
+            pipeline_outcome="processed",
+            scene_review=attachment_pair_salvage_scene_review,
+        )
 
         processed += 1
         newly_processed += 1
 
     _write_json_payload(output_path, cache)
     _write_attachment_review()
+    _write_attachment_pair_salvage_review()
     if batch_target is not None and final_batch_mode:
         remaining_unprocessed = max(0, len(scene_entries) - _processed_scene_count())
         _log_final_batch_banner(
