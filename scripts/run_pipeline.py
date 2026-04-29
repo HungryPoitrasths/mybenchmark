@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 import json
 import logging
 import os
@@ -3225,6 +3226,10 @@ def run_pipeline(
     run_question_dinox_audit: bool = False,
     run_question_presence_review: bool = True,
     question_presence_review_workers: int = 8,
+    slow_frame_warn_seconds: float = 120.0,
+    slow_phase_warn_seconds: float = 30.0,
+    generator_progress_log_seconds: float = 15.0,
+    slow_generator_warn_seconds: float = 60.0,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     if referability_cache is None:
@@ -3272,6 +3277,102 @@ def run_pipeline(
         except OSError:
             pass
     raw_question_paths: list[Path] = []
+
+    def _format_observability_value(value: object) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(value)
+
+    def _log_frame_event(
+        level_fn,
+        event_name: str,
+        frame_ctx: dict[str, object],
+        **fields: object,
+    ) -> None:
+        message_parts = [
+            f"scene={frame_ctx['scene_id']}",
+            f"frame={frame_ctx['image_name']}",
+            f"index={frame_ctx['frame_index']}/{frame_ctx['frame_total']}",
+        ]
+        for key, value in fields.items():
+            if value is None:
+                continue
+            message_parts.append(f"{key}={_format_observability_value(value)}")
+        level_fn("%s: %s", event_name, " ".join(message_parts))
+
+    @contextmanager
+    def _timed_frame_phase(
+        frame_ctx: dict[str, object],
+        phase_name: str,
+    ) -> Iterator[None]:
+        phase_started_at = time.perf_counter()
+        _log_frame_event(
+            logger.info,
+            "frame phase start",
+            frame_ctx,
+            phase=phase_name,
+        )
+        try:
+            yield
+        finally:
+            elapsed_seconds = time.perf_counter() - phase_started_at
+            _log_frame_event(
+                logger.info,
+                "frame phase done",
+                frame_ctx,
+                phase=phase_name,
+                elapsed=f"{elapsed_seconds:.2f}s",
+            )
+            if (
+                slow_phase_warn_seconds > 0
+                and elapsed_seconds >= slow_phase_warn_seconds
+            ):
+                _log_frame_event(
+                    logger.warning,
+                    "slow frame phase",
+                    frame_ctx,
+                    phase=phase_name,
+                    elapsed=f"{elapsed_seconds:.2f}s",
+                )
+
+    def _log_frame_done(
+        frame_ctx: dict[str, object],
+        frame_started_at: float,
+        *,
+        status: str,
+        skip_reason: str | None,
+        raw_generated_count: int,
+        kept_count: int,
+    ) -> None:
+        elapsed_seconds = time.perf_counter() - frame_started_at
+        slow_frame = (
+            slow_frame_warn_seconds > 0
+            and elapsed_seconds >= slow_frame_warn_seconds
+        )
+        _log_frame_event(
+            logger.info,
+            "frame done",
+            frame_ctx,
+            status=status,
+            skip_reason=skip_reason,
+            elapsed=f"{elapsed_seconds:.2f}s",
+            raw_generated=raw_generated_count,
+            kept=kept_count,
+            slow_frame=slow_frame,
+        )
+        if slow_frame:
+            _log_frame_event(
+                logger.warning,
+                "slow frame",
+                frame_ctx,
+                status=status,
+                skip_reason=skip_reason,
+                elapsed=f"{elapsed_seconds:.2f}s",
+                raw_generated=raw_generated_count,
+                kept=kept_count,
+            )
 
     try:
         for scene_index, scene_dir in enumerate(scene_dirs, start=1):
@@ -3374,52 +3475,42 @@ def run_pipeline(
 
             scene_frame_debug_entries: list[dict[str, object]] = []
 
-            for frame in frames:
+            for frame_index, frame in enumerate(frames, start=1):
                 image_name = frame["image_name"]
-                if image_name not in poses:
-                    if write_frame_debug:
-                        selector_visible_ids = _normalize_object_ids(frame.get("visible_object_ids"))
-                        frame_attachment_rows = _filter_frame_attachment_rows(
-                            scene_attachment_rows,
-                            set(selector_visible_ids),
-                        )
-                        scene_frame_debug_entries.append(
-                            _build_frame_debug_entry(
-                                image_name=image_name,
-                                scene_objects=scene["objects"],
-                                objects_by_id=objects_by_id,
-                                selector_visible_ids=selector_visible_ids,
-                                pipeline_visible_ids=[],
-                                occlusion_eligible_object_ids=[],
-                                pipeline_referable_object_ids=[],
-                                referability_entry=_get_referability_entry(
-                                    referability_cache,
-                                    scene_id,
-                                    image_name,
-                                ),
-                                frame_attachment_rows=frame_attachment_rows,
-                                pipeline_skip_reason="missing_pose",
-                            )
-                        )
-                    continue
-
-                camera_pose = poses[image_name]
-                depth_image = None
-                if use_occlusion and depth_intrinsics is not None:
-                    frame_id = image_name.replace(".jpg", "")
-                    depth_path = scene_dir / "depth" / f"{frame_id}.png"
-                    if depth_path.exists():
-                        try:
-                            depth_image = load_depth_image(depth_path)
-                        except Exception as e:
-                            logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
-
                 selector_visible_ids = _normalize_object_ids(frame.get("visible_object_ids"))
                 visible_ids = list(selector_visible_ids)
-                visible_id_set = set(int(obj_id) for obj_id in visible_ids)
+                visible_id_set = {int(obj_id) for obj_id in visible_ids}
+                referability_entry = _get_referability_entry(
+                    referability_cache,
+                    scene_id,
+                    image_name,
+                )
+                cache_referable_count = (
+                    len(referability_entry.get("referable_object_ids", []) or [])
+                    if referability_entry is not None
+                    else None
+                )
+                frame_ctx = {
+                    "scene_id": scene_id,
+                    "image_name": image_name,
+                    "frame_index": frame_index,
+                    "frame_total": len(frames),
+                }
+                frame_started_at = time.perf_counter()
+                frame_status = "done"
+                frame_skip_reason: str | None = None
+                frame_raw_generated_count = 0
+                frame_kept_count = 0
+                _log_frame_event(
+                    logger.info,
+                    "frame start",
+                    frame_ctx,
+                    visible=len(selector_visible_ids),
+                    cache_referable=cache_referable_count,
+                )
+
                 referable_ids = None
                 attachment_referable_ids = None
-                raw_referable_ids: list[int] = []
                 label_statuses = None
                 label_counts = None
                 out_of_frame_not_visible_labels: list[str] = []
@@ -3432,72 +3523,210 @@ def run_pipeline(
                     "skipped_object_ids": [],
                     "audit_by_object_id": {},
                 }
-                referability_entry = _get_referability_entry(
-                    referability_cache,
-                    scene_id,
-                    image_name,
-                )
-                mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
-                    visible_object_ids=visible_ids,
-                    referability_entry=referability_entry,
-                    scene_objects=scene["objects"],
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                )
-                projected_area_by_obj_id = _build_visible_object_projected_area_map(
-                    visible_object_ids=visible_ids,
-                    referability_entry=referability_entry,
-                    scene_objects=scene["objects"],
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                )
-                occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
-                    visible_object_ids=visible_ids,
-                    mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
-                )
-                if referability_entry is not None:
-                    label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
-                    label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
-                    out_of_frame_not_visible_labels = _normalize_label_list(
-                        referability_entry.get("out_of_frame_not_visible_labels")
-                    )
-                    out_of_frame_label_to_object_ids = _shared_normalize_label_to_object_ids(
-                        referability_entry.get("out_of_frame_label_to_object_ids")
-                    )
-                    raw_referable_ids = [
-                        int(obj_id)
-                        for obj_id in referability_entry.get("referable_object_ids", [])
-                        if int(obj_id) in visible_id_set
-                    ]
-                    referable_occlusion_veto = _filter_referable_object_ids_with_occlusion_veto(
-                        scene_id=scene_id,
-                        image_name=image_name,
-                        referable_object_ids=raw_referable_ids,
-                        objects_by_id=objects_by_id,
-                        projected_area_by_obj_id=projected_area_by_obj_id,
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        ray_caster=ray_caster,
-                        instance_mesh_data=instance_mesh_data,
-                    )
-                    referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
-                    raw_attachment_referable_ids = referability_entry.get(
-                        "attachment_referable_object_ids"
-                    )
-                    if raw_attachment_referable_ids is None:
-                        raw_attachment_referable_ids = _derive_final_referability_fields(
-                            referability_entry
-                        ).get("attachment_referable_object_ids", [])
-                    attachment_referable_ids = [
-                        int(obj_id)
-                        for obj_id in (raw_attachment_referable_ids or [])
-                        if int(obj_id) in visible_id_set
-                    ]
-                    if not referable_ids and not _has_l1_visibility_candidates(
+                mention_in_frame_ratio_by_obj_id: dict[int, float] = {}
+                projected_area_by_obj_id: dict[int, float] = {}
+                occlusion_eligible_ids: list[int] = []
+                camera_pose = None
+                depth_image = None
+
+                try:
+                    with _timed_frame_phase(frame_ctx, "pose_depth_load"):
+                        if image_name in poses:
+                            camera_pose = poses[image_name]
+                            if use_occlusion and depth_intrinsics is not None:
+                                frame_id = image_name.replace(".jpg", "")
+                                depth_path = scene_dir / "depth" / f"{frame_id}.png"
+                                if depth_path.exists():
+                                    try:
+                                        depth_image = load_depth_image(depth_path)
+                                    except Exception as e:
+                                        logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, e)
+
+                    if camera_pose is None:
+                        if write_frame_debug:
+                            with _timed_frame_phase(frame_ctx, "frame_debug_assembly"):
+                                frame_attachment_rows = _filter_frame_attachment_rows(
+                                    scene_attachment_rows,
+                                    set(selector_visible_ids),
+                                )
+                                scene_frame_debug_entries.append(
+                                    _build_frame_debug_entry(
+                                        image_name=image_name,
+                                        scene_objects=scene["objects"],
+                                        objects_by_id=objects_by_id,
+                                        selector_visible_ids=selector_visible_ids,
+                                        pipeline_visible_ids=[],
+                                        occlusion_eligible_object_ids=[],
+                                        pipeline_referable_object_ids=[],
+                                        referability_entry=referability_entry,
+                                        frame_attachment_rows=frame_attachment_rows,
+                                        pipeline_skip_reason="missing_pose",
+                                    )
+                                )
+                        frame_status = "skipped"
+                        frame_skip_reason = "missing_pose"
+                        continue
+
+                    with _timed_frame_phase(frame_ctx, "referability_entry_normalization"):
+                        if referability_entry is not None:
+                            label_statuses = _normalize_label_statuses(referability_entry.get("label_statuses"))
+                            label_counts = _normalize_label_counts(referability_entry.get("label_counts"))
+                            out_of_frame_not_visible_labels = _normalize_label_list(
+                                referability_entry.get("out_of_frame_not_visible_labels")
+                            )
+                            out_of_frame_label_to_object_ids = _shared_normalize_label_to_object_ids(
+                                referability_entry.get("out_of_frame_label_to_object_ids")
+                            )
+                            raw_referable_ids = [
+                                int(obj_id)
+                                for obj_id in referability_entry.get("referable_object_ids", [])
+                                if int(obj_id) in visible_id_set
+                            ]
+                            raw_attachment_referable_ids = referability_entry.get(
+                                "attachment_referable_object_ids"
+                            )
+                            if raw_attachment_referable_ids is None:
+                                raw_attachment_referable_ids = _derive_final_referability_fields(
+                                    referability_entry
+                                ).get("attachment_referable_object_ids", [])
+                            attachment_referable_ids = [
+                                int(obj_id)
+                                for obj_id in (raw_attachment_referable_ids or [])
+                                if int(obj_id) in visible_id_set
+                            ]
+                        else:
+                            raw_referable_ids = []
+
+                    with _timed_frame_phase(frame_ctx, "in_frame_ratio_projected_area_map_build"):
+                        mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
+                            visible_object_ids=visible_ids,
+                            referability_entry=referability_entry,
+                            scene_objects=scene["objects"],
+                            camera_pose=camera_pose,
+                            color_intrinsics=color_intrinsics,
+                        )
+                        projected_area_by_obj_id = _build_visible_object_projected_area_map(
+                            visible_object_ids=visible_ids,
+                            referability_entry=referability_entry,
+                            scene_objects=scene["objects"],
+                            camera_pose=camera_pose,
+                            color_intrinsics=color_intrinsics,
+                        )
+                        occlusion_eligible_ids = _build_occlusion_eligible_object_ids(
+                            visible_object_ids=visible_ids,
+                            mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
+                        )
+
+                    with _timed_frame_phase(frame_ctx, "referable_occlusion_veto"):
+                        if referability_entry is not None:
+                            referable_occlusion_veto = _filter_referable_object_ids_with_occlusion_veto(
+                                scene_id=scene_id,
+                                image_name=image_name,
+                                referable_object_ids=raw_referable_ids,
+                                objects_by_id=objects_by_id,
+                                projected_area_by_obj_id=projected_area_by_obj_id,
+                                camera_pose=camera_pose,
+                                color_intrinsics=color_intrinsics,
+                                ray_caster=ray_caster,
+                                instance_mesh_data=instance_mesh_data,
+                            )
+                            referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
+
+                    if referability_entry is not None and not referable_ids and not _has_l1_visibility_candidates(
                         label_statuses,
                         out_of_frame_not_visible_labels,
                     ):
                         if write_frame_debug:
+                            with _timed_frame_phase(frame_ctx, "frame_debug_assembly"):
+                                frame_attachment_rows = _filter_frame_attachment_rows(
+                                    scene_attachment_rows,
+                                    set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
+                                )
+                                scene_frame_debug_entries.append(
+                                    _build_frame_debug_entry(
+                                        image_name=image_name,
+                                        scene_objects=scene["objects"],
+                                        objects_by_id=objects_by_id,
+                                        selector_visible_ids=selector_visible_ids,
+                                        pipeline_visible_ids=list(visible_ids),
+                                        occlusion_eligible_object_ids=occlusion_eligible_ids,
+                                        pipeline_referable_object_ids=referable_ids,
+                                        referability_entry=referability_entry,
+                                        frame_attachment_rows=frame_attachment_rows,
+                                        referable_occlusion_veto=referable_occlusion_veto,
+                                        pipeline_skip_reason="no_referable_objects_or_l1_candidates",
+                                    )
+                                )
+                        logger.debug(
+                            "Frame %s/%s has no referable objects or L1 visibility candidates",
+                            scene_id,
+                            image_name,
+                        )
+                        frame_status = "skipped"
+                        frame_skip_reason = "no_referable_objects_or_l1_candidates"
+                        continue
+
+                    with _timed_frame_phase(frame_ctx, "generate_all_questions"):
+                        try:
+                            questions = generate_all_questions(
+                                objects=scene["objects"],
+                                attachment_graph=attachment_graph,
+                                attached_by=attached_by,
+                                support_chain_graph=support_chain_graph,
+                                support_chain_by=support_chain_by,
+                                camera_pose=camera_pose,
+                                color_intrinsics=color_intrinsics,
+                                depth_image=depth_image,
+                                depth_intrinsics=depth_intrinsics,
+                                occlusion_backend=occlusion_backend,
+                                ray_caster=ray_caster,
+                                instance_mesh_data=instance_mesh_data,
+                                visible_object_ids=visible_ids,
+                                referable_object_ids=referable_ids,
+                                attachment_referable_object_ids=attachment_referable_ids,
+                                occlusion_eligible_object_ids=occlusion_eligible_ids,
+                                mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
+                                label_statuses=label_statuses,
+                                label_counts=label_counts,
+                                label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
+                                out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
+                                out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
+                                room_bounds=scene.get("room_bounds"),
+                                wall_objects=scene.get("wall_objects"),
+                                attachment_edges=scene.get("attachment_edges", []),
+                                generator_progress_log_seconds=generator_progress_log_seconds,
+                                slow_generator_warn_seconds=slow_generator_warn_seconds,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "Question generation failed for %s/%s (visible=%d referable=%d attachment_referable=%d occlusion_eligible=%d)",
+                                scene_id,
+                                image_name,
+                                len(visible_ids or []),
+                                len(referable_ids or []),
+                                len(attachment_referable_ids or []),
+                                len(occlusion_eligible_ids or []),
+                            )
+                            raise
+                    frame_raw_generated_count = len(questions)
+
+                    for q in questions:
+                        q["scene_id"] = scene_id
+                        q["image_name"] = image_name
+
+                    with _timed_frame_phase(frame_ctx, "referability_post_filter"):
+                        kept_questions, audited_questions = _apply_question_referability_filter(
+                            questions,
+                            objects_by_id=objects_by_id,
+                            referability_entry=referability_entry,
+                            frame_referable_ids=referable_ids or [],
+                            attachment_frame_referable_ids=attachment_referable_ids or [],
+                        )
+                    frame_kept_count = len(kept_questions)
+                    scene_questions.extend(kept_questions)
+
+                    if write_frame_debug:
+                        with _timed_frame_phase(frame_ctx, "frame_debug_assembly"):
                             frame_attachment_rows = _filter_frame_attachment_rows(
                                 scene_attachment_rows,
                                 set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
@@ -3514,76 +3743,20 @@ def run_pipeline(
                                     referability_entry=referability_entry,
                                     frame_attachment_rows=frame_attachment_rows,
                                     referable_occlusion_veto=referable_occlusion_veto,
-                                    pipeline_skip_reason="no_referable_objects_or_l1_candidates",
+                                    generated_questions=audited_questions,
                                 )
                             )
-                        logger.debug(
-                            "Frame %s/%s has no referable objects or L1 visibility candidates",
-                            scene_id,
-                            image_name,
-                        )
-                        continue
-
-                questions = generate_all_questions(
-                    objects=scene["objects"],
-                    attachment_graph=attachment_graph,
-                    attached_by=attached_by,
-                    support_chain_graph=support_chain_graph,
-                    support_chain_by=support_chain_by,
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                    depth_image=depth_image,
-                    depth_intrinsics=depth_intrinsics,
-                    occlusion_backend=occlusion_backend,
-                    ray_caster=ray_caster,
-                    instance_mesh_data=instance_mesh_data,
-                    visible_object_ids=visible_ids,
-                    referable_object_ids=referable_ids,
-                    attachment_referable_object_ids=attachment_referable_ids,
-                    occlusion_eligible_object_ids=occlusion_eligible_ids,
-                    mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
-                    label_statuses=label_statuses,
-                    label_counts=label_counts,
-                    label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
-                    out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
-                    out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
-                    room_bounds=scene.get("room_bounds"),
-                    wall_objects=scene.get("wall_objects"),
-                    attachment_edges=scene.get("attachment_edges", []),
-                )
-
-                for q in questions:
-                    q["scene_id"] = scene_id
-                    q["image_name"] = image_name
-
-                kept_questions, audited_questions = _apply_question_referability_filter(
-                    questions,
-                    objects_by_id=objects_by_id,
-                    referability_entry=referability_entry,
-                    frame_referable_ids=referable_ids or [],
-                    attachment_frame_referable_ids=attachment_referable_ids or [],
-                )
-
-                scene_questions.extend(kept_questions)
-                frame_attachment_rows = _filter_frame_attachment_rows(
-                    scene_attachment_rows,
-                    set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
-                )
-                if write_frame_debug:
-                    scene_frame_debug_entries.append(
-                        _build_frame_debug_entry(
-                            image_name=image_name,
-                            scene_objects=scene["objects"],
-                            objects_by_id=objects_by_id,
-                            selector_visible_ids=selector_visible_ids,
-                            pipeline_visible_ids=list(visible_ids),
-                            occlusion_eligible_object_ids=occlusion_eligible_ids,
-                            pipeline_referable_object_ids=referable_ids,
-                            referability_entry=referability_entry,
-                            frame_attachment_rows=frame_attachment_rows,
-                            referable_occlusion_veto=referable_occlusion_veto,
-                            generated_questions=audited_questions,
-                        )
+                except Exception:
+                    frame_status = "error"
+                    raise
+                finally:
+                    _log_frame_done(
+                        frame_ctx,
+                        frame_started_at,
+                        status=frame_status,
+                        skip_reason=frame_skip_reason,
+                        raw_generated_count=frame_raw_generated_count,
+                        kept_count=frame_kept_count,
                     )
 
             raw_question_path = raw_questions_dir / f"{scene_id}.json"
@@ -4070,6 +4243,30 @@ def main():
         help="Thread pool size for post-generation question presence/answer review",
     )
     parser.add_argument(
+        "--slow_frame_warn_seconds",
+        type=float,
+        default=120.0,
+        help="Warn when one frame exceeds this many seconds, without interrupting work",
+    )
+    parser.add_argument(
+        "--slow_phase_warn_seconds",
+        type=float,
+        default=30.0,
+        help="Warn when one frame phase exceeds this many seconds, without interrupting work",
+    )
+    parser.add_argument(
+        "--generator_progress_log_seconds",
+        type=float,
+        default=15.0,
+        help="Heartbeat interval in seconds for long-running QA generator loops",
+    )
+    parser.add_argument(
+        "--slow_generator_warn_seconds",
+        type=float,
+        default=60.0,
+        help="Warn once when a QA generator invocation exceeds this many seconds",
+    )
+    parser.add_argument(
         "--repair_referability_cache",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -4100,6 +4297,10 @@ def main():
         run_question_dinox_audit=args.question_dinox_audit,
         run_question_presence_review=args.question_presence_review,
         question_presence_review_workers=args.question_presence_review_workers,
+        slow_frame_warn_seconds=args.slow_frame_warn_seconds,
+        slow_phase_warn_seconds=args.slow_phase_warn_seconds,
+        generator_progress_log_seconds=args.generator_progress_log_seconds,
+        slow_generator_warn_seconds=args.slow_generator_warn_seconds,
     )
 
 
