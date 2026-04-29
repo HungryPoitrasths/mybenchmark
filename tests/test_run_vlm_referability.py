@@ -339,12 +339,40 @@ class _SequenceVisibilityCaster:
 
 
 class RunVlmReferabilityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self._split_metadata_root = (
+            Path(__file__).resolve().parent / "_tmp" / f"split_metadata_{uuid.uuid4().hex}"
+        )
+        self._split_metadata_root.mkdir(parents=True, exist_ok=True)
+        self._train_split_path = self._split_metadata_root / "scannetv2_train.txt"
+        self._val_split_path = self._split_metadata_root / "scannetv2_val.txt"
+        self.write_split_file("train", ["scene0001_00", "scene0002_00", "scene0003_00"])
+        self.write_split_file("val", ["scene1000_00", "scene1001_00"])
+        self._split_patch = patch.dict(
+            referability_module.SCANNET_METADATA_SPLIT_FILES,
+            {
+                "train": self._train_split_path,
+                "val": self._val_split_path,
+            },
+            clear=True,
+        )
+        self._split_patch.start()
+        self.addCleanup(self._split_patch.stop)
+        self.addCleanup(shutil.rmtree, self._split_metadata_root, True)
+
+    def write_split_file(self, split: str, scene_ids: list[str]) -> None:
+        split_path = {
+            "train": self._train_split_path,
+            "val": self._val_split_path,
+        }[split]
+        split_path.write_text("\n".join(scene_ids) + "\n", encoding="utf-8")
+
     def test_resolve_scannet_scene_dirs_reads_train_from_data_root(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"resolve_train_{uuid.uuid4().hex}"
         data_root = root / "data"
         make_scene_dir(data_root, "scans/scene0002_00")
         make_scene_dir(data_root, "scans/scene0001_00")
-        make_scene_dir(data_root, "scans_test/scene1000_00")
         self.addCleanup(shutil.rmtree, root, True)
 
         entries = referability_module._resolve_scannet_scene_dirs(data_root, "train")
@@ -354,42 +382,48 @@ class RunVlmReferabilityTests(unittest.TestCase):
             [("train", "scene0001_00"), ("train", "scene0002_00")],
         )
 
-    def test_resolve_scannet_scene_dirs_reads_test_from_scans_root(self) -> None:
-        root = Path(__file__).resolve().parent / "_tmp" / f"resolve_test_{uuid.uuid4().hex}"
+    def test_resolve_scannet_scene_dirs_reads_val_from_scans_root(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"resolve_val_{uuid.uuid4().hex}"
         data_root = root / "data"
         scans_root = data_root / "scans"
+        make_scene_dir(data_root, "scans/scene1001_00")
         make_scene_dir(data_root, "scans/scene0001_00")
-        make_scene_dir(data_root, "scans_test/scene1001_00")
         self.addCleanup(shutil.rmtree, root, True)
 
-        entries = referability_module._resolve_scannet_scene_dirs(scans_root, "test")
+        entries = referability_module._resolve_scannet_scene_dirs(scans_root, "val")
 
         self.assertEqual(
             [(split, path.name) for split, path in entries],
-            [("test", "scene1001_00")],
+            [("val", "scene1001_00")],
         )
 
-    def test_resolve_scannet_scene_dirs_reads_all_in_train_then_test_order(self) -> None:
+    def test_resolve_scannet_scene_dirs_reads_all_in_train_then_val_order(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"resolve_all_{uuid.uuid4().hex}"
         data_root = root / "data"
-        scans_test_root = data_root / "scans_test"
         make_scene_dir(data_root, "scans/scene0002_00")
         make_scene_dir(data_root, "scans/scene0001_00")
-        make_scene_dir(data_root, "scans_test/scene1001_00")
-        make_scene_dir(data_root, "scans_test/scene1000_00")
+        make_scene_dir(data_root, "scans/scene1001_00")
+        make_scene_dir(data_root, "scans/scene1000_00")
         self.addCleanup(shutil.rmtree, root, True)
 
-        entries = referability_module._resolve_scannet_scene_dirs(scans_test_root, "all")
+        entries = referability_module._resolve_scannet_scene_dirs(data_root, "all")
 
         self.assertEqual(
             [(split, path.name) for split, path in entries],
             [
                 ("train", "scene0001_00"),
                 ("train", "scene0002_00"),
-                ("test", "scene1000_00"),
-                ("test", "scene1001_00"),
+                ("val", "scene1000_00"),
+                ("val", "scene1001_00"),
             ],
         )
+
+    def test_read_scannet_split_scene_ids_ignores_blank_lines(self) -> None:
+        self._train_split_path.write_text("scene0002_00\n\nscene0001_00\n", encoding="utf-8")
+
+        scene_ids = referability_module._read_scannet_split_scene_ids("train")
+
+        self.assertEqual(scene_ids, ["scene0002_00", "scene0001_00"])
 
     def test_call_vlm_json_tracks_failure_count(self) -> None:
         referability_module._reset_vlm_call_failure_count()
@@ -3055,6 +3089,34 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(review["pair_reviews"][0]["decision"], "salvageable")
         self.assertEqual(review["pair_reviews"][1]["decision"], "not_salvageable")
 
+    def test_render_attachment_pair_salvage_review_html_lists_included_scenes_in_deduped_order(self) -> None:
+        review_doc = {
+            "scene_count": 3,
+            "group_count_total": 0,
+            "group_count_with_clarity_pass_images": 0,
+            "group_count_with_multi_image_cover": 0,
+            "pair_count_total": 0,
+            "pair_count_kept": 0,
+            "pair_count_auto_drop_hard_fail": 0,
+            "pair_count_needs_vlm_salvage_review": 0,
+            "pair_count_uncertain": 0,
+            "pair_count_vlm_salvageable": 0,
+            "pair_count_vlm_not_salvageable": 0,
+            "pair_count_vlm_uncertain": 0,
+            "scenes": [
+                {"scene_id": "scene0002_00", "pipeline_outcome": "processed", "groups": []},
+                {"scene_id": "scene0001_00", "pipeline_outcome": "processed", "groups": []},
+                {"scene_id": "scene0002_00", "pipeline_outcome": "processed", "groups": []},
+            ],
+        }
+
+        html_text = referability_module._render_attachment_pair_salvage_review_html(review_doc)
+
+        self.assertIn(
+            "included scenes:</strong> scene0002_00, scene0001_00",
+            html_text,
+        )
+
     def test_main_persists_scene_grouping_summary_in_cache_and_debug_json(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"
         data_root = root / "data"
@@ -3378,7 +3440,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+        review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_candidate_review.json"
         output_path.write_text(
             json.dumps(
                 {
@@ -3446,7 +3508,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+        review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_candidate_review.json"
         scene = {
             "objects": [
                 make_object(1, "table"),
@@ -3501,15 +3563,71 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "no_attachment_relations",
         )
 
-    def test_main_writes_attachment_pair_salvage_review_json_and_html(self) -> None:
+    def test_main_respects_attachment_review_output_override(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_override_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        custom_review_path = root / "custom" / "review.json"
+        default_review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_candidate_review.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {}
+            scene_dict["attached_by"] = {}
+            scene_dict["attachment_edges"] = []
+            scene_dict["support_chain_graph"] = {}
+            scene_dict["support_chain_by"] = {}
+            return scene_dict
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "select_frames", side_effect=AssertionError("select_frames should not run without attachment relations")),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--attachment_review_output",
+                str(custom_review_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "5",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertTrue(custom_review_path.exists())
+        self.assertFalse(default_review_path.exists())
+        review_doc = json.loads(custom_review_path.read_text(encoding="utf-8"))
+        self.assertEqual(review_doc["scene_count"], 1)
+        self.assertEqual(
+            json.loads(output_path.read_text(encoding="utf-8"))["scene_status"]["scene0001_00"]["pipeline_outcome"],
+            "no_attachment_relations",
+        )
+
+    def test_main_writes_attachment_pair_salvage_review_json_and_html_by_default(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_pair_salvage_main_{uuid.uuid4().hex}"
         data_root = root / "data"
         scene_dir = data_root / "scene0001_00"
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.json"
-        review_html_path = output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.html"
+        review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_pair_salvage_review.json"
+        review_html_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_pair_salvage_review.html"
 
         scene = {
             "objects": [
@@ -3638,7 +3756,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 str(output_path),
                 "--max_scenes",
                 "1",
-                "--write_attachment_pair_salvage_review",
                 "--no-write_attachment_review",
             ]),
         ):
@@ -3651,9 +3768,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(review_doc["name"], referability_module.ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME)
         self.assertEqual(review_doc["pair_count_needs_vlm_salvage_review"], 1)
         self.assertIn("Attachment Pair Salvage Review", html_text)
+        self.assertIn("included scenes:</strong> scene0001_00", html_text)
         self.assertIn("scene0001_00:group_0", html_text)
         self.assertIn("000001", html_text)
         self.assertIn("1-&gt;2", html_text)
+        self.assertTrue(output_path.exists())
 
     def test_main_writes_scene_status_for_no_frame_candidates(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_no_frames_{uuid.uuid4().hex}"
@@ -3700,6 +3819,50 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(scene_status["scene_skip_reason"], "no_frame_candidates")
         self.assertFalse(scene_status["has_cache_frames"])
         self.assertEqual(scene_status["final_cacheable_frame_count"], 0)
+
+    def test_main_marks_scene_status_split_as_val(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_val_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scans" / "scene1001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        scene = {"objects": [make_object(1, "table"), make_object(2, "book")]}
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "select_frames", return_value=[]),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--split",
+                "val",
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        scene_status = cache_doc["scene_status"]["scene1001_00"]
+        self.assertEqual(scene_status["split"], "val")
+        self.assertEqual(scene_status["pipeline_outcome"], "no_frame_candidates")
 
     def test_no_final_referability_scene_status_prevents_repeat_processing(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_no_final_{uuid.uuid4().hex}"
@@ -3889,6 +4052,104 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "no_final_referability_frames",
         )
         self.assertEqual(cache_doc["scene_status"]["scene0003_00"]["pipeline_outcome"], "processed")
+
+    def test_resume_rejects_legacy_test_cache_for_val(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"legacy_test_guard_val_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        make_scene_dir(data_root / "scans", "scene1001_00")
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "version": referability_module.REFERABILITY_CACHE_VERSION,
+                    "model": "fake-vlm",
+                    "alias_config_version": "test",
+                    "referability_backend": "crop_vlm_with_mesh_ray",
+                    "label_batch_size": 1,
+                    "frames": {},
+                    "scene_status": {
+                        "scene1001_00": {
+                            "scene_id": "scene1001_00",
+                            "processed": True,
+                            "pipeline_outcome": "processed",
+                            "split": "test",
+                            "has_cache_frames": False,
+                            "final_cacheable_frame_count": 0,
+                            "scene_skip_reason": None,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--split",
+                "val",
+                "--output",
+                str(output_path),
+                "--resume",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "legacy split=test entries"):
+                referability_module.main()
+
+    def test_resume_rejects_legacy_test_cache_for_all(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"legacy_test_guard_all_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        make_scene_dir(data_root / "scans", "scene0001_00")
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "version": referability_module.REFERABILITY_CACHE_VERSION,
+                    "model": "fake-vlm",
+                    "alias_config_version": "test",
+                    "referability_backend": "crop_vlm_with_mesh_ray",
+                    "label_batch_size": 1,
+                    "frames": {},
+                    "scene_grouping": {
+                        "scene1001_00": {
+                            "scene_id": "scene1001_00",
+                            "split": "test",
+                            "pipeline_outcome": "processed",
+                            "scene_skip_reason": None,
+                            "final_cacheable_frame_count": 0,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--split",
+                "all",
+                "--output",
+                str(output_path),
+                "--resume",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "legacy split=test entries"):
+                referability_module.main()
 
     def test_final_scene_batch_logs_banner_and_processes_all_remaining_scenes(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"final_batch_banner_{uuid.uuid4().hex}"

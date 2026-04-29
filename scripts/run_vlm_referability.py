@@ -75,6 +75,10 @@ ATTACHMENT_REVIEW_STAGE = "post_attachment_enrichment"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION = "1.0"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME = "attachment_pair_salvage_review"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE = "post_attachment_referability"
+SCANNET_METADATA_SPLIT_FILES: dict[str, Path] = {
+    "train": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_train.txt"),
+    "val": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_val.txt"),
+}
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -175,16 +179,20 @@ def _write_json_payload(path: Path, payload: object) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
+def _referability_artifact_dir(output_path: Path) -> Path:
+    return output_path.parent / "referability"
+
+
 def _attachment_review_output_path(output_path: Path) -> Path:
-    return output_path.parent / f"{output_path.stem}_attachment_candidate_review.json"
+    return _referability_artifact_dir(output_path) / f"{output_path.stem}_attachment_candidate_review.json"
 
 
 def _attachment_pair_salvage_review_output_path(output_path: Path) -> Path:
-    return output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.json"
+    return _referability_artifact_dir(output_path) / f"{output_path.stem}_attachment_pair_salvage_review.json"
 
 
 def _attachment_pair_salvage_review_html_output_path(output_path: Path) -> Path:
-    return output_path.parent / f"{output_path.stem}_attachment_pair_salvage_review.html"
+    return _referability_artifact_dir(output_path) / f"{output_path.stem}_attachment_pair_salvage_review.html"
 
 
 def _scene_object_label(obj: dict[str, Any]) -> str:
@@ -2585,6 +2593,15 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
             return "-"
         return ", ".join(html.escape(str(value)) for value in values)
 
+    included_scene_ids: list[str] = []
+    seen_scene_ids: set[str] = set()
+    for scene in review_doc.get("scenes", []):
+        scene_id = str(scene.get("scene_id", "")).strip()
+        if not scene_id or scene_id in seen_scene_ids:
+            continue
+        seen_scene_ids.add(scene_id)
+        included_scene_ids.append(scene_id)
+
     pair_cards: list[str] = []
     scene_sections: list[str] = []
     for scene in review_doc.get("scenes", []):
@@ -2700,6 +2717,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     .summary,.scene-card,.group-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
     .summary{{padding:18px 20px;margin-bottom:22px;}}
     .summary-grid,.scene-meta,.group-meta,.pair-meta{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
+    .summary-scenes{{margin-top:16px;padding-top:14px;border-top:1px solid #e7dfd1;}}
     .scene-card{{padding:18px 20px;margin-bottom:24px;}}
     .group-card{{padding:16px 18px;margin:18px 0;}}
     .cover-grid,.crop-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:14px 0;}}
@@ -2730,6 +2748,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
         <div><strong>VLM not salvageable:</strong> {int(review_doc.get("pair_count_vlm_not_salvageable", 0) or 0)}</div>
         <div><strong>VLM uncertain:</strong> {int(review_doc.get("pair_count_vlm_uncertain", 0) or 0)}</div>
       </div>
+      <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
     </section>
     {''.join(scene_sections) or '<div class="empty-state">No attachment pair salvage scenes recorded.</div>'}
   </div>
@@ -5621,57 +5640,91 @@ def _write_scene_grouping_summary(
 
 
 def _infer_default_split(data_root: Path) -> str:
-    if data_root.name == "scans_test":
-        return "test"
     return "train"
 
 
-def _resolve_scannet_scene_dirs(data_root: Path, split: str) -> list[tuple[str, Path]]:
-    if data_root.name == "scans":
-        split_roots = {
-            "train": data_root,
-            "test": data_root.parent / "scans_test",
-        }
-    elif data_root.name == "scans_test":
-        split_roots = {
-            "train": data_root.parent / "scans",
-            "test": data_root,
-        }
-    else:
-        nested_train_root = data_root / "scans"
-        nested_test_root = data_root / "scans_test"
-        has_flat_scene_dirs = data_root.exists() and any(
-            path.is_dir() and (path / "pose").exists()
-            for path in data_root.iterdir()
-        )
-        if has_flat_scene_dirs and not nested_train_root.exists() and not nested_test_root.exists():
-            split_roots = {
-                "train": data_root,
-                "test": data_root.parent / "scans_test",
-            }
-        else:
-            split_roots = {
-                "train": nested_train_root,
-                "test": nested_test_root,
-            }
+def _is_scannet_scene_dir(path: Path) -> bool:
+    return path.is_dir() and (path / "pose").exists()
 
-    split_order = ["train", "test"] if split == "all" else [split]
-    scene_entries: list[tuple[str, Path]] = []
-    for split_name in split_order:
-        split_root = split_roots[split_name]
-        if not split_root.exists() or not split_root.is_dir():
-            logger.warning(
-                "ScanNet split root for %s does not exist: %s",
-                split_name,
-                split_root,
-            )
+
+def _resolve_scannet_scene_root(data_root: Path) -> Path:
+    if data_root.name == "scans":
+        return data_root
+    nested_scans_root = data_root / "scans"
+    if nested_scans_root.exists() and nested_scans_root.is_dir():
+        return nested_scans_root
+    has_flat_scene_dirs = data_root.exists() and data_root.is_dir() and any(
+        _is_scannet_scene_dir(path)
+        for path in data_root.iterdir()
+    )
+    if has_flat_scene_dirs:
+        return data_root
+    return nested_scans_root
+
+
+def _read_scannet_split_scene_ids(split: str) -> list[str]:
+    split_file = SCANNET_METADATA_SPLIT_FILES.get(split)
+    if split_file is None:
+        raise ValueError(f"Unsupported ScanNet split metadata request: {split}")
+    try:
+        raw_lines = split_file.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"ScanNet split metadata file for {split} does not exist: {split_file}"
+        ) from exc
+
+    scene_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_line in raw_lines:
+        scene_id = raw_line.strip()
+        if not scene_id or scene_id in seen:
             continue
-        split_scene_dirs = sorted(
-            path for path in split_root.iterdir()
-            if path.is_dir() and (path / "pose").exists()
-        )
+        seen.add(scene_id)
+        scene_ids.append(scene_id)
+    return scene_ids
+
+
+def _resolve_scannet_scene_dirs(data_root: Path, split: str) -> list[tuple[str, Path]]:
+    scene_root = _resolve_scannet_scene_root(data_root)
+    split_order = ["train", "val"] if split == "all" else [split]
+    scene_entries: list[tuple[str, Path]] = []
+    if not scene_root.exists() or not scene_root.is_dir():
+        logger.warning("ScanNet scene root does not exist: %s", scene_root)
+        return scene_entries
+
+    available_scene_dirs = {
+        path.name: path
+        for path in scene_root.iterdir()
+        if _is_scannet_scene_dir(path)
+    }
+    for split_name in split_order:
+        split_scene_ids = _read_scannet_split_scene_ids(split_name)
+        split_scene_dirs = [
+            available_scene_dirs[scene_id]
+            for scene_id in sorted(scene_id for scene_id in split_scene_ids if scene_id in available_scene_dirs)
+        ]
+        if not split_scene_dirs:
+            logger.warning(
+                "Found no ScanNet scenes under %s for split=%s after metadata filtering",
+                scene_root,
+                split_name,
+            )
         scene_entries.extend((split_name, path) for path in split_scene_dirs)
     return scene_entries
+
+
+def _cache_contains_legacy_test_split(cache: dict[str, Any]) -> bool:
+    for field_name in ("scene_status", "scene_grouping"):
+        field_value = cache.get(field_name)
+        if not isinstance(field_value, dict):
+            continue
+        for record in field_value.values():
+            if not isinstance(record, dict):
+                continue
+            split_value = str(record.get("split") or "").strip().lower()
+            if split_value == "test":
+                return True
+    return False
 
 
 def _build_scene_status_record(
@@ -5993,13 +6046,13 @@ def main():
     parser.add_argument(
         "--data_root", type=str,
         default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
-        help="ScanNet data root or split root; supports .../data, .../data/scans, or .../data/scans_test",
+        help="ScanNet scene root; supports .../data, .../data/scans, or a directory containing scene folders directly",
     )
     parser.add_argument(
         "--split",
-        choices=("train", "test", "all"),
-        default=None,
-        help="ScanNet split to process; defaults to an inferred split based on --data_root",
+        choices=("train", "val", "all"),
+        default="train",
+        help="ScanNet split to process using fixed metadata scene lists; --split all runs train first, then val",
     )
     parser.add_argument(
         "--output", type=str, required=True,
@@ -6060,13 +6113,21 @@ def main():
     parser.set_defaults(write_attachment_review=True)
     parser.add_argument(
         "--attachment_review_output", type=str, default=None,
-        help="Optional path for the attachment candidate review JSON; defaults beside --output",
+        help="Optional path for the attachment candidate review JSON; defaults under the referability artifact folder beside --output",
     )
     parser.add_argument(
         "--write_attachment_pair_salvage_review",
+        dest="write_attachment_pair_salvage_review",
         action="store_true",
-        help="Write group-level attachment pair salvage review JSON and HTML alongside the referability cache",
+        help="Write group-level attachment pair salvage review JSON and HTML under the default referability artifact folder beside --output",
     )
+    parser.add_argument(
+        "--no-write_attachment_pair_salvage_review",
+        dest="write_attachment_pair_salvage_review",
+        action="store_false",
+        help="Disable the group-level attachment pair salvage review JSON and HTML outputs",
+    )
+    parser.set_defaults(write_attachment_pair_salvage_review=True)
     parser.add_argument(
         "--attachment_pair_salvage_bbox_hard_fail_min",
         type=float,
@@ -6164,6 +6225,12 @@ def main():
     if migrated_scene_status and args.resume and output_path.exists():
         logger.info("Migrated legacy cache scene progress into scene_status")
         _write_json_payload(output_path, cache)
+    if selected_split in {"val", "all"} and _cache_contains_legacy_test_split(cache):
+        raise RuntimeError(
+            "Cannot resume a cache containing legacy split=test entries while running "
+            f"--split {selected_split}. Use a new output path to avoid mixing legacy test cache "
+            "content with metadata-based val processing."
+        )
     if not isinstance(cache.get("scene_grouping"), dict):
         cache["scene_grouping"] = {}
     if not isinstance(cache.get("scene_status"), dict):
@@ -6180,6 +6247,7 @@ def main():
             terminal_output_lines=attachment_review_terminal_lines,
         )
         _write_json_payload(attachment_review_output, review_doc)
+        logger.info("Saved attachment candidate review to %s", attachment_review_output)
 
     def _finalize_attachment_review_scene(record: dict[str, Any]) -> None:
         if not args.write_attachment_review:
@@ -6198,10 +6266,13 @@ def main():
             scenes=attachment_pair_salvage_review_scenes,
         )
         _write_json_payload(attachment_pair_salvage_review_output, review_doc)
+        attachment_pair_salvage_review_html_output.parent.mkdir(parents=True, exist_ok=True)
         attachment_pair_salvage_review_html_output.write_text(
             _render_attachment_pair_salvage_review_html(review_doc),
             encoding="utf-8",
         )
+        logger.info("Saved attachment pair salvage review JSON to %s", attachment_pair_salvage_review_output)
+        logger.info("Saved attachment pair salvage review HTML to %s", attachment_pair_salvage_review_html_output)
 
     def _finalize_attachment_pair_salvage_review_scene(
         *,
