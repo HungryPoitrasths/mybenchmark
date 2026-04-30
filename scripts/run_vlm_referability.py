@@ -18,6 +18,7 @@ import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import html
+from html.parser import HTMLParser
 import inspect
 import json
 import logging
@@ -101,6 +102,8 @@ REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT = 64
 REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT = 512
 REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
+ATTACHMENT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
+ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
 NON_ATTACHMENT_GROUP_EARLY_STOP_CLARITY_SCORE = 70
 NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT = 2
 FRAME_USABLE_BONUS = 100000
@@ -270,6 +273,73 @@ def _build_attachment_final_frame_selection_payload(
         "selected_for_final_cache": selected_for_final_cache,
         "selection_rank": rank if selected_for_final_cache else None,
     }
+
+
+def _normalize_attachment_human_review_cards(value: object) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return normalized
+
+    seen: set[tuple[int, int, str, str]] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        try:
+            parent_id = int(item.get("parent_id"))
+            child_id = int(item.get("child_id"))
+        except (TypeError, ValueError):
+            continue
+        parent_surface_text = str(item.get("parent_surface_text", "")).strip()
+        child_surface_text = str(item.get("child_surface_text", "")).strip()
+        if not parent_surface_text or not child_surface_text:
+            continue
+        dedupe_key = (parent_id, child_id, parent_surface_text, child_surface_text)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(
+            {
+                "pair_id": str(item.get("pair_id", f"{parent_id}->{child_id}")).strip() or f"{parent_id}->{child_id}",
+                "parent_id": parent_id,
+                "parent_label": str(item.get("parent_label", "")).strip(),
+                "parent_surface_text": parent_surface_text,
+                "child_id": child_id,
+                "child_label": str(item.get("child_label", "")).strip(),
+                "child_surface_text": child_surface_text,
+                "source": str(item.get("source", "")).strip() or "human_salvage_html",
+            }
+        )
+    normalized.sort(
+        key=lambda item: (
+            int(item["parent_id"]),
+            int(item["child_id"]),
+            str(item["parent_surface_text"]).lower(),
+            str(item["child_surface_text"]).lower(),
+        )
+    )
+    return normalized
+
+
+def _attachment_human_review_object_ids(cards: object) -> list[int]:
+    object_ids: set[int] = set()
+    for item in _normalize_attachment_human_review_cards(cards):
+        object_ids.add(int(item["parent_id"]))
+        object_ids.add(int(item["child_id"]))
+    return sorted(object_ids)
+
+
+def _attachment_human_review_surface_text_by_object_id(cards: object) -> dict[int, str]:
+    surface_text_by_obj_id: dict[int, str] = {}
+    for item in _normalize_attachment_human_review_cards(cards):
+        parent_id = int(item["parent_id"])
+        child_id = int(item["child_id"])
+        parent_surface_text = str(item["parent_surface_text"]).strip()
+        child_surface_text = str(item["child_surface_text"]).strip()
+        if parent_id not in surface_text_by_obj_id and parent_surface_text:
+            surface_text_by_obj_id[parent_id] = parent_surface_text
+        if child_id not in surface_text_by_obj_id and child_surface_text:
+            surface_text_by_obj_id[child_id] = child_surface_text
+    return dict(sorted(surface_text_by_obj_id.items()))
 
 
 def _apply_attachment_layer_payloads(
@@ -1656,6 +1726,19 @@ def _derive_final_referability_fields(entry: Any) -> dict[str, Any]:
         visibility_audit_by_object_id=entry.get("visibility_audit_by_object_id"),
         bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
     )
+    attachment_human_review_cards = _normalize_attachment_human_review_cards(
+        entry.get("attachment_human_review_cards")
+    )
+    attachment_referable_object_ids = sorted(
+        {
+            int(obj_id)
+            for obj_id in attachment_referable_object_ids
+        }
+        | {
+            int(obj_id)
+            for obj_id in _attachment_human_review_object_ids(attachment_human_review_cards)
+        }
+    )
 
     derived = {
         "label_to_object_ids": label_to_object_ids,
@@ -1971,6 +2054,131 @@ def _sample_group_frames(frames: list[dict[str, Any]]) -> tuple[list[dict[str, A
     return sampled_frames, group_frame_stride
 
 
+def _attachment_pair_set_for_frame(
+    frame: dict[str, Any],
+    attachment_graph: dict[int, list[int]] | None,
+) -> tuple[tuple[int, int], ...] | None:
+    visible_object_ids = _visible_object_frame_group_key(frame)
+    if visible_object_ids is None:
+        return None
+    return tuple(_attachment_pairs_for_visible_group(attachment_graph, visible_object_ids))
+
+
+def _attachment_frame_pose_angle_deg(
+    frame_a: dict[str, Any],
+    frame_b: dict[str, Any],
+    poses: dict[str, CameraPose] | None,
+) -> float | None:
+    if not poses:
+        return None
+    image_name_a = str(frame_a.get("image_name", "")).strip()
+    image_name_b = str(frame_b.get("image_name", "")).strip()
+    if not image_name_a or not image_name_b:
+        return None
+    pose_a = poses.get(image_name_a)
+    pose_b = poses.get(image_name_b)
+    if pose_a is None or pose_b is None:
+        return None
+    forward_a = np.asarray(pose_a.rotation, dtype=np.float64).T[:, 2]
+    forward_b = np.asarray(pose_b.rotation, dtype=np.float64).T[:, 2]
+    denom = float(np.linalg.norm(forward_a) * np.linalg.norm(forward_b))
+    if denom <= 0.0:
+        return None
+    cosine = float(np.clip(np.dot(forward_a, forward_b) / denom, -1.0, 1.0))
+    return float(np.degrees(np.arccos(cosine)))
+
+
+def _attachment_frame_merge_metrics(
+    anchor_frame: dict[str, Any],
+    candidate_frame: dict[str, Any],
+    poses: dict[str, CameraPose] | None,
+) -> tuple[bool, float | None, int] | None:
+    anchor_visible_ids = _visible_object_frame_group_key(anchor_frame)
+    candidate_visible_ids = _visible_object_frame_group_key(candidate_frame)
+    if anchor_visible_ids is None or candidate_visible_ids is None:
+        return None
+
+    symmetric_diff_size = len(set(anchor_visible_ids) ^ set(candidate_visible_ids))
+    if symmetric_diff_size > ATTACHMENT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF:
+        return None
+
+    angle_deg = _attachment_frame_pose_angle_deg(anchor_frame, candidate_frame, poses)
+    if angle_deg is None:
+        if symmetric_diff_size == 0:
+            return True, None, symmetric_diff_size
+        return None
+    if angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG:
+        return None
+    return True, angle_deg, symmetric_diff_size
+
+
+def _build_attachment_frame_groups(
+    *,
+    frames: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]] | None,
+    poses: dict[str, CameraPose] | None,
+) -> list[dict[str, Any]]:
+    pair_buckets: dict[tuple[tuple[int, int], ...], list[dict[str, Any]]] = {}
+    for frame in frames:
+        pair_set_key = _attachment_pair_set_for_frame(frame, attachment_graph)
+        if pair_set_key is None:
+            continue
+        pair_buckets.setdefault(pair_set_key, []).append(frame)
+
+    merged_groups: list[dict[str, Any]] = []
+    for pair_set_key, bucket_frames in pair_buckets.items():
+        bucket_clusters: list[dict[str, Any]] = []
+        for frame in bucket_frames:
+            frame_visible_ids = _visible_object_frame_group_key(frame)
+            if frame_visible_ids is None:
+                continue
+            matching_clusters: list[tuple[float, int, int]] = []
+            for cluster_index, cluster in enumerate(bucket_clusters):
+                metrics = _attachment_frame_merge_metrics(
+                    cluster["anchor_frame"],
+                    frame,
+                    poses,
+                )
+                if metrics is None:
+                    continue
+                _merge_allowed, angle_deg, symmetric_diff_size = metrics
+                matching_clusters.append(
+                    (
+                        float("inf") if angle_deg is None else float(angle_deg),
+                        int(symmetric_diff_size),
+                        int(cluster_index),
+                    )
+                )
+            if matching_clusters:
+                _, _, best_cluster_index = min(matching_clusters)
+                best_cluster = bucket_clusters[best_cluster_index]
+                best_cluster["frames"].append(frame)
+                best_cluster["visible_object_ids"].update(frame_visible_ids)
+                continue
+            bucket_clusters.append(
+                {
+                    "anchor_frame": frame,
+                    "frames": [frame],
+                    "visible_object_ids": set(frame_visible_ids),
+                }
+            )
+
+        for cluster in bucket_clusters:
+            visible_object_ids = sorted(int(obj_id) for obj_id in cluster["visible_object_ids"])
+            merged_groups.append(
+                {
+                    "frames": list(cluster["frames"]),
+                    "visible_object_ids": visible_object_ids,
+                    "group_pairs": _attachment_pairs_for_visible_group(
+                        attachment_graph,
+                        visible_object_ids,
+                    ),
+                    "pair_set_key": [list(pair) for pair in pair_set_key],
+                }
+            )
+    return merged_groups
+
+
 def _select_attachment_group_representatives(
     *,
     client,
@@ -1978,6 +2186,7 @@ def _select_attachment_group_representatives(
     scene_dir: Path,
     frames: list[dict[str, Any]],
     attachment_graph: dict[int, list[int]] | None,
+    poses: dict[str, CameraPose] | None = None,
     attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     max_accepted_frame_count: int | None = None,
     vlm_workers: int = 1,
@@ -1986,23 +2195,24 @@ def _select_attachment_group_representatives(
         return []
 
     color_dir = scene_dir / "color"
-    grouped_frames: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for frame in frames:
-        group_key = _visible_object_frame_group_key(frame)
-        if group_key is None:
-            continue
-        grouped_frames.setdefault(group_key, []).append(frame)
-    grouped_items = list(grouped_frames.items())
+    grouped_items = list(
+        enumerate(
+            _build_attachment_frame_groups(
+                frames=frames,
+                attachment_graph=attachment_graph,
+                poses=poses,
+            )
+        )
+    )
     accepted_target: int | None = None
     if max_accepted_frame_count is not None:
         accepted_target = max(0, int(max_accepted_frame_count))
         if accepted_target <= 0:
             return []
 
-    def _select_group(
-        item: tuple[int, tuple[tuple[Any, ...], list[dict[str, Any]]]]
-    ) -> dict[str, Any] | None:
-        group_id, (_group_key, group_frames) = item
+    def _select_group(item: tuple[int, dict[str, Any]]) -> dict[str, Any] | None:
+        group_id, group_doc = item
+        group_frames = list(group_doc.get("frames", []))
         sampled_frames, _group_frame_stride = _sample_group_frames(group_frames)
         for frame in sampled_frames:
             reviewed_frame = _review_frame_clarity(
@@ -2050,12 +2260,7 @@ def _select_attachment_group_representatives(
             if remaining_target is not None
             else len(grouped_items) - next_group_index
         )
-        batch_items = list(
-            enumerate(
-                grouped_items[next_group_index : next_group_index + batch_size],
-                start=next_group_index,
-            )
-        )
+        batch_items = grouped_items[next_group_index : next_group_index + batch_size]
         batch_results = _run_in_thread_pool(
             batch_items,
             _select_group,
@@ -2220,21 +2425,20 @@ def _build_attachment_pair_salvage_scene_review(
     attachment_graph: dict[int, list[int]] | None,
     attachment_edges: list[dict[str, Any]],
     frames: list[dict[str, Any]],
+    poses: dict[str, CameraPose] | None,
     attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None,
     bbox_hard_fail_min: float,
     projected_area_hard_fail_min: float,
 ) -> dict[str, Any]:
-    grouped_frames: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for frame in frames:
-        group_key = _visible_object_frame_group_key(frame)
-        if group_key is None:
-            continue
-        grouped_frames.setdefault(group_key, []).append(frame)
-
     relation_type_map = _attachment_edge_relation_type_map(attachment_edges)
     color_dir = scene_dir / "color"
     image_cache: dict[str, np.ndarray | None] = {}
     terminal_output_lines: list[str] = []
+    grouped_frames = _build_attachment_frame_groups(
+        frames=frames,
+        attachment_graph=attachment_graph,
+        poses=poses,
+    )
 
     def _load_scene_image(image_name: str) -> np.ndarray | None:
         if image_name not in image_cache:
@@ -2242,8 +2446,15 @@ def _build_attachment_pair_salvage_scene_review(
         return image_cache[image_name]
 
     groups: list[dict[str, Any]] = []
-    for group_index, (group_key, group_frames) in enumerate(grouped_frames.items()):
-        group_pairs = _attachment_pairs_for_visible_group(attachment_graph, group_key)
+    for group_index, grouped_frame_doc in enumerate(grouped_frames):
+        group_frames = list(grouped_frame_doc.get("frames", []))
+        group_visible_object_ids = [
+            int(obj_id) for obj_id in grouped_frame_doc.get("visible_object_ids", [])
+        ]
+        group_pairs = [
+            (int(parent_id), int(child_id))
+            for parent_id, child_id in grouped_frame_doc.get("group_pairs", [])
+        ]
         if not group_pairs:
             continue
 
@@ -2321,7 +2532,7 @@ def _build_attachment_pair_salvage_scene_review(
             annotated = _annotate_attachment_pair_salvage_frame(
                 image,
                 entry=entry,
-                visible_object_ids=[int(obj_id) for obj_id in group_key],
+                visible_object_ids=group_visible_object_ids,
                 objects_by_id=objects_by_id,
             )
             selected_cover_images.append(
@@ -2396,10 +2607,10 @@ def _build_attachment_pair_salvage_scene_review(
             {
                 "group_id": f"{scene_id}:group_{group_index}",
                 "group_index": int(group_index),
-                "visible_object_ids": [int(obj_id) for obj_id in group_key],
+                "visible_object_ids": group_visible_object_ids,
                 "visible_object_labels": [
                     f"{_scene_object_label(objects_by_id.get(int(obj_id), {})).lower()}#{int(obj_id)}"
-                    for obj_id in group_key
+                    for obj_id in group_visible_object_ids
                 ],
                 "group_frame_image_names": [
                     str(frame.get("image_name", "")).strip()
@@ -2694,6 +2905,205 @@ def _attachment_pair_renderable_cover(
     return None
 
 
+class _AttachmentPairSalvageHtmlParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.cards: list[dict[str, Any]] = []
+        self._current_card: dict[str, Any] | None = None
+        self._card_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_map = {str(key): ("" if value is None else str(value)) for key, value in attrs}
+        classes = {
+            item.strip()
+            for item in str(attrs_map.get("class", "")).split()
+            if item.strip()
+        }
+        if tag == "article" and "pair-card" in classes and self._current_card is None:
+            self._current_card = {
+                "scene_id": str(attrs_map.get("data-scene-id", "")).strip(),
+                "image_name": str(attrs_map.get("data-image-name", "")).strip(),
+                "group_id": str(attrs_map.get("data-group-id", "")).strip(),
+                "pair_id": str(attrs_map.get("data-pair-id", "")).strip(),
+                "parent_id": str(attrs_map.get("data-parent-id", "")).strip(),
+                "parent_label": str(attrs_map.get("data-parent-label", "")).strip(),
+                "child_id": str(attrs_map.get("data-child-id", "")).strip(),
+                "child_label": str(attrs_map.get("data-child-label", "")).strip(),
+                "deleted": str(attrs_map.get("data-deleted", "")).strip().lower() == "true",
+                "parent_surface_text": "",
+                "child_surface_text": "",
+            }
+            self._card_depth = 1
+            return
+
+        if self._current_card is None:
+            return
+
+        if tag == "article":
+            self._card_depth += 1
+            return
+        if tag != "input":
+            return
+
+        name = str(attrs_map.get("name", "")).strip().lower()
+        value = html.unescape(str(attrs_map.get("value", ""))).strip()
+        if name == "parent_surface_text":
+            self._current_card["parent_surface_text"] = value
+        elif name == "child_surface_text":
+            self._current_card["child_surface_text"] = value
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "article" or self._current_card is None:
+            return
+        self._card_depth -= 1
+        if self._card_depth > 0:
+            return
+        self.cards.append(dict(self._current_card))
+        self._current_card = None
+        self._card_depth = 0
+
+
+def _parse_attachment_pair_salvage_review_html(html_text: str) -> list[dict[str, Any]]:
+    parser = _AttachmentPairSalvageHtmlParser()
+    parser.feed(str(html_text))
+    parser.close()
+    return parser.cards
+
+
+def _apply_attachment_pair_salvage_html_review(
+    *,
+    html_text: str,
+    cache_doc: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(cache_doc, dict):
+        raise ValueError("referability cache must be a JSON object")
+    if str(cache_doc.get("version", "")).strip() != REFERABILITY_CACHE_VERSION:
+        raise ValueError(
+            f"Referability cache version mismatch: expected {REFERABILITY_CACHE_VERSION}, "
+            f"got {str(cache_doc.get('version', '') or '<missing>').strip()}."
+        )
+    frames = cache_doc.get("frames")
+    if not isinstance(frames, dict):
+        raise ValueError("referability cache is missing a frames mapping")
+
+    kept_by_frame: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    seen_pair_texts: dict[tuple[str, str, int, int], tuple[str, str]] = {}
+    for card in _parse_attachment_pair_salvage_review_html(html_text):
+        if bool(card.get("deleted", False)):
+            continue
+        scene_id = str(card.get("scene_id", "")).strip()
+        image_name = str(card.get("image_name", "")).strip()
+        if not scene_id or not image_name:
+            continue
+        try:
+            parent_id = int(card.get("parent_id"))
+            child_id = int(card.get("child_id"))
+        except (TypeError, ValueError):
+            continue
+        parent_surface_text = str(card.get("parent_surface_text", "")).strip()
+        child_surface_text = str(card.get("child_surface_text", "")).strip()
+        if not parent_surface_text or not child_surface_text:
+            continue
+
+        pair_key = (scene_id, image_name, parent_id, child_id)
+        pair_texts = (parent_surface_text, child_surface_text)
+        existing_pair_texts = seen_pair_texts.get(pair_key)
+        if existing_pair_texts is not None and existing_pair_texts != pair_texts:
+            raise ValueError(
+                "Conflicting human review texts for "
+                f"{scene_id}/{image_name} pair {parent_id}->{child_id}: "
+                f"{existing_pair_texts[0]!r}/{existing_pair_texts[1]!r} vs "
+                f"{parent_surface_text!r}/{child_surface_text!r}"
+            )
+        seen_pair_texts[pair_key] = pair_texts
+        kept_by_frame[(scene_id, image_name)].append(
+            {
+                "pair_id": str(card.get("pair_id", f"{parent_id}->{child_id}")).strip() or f"{parent_id}->{child_id}",
+                "parent_id": parent_id,
+                "parent_label": str(card.get("parent_label", "")).strip(),
+                "parent_surface_text": parent_surface_text,
+                "child_id": child_id,
+                "child_label": str(card.get("child_label", "")).strip(),
+                "child_surface_text": child_surface_text,
+                "source": "human_salvage_html",
+            }
+        )
+
+    updated_cache = json.loads(json.dumps(cache_doc, ensure_ascii=False))
+    updated_frames = updated_cache.get("frames", {})
+    for (scene_id, image_name), review_cards in kept_by_frame.items():
+        scene_frames = updated_frames.get(scene_id)
+        if not isinstance(scene_frames, dict):
+            raise ValueError(f"Scene {scene_id} not found in referability cache")
+        entry = scene_frames.get(image_name)
+        if not isinstance(entry, dict):
+            raise ValueError(f"Frame {scene_id}/{image_name} not found in referability cache")
+
+        normalized_cards = _normalize_attachment_human_review_cards(review_cards)
+        surface_text_by_obj_id: dict[int, str] = {}
+        for item in normalized_cards:
+            parent_id = int(item["parent_id"])
+            child_id = int(item["child_id"])
+            parent_surface_text = str(item["parent_surface_text"]).strip()
+            child_surface_text = str(item["child_surface_text"]).strip()
+            parent_existing = surface_text_by_obj_id.get(parent_id)
+            if parent_existing is not None and parent_existing != parent_surface_text:
+                raise ValueError(
+                    f"Conflicting parent surface text for {scene_id}/{image_name} object {parent_id}: "
+                    f"{parent_existing!r} vs {parent_surface_text!r}"
+                )
+            child_existing = surface_text_by_obj_id.get(child_id)
+            if child_existing is not None and child_existing != child_surface_text:
+                raise ValueError(
+                    f"Conflicting child surface text for {scene_id}/{image_name} object {child_id}: "
+                    f"{child_existing!r} vs {child_surface_text!r}"
+                )
+            surface_text_by_obj_id[parent_id] = parent_surface_text
+            surface_text_by_obj_id[child_id] = child_surface_text
+
+        existing_pairs = [
+            [int(pair[0]), int(pair[1])]
+            for pair in (entry.get("attachment_referable_pairs") or [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
+        merged_pairs = sorted(
+            {
+                (int(pair[0]), int(pair[1]))
+                for pair in existing_pairs
+            }
+            | {
+                (int(item["parent_id"]), int(item["child_id"]))
+                for item in normalized_cards
+            }
+        )
+        merged_object_ids = sorted(
+            {
+                int(obj_id)
+                for obj_id in (entry.get("attachment_referable_object_ids") or [])
+            }
+            | {
+                int(obj_id)
+                for obj_id in _attachment_human_review_object_ids(normalized_cards)
+            }
+        )
+
+        updated_entry = dict(entry)
+        updated_entry["attachment_human_review_cards"] = normalized_cards
+        updated_entry["attachment_referable_pairs"] = [
+            [int(parent_id), int(child_id)]
+            for parent_id, child_id in merged_pairs
+        ]
+        updated_entry["attachment_referable_pair_count"] = len(updated_entry["attachment_referable_pairs"])
+        updated_entry["attachment_referable_object_ids"] = merged_object_ids
+        updated_entry["attachment_final_referability"] = _build_attachment_final_referability_payload(
+            attachment_referable_object_ids=merged_object_ids,
+            attachment_pairs=updated_entry["attachment_referable_pairs"],
+        )
+        scene_frames[image_name] = updated_entry
+
+    return updated_cache
+
+
 def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
     def _render_simple_list(values: list[str]) -> str:
         if not values:
@@ -2708,13 +3118,18 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     scene_sections: list[str] = []
     for scene in review_doc.get("scenes", []):
         scene_id = str(scene.get("scene_id", "")).strip()
-        group_cards: list[str] = []
+        rendered_group_ids: set[str] = set()
+        pair_cards: list[str] = []
         for group in scene.get("groups", []):
-            pair_cards: list[str] = []
+            group_id = str(group.get("group_id", "")).strip()
             for pair_row in group.get("dropped_pairs", []):
                 cover = _attachment_pair_renderable_cover(group, pair_row)
                 if cover is None:
                     continue
+                pair_id = str(pair_row.get("pair_id", "")).strip()
+                if not pair_id:
+                    continue
+                rendered_group_ids.add(group_id)
                 rendered_pair_count += 1
                 reason_text = _attachment_pair_reason_codes_to_zh(pair_row.get("program_reason_codes", []))
                 pair_cards.append(
@@ -2724,24 +3139,17 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     f'<div class="pair-image-name">{html.escape(cover["image_stem"] or cover["image_name"])}</div>'
                     "</div>"
                     '<div class="pair-copy">'
+                    f'<div class="pair-text"><strong>group</strong> {html.escape(group_id or "-")}</div>'
                     f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)} -> '
                     f'{html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)}</div>'
-                    f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_row.get("pair_id", ""))}</div>'
+                    f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
                     f'<div class="pair-text"><strong>筛除理由</strong> {html.escape(reason_text)}</div>'
                     "</div>"
                     "</div>"
                 )
-            if not pair_cards:
-                continue
-            rendered_group_count += 1
-            group_cards.append(
-                '<section class="group-card">'
-                f'<h3>{html.escape(group.get("group_id", ""))}</h3>'
-                f'<div class="pair-list">{"".join(pair_cards)}</div>'
-                "</section>"
-            )
-        if not group_cards:
+        if not pair_cards:
             continue
+        rendered_group_count += len(rendered_group_ids)
         rendered_scene_count += 1
         if scene_id and scene_id not in seen_scene_ids:
             seen_scene_ids.add(scene_id)
@@ -2749,7 +3157,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
         scene_sections.append(
             '<section class="scene-card">'
             f'<h2>{html.escape(scene_id)} [{html.escape(scene.get("pipeline_outcome", ""))}]</h2>'
-            + "".join(group_cards)
+            f'<div class="pair-list">{"".join(pair_cards)}</div>'
             + "</section>"
         )
 
@@ -2763,12 +3171,11 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     body{{margin:0;background:linear-gradient(180deg,#efe7dc 0%,#f7f3ee 48%,#f4efe8 100%);color:#1f2937;font:14px/1.5 Georgia, 'Times New Roman', serif;}}
     .page{{max-width:1200px;margin:0 auto;padding:28px 20px 60px;}}
     h1,h2,h3{{margin:0 0 12px;color:#111827;}}
-    .summary,.scene-card,.group-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
+    .summary,.scene-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
     .summary{{padding:18px 20px;margin-bottom:22px;}}
     .summary-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
     .summary-scenes{{margin-top:16px;padding-top:14px;border-top:1px solid #e7dfd1;}}
     .scene-card{{padding:18px 20px;margin-bottom:24px;}}
-    .group-card{{padding:16px 18px;margin:18px 0;}}
     .pair-list{{display:grid;gap:14px;margin-top:16px;}}
     .pair-card{{padding:14px 16px;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start;}}
     .pair-visual{{display:grid;gap:8px;}}
@@ -2798,6 +3205,198 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
   </div>
 </body>
 </html>"""
+
+
+def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
+    def _render_simple_list(values: list[str]) -> str:
+        if not values:
+            return "-"
+        return ", ".join(html.escape(str(value)) for value in values)
+
+    rendered_scene_count = 0
+    rendered_group_count = 0
+    rendered_pair_count = 0
+    included_scene_ids: list[str] = []
+    seen_scene_ids: set[str] = set()
+    scene_sections: list[str] = []
+    for scene in review_doc.get("scenes", []):
+        scene_id = str(scene.get("scene_id", "")).strip()
+        rendered_group_ids: set[str] = set()
+        pair_cards: list[str] = []
+        for group in scene.get("groups", []):
+            group_id = str(group.get("group_id", "")).strip()
+            for pair_row in group.get("dropped_pairs", []):
+                cover = _attachment_pair_renderable_cover(group, pair_row)
+                if cover is None:
+                    continue
+                pair_id = str(pair_row.get("pair_id", "")).strip()
+                if not pair_id:
+                    continue
+                rendered_group_ids.add(group_id)
+                rendered_pair_count += 1
+                reason_text = _attachment_pair_reason_codes_to_zh(pair_row.get("program_reason_codes", []))
+                parent_id = int(pair_row.get("parent_id", 0) or 0)
+                child_id = int(pair_row.get("child_id", 0) or 0)
+                parent_label = str(pair_row.get("parent_label", "")).strip()
+                child_label = str(pair_row.get("child_label", "")).strip()
+                pair_cards.append(
+                    f'<article class="pair-card" data-scene-id="{html.escape(scene_id)}" '
+                    f'data-image-name="{html.escape(cover["image_name"])}" '
+                    f'data-group-id="{html.escape(group_id)}" '
+                    f'data-pair-id="{html.escape(pair_id)}" '
+                    f'data-parent-id="{parent_id}" '
+                    f'data-parent-label="{html.escape(parent_label)}" '
+                    f'data-child-id="{child_id}" '
+                    f'data-child-label="{html.escape(child_label)}" '
+                    'data-deleted="false">'
+                    '<div class="pair-visual">'
+                    f'<img src="{html.escape(cover["data_url"])}" alt="{html.escape(cover["image_name"])}">'
+                    f'<div class="pair-image-name">{html.escape(cover["image_stem"] or cover["image_name"])}</div>'
+                    "</div>"
+                    '<div class="pair-copy">'
+                    f'<div class="pair-text"><strong>group</strong> {html.escape(group_id or "-")}</div>'
+                    f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(parent_label)}#{parent_id} -> '
+                    f'{html.escape(child_label)}#{child_id}</div>'
+                    f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
+                    f'<div class="pair-text"><strong>缁ႈ盯娅庨悶鍡欐暠</strong> {html.escape(reason_text)}</div>'
+                    '<div class="pair-editor">'
+                    '<label class="pair-editor-field">'
+                    '<span class="pair-editor-label">Parent Name</span>'
+                    f'<input type="text" name="parent_surface_text" class="pair-name-input pair-name-input-parent" value="{html.escape(parent_label)}">'
+                    "</label>"
+                    '<label class="pair-editor-field">'
+                    '<span class="pair-editor-label">Child Name</span>'
+                    f'<input type="text" name="child_surface_text" class="pair-name-input pair-name-input-child" value="{html.escape(child_label)}">'
+                    "</label>"
+                    '<div class="pair-editor-actions">'
+                    '<button type="button" class="pair-delete-toggle">Delete Card</button>'
+                    "</div>"
+                    "</div>"
+                    "</div>"
+                    "</article>"
+                )
+        if not pair_cards:
+            continue
+        rendered_group_count += len(rendered_group_ids)
+        rendered_scene_count += 1
+        if scene_id and scene_id not in seen_scene_ids:
+            seen_scene_ids.add(scene_id)
+            included_scene_ids.append(scene_id)
+        scene_sections.append(
+            '<section class="scene-card">'
+            f'<h2>{html.escape(scene_id)} [{html.escape(scene.get("pipeline_outcome", ""))}]</h2>'
+            f'<div class="pair-list">{"".join(pair_cards)}</div>'
+            + "</section>"
+        )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Attachment Pair Salvage Review</title>
+  <style>
+    body{{margin:0;background:linear-gradient(180deg,#efe7dc 0%,#f7f3ee 48%,#f4efe8 100%);color:#1f2937;font:14px/1.5 Georgia, 'Times New Roman', serif;}}
+    .page{{max-width:1200px;margin:0 auto;padding:28px 20px 60px;}}
+    h1,h2,h3{{margin:0 0 12px;color:#111827;}}
+    .summary,.scene-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
+    .summary{{padding:18px 20px;margin-bottom:22px;}}
+    .summary-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
+    .summary-scenes{{margin-top:16px;padding-top:14px;border-top:1px solid #e7dfd1;}}
+    .summary-actions{{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px;}}
+    .summary-action{{appearance:none;border:1px solid #c8a875;background:#a44a3f;color:#fff;border-radius:999px;padding:10px 16px;font:600 13px/1 Georgia, 'Times New Roman', serif;cursor:pointer;}}
+    .scene-card{{padding:18px 20px;margin-bottom:24px;}}
+    .pair-list{{display:grid;gap:14px;margin-top:16px;}}
+    .pair-card{{padding:14px 16px;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start;}}
+    .pair-card[data-deleted="true"]{{opacity:.42;filter:saturate(.4);}}
+    .pair-visual{{display:grid;gap:8px;}}
+    .pair-visual img{{width:100%;height:264px;object-fit:cover;display:block;border-radius:12px;background:#d1d5db;}}
+    .pair-image-name{{font-size:12px;color:#6b7280;letter-spacing:.02em;}}
+    .pair-copy{{display:grid;gap:10px;align-content:start;}}
+    .pair-text{{padding:10px 12px;border-radius:12px;background:#f8f6f1;border:1px solid #e7dfd1;}}
+    .pair-editor{{display:grid;gap:10px;padding:12px;border-radius:12px;background:#f4efe7;border:1px solid #ddcfbc;}}
+    .pair-editor-field{{display:grid;gap:6px;}}
+    .pair-editor-label{{font-size:12px;font-weight:700;color:#6b4f2a;letter-spacing:.02em;text-transform:uppercase;}}
+    .pair-name-input{{width:100%;box-sizing:border-box;border:1px solid #cab89f;border-radius:10px;padding:10px 12px;background:#fffaf2;color:#111827;font:14px/1.4 Georgia, 'Times New Roman', serif;}}
+    .pair-editor-actions{{display:flex;justify-content:flex-end;gap:8px;}}
+    .pair-delete-toggle{{appearance:none;border:1px solid #b85b52;background:#fff;color:#8d2f28;border-radius:999px;padding:8px 12px;font:600 12px/1 Georgia, 'Times New Roman', serif;cursor:pointer;}}
+    .empty-state{{padding:14px;border:1px dashed #c7bba7;border-radius:12px;background:#faf7f2;color:#6b7280;}}
+    @media (max-width: 720px){{
+      .pair-card{{grid-template-columns:1fr;}}
+      .pair-visual img{{height:auto;max-height:220px;}}
+    }}
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="summary">
+      <h1>Attachment Pair Salvage Review</h1>
+      <div class="summary-grid">
+        <div><strong>scene count:</strong> {rendered_scene_count}</div>
+        <div><strong>group count:</strong> {rendered_group_count}</div>
+        <div><strong>pair count:</strong> {rendered_pair_count}</div>
+      </div>
+      <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
+      <div class="summary-actions">
+        <button type="button" id="export-edited-html" class="summary-action">Export Edited HTML</button>
+      </div>
+    </section>
+    {''.join(scene_sections) or '<div class="empty-state">No attachment pair salvage scenes recorded.</div>'}
+  </div>
+  <script>
+    (() => {{
+      function persistCardState() {{
+        document.querySelectorAll('.pair-card').forEach((card) => {{
+          card.setAttribute('data-deleted', card.dataset.deleted === 'true' ? 'true' : 'false');
+          card.querySelectorAll('input.pair-name-input').forEach((input) => {{
+            input.setAttribute('value', input.value);
+          }});
+        }});
+      }}
+
+      document.querySelectorAll('.pair-delete-toggle').forEach((button) => {{
+        button.addEventListener('click', () => {{
+          const card = button.closest('.pair-card');
+          if (!card) {{
+            return;
+          }}
+          const deleted = card.dataset.deleted === 'true';
+          card.dataset.deleted = deleted ? 'false' : 'true';
+          button.textContent = deleted ? 'Delete Card' : 'Restore Card';
+        }});
+      }});
+
+      const exportButton = document.getElementById('export-edited-html');
+      if (exportButton) {{
+        exportButton.addEventListener('click', () => {{
+          persistCardState();
+          const htmlText = '<!doctype html>\\n' + document.documentElement.outerHTML;
+          const blob = new Blob([htmlText], {{ type: 'text/html;charset=utf-8' }});
+          const anchor = document.createElement('a');
+          anchor.href = URL.createObjectURL(blob);
+          anchor.download = 'attachment_pair_salvage_review_edited.html';
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+          setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
+        }});
+      }}
+    }})();
+  </script>
+</body>
+</html>"""
+
+
+_render_attachment_pair_salvage_review_html_impl = _render_attachment_pair_salvage_review_html
+
+
+def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
+    html_text = _render_attachment_pair_salvage_review_html_impl(review_doc)
+    return re.sub(
+        r'(<div class="pair-text"><strong>)(?!group</strong>|attachment pair</strong>|pair id</strong>).*?(</strong>)',
+        lambda match: f"{match.group(1)}筛除理由{match.group(2)}",
+        html_text,
+    )
 
 
 def _select_non_attachment_group_representatives(
@@ -6705,6 +7304,7 @@ def main():
             scene_dir=scene_dir,
             frames=attachment_candidate_frames,
             attachment_graph=attachment_graph,
+            poses=poses,
             attachment_entry_builder=_build_attachment_entry,
             max_accepted_frame_count=int(args.max_frames),
             vlm_workers=int(args.vlm_workers),
@@ -6721,6 +7321,7 @@ def main():
                 attachment_graph=attachment_graph,
                 attachment_edges=final_attachment_edges,
                 frames=attachment_candidate_frames,
+                poses=poses,
                 attachment_entry_builder=_build_attachment_entry,
                 bbox_hard_fail_min=float(args.attachment_pair_salvage_bbox_hard_fail_min),
                 projected_area_hard_fail_min=float(

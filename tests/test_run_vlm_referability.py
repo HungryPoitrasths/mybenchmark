@@ -14,10 +14,25 @@ import scripts.run_vlm_referability as referability_module
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 
 
-def make_camera_pose() -> CameraPose:
+def make_camera_pose(
+    *,
+    image_name: str = "000000.jpg",
+    yaw_deg: float = 0.0,
+) -> CameraPose:
+    yaw_rad = np.deg2rad(float(yaw_deg))
+    cos_yaw = float(np.cos(yaw_rad))
+    sin_yaw = float(np.sin(yaw_rad))
+    rotation = np.array(
+        [
+            [cos_yaw, 0.0, sin_yaw],
+            [0.0, 1.0, 0.0],
+            [-sin_yaw, 0.0, cos_yaw],
+        ],
+        dtype=np.float64,
+    )
     return CameraPose(
-        image_name="000000.jpg",
-        rotation=np.eye(3, dtype=np.float64),
+        image_name=image_name,
+        rotation=rotation,
         translation=np.zeros(3, dtype=np.float64),
     )
 
@@ -2537,26 +2552,123 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(stats_output["non_attachment_processed_group_count"], 2)
         self.assertEqual(stats_output["accepted_frame_count_after_group_scan"], 2)
 
-    def test_select_attachment_group_representatives_groups_by_visible_object_ids_and_limits_each_group_to_one_frame(self) -> None:
+    def test_build_attachment_frame_groups_merges_frames_with_same_pair_set_small_visible_diff_and_pose_angle(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000020.jpg", "visible_object_ids": [9, 2, 1]},
+        ]
+
+        groups = referability_module._build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph={1: [2]},
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+                "000020.jpg": make_camera_pose(image_name="000020.jpg", yaw_deg=12.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            [frame["image_name"] for frame in groups[0]["frames"]],
+            ["000000.jpg", "000010.jpg", "000020.jpg"],
+        )
+        self.assertEqual(groups[0]["visible_object_ids"], [1, 2, 9])
+        self.assertEqual(groups[0]["group_pairs"], [(1, 2)])
+
+    def test_build_attachment_frame_groups_keeps_separate_groups_when_pose_angle_exceeds_threshold(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9]},
+        ]
+
+        groups = referability_module._build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph={1: [2]},
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=25.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]["visible_object_ids"], [1, 2])
+        self.assertEqual(groups[1]["visible_object_ids"], [1, 2, 9])
+
+    def test_build_attachment_frame_groups_keeps_separate_groups_when_visible_symmetric_diff_is_too_large(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9, 10, 11, 12]},
+        ]
+
+        groups = referability_module._build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph={1: [2]},
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 2)
+
+    def test_build_attachment_frame_groups_never_merges_different_pair_sets(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 3]},
+        ]
+
+        groups = referability_module._build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph={1: [2, 3]},
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]["group_pairs"], [(1, 2)])
+        self.assertEqual(groups[1]["group_pairs"], [(1, 2), (1, 3)])
+
+    def test_build_attachment_frame_groups_missing_pose_only_allows_exact_visible_match(self) -> None:
+        mergeable_frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [2, 1]},
+        ]
+        non_mergeable_frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000020.jpg", "visible_object_ids": [1, 2, 9]},
+        ]
+
+        merged_groups = referability_module._build_attachment_frame_groups(
+            frames=mergeable_frames,
+            attachment_graph={1: [2]},
+            poses={"000000.jpg": make_camera_pose(image_name="000000.jpg")},
+        )
+        split_groups = referability_module._build_attachment_frame_groups(
+            frames=non_mergeable_frames,
+            attachment_graph={1: [2]},
+            poses={"000000.jpg": make_camera_pose(image_name="000000.jpg")},
+        )
+
+        self.assertEqual(len(merged_groups), 1)
+        self.assertEqual(merged_groups[0]["visible_object_ids"], [1, 2])
+        self.assertEqual(len(split_groups), 2)
+
+    def test_select_attachment_group_representatives_merges_near_duplicate_visible_groups_when_pair_set_and_pose_match(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
             {"image_name": "000020.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [9, 2, 1]},
         ]
-        frame_decisions = [
-            {
-                "clear": True,
-                "clarity_score": 72,
-                "frame_usable": True,
-                "reason": "clear",
-            },
-            {
-                "clear": True,
-                "clarity_score": 74,
-                "frame_usable": True,
-                "reason": "clear enough",
-            },
-        ]
+        frame_decisions = [{
+            "clear": True,
+            "clarity_score": 72,
+            "frame_usable": True,
+            "reason": "clear",
+        }]
 
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_group_visible_ids_{uuid.uuid4().hex}"
         root.mkdir(parents=True, exist_ok=False)
@@ -2581,8 +2693,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 build_calls.append(frame["image_name"])
                 if frame["image_name"] == "000000.jpg":
                     return {"attachment_referable_object_ids": [1, 2]}
-                if frame["image_name"] == "000010.jpg":
-                    return {"attachment_referable_object_ids": [1, 2]}
                 raise AssertionError(f"unexpected frame {frame['image_name']}")
 
             selected = referability_module._select_attachment_group_representatives(
@@ -2591,13 +2701,18 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 scene_dir=scene_dir,
                 frames=frames,
                 attachment_graph={1: [2]},
+                poses={
+                    "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                    "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+                    "000020.jpg": make_camera_pose(image_name="000020.jpg", yaw_deg=12.0),
+                },
                 attachment_entry_builder=build_entry,
             )
 
-        self.assertEqual(frame_decision_mock.call_count, 2)
-        self.assertEqual(build_calls, ["000000.jpg", "000010.jpg"])
-        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000010.jpg"])
-        self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [0, 1])
+        self.assertEqual(frame_decision_mock.call_count, 1)
+        self.assertEqual(build_calls, ["000000.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
+        self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [0])
 
     def test_select_attachment_group_representatives_checks_group_frames_until_first_clear_pair_frame(self) -> None:
         frames = [
@@ -2858,6 +2973,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 attachment_graph={1: [2]},
                 attachment_edges=[{"parent_id": 1, "child_id": 2, "type": "supported_by"}],
                 frames=frames,
+                poses={"000001.jpg": make_camera_pose(image_name="000001.jpg")},
                 attachment_entry_builder=lambda frame, reviewed_frame: dict(entry),
                 bbox_hard_fail_min=0.15,
                 projected_area_hard_fail_min=800.0,
@@ -2867,6 +2983,75 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(group["selected_cover_image_names"], ["000001.jpg"])
         self.assertEqual(group["clarity_pass_image_names"], ["000001.jpg"])
         self.assertEqual(scene_review["pair_count_kept"], 1)
+
+    def test_build_attachment_pair_salvage_scene_review_merges_attachment_groups_and_uses_visible_id_union(self) -> None:
+        objects = [make_object(1, "table"), make_object(2, "book"), make_object(9, "lamp")]
+        frames = [
+            {"image_name": "000001.jpg", "visible_object_ids": [1, 2], "score": 10, "attachment_viewpoint_exempt": True},
+            {"image_name": "000002.jpg", "visible_object_ids": [1, 2, 9], "score": 9, "attachment_viewpoint_exempt": True},
+        ]
+        entries = {
+            "000001.jpg": make_attachment_pair_salvage_entry(
+                candidate_visible_object_ids=[1, 2],
+                crop_label_statuses={"table": "unique", "book": "unique"},
+                full_frame_label_statuses={"table": "unique", "book": "unique"},
+                label_statuses={"table": "unique", "book": "unique"},
+                attachment_referable_pairs=[[1, 2]],
+            ),
+            "000002.jpg": make_attachment_pair_salvage_entry(
+                candidate_visible_object_ids=[1, 2, 9],
+                crop_label_statuses={"table": "unique", "book": "unique", "lamp": "unique"},
+                full_frame_label_statuses={"table": "unique", "book": "unique", "lamp": "unique"},
+                label_statuses={"table": "unique", "book": "unique", "lamp": "unique"},
+                attachment_referable_pairs=[[1, 2]],
+            ),
+        }
+        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_merged_groups_{uuid.uuid4().hex}"
+        scene_dir = make_scene_dir(root, "scene0001_00")
+        self.addCleanup(shutil.rmtree, root, True)
+
+        with (
+            patch.object(
+                referability_module,
+                "_review_frame_clarity",
+                side_effect=[
+                    {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 84, "frame_usable": True, "reason": "clear"}},
+                    {"image_name": "000002.jpg", "frame_info": {"clear": True, "clarity_score": 83, "frame_usable": True, "reason": "clear"}},
+                ],
+            ),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+            ),
+        ):
+            scene_review = referability_module._build_attachment_pair_salvage_scene_review(
+                client=object(),
+                model_name="fake-vlm",
+                scene_id="scene0001_00",
+                split="train",
+                scene_dir=scene_dir,
+                objects=objects,
+                objects_by_id={obj["id"]: obj for obj in objects},
+                attachment_graph={1: [2]},
+                attachment_edges=[{"parent_id": 1, "child_id": 2, "type": "supported_by"}],
+                frames=frames,
+                poses={
+                    "000001.jpg": make_camera_pose(image_name="000001.jpg", yaw_deg=0.0),
+                    "000002.jpg": make_camera_pose(image_name="000002.jpg", yaw_deg=10.0),
+                },
+                attachment_entry_builder=lambda frame, reviewed_frame: dict(entries[frame["image_name"]]),
+                bbox_hard_fail_min=0.15,
+                projected_area_hard_fail_min=800.0,
+            )
+
+        self.assertEqual(scene_review["group_count_total"], 1)
+        self.assertEqual(scene_review["pair_count_total"], 1)
+        group = scene_review["groups"][0]
+        self.assertEqual(group["visible_object_ids"], [1, 2, 9])
+        self.assertEqual(group["group_frame_image_names"], ["000001.jpg", "000002.jpg"])
+        self.assertEqual(group["pair_count_total"], 1)
+        self.assertEqual([pair["pair_id"] for pair in group["pairs"]], ["1->2"])
 
     def test_build_attachment_pair_salvage_scene_review_uses_multi_image_cover_when_needed(self) -> None:
         objects = [make_object(1, "table"), make_object(2, "book"), make_object(3, "lamp")]
@@ -2919,6 +3104,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
                     {"parent_id": 1, "child_id": 3, "type": "next_to"},
                 ],
                 frames=frames,
+                poses={
+                    "000001.jpg": make_camera_pose(image_name="000001.jpg"),
+                    "000002.jpg": make_camera_pose(image_name="000002.jpg"),
+                },
                 attachment_entry_builder=lambda frame, reviewed_frame: dict(entries[frame["image_name"]]),
                 bbox_hard_fail_min=0.15,
                 projected_area_hard_fail_min=800.0,
@@ -3295,6 +3484,160 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "筛除理由</strong> 没有可覆盖该 attachment pair 的清晰图像，子物体最终判定中存在多个同类目标，mystery_reason_code",
             html_text,
         )
+
+    def test_render_attachment_pair_salvage_review_html_keeps_same_pair_as_separate_cards(
+        self,
+    ) -> None:
+        review_doc = {
+            "scenes": [
+                {
+                    "scene_id": "scene0003_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0003_00:group_0",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "000301.jpg",
+                                    "image_stem": "000301",
+                                    "data_url": "data:image/jpeg;base64,cover_a",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "10->11",
+                                    "parent_id": 10,
+                                    "parent_label": "table",
+                                    "child_id": 11,
+                                    "child_label": "book",
+                                    "first_covered_image_name": "000301.jpg",
+                                    "program_reason_codes": ["coverage_uncertain"],
+                                }
+                            ],
+                        },
+                        {
+                            "group_id": "scene0003_00:group_1",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "000302.jpg",
+                                    "image_stem": "000302",
+                                    "data_url": "data:image/jpeg;base64,cover_b",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "10->11",
+                                    "parent_id": 10,
+                                    "parent_label": "table",
+                                    "child_id": 11,
+                                    "child_label": "book",
+                                    "first_covered_image_name": "000302.jpg",
+                                    "program_reason_codes": ["status_conflict"],
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        html_text = referability_module._render_attachment_pair_salvage_review_html(review_doc)
+
+        self.assertNotIn('<details class="pair-bucket">', html_text)
+        self.assertIn("pair count:</strong> 2", html_text)
+        self.assertIn("group count:</strong> 2", html_text)
+        self.assertEqual(html_text.count("pair id</strong> 10-&gt;11"), 2)
+        self.assertIn("group</strong> scene0003_00:group_0", html_text)
+        self.assertIn("group</strong> scene0003_00:group_1", html_text)
+        self.assertIn('id="export-edited-html"', html_text)
+        self.assertIn('name="parent_surface_text"', html_text)
+        self.assertIn('name="child_surface_text"', html_text)
+        self.assertIn('class="pair-delete-toggle"', html_text)
+
+    def test_parse_attachment_pair_salvage_review_html_reads_edited_inputs_and_deleted_state(self) -> None:
+        html_text = """<!doctype html>
+<html lang="en">
+<body>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000001.jpg" data-group-id="scene0001_00:group_0" data-pair-id="1-&gt;2" data-parent-id="1" data-parent-label="table" data-child-id="2" data-child-label="book" data-deleted="false">
+    <input type="text" name="parent_surface_text" value="wooden table">
+    <input type="text" name="child_surface_text" value="blue book">
+  </article>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000002.jpg" data-group-id="scene0001_00:group_1" data-pair-id="3-&gt;4" data-parent-id="3" data-parent-label="desk" data-child-id="4" data-child-label="lamp" data-deleted="true">
+    <input type="text" name="parent_surface_text" value="desk">
+    <input type="text" name="child_surface_text" value="lamp">
+  </article>
+</body>
+</html>"""
+
+        cards = referability_module._parse_attachment_pair_salvage_review_html(html_text)
+
+        self.assertEqual(len(cards), 2)
+        self.assertEqual(cards[0]["scene_id"], "scene0001_00")
+        self.assertEqual(cards[0]["image_name"], "000001.jpg")
+        self.assertEqual(cards[0]["parent_surface_text"], "wooden table")
+        self.assertEqual(cards[0]["child_surface_text"], "blue book")
+        self.assertFalse(cards[0]["deleted"])
+        self.assertTrue(cards[1]["deleted"])
+
+    def test_apply_attachment_pair_salvage_html_review_updates_cache_with_kept_cards_only(self) -> None:
+        cache_doc = {
+            "version": referability_module.REFERABILITY_CACHE_VERSION,
+            "frames": {
+                "scene0001_00": {
+                    "000001.jpg": {
+                        **make_debug_cache_entry(),
+                        "attachment_referable_pairs": [],
+                        "attachment_referable_object_ids": [],
+                    },
+                    "000002.jpg": {
+                        **make_debug_cache_entry(),
+                        "attachment_referable_pairs": [],
+                        "attachment_referable_object_ids": [],
+                    },
+                }
+            },
+        }
+        html_text = """<!doctype html>
+<html lang="en">
+<body>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000001.jpg" data-group-id="scene0001_00:group_0" data-pair-id="1-&gt;2" data-parent-id="1" data-parent-label="table" data-child-id="2" data-child-label="book" data-deleted="false">
+    <input type="text" name="parent_surface_text" value="wooden table">
+    <input type="text" name="child_surface_text" value="blue book">
+  </article>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000002.jpg" data-group-id="scene0001_00:group_1" data-pair-id="3-&gt;4" data-parent-id="3" data-parent-label="desk" data-child-id="4" data-child-label="lamp" data-deleted="true">
+    <input type="text" name="parent_surface_text" value="desk">
+    <input type="text" name="child_surface_text" value="lamp">
+  </article>
+</body>
+</html>"""
+
+        updated = referability_module._apply_attachment_pair_salvage_html_review(
+            html_text=html_text,
+            cache_doc=cache_doc,
+        )
+
+        kept_entry = updated["frames"]["scene0001_00"]["000001.jpg"]
+        dropped_entry = updated["frames"]["scene0001_00"]["000002.jpg"]
+        self.assertEqual(kept_entry["attachment_referable_pairs"], [[1, 2]])
+        self.assertEqual(kept_entry["attachment_referable_object_ids"], [1, 2])
+        self.assertTrue(referability_module._frame_entry_has_consistent_final_fields(kept_entry))
+        self.assertEqual(
+            kept_entry["attachment_human_review_cards"],
+            [
+                {
+                    "pair_id": "1->2",
+                    "parent_id": 1,
+                    "parent_label": "table",
+                    "parent_surface_text": "wooden table",
+                    "child_id": 2,
+                    "child_label": "book",
+                    "child_surface_text": "blue book",
+                    "source": "human_salvage_html",
+                }
+            ],
+        )
+        self.assertEqual(dropped_entry["attachment_referable_pairs"], [])
+        self.assertEqual(dropped_entry["attachment_referable_object_ids"], [])
 
     def test_main_persists_scene_grouping_summary_in_cache_and_debug_json(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"
