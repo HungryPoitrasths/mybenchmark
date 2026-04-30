@@ -179,20 +179,34 @@ def _write_json_payload(path: Path, payload: object) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
-def _referability_artifact_dir(output_path: Path) -> Path:
-    return output_path.parent / "referability"
+def _default_review_output_prefix(output_path: Path) -> str:
+    match = re.search(r"(?:^|_)(flash[^_]*)$", output_path.stem)
+    if match is None:
+        return output_path.stem
+    return match.group(1)
+
+
+def _salvage_artifact_dir(output_path: Path) -> Path:
+    return output_path.parent / "salvage"
+
+
+def _candidate_artifact_dir(output_path: Path) -> Path:
+    return output_path.parent / "candidate"
 
 
 def _attachment_review_output_path(output_path: Path) -> Path:
-    return _referability_artifact_dir(output_path) / f"{output_path.stem}_attachment_candidate_review.json"
+    prefix = _default_review_output_prefix(output_path)
+    return _candidate_artifact_dir(output_path) / f"{prefix}_attachment_candidate_review.json"
 
 
 def _attachment_pair_salvage_review_output_path(output_path: Path) -> Path:
-    return _referability_artifact_dir(output_path) / f"{output_path.stem}_attachment_pair_salvage_review.json"
+    prefix = _default_review_output_prefix(output_path)
+    return _salvage_artifact_dir(output_path) / f"{prefix}_salvage_review.json"
 
 
 def _attachment_pair_salvage_review_html_output_path(output_path: Path) -> Path:
-    return _referability_artifact_dir(output_path) / f"{output_path.stem}_attachment_pair_salvage_review.html"
+    prefix = _default_review_output_prefix(output_path)
+    return _salvage_artifact_dir(output_path) / f"{prefix}_salvage_review.html"
 
 
 def _scene_object_label(obj: dict[str, Any]) -> str:
@@ -6113,13 +6127,13 @@ def main():
     parser.set_defaults(write_attachment_review=True)
     parser.add_argument(
         "--attachment_review_output", type=str, default=None,
-        help="Optional path for the attachment candidate review JSON; defaults under the referability artifact folder beside --output",
+        help="Optional path for the attachment candidate review JSON; defaults to candidate/<short-prefix>_attachment_candidate_review.json beside --output",
     )
     parser.add_argument(
         "--write_attachment_pair_salvage_review",
         dest="write_attachment_pair_salvage_review",
         action="store_true",
-        help="Write group-level attachment pair salvage review JSON and HTML under the default referability artifact folder beside --output",
+        help="Write group-level attachment pair salvage review JSON and HTML to salvage/<short-prefix>_salvage_review.{json,html} beside --output",
     )
     parser.add_argument(
         "--no-write_attachment_pair_salvage_review",

@@ -368,6 +368,20 @@ class RunVlmReferabilityTests(unittest.TestCase):
         }[split]
         split_path.write_text("\n".join(scene_ids) + "\n", encoding="utf-8")
 
+    def test_default_review_output_prefix_uses_trailing_flash_suffix(self) -> None:
+        output_path = Path("output/pilot_referability_cache_qwen3_vl_flash12.json")
+
+        prefix = referability_module._default_review_output_prefix(output_path)
+
+        self.assertEqual(prefix, "flash12")
+
+    def test_default_review_output_prefix_falls_back_to_full_stem(self) -> None:
+        output_path = Path("output/referability_cache.json")
+
+        prefix = referability_module._default_review_output_prefix(output_path)
+
+        self.assertEqual(prefix, "referability_cache")
+
     def test_resolve_scannet_scene_dirs_reads_train_from_data_root(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"resolve_train_{uuid.uuid4().hex}"
         data_root = root / "data"
@@ -3440,7 +3454,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_candidate_review.json"
+        review_path = output_path.parent / "candidate" / "referability_cache_attachment_candidate_review.json"
         output_path.write_text(
             json.dumps(
                 {
@@ -3508,7 +3522,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_candidate_review.json"
+        review_path = output_path.parent / "candidate" / "referability_cache_attachment_candidate_review.json"
         scene = {
             "objects": [
                 make_object(1, "table"),
@@ -3570,7 +3584,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         custom_review_path = root / "custom" / "review.json"
-        default_review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_candidate_review.json"
+        default_review_path = output_path.parent / "candidate" / "referability_cache_attachment_candidate_review.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         scene = {
             "objects": [
@@ -3626,8 +3640,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_pair_salvage_review.json"
-        review_html_path = output_path.parent / "referability" / f"{output_path.stem}_attachment_pair_salvage_review.html"
+        review_path = output_path.parent / "salvage" / "referability_cache_salvage_review.json"
+        review_html_path = output_path.parent / "salvage" / "referability_cache_salvage_review.html"
 
         scene = {
             "objects": [
