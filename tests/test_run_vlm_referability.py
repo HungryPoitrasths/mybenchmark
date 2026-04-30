@@ -1455,6 +1455,111 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(enriched["000001.jpg"]["out_of_frame_not_visible_labels"], ["lamp"])
 
+    def test_enrich_final_scene_entries_out_of_frame_uses_referability_getter_before_recompute(self) -> None:
+        cached_entry = make_debug_cache_entry()
+        cached_entry["out_of_frame_label_reviews"] = [
+            {"label": "lamp", "status": "not_visible", "raw_response": '{"status":"not_visible"}'}
+        ]
+        cached_entry["out_of_frame_not_visible_labels"] = ["lamp"]
+        cached_entry["out_of_frame_label_to_object_ids"] = {"lamp": [1]}
+        cached_entry["out_of_frame_vlm_early_stop"] = True
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                side_effect=AssertionError("referability getter should satisfy enrichment"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                side_effect=AssertionError("referability getter should satisfy enrichment"),
+            ),
+        ):
+            enriched = referability_module._enrich_final_scene_entries_out_of_frame(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=Path("."),
+                final_scene_entries={"000001.jpg": make_debug_cache_entry()},
+                scene_objects=[make_object(1, "lamp", alias_group="lamp_family")],
+                objects_by_id={1: make_object(1, "lamp", alias_group="lamp_family")},
+                poses={"000001.jpg": make_camera_pose()},
+                color_intrinsics=make_camera_intrinsics(),
+                depth_intrinsics=None,
+                referability_entry_getter=lambda image_name: dict(cached_entry),
+            )
+
+        self.assertEqual(enriched["000001.jpg"]["out_of_frame_not_visible_labels"], ["lamp"])
+
+    def test_compute_frame_referability_entry_reuses_injected_per_image_derivatives(self) -> None:
+        scene_objects = [make_object(1, "lamp", alias_group="lamp_family")]
+        objects_by_id = {1: scene_objects[0]}
+        visibility = {
+            1: make_visibility_meta(projected_area_px=1200.0, bbox_in_frame_ratio=0.9),
+        }
+        out_of_frame_review = {
+            "out_of_frame_label_reviews": [],
+            "out_of_frame_not_visible_labels": [],
+            "out_of_frame_label_to_object_ids": {},
+            "out_of_frame_vlm_early_stop": False,
+        }
+
+        with (
+            patch.object(
+                referability_module,
+                "_image_to_base64",
+                side_effect=AssertionError("injected image_b64 should be reused"),
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                side_effect=AssertionError("injected visibility should be reused"),
+            ),
+            patch.object(
+                referability_module,
+                "_review_out_of_frame_label_candidates",
+                side_effect=AssertionError("injected out_of_frame_review should be reused"),
+            ),
+            patch.object(
+                referability_module,
+                "_build_object_review_crop",
+                return_value={
+                    "local_outcome": "excluded",
+                    "local_reason": "projected_area_too_small",
+                    "projected_area_px": 100.0,
+                    "bbox_in_frame_ratio": 0.2,
+                },
+            ),
+        ):
+            entry = referability_module._compute_frame_referability_entry(
+                client=object(),
+                model_name="fake-vlm",
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                image=np.zeros((120, 120, 3), dtype=np.uint8),
+                image_path=Path("000001.jpg"),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                selector_visible_object_ids=[1],
+                frame_info={
+                    "clear": True,
+                    "clarity_score": 80,
+                    "frame_usable": True,
+                    "reason": "clear",
+                },
+                frame_selection_score=100080,
+                image_b64="frame-b64",
+                visibility_by_obj_id=visibility,
+                out_of_frame_review=out_of_frame_review,
+                vlm_workers=1,
+            )
+
+        self.assertEqual(entry["candidate_visible_object_ids"], [1])
+        self.assertEqual(entry["out_of_frame_label_reviews"], [])
+        self.assertEqual(entry["out_of_frame_not_visible_labels"], [])
+
     def test_compute_frame_referability_entry_skips_out_of_frame_review_for_ambiguous_alias_group(self) -> None:
         scene_objects = [
             make_object(1, "lamp", alias_group="shared_family"),
@@ -3847,13 +3952,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
             scene_dict["support_chain_by"] = {"2": 1}
             return scene_dict
 
-        attachment_entry = make_attachment_pair_salvage_entry(
-            candidate_visible_object_ids=[1, 2],
-            crop_label_statuses={"table": "unique", "book": "unique"},
-            full_frame_label_statuses={"table": "unique", "book": "unique"},
-            label_statuses={"table": "unique", "book": "unique"},
-            attachment_referable_pairs=[[1, 2]],
-        )
+        attachment_entry = make_debug_cache_entry()
+        attachment_entry["attachment_referable_object_ids"] = [1, 2]
+        attachment_entry["attachment_referable_pairs"] = [[1, 2]]
+        attachment_entry["attachment_referable_pair_count"] = 1
+        attachment_entry["attachment_final_referability"] = {
+            "object_ids": [1, 2],
+            "pairs": [[1, 2]],
+            "pair_count": 1,
+        }
 
         self.addCleanup(shutil.rmtree, root, True)
         with (
@@ -4084,6 +4191,278 @@ class RunVlmReferabilityTests(unittest.TestCase):
             cache_doc["frames"]["scene0001_00"]["000101.jpg"]["referable_object_ids"],
             [3],
         )
+
+    def test_load_frame_sidecar_scene_cache_ignores_invalid_or_mismatched_docs(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_load_{uuid.uuid4().hex}"
+        output_path = root / "output" / "referability_cache.json"
+        scene_id = "scene0001_00"
+        sidecar_path = referability_module._frame_cache_sidecar_path(output_path, scene_id)
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        record = {
+            "frame_info": {
+                "clear": True,
+                "clarity_score": 84,
+                "frame_usable": True,
+                "reason": "clear",
+            },
+            "frame_selection_score": 100084,
+            "referability_entry": make_debug_cache_entry(),
+        }
+        valid_doc = referability_module._build_frame_sidecar_scene_doc(
+            scene_id=scene_id,
+            model_name="fake-vlm",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+            frame_records={"000001.jpg": record},
+        )
+        sidecar_path.write_text(json.dumps(valid_doc, ensure_ascii=False), encoding="utf-8")
+
+        loaded = referability_module._load_frame_sidecar_scene_cache(
+            output_path=output_path,
+            scene_id=scene_id,
+            model_name="fake-vlm",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+        )
+        self.assertIn("000001.jpg", loaded)
+
+        invalid_docs = [
+            "{bad json",
+            dict(valid_doc, vlm_model="other-model"),
+            dict(valid_doc, version="999.0"),
+            dict(valid_doc, alias_config_version="other-alias-version"),
+            dict(valid_doc, referability_backend="other-backend"),
+            dict(valid_doc, frames={"000001.jpg": {"frame_info": {"frame_usable": True}}}),
+        ]
+
+        for invalid_doc in invalid_docs:
+            if isinstance(invalid_doc, str):
+                sidecar_path.write_text(invalid_doc, encoding="utf-8")
+            else:
+                sidecar_path.write_text(json.dumps(invalid_doc, ensure_ascii=False), encoding="utf-8")
+            loaded = referability_module._load_frame_sidecar_scene_cache(
+                output_path=output_path,
+                scene_id=scene_id,
+                model_name="fake-vlm",
+                referability_backend=referability_module.REFERABILITY_BACKEND,
+            )
+            self.assertEqual(loaded, {})
+
+    def test_main_reuses_frame_sidecar_across_reset_scene_status_runs(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_main_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        depth_dir = scene_dir / "depth"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        depth_dir.mkdir(parents=True, exist_ok=True)
+        (depth_dir / "000101.png").write_bytes(b"depth")
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+                make_object(3, "lamp"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        computed_entry = make_debug_cache_entry()
+        computed_entry["image_name"] = "000101.jpg"
+        computed_entry["selector_visible_object_ids"] = [3]
+        computed_entry["candidate_visible_object_ids"] = [3]
+
+        self.addCleanup(shutil.rmtree, root, True)
+
+        def run_once(*, reset_scene_status: bool, frame_decision_side_effect, entry_side_effect) -> None:
+            def fake_select_and_rerank_frames(**kwargs):
+                frame = dict(kwargs["frame_candidates"][0])
+                reviewed_frame = kwargs["frame_review_getter"](frame)
+                self.assertIsInstance(reviewed_frame, dict)
+                built_entry = kwargs["referability_entry_builder"](frame, reviewed_frame)
+                self.assertIsInstance(built_entry, dict)
+                debug_output = kwargs["debug_output"]
+                debug_output["reranked_accepted_frame_image_names"] = [frame["image_name"]]
+                debug_output["selected_before_attachment_slots_image_names"] = [frame["image_name"]]
+                debug_output["selected_before_attachment_slots_count"] = 1
+                debug_output["accepted_frame_count_after_group_scan"] = 1
+                debug_output["non_attachment_processed_group_count"] = 1
+                debug_output["groups"] = []
+                return [
+                    {
+                        "image_name": frame["image_name"],
+                        "visible_object_ids": list(frame["visible_object_ids"]),
+                        "selector_score": int(frame["score"]),
+                        "frame_info": dict(reviewed_frame["frame_info"]),
+                        "frame_selection_score": int(reviewed_frame["frame_selection_score"]),
+                    }
+                ]
+
+            argv = [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]
+            if reset_scene_status:
+                argv.append("--reset_scene_status")
+            with (
+                patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+                patch.object(
+                    referability_module,
+                    "_resolve_scannet_scene_dirs",
+                    return_value=[("train", scene_dir)],
+                ),
+                patch("src.scene_parser.parse_scene", return_value=scene),
+                patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+                patch("src.support_graph.build_attachment_candidates", return_value=[]),
+                patch.object(
+                    referability_module,
+                    "select_frames",
+                    return_value=[
+                        {
+                            "image_name": "000101.jpg",
+                            "visible_object_ids": [3],
+                            "score": 9,
+                            "attachment_viewpoint_exempt": False,
+                        }
+                    ],
+                ),
+                patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+                patch.object(
+                    referability_module,
+                    "load_scannet_poses",
+                    return_value={"000101.jpg": make_camera_pose(image_name="000101.jpg")},
+                ),
+                patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+                patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=make_camera_intrinsics()),
+                patch.object(
+                    referability_module.cv2,
+                    "imread",
+                    return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+                ),
+                patch.object(
+                    referability_module,
+                    "load_depth_image",
+                    return_value=np.ones((120, 120), dtype=np.uint16),
+                ),
+                patch.object(referability_module, "_frame_decision", side_effect=frame_decision_side_effect),
+                patch.object(
+                    referability_module,
+                    "_compute_frame_referability_entry",
+                    side_effect=entry_side_effect,
+                ),
+                patch.object(
+                    referability_module,
+                    "_enrich_final_scene_entries_out_of_frame",
+                    side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+                ),
+                patch.object(
+                    referability_module,
+                    "_select_and_rerank_frames",
+                    side_effect=fake_select_and_rerank_frames,
+                ),
+                patch.object(sys, "argv", argv),
+            ):
+                referability_module.main()
+
+        run_once(
+            reset_scene_status=False,
+            frame_decision_side_effect=lambda *args, **kwargs: {
+                "clear": True,
+                "clarity_score": 84,
+                "frame_usable": True,
+                "reason": "clear",
+            },
+            entry_side_effect=lambda *args, **kwargs: dict(computed_entry),
+        )
+
+        batch_paths = list_batch_cache_paths(output_path)
+        self.assertEqual(len(batch_paths), 1)
+        first_cache_doc = json.loads(batch_paths[0].read_text(encoding="utf-8"))
+        sidecar_path = referability_module._frame_cache_sidecar_path(batch_paths[0], "scene0001_00")
+        self.assertTrue(sidecar_path.exists())
+
+        run_once(
+            reset_scene_status=True,
+            frame_decision_side_effect=AssertionError("frame sidecar should skip _frame_decision"),
+            entry_side_effect=AssertionError("frame sidecar should skip _compute_frame_referability_entry"),
+        )
+
+        batch_paths = list_batch_cache_paths(output_path)
+        self.assertEqual(len(batch_paths), 2)
+        latest_cache_doc = json.loads(batch_paths[-1].read_text(encoding="utf-8"))
+        self.assertEqual(
+            latest_cache_doc["frames"]["scene0001_00"],
+            first_cache_doc["frames"]["scene0001_00"],
+        )
+
+    def test_main_writes_review_outputs_once_per_batch(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"review_write_once_{uuid.uuid4().hex}"
+        output_path = root / "output" / "referability_cache.json"
+        scene_dir_1 = root / "data" / "scene0001_00"
+        scene_dir_2 = root / "data" / "scene0002_00"
+        scene_dir_1.mkdir(parents=True, exist_ok=True)
+        scene_dir_2.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        write_calls: list[Path] = []
+
+        def recording_write_json_payload(path: Path, payload: dict) -> None:
+            resolved = Path(path)
+            write_calls.append(resolved)
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(
+                referability_module,
+                "_resolve_scannet_scene_dirs",
+                return_value=[("train", scene_dir_1), ("train", scene_dir_2)],
+            ),
+            patch("src.scene_parser.parse_scene", return_value={"objects": []}),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=lambda scene: scene),
+            patch("src.support_graph.get_scene_attachment_graph", return_value={}),
+            patch("src.support_graph.has_nontrivial_attachment", return_value=False),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "_write_json_payload",
+                side_effect=recording_write_json_payload,
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(root / "data"),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "2",
+            ]),
+        ):
+            referability_module.main()
+
+        batch_path, _cache_doc = load_single_batch_cache_for_output(output_path)
+        attachment_review_path = referability_module._attachment_review_output_path(batch_path)
+        salvage_review_path = referability_module._attachment_pair_salvage_review_output_path(batch_path)
+        self.assertEqual(write_calls.count(attachment_review_path), 1)
+        self.assertEqual(write_calls.count(salvage_review_path), 1)
 
     def test_main_persists_scene_grouping_summary_in_cache(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"

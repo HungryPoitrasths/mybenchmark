@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import argparse
 import base64
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import html
 from html.parser import HTMLParser
@@ -47,7 +48,7 @@ from src.referability_checks import (
     normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
     normalize_object_ids as _shared_normalize_object_ids,
 )
-from src.scene_parser import InstanceMeshData, load_instance_mesh_data
+from src.scene_parser import InstanceMeshData, _load_scene_geometry, load_instance_mesh_data
 from src.utils import RayCaster
 from src.utils.colmap_loader import (
     CameraIntrinsics,
@@ -71,12 +72,14 @@ DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
 LABEL_BATCH_SIZE = 1
 REFERABILITY_CACHE_VERSION = "20.0"
+REFERABILITY_BACKEND = "crop_vlm_with_mesh_ray"
 ATTACHMENT_REVIEW_VERSION = "1.0"
 ATTACHMENT_REVIEW_NAME = "attachment_candidate_review"
 ATTACHMENT_REVIEW_STAGE = "post_attachment_enrichment"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION = "1.0"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME = "attachment_pair_salvage_review"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE = "post_attachment_referability"
+FRAME_CACHE_SIDECAR_DIR_NAME = ".run_vlm_referability_frame_cache"
 SCANNET_METADATA_SPLIT_FILES: dict[str, Path] = {
     "train": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_train.txt"),
     "val": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_val.txt"),
@@ -160,6 +163,41 @@ OUT_OF_FRAME_REVIEW_STATUS_UNSURE = "unsure"
 _DINOX_CLIENT_CACHE: Any | None = None
 _VLM_CALL_FAILURE_COUNT = 0
 _VLM_CALL_FAILURE_COUNT_LOCK = threading.Lock()
+_VLM_REQUEST_SEMAPHORE: threading.BoundedSemaphore | None = None
+_VLM_THREAD_LOCAL_CLIENTS = threading.local()
+
+
+@dataclass
+class SceneWorkerResult:
+    scene_index: int
+    scene_id: str
+    split: str
+    pipeline_outcome: str
+    scene_skip_reason: str | None
+    scene_cache: dict[str, Any] | None
+    scene_grouping_summary: dict[str, Any] | None
+    attachment_review_record: dict[str, Any] | None
+    attachment_pair_salvage_review_record: dict[str, Any] | None
+    frame_sidecar_cache: dict[str, dict[str, Any]] | None = None
+
+
+class _ThreadLocalOpenAIClientFactory:
+    def __init__(self, openai_cls: Callable[..., Any], *, api_key: str, base_url: str) -> None:
+        self._openai_cls = openai_cls
+        self._api_key = str(api_key)
+        self._base_url = str(base_url)
+
+    def get_client(self) -> Any:
+        client_cache = getattr(_VLM_THREAD_LOCAL_CLIENTS, "clients", None)
+        if not isinstance(client_cache, dict):
+            client_cache = {}
+            _VLM_THREAD_LOCAL_CLIENTS.clients = client_cache
+        cache_key = (id(self._openai_cls), self._api_key, self._base_url)
+        client = client_cache.get(cache_key)
+        if client is None:
+            client = self._openai_cls(api_key=self._api_key, base_url=self._base_url)
+            client_cache[cache_key] = client
+        return client
 
 
 def _reset_vlm_call_failure_count() -> None:
@@ -177,6 +215,18 @@ def _record_vlm_call_failure() -> None:
 def _get_vlm_call_failure_count() -> int:
     with _VLM_CALL_FAILURE_COUNT_LOCK:
         return int(_VLM_CALL_FAILURE_COUNT)
+
+
+def _configure_vlm_request_concurrency(max_workers: int) -> None:
+    global _VLM_REQUEST_SEMAPHORE
+    _VLM_REQUEST_SEMAPHORE = threading.BoundedSemaphore(max(1, int(max_workers)))
+
+
+def _resolve_vlm_client(client: Any) -> Any:
+    getter = getattr(client, "get_client", None)
+    if callable(getter):
+        return getter()
+    return client
 
 
 def _write_json_payload(path: Path, payload: object) -> None:
@@ -369,6 +419,139 @@ def _attachment_pair_salvage_review_output_path(output_path: Path) -> Path:
 def _attachment_pair_salvage_review_html_output_path(output_path: Path) -> Path:
     prefix = _default_review_output_prefix(output_path)
     return _salvage_artifact_dir(output_path) / f"{prefix}_salvage_review.html"
+
+
+def _frame_cache_artifact_dir(output_path: Path) -> Path:
+    return output_path.parent / FRAME_CACHE_SIDECAR_DIR_NAME
+
+
+def _frame_cache_sidecar_path(output_path: Path, scene_id: str) -> Path:
+    return _frame_cache_artifact_dir(output_path) / f"{str(scene_id).strip()}.json"
+
+
+def _normalize_frame_sidecar_record(record: Any) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    frame_info = record.get("frame_info")
+    if not isinstance(frame_info, dict):
+        return None
+    try:
+        frame_selection_score = int(record.get("frame_selection_score"))
+    except (TypeError, ValueError):
+        return None
+    normalized_entry = None
+    if record.get("referability_entry") is not None:
+        referability_entry = record.get("referability_entry")
+        if not isinstance(referability_entry, dict):
+            return None
+        if _frame_entry_has_debug_fields(referability_entry):
+            normalized_entry = dict(referability_entry)
+        else:
+            normalized_entry = _repair_final_referability_fields(referability_entry)
+            if not _frame_entry_has_debug_fields(normalized_entry):
+                return None
+    return {
+        "frame_info": _normalize_frame_review(frame_info),
+        "frame_selection_score": frame_selection_score,
+        "referability_entry": normalized_entry,
+    }
+
+
+def _load_frame_sidecar_scene_cache(
+    *,
+    output_path: Path,
+    scene_id: str,
+    model_name: str,
+    referability_backend: str,
+) -> dict[str, dict[str, Any]]:
+    sidecar_path = _frame_cache_sidecar_path(output_path, scene_id)
+    if not sidecar_path.exists():
+        return {}
+    try:
+        sidecar_doc = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Ignoring unreadable frame sidecar %s: %s", sidecar_path, exc)
+        return {}
+    if not isinstance(sidecar_doc, dict):
+        logger.warning("Ignoring malformed frame sidecar %s: expected object", sidecar_path)
+        return {}
+    expected_meta = {
+        "scene_id": str(scene_id),
+        "version": REFERABILITY_CACHE_VERSION,
+        "alias_config_version": ALIAS_CONFIG_VERSION,
+        "referability_backend": str(referability_backend),
+        "vlm_model": str(model_name),
+    }
+    for key, expected_value in expected_meta.items():
+        if sidecar_doc.get(key) != expected_value:
+            return {}
+    raw_frames = sidecar_doc.get("frames")
+    if not isinstance(raw_frames, dict):
+        logger.warning("Ignoring malformed frame sidecar %s: missing frames mapping", sidecar_path)
+        return {}
+
+    normalized_frames: dict[str, dict[str, Any]] = {}
+    for image_name, record in raw_frames.items():
+        normalized_record = _normalize_frame_sidecar_record(record)
+        if normalized_record is None:
+            logger.warning(
+                "Ignoring malformed frame sidecar %s: invalid record for %s",
+                sidecar_path,
+                image_name,
+            )
+            return {}
+        normalized_frames[str(image_name)] = normalized_record
+    return normalized_frames
+
+
+def _build_frame_sidecar_scene_doc(
+    *,
+    scene_id: str,
+    model_name: str,
+    referability_backend: str,
+    frame_records: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "scene_id": str(scene_id),
+        "version": REFERABILITY_CACHE_VERSION,
+        "alias_config_version": ALIAS_CONFIG_VERSION,
+        "referability_backend": str(referability_backend),
+        "vlm_model": str(model_name),
+        "frames": {
+            str(image_name): {
+                "frame_info": dict(record["frame_info"]),
+                "frame_selection_score": int(record["frame_selection_score"]),
+                "referability_entry": (
+                    dict(record["referability_entry"])
+                    if isinstance(record.get("referability_entry"), dict)
+                    else None
+                ),
+            }
+            for image_name, record in sorted(frame_records.items())
+            if isinstance(record, dict)
+        },
+    }
+
+
+def _write_frame_sidecar_scene_cache(
+    *,
+    output_path: Path,
+    scene_id: str,
+    model_name: str,
+    referability_backend: str,
+    frame_records: dict[str, dict[str, Any]],
+) -> None:
+    sidecar_path = _frame_cache_sidecar_path(output_path, scene_id)
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json_payload(
+        sidecar_path,
+        _build_frame_sidecar_scene_doc(
+            scene_id=scene_id,
+            model_name=model_name,
+            referability_backend=referability_backend,
+            frame_records=frame_records,
+        ),
+    )
 
 
 def _edited_attachment_pair_salvage_html_output_path(output_path: Path) -> Path:
@@ -1333,7 +1516,7 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return None
 
 
-def _call_vlm_json(
+def _call_vlm_json_impl(
     client,
     model: str,
     content: list[dict],
@@ -1356,6 +1539,33 @@ def _call_vlm_json(
         _record_vlm_call_failure()
         logger.warning("VLM call failed: %s", exc)
         return default, ""
+
+
+def _call_vlm_json(
+    client,
+    model: str,
+    content: list[dict],
+    default: dict[str, Any],
+    max_tokens: int = 512,
+) -> tuple[dict[str, Any], str]:
+    resolved_client = _resolve_vlm_client(client)
+    semaphore = _VLM_REQUEST_SEMAPHORE
+    if semaphore is None:
+        return _call_vlm_json_impl(
+            resolved_client,
+            model,
+            content,
+            default,
+            max_tokens=max_tokens,
+        )
+    with semaphore:
+        return _call_vlm_json_impl(
+            resolved_client,
+            model,
+            content,
+            default,
+            max_tokens=max_tokens,
+        )
 
 
 def _run_in_thread_pool(
@@ -3936,8 +4146,9 @@ def _frame_decision(
     client,
     model: str,
     image: np.ndarray,
+    image_b64: str | None = None,
 ) -> dict[str, Any]:
-    full_b64 = _image_to_base64(image)
+    full_b64 = str(image_b64 or "") or _image_to_base64(image)
     default = {
         "clear": True,
         "clarity_score": 60,
@@ -4313,6 +4524,7 @@ def _review_out_of_frame_label_candidates(
     client,
     model_name: str,
     image: np.ndarray,
+    image_b64: str | None = None,
     scene_objects: list[dict[str, Any]],
     objects_by_id: dict[int, dict[str, Any]],
     visibility_by_obj_id: dict[int, dict[str, Any]],
@@ -4336,7 +4548,7 @@ def _review_out_of_frame_label_candidates(
             "out_of_frame_vlm_early_stop": False,
         }
 
-    image_b64 = _image_to_base64(image)
+    encoded_image_b64 = str(image_b64 or "") or _image_to_base64(image)
     pending_reviews: list[dict[str, Any]] = []
     not_visible_labels: list[str] = []
     early_stop = False
@@ -4348,7 +4560,7 @@ def _review_out_of_frame_label_candidates(
         vlm_review = _out_of_frame_label_vlm_review(
             client=client,
             model=model_name,
-            image_b64=image_b64,
+            image_b64=encoded_image_b64,
             label=label,
         )
         status = (
@@ -5847,6 +6059,7 @@ def _make_lazy_mesh_ray_resource_getters(
     scene_dir: Path,
     scene_objects: list[dict[str, Any]],
     axis_alignment: np.ndarray | None,
+    preloaded_geometry: Any | None = None,
 ) -> tuple[Callable[[], Any], Callable[[int], InstanceMeshData]]:
     object_ids = sorted(
         {
@@ -5874,6 +6087,7 @@ def _make_lazy_mesh_ray_resource_getters(
                 scene_dir,
                 instance_ids=list(object_ids),
                 n_surface_samples=base_count,
+                preloaded_geometry=preloaded_geometry,
             )
         return resource_cache[cache_key]
 
@@ -5965,6 +6179,9 @@ def _compute_frame_referability_entry(
     selector_score: int | None = None,
     frame_info: dict[str, Any] | None = None,
     frame_selection_score: int | None = None,
+    image_b64: str | None = None,
+    visibility_by_obj_id: dict[int, dict[str, Any]] | None = None,
+    out_of_frame_review: dict[str, Any] | None = None,
     vlm_workers: int = 1,
     ray_caster_getter: Callable[[], Any] | None = None,
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
@@ -6015,20 +6232,22 @@ def _compute_frame_referability_entry(
         visibility_instance_mesh_data = instance_mesh_data_getter(
             REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
         )
-    visibility_by_obj_id = compute_frame_object_visibility(
-        scene_objects,
-        camera_pose,
-        color_intrinsics,
-        image_path=image_path,
-        depth_image=depth_image,
-        depth_intrinsics=depth_intrinsics,
-        instance_mesh_data=visibility_instance_mesh_data,
-        strict_mode=False,
-    )
+    computed_visibility_by_obj_id = visibility_by_obj_id
+    if computed_visibility_by_obj_id is None:
+        computed_visibility_by_obj_id = compute_frame_object_visibility(
+            scene_objects,
+            camera_pose,
+            color_intrinsics,
+            image_path=image_path,
+            depth_image=depth_image,
+            depth_intrinsics=depth_intrinsics,
+            instance_mesh_data=visibility_instance_mesh_data,
+            strict_mode=False,
+        )
     visibility_audit_by_object_id = _build_visibility_audit_by_object_id(
         scene_objects,
         objects_by_id,
-        visibility_by_obj_id,
+        computed_visibility_by_obj_id,
         color_intrinsics,
         selector_visible_object_ids,
         candidate_visible_object_ids,
@@ -6068,7 +6287,10 @@ def _compute_frame_referability_entry(
             if obj is None:
                 continue
             label = str(obj.get("label", "")).strip().lower()
-            crop_entry = _build_object_review_crop(image, visibility_by_obj_id.get(int(obj_id)))
+            crop_entry = _build_object_review_crop(
+                image,
+                computed_visibility_by_obj_id.get(int(obj_id)),
+            )
             review = _build_object_review_entry(
                 obj_id=int(obj_id),
                 label=label,
@@ -6206,26 +6428,37 @@ def _compute_frame_referability_entry(
             visibility_audit_by_object_id=visibility_audit_by_object_id,
             bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
         )
-        out_of_frame_review = _review_out_of_frame_label_candidates(
-            client=client,
-            model_name=model_name,
-            image=image,
-            scene_objects=scene_objects,
-            objects_by_id=objects_by_id,
-            visibility_by_obj_id=visibility_by_obj_id,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            instance_mesh_data_getter=instance_mesh_data_getter,
+        normalized_out_of_frame_review = out_of_frame_review
+        if normalized_out_of_frame_review is None:
+            if image_b64 is None:
+                image_b64 = _image_to_base64(image)
+            normalized_out_of_frame_review = _review_out_of_frame_label_candidates(
+                client=client,
+                model_name=model_name,
+                image=image,
+                image_b64=image_b64,
+                scene_objects=scene_objects,
+                objects_by_id=objects_by_id,
+                visibility_by_obj_id=computed_visibility_by_obj_id,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+        out_of_frame_label_reviews = list(
+            normalized_out_of_frame_review["out_of_frame_label_reviews"]
         )
-        out_of_frame_label_reviews = list(out_of_frame_review["out_of_frame_label_reviews"])
-        out_of_frame_not_visible_labels = list(out_of_frame_review["out_of_frame_not_visible_labels"])
+        out_of_frame_not_visible_labels = list(
+            normalized_out_of_frame_review["out_of_frame_not_visible_labels"]
+        )
         out_of_frame_label_to_object_ids = {
             str(label): [int(obj_id) for obj_id in obj_ids]
             for label, obj_ids in sorted(
-                out_of_frame_review["out_of_frame_label_to_object_ids"].items()
+                normalized_out_of_frame_review["out_of_frame_label_to_object_ids"].items()
             )
         }
-        out_of_frame_vlm_early_stop = bool(out_of_frame_review["out_of_frame_vlm_early_stop"])
+        out_of_frame_vlm_early_stop = bool(
+            normalized_out_of_frame_review["out_of_frame_vlm_early_stop"]
+        )
 
         alias_group_to_statuses: dict[str, set[str]] = defaultdict(set)
         alias_group_to_reasons: dict[str, set[str]] = defaultdict(set)
@@ -6382,6 +6615,23 @@ def _frame_entry_has_out_of_frame_review_data(entry: Any) -> bool:
     )
 
 
+def _extract_out_of_frame_review_payload(entry: Any) -> dict[str, Any]:
+    return {
+        "out_of_frame_label_reviews": _normalize_cached_out_of_frame_label_reviews(
+            entry.get("out_of_frame_label_reviews") if isinstance(entry, dict) else None
+        ),
+        "out_of_frame_not_visible_labels": _normalize_cached_out_of_frame_not_visible_labels(
+            entry.get("out_of_frame_not_visible_labels") if isinstance(entry, dict) else None
+        ),
+        "out_of_frame_label_to_object_ids": _shared_normalize_label_to_object_ids(
+            entry.get("out_of_frame_label_to_object_ids") if isinstance(entry, dict) else None
+        ),
+        "out_of_frame_vlm_early_stop": _normalize_cached_out_of_frame_vlm_early_stop(
+            entry.get("out_of_frame_vlm_early_stop") if isinstance(entry, dict) else None
+        ),
+    }
+
+
 def _enrich_final_scene_entries_out_of_frame(
     *,
     client,
@@ -6393,6 +6643,7 @@ def _enrich_final_scene_entries_out_of_frame(
     poses: dict[str, CameraPose],
     color_intrinsics: CameraIntrinsics | None,
     depth_intrinsics: CameraIntrinsics | None,
+    referability_entry_getter: Callable[[str], dict[str, Any] | None] | None = None,
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> dict[str, dict[str, Any]]:
     enriched_entries: dict[str, dict[str, Any]] = {}
@@ -6410,6 +6661,13 @@ def _enrich_final_scene_entries_out_of_frame(
         if _frame_entry_has_out_of_frame_review_data(updated_entry):
             enriched_entries[image_name] = updated_entry
             continue
+
+        if callable(referability_entry_getter):
+            cached_entry = referability_entry_getter(image_name)
+            if isinstance(cached_entry, dict) and _frame_entry_has_out_of_frame_review_data(cached_entry):
+                updated_entry.update(_extract_out_of_frame_review_payload(cached_entry))
+                enriched_entries[image_name] = updated_entry
+                continue
 
         camera_pose = poses.get(image_name)
         if camera_pose is None:
@@ -7007,6 +7265,10 @@ def main():
         help="Maximum number of concurrent independent VLM requests",
     )
     parser.add_argument(
+        "--scene_workers", type=int, default=1,
+        help="Number of scenes to process concurrently",
+    )
+    parser.add_argument(
         "--write_attachment_review",
         dest="write_attachment_review",
         action="store_true",
@@ -7052,6 +7314,10 @@ def main():
     _reset_vlm_call_failure_count()
     if args.scene_batch_size is not None and int(args.scene_batch_size) <= 0:
         parser.error("--scene_batch_size must be >= 1")
+    if int(args.vlm_workers) <= 0:
+        parser.error("--vlm_workers must be >= 1")
+    if int(args.scene_workers) <= 0:
+        parser.error("--scene_workers must be >= 1")
 
     global EXCLUDED_LABELS
     from src.scene_parser import EXCLUDED_LABELS as SCENE_EXCLUDED_LABELS
@@ -7087,6 +7353,12 @@ def main():
 
     model_name = args.vlm_model if args.vlm_model else available[0]
     logger.info("Using model: %s", model_name)
+    _configure_vlm_request_concurrency(int(args.vlm_workers))
+    worker_client_factory = _ThreadLocalOpenAIClientFactory(
+        OpenAI,
+        api_key=api_key,
+        base_url=args.vlm_url,
+    )
 
     data_root = Path(args.data_root)
     selected_split = args.split or _infer_default_split(data_root)
@@ -7138,7 +7410,7 @@ def main():
         "version": REFERABILITY_CACHE_VERSION,
         "model": model_name,
         "alias_config_version": ALIAS_CONFIG_VERSION,
-        "referability_backend": "crop_vlm_with_mesh_ray",
+        "referability_backend": REFERABILITY_BACKEND,
         "label_batch_size": 1,
         "frames": {},
         "scene_grouping": {},
@@ -7165,7 +7437,6 @@ def main():
         attachment_review_terminal_lines.extend(record.get("terminal_output_lines", []))
         for line in record.get("terminal_output_lines", []):
             logger.info("%s", line)
-        _write_attachment_review()
 
     def _write_attachment_pair_salvage_review() -> None:
         if not args.write_attachment_pair_salvage_review:
@@ -7209,7 +7480,6 @@ def main():
         attachment_pair_salvage_review_scenes.append(record)
         for line in record.get("terminal_output_lines", []):
             logger.info("%s", line)
-        _write_attachment_pair_salvage_review()
 
     def _persist_current_scene(
         *,
@@ -7473,8 +7743,19 @@ def main():
         _cache_miss = object()
         scene_image_cache: dict[str, np.ndarray | None] = {}
         scene_depth_cache: dict[str, np.ndarray | None] = {}
+        scene_image_b64_cache: dict[str, str | None] = {}
+        scene_visibility_cache: dict[str, dict[int, dict[str, Any]] | None] = {}
+        scene_out_of_frame_review_cache: dict[str, dict[str, Any] | None] = {}
         frame_clarity_cache: dict[str, dict[str, Any] | None] = {}
         referability_entry_cache: dict[str, dict[str, Any] | None] = {}
+        scene_frame_sidecar_cache = _load_frame_sidecar_scene_cache(
+            output_path=output_path,
+            scene_id=scene_id,
+            model_name=model_name,
+            referability_backend=REFERABILITY_BACKEND,
+        )
+        sidecar_dirty = False
+        cached_visibility_instance_mesh_data: Any = _cache_miss
 
         def _load_scene_image(image_name: str) -> np.ndarray | None:
             cached_image = scene_image_cache.get(image_name, _cache_miss)
@@ -7502,31 +7783,303 @@ def main():
             scene_depth_cache[image_name] = depth_image
             return depth_image
 
+        def _get_scene_image_b64(image_name: str) -> str | None:
+            cached_image_b64 = scene_image_b64_cache.get(image_name, _cache_miss)
+            if cached_image_b64 is _cache_miss:
+                image = _load_scene_image(image_name)
+                cached_image_b64 = None if image is None else _image_to_base64(image)
+                scene_image_b64_cache[image_name] = cached_image_b64
+            return cached_image_b64 if isinstance(cached_image_b64, str) else None
+
+        def _get_scene_visibility_instance_mesh_data() -> InstanceMeshData | None:
+            nonlocal cached_visibility_instance_mesh_data
+            if cached_visibility_instance_mesh_data is _cache_miss:
+                cached_visibility_instance_mesh_data = None
+                if callable(instance_mesh_data_getter):
+                    try:
+                        cached_visibility_instance_mesh_data = instance_mesh_data_getter(
+                            REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
+                        )
+                    except Exception:
+                        cached_visibility_instance_mesh_data = None
+            return (
+                cached_visibility_instance_mesh_data
+                if isinstance(cached_visibility_instance_mesh_data, InstanceMeshData)
+                else None
+            )
+
+        def _update_scene_frame_sidecar_record(
+            image_name: str,
+            *,
+            frame_info: dict[str, Any] | None = None,
+            frame_selection_score: int | None = None,
+            referability_entry: dict[str, Any] | None | object = _cache_miss,
+        ) -> None:
+            nonlocal sidecar_dirty
+            if not image_name:
+                return
+            current_record = scene_frame_sidecar_cache.get(image_name)
+            updated_record = (
+                dict(current_record)
+                if isinstance(current_record, dict)
+                else {
+                    "frame_info": None,
+                    "frame_selection_score": None,
+                    "referability_entry": None,
+                }
+            )
+            changed = False
+            if isinstance(frame_info, dict):
+                normalized_frame_info = _normalize_frame_review(frame_info)
+                if updated_record.get("frame_info") != normalized_frame_info:
+                    updated_record["frame_info"] = normalized_frame_info
+                    changed = True
+            if frame_selection_score is not None:
+                normalized_selection_score = int(frame_selection_score)
+                if updated_record.get("frame_selection_score") != normalized_selection_score:
+                    updated_record["frame_selection_score"] = normalized_selection_score
+                    changed = True
+            if referability_entry is not _cache_miss:
+                normalized_entry = (
+                    dict(referability_entry)
+                    if isinstance(referability_entry, dict)
+                    else None
+                )
+                if updated_record.get("referability_entry") != normalized_entry:
+                    updated_record["referability_entry"] = normalized_entry
+                    changed = True
+            if changed:
+                scene_frame_sidecar_cache[image_name] = updated_record
+                sidecar_dirty = True
+
+        def _flush_scene_frame_sidecar() -> None:
+            nonlocal sidecar_dirty
+            if not sidecar_dirty:
+                return
+            sidecar_path = _frame_cache_sidecar_path(output_path, scene_id)
+            sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json_payload(
+                sidecar_path,
+                _build_frame_sidecar_scene_doc(
+                    scene_id=scene_id,
+                    model_name=model_name,
+                    referability_backend=REFERABILITY_BACKEND,
+                    frame_records=scene_frame_sidecar_cache,
+                ),
+            )
+            sidecar_dirty = False
+
+        def _get_scene_visibility_by_obj_id(
+            image_name: str,
+        ) -> dict[int, dict[str, Any]] | None:
+            cached_visibility = scene_visibility_cache.get(image_name, _cache_miss)
+            if cached_visibility is not _cache_miss:
+                return cached_visibility if isinstance(cached_visibility, dict) else None
+
+            camera_pose = poses.get(image_name)
+            if camera_pose is None:
+                scene_visibility_cache[image_name] = None
+                return None
+            image_path = scene_dir / "color" / image_name
+            depth_image = _load_scene_depth_image(image_name)
+            cached_visibility = compute_frame_object_visibility(
+                scene["objects"],
+                camera_pose,
+                color_intrinsics,
+                image_path=image_path,
+                depth_image=depth_image,
+                depth_intrinsics=depth_intrinsics,
+                instance_mesh_data=_get_scene_visibility_instance_mesh_data(),
+                strict_mode=False,
+            )
+            scene_visibility_cache[image_name] = cached_visibility
+            return cached_visibility if isinstance(cached_visibility, dict) else None
+
+        def _get_scene_out_of_frame_review(image_name: str) -> dict[str, Any] | None:
+            cached_review = scene_out_of_frame_review_cache.get(image_name, _cache_miss)
+            if cached_review is not _cache_miss:
+                return cached_review if isinstance(cached_review, dict) else None
+
+            image = _load_scene_image(image_name)
+            camera_pose = poses.get(image_name)
+            visibility_by_obj_id = _get_scene_visibility_by_obj_id(image_name)
+            image_b64 = _get_scene_image_b64(image_name)
+            if (
+                image is None
+                or camera_pose is None
+                or not isinstance(visibility_by_obj_id, dict)
+                or not isinstance(image_b64, str)
+            ):
+                scene_out_of_frame_review_cache[image_name] = None
+                return None
+            cached_review = _review_out_of_frame_label_candidates(
+                client=client,
+                model_name=model_name,
+                image=image,
+                image_b64=image_b64,
+                scene_objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                visibility_by_obj_id=visibility_by_obj_id,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+            scene_out_of_frame_review_cache[image_name] = cached_review
+            return cached_review if isinstance(cached_review, dict) else None
+
+        def _get_referability_entry_by_image_name(
+            image_name: str,
+            *,
+            frame: dict[str, Any] | None = None,
+            reviewed_frame: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            if not image_name or image_name not in poses:
+                return None
+
+            cached_entry = referability_entry_cache.get(image_name, _cache_miss)
+            if cached_entry is _cache_miss:
+                sidecar_record = scene_frame_sidecar_cache.get(image_name)
+                if isinstance(sidecar_record, dict) and isinstance(
+                    sidecar_record.get("referability_entry"),
+                    dict,
+                ):
+                    cached_entry = dict(sidecar_record["referability_entry"])
+                    referability_entry_cache[image_name] = cached_entry
+                    scene_out_of_frame_review_cache.setdefault(
+                        image_name,
+                        _extract_out_of_frame_review_payload(cached_entry),
+                    )
+            if cached_entry is not _cache_miss:
+                return dict(cached_entry) if isinstance(cached_entry, dict) else None
+
+            if not isinstance(frame, dict):
+                return None
+            if not isinstance(reviewed_frame, dict):
+                reviewed_frame = _get_reviewed_frame(frame)
+            if not isinstance(reviewed_frame, dict):
+                referability_entry_cache[image_name] = None
+                return None
+
+            image = _load_scene_image(image_name)
+            if image is None:
+                referability_entry_cache[image_name] = None
+                return None
+
+            selector_visible_object_ids = [
+                int(obj_id)
+                for obj_id in frame.get("visible_object_ids", [])
+                if int(obj_id) in objects_by_id
+            ]
+            visibility_by_obj_id = _get_scene_visibility_by_obj_id(image_name)
+            if visibility_by_obj_id is None:
+                referability_entry_cache[image_name] = None
+                return None
+            frame_info = reviewed_frame.get("frame_info", _selector_quality_pass_frame_info())
+            frame_selection_score = int(
+                reviewed_frame.get(
+                    "frame_selection_score",
+                    frame.get("selector_score", frame.get("score", 0)),
+                ) or 0
+            )
+            image_b64 = _get_scene_image_b64(image_name)
+            entry = _compute_frame_referability_entry(
+                client=client,
+                model_name=model_name,
+                scene_objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                image=image,
+                image_path=scene_dir / "color" / image_name,
+                camera_pose=poses[image_name],
+                color_intrinsics=color_intrinsics,
+                depth_image=_load_scene_depth_image(image_name),
+                depth_intrinsics=depth_intrinsics,
+                selector_visible_object_ids=selector_visible_object_ids,
+                selector_score=int(
+                    frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0
+                ),
+                frame_info=frame_info,
+                frame_selection_score=frame_selection_score,
+                image_b64=image_b64,
+                visibility_by_obj_id=visibility_by_obj_id,
+                out_of_frame_review=(
+                    _get_scene_out_of_frame_review(image_name)
+                    if bool(frame_info.get("frame_usable", True))
+                    else None
+                ),
+                vlm_workers=int(args.vlm_workers),
+                ray_caster_getter=ray_caster_getter,
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+            referability_entry_cache[image_name] = dict(entry) if isinstance(entry, dict) else None
+            if isinstance(entry, dict):
+                scene_out_of_frame_review_cache[image_name] = _extract_out_of_frame_review_payload(entry)
+                _update_scene_frame_sidecar_record(
+                    image_name,
+                    frame_info=frame_info,
+                    frame_selection_score=frame_selection_score,
+                    referability_entry=entry,
+                )
+            return dict(entry) if isinstance(entry, dict) else None
+
         def _get_reviewed_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
             image_name = str(frame.get("image_name", "")).strip()
             if not image_name:
                 return None
 
+            selector_score = int(
+                frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0
+            )
             cached_frame_info = frame_clarity_cache.get(image_name, _cache_miss)
+            sidecar_record = (
+                scene_frame_sidecar_cache.get(image_name)
+                if isinstance(scene_frame_sidecar_cache.get(image_name), dict)
+                else None
+            )
+            if cached_frame_info is _cache_miss and isinstance(sidecar_record, dict):
+                sidecar_frame_info = sidecar_record.get("frame_info")
+                if isinstance(sidecar_frame_info, dict):
+                    cached_frame_info = dict(sidecar_frame_info)
+                    frame_clarity_cache[image_name] = cached_frame_info
+                sidecar_entry = sidecar_record.get("referability_entry")
+                if isinstance(sidecar_entry, dict):
+                    referability_entry_cache.setdefault(image_name, dict(sidecar_entry))
+                    scene_out_of_frame_review_cache.setdefault(
+                        image_name,
+                        _extract_out_of_frame_review_payload(sidecar_entry),
+                    )
             if cached_frame_info is _cache_miss:
                 image = _load_scene_image(image_name)
                 if image is None:
                     frame_clarity_cache[image_name] = None
                     return None
-                cached_frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
+                cached_frame_info = _normalize_frame_review(
+                    _frame_decision(
+                        client,
+                        model_name,
+                        image,
+                        image_b64=_get_scene_image_b64(image_name),
+                    )
+                )
                 frame_clarity_cache[image_name] = cached_frame_info
             if not isinstance(cached_frame_info, dict):
                 return None
 
-            selector_score = int(
-                frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0
+            frame_selection_score = (
+                int(sidecar_record.get("frame_selection_score"))
+                if isinstance(sidecar_record, dict)
+                and sidecar_record.get("frame_selection_score") is not None
+                else _frame_selection_score(selector_score, cached_frame_info)
             )
-            frame_info = dict(cached_frame_info)
+            _update_scene_frame_sidecar_record(
+                image_name,
+                frame_info=cached_frame_info,
+                frame_selection_score=frame_selection_score,
+            )
             return {
                 **frame,
                 "selector_score": selector_score,
-                "frame_info": frame_info,
-                "frame_selection_score": _frame_selection_score(selector_score, frame_info),
+                "frame_info": dict(cached_frame_info),
+                "frame_selection_score": frame_selection_score,
             }
 
         attachment_candidate_frames = [
@@ -7555,55 +8108,11 @@ def main():
             reviewed_frame: dict[str, Any],
         ) -> dict[str, Any] | None:
             image_name = str(frame.get("image_name", "")).strip()
-            if not image_name or image_name not in poses:
-                return None
-
-            cached_entry = referability_entry_cache.get(image_name, _cache_miss)
-            if cached_entry is not _cache_miss:
-                return dict(cached_entry) if isinstance(cached_entry, dict) else None
-
-            image_path = scene_dir / "color" / image_name
-            image = _load_scene_image(image_name)
-            if image is None:
-                referability_entry_cache[image_name] = None
-                return None
-
-            camera_pose = poses[image_name]
-            selector_visible_object_ids = [
-                int(obj_id)
-                for obj_id in frame.get("visible_object_ids", [])
-                if int(obj_id) in objects_by_id
-            ]
-            depth_image = _load_scene_depth_image(image_name)
-
-            entry = _compute_frame_referability_entry(
-                client=client,
-                model_name=model_name,
-                scene_objects=scene["objects"],
-                objects_by_id=objects_by_id,
-                image=image,
-                image_path=image_path,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-                selector_visible_object_ids=selector_visible_object_ids,
-                selector_score=int(
-                    frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0
-                ),
-                frame_info=reviewed_frame.get("frame_info", _selector_quality_pass_frame_info()),
-                frame_selection_score=int(
-                    reviewed_frame.get(
-                        "frame_selection_score",
-                        frame.get("selector_score", frame.get("score", 0)),
-                    ) or 0
-                ),
-                vlm_workers=int(args.vlm_workers),
-                ray_caster_getter=ray_caster_getter,
-                instance_mesh_data_getter=instance_mesh_data_getter,
+            return _get_referability_entry_by_image_name(
+                image_name,
+                frame=frame,
+                reviewed_frame=reviewed_frame,
             )
-            referability_entry_cache[image_name] = dict(entry) if isinstance(entry, dict) else None
-            return dict(entry) if isinstance(entry, dict) else None
 
         scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         scene_grouping_summary["non_attachment_candidate_frame_count"] = len(non_attachment_candidate_frames)
@@ -7709,150 +8218,154 @@ def main():
                     group.get("status_before_attachment_slots", "dropped_by_group_rerank")
                 )
 
-        if not selected_attachment_frames and not selected_non_attachment_frames:
-            scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
-            scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
-            _persist_current_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="no_final_referability_frames",
-                scene_skip_reason="no_final_referability_frames",
-                scene_grouping_summary=scene_grouping_summary,
-                scene_cache=None,
-            )
-            logger.info("Scene %s has no final referability frames -> skipping", scene_id)
-            _finalize_attachment_review_scene(
-                _make_attachment_review_record("no_final_referability_frames")
-            )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="no_final_referability_frames",
-                scene_review=attachment_pair_salvage_scene_review,
-            )
-            newly_processed += 1
-            continue
-
-        logger.info(
-            "Processing referability scene %s [split=%s] with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
-            scene_id,
-            scene_split,
-            len(selected_attachment_frames),
-            len(selected_non_attachment_frames),
-        )
-
-        final_scene_entries: dict[str, dict[str, Any]] = {}
-        final_selection_rank = 0
-
-        for frame in selected_attachment_frames:
-            image_name = str(frame.get("image_name", "")).strip()
-            final_scene_entries[image_name] = _attach_selection_metadata(
-                frame,
-                attachment_graph,
-                final_selection_rank=final_selection_rank,
-                attachment_view_group_id=frame.get("attachment_view_group_id"),
-                attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
-                attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
-            )
-            final_selection_rank += 1
-
-        for frame in selected_non_attachment_frames:
-            image_name = str(frame.get("image_name", "")).strip()
-            if not image_name or image_name not in poses:
+        try:
+            if not selected_attachment_frames and not selected_non_attachment_frames:
+                scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
+                scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
+                _persist_current_scene(
+                    scene_id=scene_id,
+                    split=scene_split,
+                    pipeline_outcome="no_final_referability_frames",
+                    scene_skip_reason="no_final_referability_frames",
+                    scene_grouping_summary=scene_grouping_summary,
+                    scene_cache=None,
+                )
+                logger.info("Scene %s has no final referability frames -> skipping", scene_id)
+                _finalize_attachment_review_scene(
+                    _make_attachment_review_record("no_final_referability_frames")
+                )
+                _finalize_attachment_pair_salvage_review_scene(
+                    scene_id=scene_id,
+                    split=scene_split,
+                    pipeline_outcome="no_final_referability_frames",
+                    scene_review=attachment_pair_salvage_scene_review,
+                )
+                newly_processed += 1
                 continue
 
-            cached_entry = frame.get("_referability_entry")
-            if isinstance(cached_entry, dict):
-                entry = dict(cached_entry)
-            else:
-                reviewed_frame = dict(frame)
-                if not isinstance(reviewed_frame.get("frame_info"), dict):
-                    reviewed_frame = _get_reviewed_frame(frame)
-                if reviewed_frame is None:
-                    continue
-                entry = _get_referability_entry(frame, reviewed_frame)
-                if not isinstance(entry, dict):
-                    continue
-            final_scene_entries[image_name] = _attach_selection_metadata(
-                entry,
-                attachment_graph,
-                final_selection_rank=final_selection_rank,
-                attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
-                attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
+            logger.info(
+                "Processing referability scene %s [split=%s] with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
+                scene_id,
+                scene_split,
+                len(selected_attachment_frames),
+                len(selected_non_attachment_frames),
             )
-            final_selection_rank += 1
 
-        if not final_scene_entries:
-            scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
-            scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
+            final_scene_entries: dict[str, dict[str, Any]] = {}
+            final_selection_rank = 0
+
+            for frame in selected_attachment_frames:
+                image_name = str(frame.get("image_name", "")).strip()
+                final_scene_entries[image_name] = _attach_selection_metadata(
+                    frame,
+                    attachment_graph,
+                    final_selection_rank=final_selection_rank,
+                    attachment_view_group_id=frame.get("attachment_view_group_id"),
+                    attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
+                    attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
+                )
+                final_selection_rank += 1
+
+            for frame in selected_non_attachment_frames:
+                image_name = str(frame.get("image_name", "")).strip()
+                if not image_name or image_name not in poses:
+                    continue
+
+                cached_entry = frame.get("_referability_entry")
+                if isinstance(cached_entry, dict):
+                    entry = dict(cached_entry)
+                else:
+                    reviewed_frame = dict(frame)
+                    if not isinstance(reviewed_frame.get("frame_info"), dict):
+                        reviewed_frame = _get_reviewed_frame(frame)
+                    if reviewed_frame is None:
+                        continue
+                    entry = _get_referability_entry(frame, reviewed_frame)
+                    if not isinstance(entry, dict):
+                        continue
+                final_scene_entries[image_name] = _attach_selection_metadata(
+                    entry,
+                    attachment_graph,
+                    final_selection_rank=final_selection_rank,
+                    attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
+                    attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
+                )
+                final_selection_rank += 1
+
+            if not final_scene_entries:
+                scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
+                scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
+                _persist_current_scene(
+                    scene_id=scene_id,
+                    split=scene_split,
+                    pipeline_outcome="no_cacheable_referability_entries",
+                    scene_skip_reason="no_cacheable_referability_entries",
+                    scene_grouping_summary=scene_grouping_summary,
+                    scene_cache=None,
+                )
+                logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
+                _finalize_attachment_review_scene(
+                    _make_attachment_review_record("no_cacheable_referability_entries")
+                )
+                _finalize_attachment_pair_salvage_review_scene(
+                    scene_id=scene_id,
+                    split=scene_split,
+                    pipeline_outcome="no_cacheable_referability_entries",
+                    scene_review=attachment_pair_salvage_scene_review,
+                )
+                newly_processed += 1
+                continue
+
+            final_scene_entries = _enrich_final_scene_entries_out_of_frame(
+                client=client,
+                model_name=model_name,
+                scene_dir=scene_dir,
+                final_scene_entries=final_scene_entries,
+                scene_objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                poses=poses,
+                color_intrinsics=color_intrinsics,
+                depth_intrinsics=depth_intrinsics,
+                referability_entry_getter=lambda image_name: _get_referability_entry_by_image_name(image_name),
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+
+            scene_cache = frames_cache.setdefault(scene_id, {})
+            scene_cache.clear()
+            for image_name, entry in sorted(
+                final_scene_entries.items(),
+                key=lambda item: int(item[1].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)),
+            ):
+                scene_cache[image_name] = entry
+            scene_grouping_summary["pipeline_outcome"] = "processed"
+            scene_grouping_summary["scene_skip_reason"] = None
+            scene_grouping_summary["final_cacheable_frame_image_names"] = [
+                str(image_name)
+                for image_name in scene_cache.keys()
+            ]
+            scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
             _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
-                pipeline_outcome="no_cacheable_referability_entries",
-                scene_skip_reason="no_cacheable_referability_entries",
+                pipeline_outcome="processed",
+                scene_skip_reason=None,
                 scene_grouping_summary=scene_grouping_summary,
-                scene_cache=None,
+                scene_cache=scene_cache,
             )
-            logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
             _finalize_attachment_review_scene(
-                _make_attachment_review_record("no_cacheable_referability_entries")
+                _make_attachment_review_record("processed")
             )
             _finalize_attachment_pair_salvage_review_scene(
                 scene_id=scene_id,
                 split=scene_split,
-                pipeline_outcome="no_cacheable_referability_entries",
+                pipeline_outcome="processed",
                 scene_review=attachment_pair_salvage_scene_review,
             )
+
+            processed += 1
             newly_processed += 1
-            continue
-
-        final_scene_entries = _enrich_final_scene_entries_out_of_frame(
-            client=client,
-            model_name=model_name,
-            scene_dir=scene_dir,
-            final_scene_entries=final_scene_entries,
-            scene_objects=scene["objects"],
-            objects_by_id=objects_by_id,
-            poses=poses,
-            color_intrinsics=color_intrinsics,
-            depth_intrinsics=depth_intrinsics,
-            instance_mesh_data_getter=instance_mesh_data_getter,
-        )
-
-        scene_cache = frames_cache.setdefault(scene_id, {})
-        scene_cache.clear()
-        for image_name, entry in sorted(
-            final_scene_entries.items(),
-            key=lambda item: int(item[1].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)),
-        ):
-            scene_cache[image_name] = entry
-        scene_grouping_summary["pipeline_outcome"] = "processed"
-        scene_grouping_summary["scene_skip_reason"] = None
-        scene_grouping_summary["final_cacheable_frame_image_names"] = [
-            str(image_name)
-            for image_name in scene_cache.keys()
-        ]
-        scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
-        _persist_current_scene(
-            scene_id=scene_id,
-            split=scene_split,
-            pipeline_outcome="processed",
-            scene_skip_reason=None,
-            scene_grouping_summary=scene_grouping_summary,
-            scene_cache=scene_cache,
-        )
-        _finalize_attachment_review_scene(
-            _make_attachment_review_record("processed")
-        )
-        _finalize_attachment_pair_salvage_review_scene(
-            scene_id=scene_id,
-            split=scene_split,
-            pipeline_outcome="processed",
-            scene_review=attachment_pair_salvage_scene_review,
-        )
-
-        processed += 1
-        newly_processed += 1
+        finally:
+            _flush_scene_frame_sidecar()
 
     batch_scene_count = len(scene_status_cache)
     if batch_scene_count > 0:
