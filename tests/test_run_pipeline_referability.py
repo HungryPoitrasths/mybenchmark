@@ -49,6 +49,39 @@ def make_case_dir(prefix: str) -> Path:
     return path
 
 
+def write_neighbor_edited_html(cache_path: Path, html_text: str | None = None) -> Path:
+    edited_html_path = cache_path.parent / "edited.html"
+    edited_html_path.write_text(
+        html_text or "<!doctype html><html lang=\"en\"><body></body></html>",
+        encoding="utf-8",
+    )
+    return edited_html_path
+
+
+def make_attachment_pair_review_html(
+    *,
+    scene_id: str,
+    image_name: str,
+    parent_id: int,
+    parent_label: str,
+    parent_surface_text: str,
+    child_id: int,
+    child_label: str,
+    child_surface_text: str,
+    deleted: bool = False,
+) -> str:
+    deleted_value = "true" if deleted else "false"
+    return f"""<!doctype html>
+<html lang="en">
+<body>
+  <article class="pair-card" data-scene-id="{scene_id}" data-image-name="{image_name}" data-group-id="{scene_id}:group_0" data-pair-id="{parent_id}-&gt;{child_id}" data-parent-id="{parent_id}" data-parent-label="{parent_label}" data-child-id="{child_id}" data-child-label="{child_label}" data-deleted="{deleted_value}">
+    <input type="text" name="parent_surface_text" value="{parent_surface_text}">
+    <input type="text" name="child_surface_text" value="{child_surface_text}">
+  </article>
+</body>
+</html>"""
+
+
 class RunPipelineReferabilityTests(unittest.TestCase):
     def test_apply_question_dinox_audit_records_all_unique_mentioned_labels(self) -> None:
         chair_mask = np.zeros((20, 30), dtype=bool)
@@ -983,9 +1016,28 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             json.dumps({"version": "3.0", "frames": {}}, ensure_ascii=False),
             encoding="utf-8",
         )
+        write_neighbor_edited_html(cache_path)
 
         with self.assertRaisesRegex(ValueError, "expected 20.0"):
             run_pipeline_module._load_referability_cache(cache_path)
+
+    def test_load_referability_cache_requires_neighbor_edited_html(self) -> None:
+        case_dir = make_case_dir("cache_missing_edited_html")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        cache_path.write_text(
+            json.dumps({"version": "20.0", "frames": {}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ValueError) as exc_info:
+            run_pipeline_module._load_referability_cache(cache_path)
+
+        message = str(exc_info.exception)
+        self.assertIn("缺少人工审核文件 edited.html", message)
+        self.assertIn(str(cache_path), message)
+        self.assertIn(str((case_dir / "edited.html").resolve()), message)
+        self.assertIn("请先完成人工审核", message)
 
     def test_load_referability_cache_rejects_inconsistent_entry_without_repair_flag(self) -> None:
         case_dir = make_case_dir("cache_inconsistent")
@@ -1027,8 +1079,79 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     },
                 },
                 ensure_ascii=False,
+                ),
+            encoding="utf-8",
+        )
+        write_neighbor_edited_html(cache_path)
+
+        with self.assertRaisesRegex(ValueError, "Rerun with --repair_referability_cache"):
+            run_pipeline_module._load_referability_cache(cache_path)
+
+    def test_load_referability_cache_validates_merged_cache_after_human_salvage(self) -> None:
+        case_dir = make_case_dir("cache_inconsistent_after_merge")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "20.0",
+                    "frames": {
+                        scene_id: {
+                            image_name: {
+                                "frame_usable": True,
+                                "label_to_object_ids": {"cup": [1], "table": [2]},
+                                "selector_visible_label_counts": {"cup": 1, "table": 1},
+                                "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                                "crop_label_counts": {"cup": 1, "table": 1},
+                                "crop_referable_object_ids": [1, 2],
+                                "full_frame_label_reviews": [{"label": "cup", "status": "absent"}],
+                                "full_frame_label_statuses": {"cup": "absent"},
+                                "full_frame_label_counts": {"cup": 0},
+                                "label_statuses": {"cup": "unique", "table": "unique"},
+                                "label_counts": {"cup": 1, "table": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
+                                "referable_object_ids": [1, 2],
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_object_ids": [],
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "cup",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                    "2": {
+                                        "obj_id": 2,
+                                        "label": "table",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                },
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
             ),
             encoding="utf-8",
+        )
+        write_neighbor_edited_html(
+            cache_path,
+            make_attachment_pair_review_html(
+                scene_id=scene_id,
+                image_name=image_name,
+                parent_id=2,
+                parent_label="table",
+                parent_surface_text="wooden table",
+                child_id=1,
+                child_label="cup",
+                child_surface_text="blue cup",
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "Rerun with --repair_referability_cache"):
@@ -1096,9 +1219,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     },
                 },
                 ensure_ascii=False,
-            ),
+                ),
             encoding="utf-8",
         )
+        write_neighbor_edited_html(cache_path)
 
         cache = run_pipeline_module._load_referability_cache(
             cache_path,
@@ -1117,6 +1241,137 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         persisted_entry = persisted_cache["frames"][scene_id][image_name]
         self.assertEqual(persisted_entry["label_statuses"], {"lamp": "absent"})
         self.assertEqual(persisted_entry["referable_object_ids"], [])
+
+    def test_load_referability_cache_applies_human_salvage_html_without_rewriting_source_json(self) -> None:
+        case_dir = make_case_dir("cache_salvage_merge")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        scene_id = "scene0001_00"
+        image_name = "000001.jpg"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "20.0",
+                    "frames": {
+                        scene_id: {
+                            image_name: {
+                                "frame_usable": True,
+                                "frame_quality_clear": True,
+                                "frame_quality_score": 82,
+                                "frame_quality_reason": "clear enough",
+                                "frame_selection_score": 82001,
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_pair_count": 0,
+                                "attachment_referable_object_ids": [],
+                                "attachment_final_referability": {
+                                    "referable_object_ids": [],
+                                    "pairs": [],
+                                    "pair_count": 0,
+                                },
+                                "final_selection_rank": 0,
+                                "candidate_visible_object_ids": [1, 2],
+                                "candidate_visibility_source": "mesh_ray_refined",
+                                "candidate_labels": ["cup", "table"],
+                                "label_to_object_ids": {"cup": [1], "table": [2]},
+                                "selector_visible_object_ids": [1, 2],
+                                "selector_visible_label_counts": {"cup": 1, "table": 1},
+                                "visibility_audit_by_object_id": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "cup",
+                                        "candidate_considered": True,
+                                        "candidate_passed": True,
+                                        "candidate_rejection_reasons": [],
+                                    },
+                                    "2": {
+                                        "obj_id": 2,
+                                        "label": "table",
+                                        "candidate_considered": True,
+                                        "candidate_passed": True,
+                                        "candidate_rejection_reasons": [],
+                                    },
+                                },
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "cup",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                    "2": {
+                                        "obj_id": 2,
+                                        "label": "table",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                },
+                                "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                                "crop_label_counts": {"cup": 1, "table": 1},
+                                "crop_referable_object_ids": [1, 2],
+                                "full_frame_label_reviews": [
+                                    {"label": "cup", "status": "unique"},
+                                    {"label": "table", "status": "unique"},
+                                ],
+                                "full_frame_label_statuses": {"cup": "unique", "table": "unique"},
+                                "full_frame_label_counts": {"cup": 1, "table": 1},
+                                "label_statuses": {"cup": "unique", "table": "unique"},
+                                "label_counts": {"cup": 1, "table": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
+                                "referable_object_ids": [1, 2],
+                                "vlm_unique_object_ids": [1, 2],
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        original_cache_text = cache_path.read_text(encoding="utf-8")
+        write_neighbor_edited_html(
+            cache_path,
+            make_attachment_pair_review_html(
+                scene_id=scene_id,
+                image_name=image_name,
+                parent_id=2,
+                parent_label="table",
+                parent_surface_text="wooden table",
+                child_id=1,
+                child_label="cup",
+                child_surface_text="blue cup",
+            ),
+        )
+
+        cache = run_pipeline_module._load_referability_cache(cache_path)
+
+        loaded_entry = cache["frames"][scene_id][image_name]
+        self.assertEqual(loaded_entry["attachment_referable_pairs"], [[2, 1]])
+        self.assertEqual(loaded_entry["attachment_referable_object_ids"], [1, 2])
+        self.assertEqual(
+            loaded_entry["attachment_human_review_cards"],
+            [
+                {
+                    "pair_id": "2->1",
+                    "parent_id": 2,
+                    "parent_label": "table",
+                    "parent_surface_text": "wooden table",
+                    "child_id": 1,
+                    "child_label": "cup",
+                    "child_surface_text": "blue cup",
+                    "source": "human_salvage_html",
+                }
+            ],
+        )
+        self.assertEqual(
+            run_pipeline_module._attachment_human_review_surface_text_by_object_id(
+                loaded_entry["attachment_human_review_cards"]
+            ),
+            {1: "blue cup", 2: "wooden table"},
+        )
+        self.assertEqual(cache_path.read_text(encoding="utf-8"), original_cache_text)
 
     def test_load_referability_cache_accepts_scene_grouping_metadata(self) -> None:
         case_dir = make_case_dir("cache_scene_grouping")
@@ -1186,9 +1441,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     },
                 },
                 ensure_ascii=False,
-            ),
+                ),
             encoding="utf-8",
         )
+        write_neighbor_edited_html(cache_path)
 
         cache = run_pipeline_module._load_referability_cache(cache_path)
         scene_frames = run_pipeline_module._get_referability_scene_frames(cache, "scene0000_00")
@@ -1434,6 +1690,18 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                         "out_of_frame_vlm_early_stop": False,
                         "candidate_labels": ["cup", "table"],
                         "label_to_object_ids": {"cup": [1], "table": [2]},
+                        "attachment_human_review_cards": [
+                            {
+                                "pair_id": "2->1",
+                                "parent_id": 2,
+                                "parent_label": "table",
+                                "parent_surface_text": "wooden table",
+                                "child_id": 1,
+                                "child_label": "cup",
+                                "child_surface_text": "blue cup",
+                                "source": "human_salvage_html",
+                            }
+                        ],
                     }
                 }
             },
@@ -1459,6 +1727,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["referable_object_ids"] = list(kwargs["referable_object_ids"] or [])
             captured["attachment_referable_object_ids"] = list(
                 kwargs.get("attachment_referable_object_ids") or []
+            )
+            captured["attachment_object_surface_text_by_id"] = dict(
+                kwargs.get("attachment_object_surface_text_by_id") or {}
             )
             captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
             captured["mention_in_frame_ratio_by_obj_id"] = dict(
@@ -1517,6 +1788,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1, 2])
         self.assertEqual(captured["attachment_referable_object_ids"], [1, 2])
+        self.assertEqual(captured["attachment_object_surface_text_by_id"], {1: "blue cup", 2: "wooden table"})
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
         self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95, 2: 0.85})
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})

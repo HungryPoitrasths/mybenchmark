@@ -212,6 +212,10 @@ def _attachment_pair_salvage_review_html_output_path(output_path: Path) -> Path:
     return _salvage_artifact_dir(output_path) / f"{prefix}_salvage_review.html"
 
 
+def _edited_attachment_pair_salvage_html_output_path(output_path: Path) -> Path:
+    return output_path.parent / "edited.html"
+
+
 def _scene_object_label(obj: dict[str, Any]) -> str:
     for key in ("label", "canonical_label", "raw_label"):
         label = str(obj.get(key, "")).strip()
@@ -2762,6 +2766,7 @@ def _build_attachment_pair_salvage_review_document(
         "generated_by": "scripts/run_vlm_referability.py",
         "review_stage": ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE,
         "referability_cache_output": str(referability_cache_output),
+        "edited_html_output": str(_edited_attachment_pair_salvage_html_output_path(referability_cache_output)),
         "scene_count": scene_count,
         "group_count_total": sum(int(scene.get("group_count_total", 0) or 0) for scene in scenes),
         "group_count_with_clarity_pass_images": sum(
@@ -3115,6 +3120,9 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     rendered_pair_count = 0
     included_scene_ids: list[str] = []
     seen_scene_ids: set[str] = set()
+    referability_cache_output = str(review_doc.get("referability_cache_output", "")).strip()
+    edited_html_output = str(review_doc.get("edited_html_output", "")).strip()
+    edited_html_filename = Path(edited_html_output).name if edited_html_output else "edited.html"
     scene_sections: list[str] = []
     for scene in review_doc.get("scenes", []):
         scene_id = str(scene.get("scene_id", "")).strip()
@@ -3218,6 +3226,9 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     rendered_pair_count = 0
     included_scene_ids: list[str] = []
     seen_scene_ids: set[str] = set()
+    referability_cache_output = str(review_doc.get("referability_cache_output", "")).strip()
+    edited_html_output = str(review_doc.get("edited_html_output", "")).strip()
+    edited_html_filename = Path(edited_html_output).name if edited_html_output else "edited.html"
     scene_sections: list[str] = []
     for scene in review_doc.get("scenes", []):
         scene_id = str(scene.get("scene_id", "")).strip()
@@ -3336,6 +3347,8 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
         <div><strong>group count:</strong> {rendered_group_count}</div>
         <div><strong>pair count:</strong> {rendered_pair_count}</div>
       </div>
+      <div class="summary-scenes"><strong>referability cache:</strong> {html.escape(referability_cache_output or "-")}</div>
+      <div class="summary-scenes"><strong>edited html target:</strong> {html.escape(edited_html_output or edited_html_filename)}</div>
       <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
       <div class="summary-actions">
         <button type="button" id="export-edited-html" class="summary-action">Export Edited HTML</button>
@@ -3345,6 +3358,8 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
   </div>
   <script>
     (() => {{
+      const editedHtmlTargetName = {json.dumps(edited_html_filename, ensure_ascii=False)};
+
       function persistCardState() {{
         document.querySelectorAll('.pair-card').forEach((card) => {{
           card.setAttribute('data-deleted', card.dataset.deleted === 'true' ? 'true' : 'false');
@@ -3368,13 +3383,35 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
 
       const exportButton = document.getElementById('export-edited-html');
       if (exportButton) {{
-        exportButton.addEventListener('click', () => {{
+        exportButton.addEventListener('click', async () => {{
           persistCardState();
           const htmlText = '<!doctype html>\\n' + document.documentElement.outerHTML;
+          if (typeof window.showSaveFilePicker === 'function') {{
+            try {{
+              const handle = await window.showSaveFilePicker({{
+                id: 'attachment-pair-salvage-edited-html',
+                suggestedName: editedHtmlTargetName,
+                types: [
+                  {{
+                    description: 'HTML file',
+                    accept: {{ 'text/html': ['.html'] }},
+                  }},
+                ],
+              }});
+              const writable = await handle.createWritable();
+              await writable.write(htmlText);
+              await writable.close();
+              return;
+            }} catch (error) {{
+              if (error && error.name === 'AbortError') {{
+                return;
+              }}
+            }}
+          }}
           const blob = new Blob([htmlText], {{ type: 'text/html;charset=utf-8' }});
           const anchor = document.createElement('a');
           anchor.href = URL.createObjectURL(blob);
-          anchor.download = 'attachment_pair_salvage_review_edited.html';
+          anchor.download = editedHtmlTargetName;
           document.body.appendChild(anchor);
           anchor.click();
           anchor.remove();
@@ -6832,6 +6869,7 @@ def main():
     )
     attachment_pair_salvage_review_output = _attachment_pair_salvage_review_output_path(output_path)
     attachment_pair_salvage_review_html_output = _attachment_pair_salvage_review_html_output_path(output_path)
+    edited_attachment_pair_salvage_html_output = _edited_attachment_pair_salvage_html_output_path(output_path)
     non_attachment_group_debug_dir = (
         Path(args.non_attachment_group_debug_dir)
         if args.non_attachment_group_debug_dir else None
@@ -6909,13 +6947,21 @@ def main():
             scenes=attachment_pair_salvage_review_scenes,
         )
         _write_json_payload(attachment_pair_salvage_review_output, review_doc)
+        rendered_review_html = _render_attachment_pair_salvage_review_html(review_doc)
         attachment_pair_salvage_review_html_output.parent.mkdir(parents=True, exist_ok=True)
-        attachment_pair_salvage_review_html_output.write_text(
-            _render_attachment_pair_salvage_review_html(review_doc),
-            encoding="utf-8",
-        )
+        attachment_pair_salvage_review_html_output.write_text(rendered_review_html, encoding="utf-8")
+        edited_attachment_pair_salvage_html_output.parent.mkdir(parents=True, exist_ok=True)
+        edited_attachment_pair_salvage_html_output.write_text(rendered_review_html, encoding="utf-8")
         logger.info("Saved attachment pair salvage review JSON to %s", attachment_pair_salvage_review_output)
         logger.info("Saved attachment pair salvage review HTML to %s", attachment_pair_salvage_review_html_output)
+        logger.info(
+            "Saved editable attachment pair salvage HTML bootstrap to %s",
+            edited_attachment_pair_salvage_html_output,
+        )
+        logger.warning("========== 人工审核 ==========")
+        logger.warning("请直接打开 %s 进行人工修改", edited_attachment_pair_salvage_html_output)
+        logger.warning("修改完成后，保留文件名 edited.html")
+        logger.warning("==============================")
 
     def _finalize_attachment_pair_salvage_review_scene(
         *,

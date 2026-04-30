@@ -72,6 +72,8 @@ from src.utils import RayCaster
 from scripts.run_vlm_referability import (
     SEGMENTATION_EXTREME_NOISE_MIN_SCORE as QUESTION_DINOX_LOOSE_MIN_SCORE,
     SEGMENTATION_STRONG_MIN_SCORE as QUESTION_DINOX_STRONG_MIN_SCORE,
+    _apply_attachment_pair_salvage_html_review,
+    _attachment_human_review_surface_text_by_object_id,
     _call_dinox_joint_detection as _referability_call_dinox_joint_detection,
     _compute_mesh_mask_quality_for_object,
     _compute_topology_quality_for_object,
@@ -914,6 +916,10 @@ def _repair_referability_cache_entries(cache: dict | None) -> int:
     return repaired_count
 
 
+def _referability_cache_edited_html_path(path: Path) -> Path:
+    return path.parent / "edited.html"
+
+
 def _load_referability_cache(
     path: Path,
     *,
@@ -924,7 +930,20 @@ def _load_referability_cache(
         logger.warning("Referability cache not found: %s", path)
         return None
     with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+        raw_data = json.load(f)
+    edited_html_path = _referability_cache_edited_html_path(path)
+    if not edited_html_path.exists():
+        raise ValueError(
+            "[缺少人工审核文件 edited.html]\n"
+            f"referability_cache: {path}\n"
+            f"期望位置: {edited_html_path.resolve()}\n"
+            "请先完成人工审核，并把导出的文件命名为 edited.html 放到上面这个目录。"
+        )
+    html_text = edited_html_path.read_text(encoding="utf-8")
+    data = _apply_attachment_pair_salvage_html_review(
+        html_text=html_text,
+        cache_doc=raw_data,
+    )
     version = str(data.get("version", ""))
     if version != EXPECTED_REFERABILITY_CACHE_VERSION:
         raise ValueError(
@@ -953,9 +972,22 @@ def _load_referability_cache(
             path,
         )
         if persist_repaired_entries and repaired_count > 0:
-            _write_json_file(path, data)
-            logger.info("Wrote repaired referability cache to %s", path)
-    logger.info("Loaded referability cache from %s", path)
+            persistable_data = json.loads(json.dumps(raw_data, ensure_ascii=False))
+            persistable_repaired_count = _repair_referability_cache_entries(persistable_data)
+            remaining_persistable_inconsistent_entry = _find_inconsistent_referability_entry(persistable_data)
+            if remaining_persistable_inconsistent_entry is not None:
+                raise ValueError(
+                    f"Referability cache entry for {remaining_persistable_inconsistent_entry} is inconsistent with cache version "
+                    f"{EXPECTED_REFERABILITY_CACHE_VERSION} even after repair. Regenerate the referability cache from scratch."
+                )
+            if persistable_repaired_count > 0:
+                _write_json_file(path, persistable_data)
+                logger.info("Wrote repaired referability cache to %s", path)
+    logger.info(
+        "Loaded referability cache from %s with automatic human salvage backfill enabled via %s",
+        path,
+        edited_html_path,
+    )
     return data
 
 
@@ -3511,6 +3543,7 @@ def run_pipeline(
 
                 referable_ids = None
                 attachment_referable_ids = None
+                attachment_object_surface_text_by_id: dict[int, str] = {}
                 label_statuses = None
                 label_counts = None
                 out_of_frame_not_visible_labels: list[str] = []
@@ -3585,6 +3618,11 @@ def run_pipeline(
                             raw_attachment_referable_ids = referability_entry.get(
                                 "attachment_referable_object_ids"
                             )
+                            attachment_object_surface_text_by_id = (
+                                _attachment_human_review_surface_text_by_object_id(
+                                    referability_entry.get("attachment_human_review_cards")
+                                )
+                            )
                             if raw_attachment_referable_ids is None:
                                 raw_attachment_referable_ids = _derive_final_referability_fields(
                                     referability_entry
@@ -3596,6 +3634,7 @@ def run_pipeline(
                             ]
                         else:
                             raw_referable_ids = []
+                            attachment_object_surface_text_by_id = {}
 
                     with _timed_frame_phase(frame_ctx, "in_frame_ratio_projected_area_map_build"):
                         mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
@@ -3684,6 +3723,7 @@ def run_pipeline(
                                 visible_object_ids=visible_ids,
                                 referable_object_ids=referable_ids,
                                 attachment_referable_object_ids=attachment_referable_ids,
+                                attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
                                 occlusion_eligible_object_ids=occlusion_eligible_ids,
                                 mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
                                 label_statuses=label_statuses,

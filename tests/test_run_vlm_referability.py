@@ -3550,6 +3550,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("group</strong> scene0003_00:group_0", html_text)
         self.assertIn("group</strong> scene0003_00:group_1", html_text)
         self.assertIn('id="export-edited-html"', html_text)
+        self.assertIn("edited html target:</strong> edited.html", html_text)
+        self.assertIn("suggestedName: editedHtmlTargetName", html_text)
         self.assertIn('name="parent_surface_text"', html_text)
         self.assertIn('name="child_surface_text"', html_text)
         self.assertIn('class="pair-delete-toggle"', html_text)
@@ -4150,6 +4152,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         review_path = output_path.parent / "salvage" / "referability_cache_salvage_review.json"
         review_html_path = output_path.parent / "salvage" / "referability_cache_salvage_review.html"
+        edited_html_path = output_path.parent / "edited.html"
 
         scene = {
             "objects": [
@@ -4292,15 +4295,19 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertTrue(review_path.exists())
         self.assertTrue(review_html_path.exists())
+        self.assertTrue(edited_html_path.exists())
         review_doc = json.loads(review_path.read_text(encoding="utf-8"))
         html_text = review_html_path.read_text(encoding="utf-8")
         self.assertEqual(review_doc["name"], referability_module.ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME)
+        self.assertEqual(review_doc["edited_html_output"], str(edited_html_path))
         self.assertEqual(review_doc["pair_count_needs_vlm_salvage_review"], 1)
         self.assertIn("Attachment Pair Salvage Review", html_text)
+        self.assertIn(f"edited html target:</strong> {edited_html_path}", html_text)
         self.assertIn("included scenes:</strong> scene0001_00", html_text)
         self.assertIn("scene0001_00:group_0", html_text)
         self.assertIn("000001", html_text)
         self.assertIn("1-&gt;2", html_text)
+        self.assertEqual(edited_html_path.read_text(encoding="utf-8"), html_text)
         self.assertTrue(output_path.exists())
 
     def test_main_writes_scene_status_for_no_frame_candidates(self) -> None:
