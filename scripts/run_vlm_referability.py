@@ -2770,9 +2770,9 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     .scene-card{{padding:18px 20px;margin-bottom:24px;}}
     .group-card{{padding:16px 18px;margin:18px 0;}}
     .pair-list{{display:grid;gap:14px;margin-top:16px;}}
-    .pair-card{{padding:14px 16px;display:grid;grid-template-columns:180px 1fr;gap:16px;align-items:start;}}
+    .pair-card{{padding:14px 16px;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start;}}
     .pair-visual{{display:grid;gap:8px;}}
-    .pair-visual img{{width:100%;height:132px;object-fit:cover;display:block;border-radius:12px;background:#d1d5db;}}
+    .pair-visual img{{width:100%;height:264px;object-fit:cover;display:block;border-radius:12px;background:#d1d5db;}}
     .pair-image-name{{font-size:12px;color:#6b7280;letter-spacing:.02em;}}
     .pair-copy{{display:grid;gap:10px;align-content:start;}}
     .pair-text{{padding:10px 12px;border-radius:12px;background:#f8f6f1;border:1px solid #e7dfd1;}}
