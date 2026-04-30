@@ -78,8 +78,8 @@ ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION = "1.0"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME = "attachment_pair_salvage_review"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE = "post_attachment_referability"
 SCANNET_METADATA_SPLIT_FILES: dict[str, Path] = {
-    "train": PROJECT_ROOT / "metadata" / "scannetv2_train.txt",
-    "val": PROJECT_ROOT / "metadata" / "scannetv2_val.txt",
+    "train": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_train.txt"),
+    "val": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_val.txt"),
 }
 SCENE_STATUS_VERSION = 1
 DEFAULT_BATCH_OUTPUT_PREFIX = "flash"
