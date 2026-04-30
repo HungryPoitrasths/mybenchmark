@@ -1696,17 +1696,16 @@ def _question_presence_prompt(
     )
     return (
         "You are auditing whether specific object instances mentioned in a visual question are clearly visible "
-        "and uniquely identifiable in the frame.\n"
+        "in the frame.\n"
         "You will receive the full scene image first, followed by one crop for each target instance.\n"
         "Each crop appears in the same order as the Targets list, so crop_index 1 refers to the first crop after "
         "the full image.\n"
         "Use the crop as the primary evidence and the full image only as context.\n"
         "Judge each crop_index independently.\n"
-        "Return present only when the exact instance is clearly visible, belongs to the given label, and can be "
-        "uniquely identified as a standalone instance in the frame.\n"
-        "If the crop is too partial, blurry, heavily occluded, confusing among multiple same-label instances, or "
-        "might only show a component/substructure of a larger object, return unsure instead of present.\n"
-        "If the instance does not appear in the image, return absent.\n"
+        "Return present only if the crop clearly shows the target instance and the object in the crop is "
+        "recognizable as the given label from the crop itself.\n"
+        "Return unsure if the crop does not provide enough evidence to tell that the object is the given label.\n"
+        "Return absent if the target instance is not visible in the image.\n"
         "Return strict JSON only with this schema:\n"
         '{"objects":[{"crop_index":1,"status":"present","reason":"short reason"}]}\n'
         f"Question: {question_text}\n"

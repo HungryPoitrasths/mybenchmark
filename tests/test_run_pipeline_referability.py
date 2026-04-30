@@ -621,6 +621,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertIn('"crop_index": 1', prompt)
         self.assertIn('"crop_index": 2', prompt)
         self.assertLess(prompt.index('"crop_index": 1'), prompt.index('"crop_index": 2'))
+        self.assertIn(
+            "recognizable as the given label from the crop itself",
+            prompt_lower,
+        )
+        self.assertIn(
+            "not provide enough evidence to tell that the object is the given label",
+            prompt_lower,
+        )
 
     def test_question_presence_reviewer_maps_crop_index_back_to_internal_obj_id(self) -> None:
         raw_text = json.dumps(
