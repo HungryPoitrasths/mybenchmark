@@ -6492,16 +6492,6 @@ def _scene_grouping_has_details(record: Any) -> bool:
     )
 
 
-def _write_scene_grouping_summary(
-    scene_id: str,
-    summary: dict[str, Any] | None,
-    debug_dir: Path | None,
-) -> None:
-    if debug_dir is None or not isinstance(summary, dict):
-        return
-    _write_json_payload(debug_dir / f"{scene_id}.json", summary)
-
-
 def _infer_default_split(data_root: Path) -> str:
     return "train"
 
@@ -6633,7 +6623,6 @@ def _persist_scene_state(
     scene_grouping_cache: dict[str, Any],
     scene_status_cache: dict[str, Any],
     output_path: Path,
-    non_attachment_group_debug_dir: Path | None,
     scene_id: str,
     split: str,
     pipeline_outcome: str,
@@ -6665,11 +6654,6 @@ def _persist_scene_state(
         final_cacheable_frame_count=final_cacheable_frame_count,
         scene_skip_reason=scene_skip_reason,
     )
-    _write_scene_grouping_summary(
-        scene_id,
-        summary,
-        non_attachment_group_debug_dir,
-    )
     _write_json_payload(output_path, cache)
 
 
@@ -6679,7 +6663,6 @@ def _persist_scene_state_and_status(
     scene_grouping_cache: dict[str, Any],
     scene_status_cache: dict[str, Any],
     output_path: Path,
-    non_attachment_group_debug_dir: Path | None,
     scene_id: str,
     split: str,
     pipeline_outcome: str,
@@ -6696,7 +6679,6 @@ def _persist_scene_state_and_status(
         scene_grouping_cache=scene_grouping_cache,
         scene_status_cache=scene_status_cache,
         output_path=output_path,
-        non_attachment_group_debug_dir=non_attachment_group_debug_dir,
         scene_id=scene_id,
         split=split,
         pipeline_outcome=pipeline_outcome,
@@ -7007,10 +6989,6 @@ def main():
         help="Maximum number of concurrent independent VLM requests",
     )
     parser.add_argument(
-        "--non_attachment_group_debug_dir", type=str, default=None,
-        help="Optional directory to write per-scene JSON debug summaries for non-attachment group selection.",
-    )
-    parser.add_argument(
         "--write_attachment_review",
         dest="write_attachment_review",
         action="store_true",
@@ -7135,10 +7113,6 @@ def main():
     attachment_pair_salvage_review_output = _attachment_pair_salvage_review_output_path(output_path)
     attachment_pair_salvage_review_html_output = _attachment_pair_salvage_review_html_output_path(output_path)
     edited_attachment_pair_salvage_html_output = _edited_attachment_pair_salvage_html_output_path(output_path)
-    non_attachment_group_debug_dir = (
-        Path(args.non_attachment_group_debug_dir)
-        if args.non_attachment_group_debug_dir else None
-    )
     attachment_review_scenes: list[dict[str, Any]] = []
     attachment_review_terminal_lines: list[str] = []
     attachment_pair_salvage_review_scenes: list[dict[str, Any]] = []
@@ -7233,7 +7207,6 @@ def main():
             scene_grouping_cache=scene_grouping_cache,
             scene_status_cache=scene_status_cache,
             output_path=output_path,
-            non_attachment_group_debug_dir=non_attachment_group_debug_dir,
             scene_id=scene_id,
             split=split,
             pipeline_outcome=pipeline_outcome,
@@ -7394,10 +7367,8 @@ def main():
                 scene_cache=existing_scene_cache,
             )
             logger.info(
-                "Scene %s already cached -> skipping%s",
+                "Scene %s already cached -> skipping",
                 scene_id,
-                " (group debug JSON mirrors the persisted scene_grouping summary)"
-                if non_attachment_group_debug_dir is not None else "",
             )
             _finalize_attachment_review_scene(
                 _make_attachment_review_record("already_cached")

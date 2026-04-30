@@ -3824,13 +3824,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(dropped_entry["attachment_referable_pairs"], [])
         self.assertEqual(dropped_entry["attachment_referable_object_ids"], [])
 
-    def test_main_persists_scene_grouping_summary_in_cache_and_debug_json(self) -> None:
+    def test_main_persists_scene_grouping_summary_in_cache(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"
         data_root = root / "data"
         scene_dir = data_root / "scene0001_00"
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
-        debug_dir = root / "output" / "group_debug"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         scene = {
@@ -4004,8 +4003,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "1",
                 "--max_frames",
                 "2",
-                "--non_attachment_group_debug_dir",
-                str(debug_dir),
                 "--no-write_attachment_review",
             ]),
         ):
@@ -4043,9 +4040,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
             global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"],
             _batch_path.name,
         )
-
-        debug_doc = json.loads((debug_dir / "scene0001_00.json").read_text(encoding="utf-8"))
-        self.assertEqual(debug_doc, scene_grouping)
 
     def test_main_writes_empty_scene_grouping_summary_when_no_non_attachment_candidates(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_empty_{uuid.uuid4().hex}"
