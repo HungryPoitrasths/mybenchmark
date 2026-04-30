@@ -2374,6 +2374,7 @@ def _select_attachment_group_representatives(
     frames: list[dict[str, Any]],
     attachment_graph: dict[int, list[int]] | None,
     poses: dict[str, CameraPose] | None = None,
+    frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     max_accepted_frame_count: int | None = None,
     vlm_workers: int = 1,
@@ -2402,12 +2403,15 @@ def _select_attachment_group_representatives(
         group_frames = list(group_doc.get("frames", []))
         sampled_frames, _group_frame_stride = _sample_group_frames(group_frames)
         for frame in sampled_frames:
-            reviewed_frame = _review_frame_clarity(
-                client=client,
-                model_name=model_name,
-                color_dir=color_dir,
-                frame=frame,
-            )
+            if callable(frame_review_getter):
+                reviewed_frame = frame_review_getter(frame)
+            else:
+                reviewed_frame = _review_frame_clarity(
+                    client=client,
+                    model_name=model_name,
+                    color_dir=color_dir,
+                    frame=frame,
+                )
             if reviewed_frame is None:
                 continue
             reviewed_frame["attachment_view_group_id"] = group_id
@@ -2613,7 +2617,9 @@ def _build_attachment_pair_salvage_scene_review(
     attachment_edges: list[dict[str, Any]],
     frames: list[dict[str, Any]],
     poses: dict[str, CameraPose] | None,
-    attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None,
+    frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
+    attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     bbox_hard_fail_min: float,
     projected_area_hard_fail_min: float,
 ) -> dict[str, Any]:
@@ -2628,6 +2634,9 @@ def _build_attachment_pair_salvage_scene_review(
     )
 
     def _load_scene_image(image_name: str) -> np.ndarray | None:
+        if callable(scene_image_getter):
+            image = scene_image_getter(image_name)
+            return image if isinstance(image, np.ndarray) else None
         if image_name not in image_cache:
             image_cache[image_name] = cv2.imread(str(color_dir / image_name))
         return image_cache[image_name]
@@ -2650,12 +2659,15 @@ def _build_attachment_pair_salvage_scene_review(
         clarity_pass_image_names: list[str] = []
         frame_records_by_image_name: dict[str, dict[str, Any]] = {}
         for frame in sampled_frames:
-            reviewed_frame = _review_frame_clarity(
-                client=client,
-                model_name=model_name,
-                color_dir=color_dir,
-                frame=frame,
-            )
+            if callable(frame_review_getter):
+                reviewed_frame = frame_review_getter(frame)
+            else:
+                reviewed_frame = _review_frame_clarity(
+                    client=client,
+                    model_name=model_name,
+                    color_dir=color_dir,
+                    frame=frame,
+                )
             if reviewed_frame is None:
                 continue
             frame_info = reviewed_frame.get("frame_info", {})
@@ -3629,6 +3641,7 @@ def _select_non_attachment_group_representatives(
     max_group_count: int | None = None,
     max_accepted_frame_count: int | None = None,
     vlm_workers: int = 1,
+    frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     debug_groups_out: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -3667,12 +3680,15 @@ def _select_non_attachment_group_representatives(
             selector_score = int(
                 frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0
             )
-            reviewed_frame = _review_frame_clarity(
-                client=client,
-                model_name=model_name,
-                color_dir=color_dir,
-                frame=frame,
-            )
+            if callable(frame_review_getter):
+                reviewed_frame = frame_review_getter(frame)
+            else:
+                reviewed_frame = _review_frame_clarity(
+                    client=client,
+                    model_name=model_name,
+                    color_dir=color_dir,
+                    frame=frame,
+                )
             if reviewed_frame is None:
                 attempts.append(
                     {
@@ -6799,6 +6815,7 @@ def _select_and_rerank_frames(
     max_group_count: int | None = None,
     poses: dict[str, CameraPose] | None = None,
     vlm_workers: int = 1,
+    frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     stats_output: dict[str, Any] | None = None,
     debug_output: dict[str, Any] | None = None,
@@ -6832,6 +6849,7 @@ def _select_and_rerank_frames(
         max_group_count=group_limit,
         max_accepted_frame_count=int(max_frames),
         vlm_workers=vlm_workers,
+        frame_review_getter=frame_review_getter,
         referability_entry_builder=referability_entry_builder,
         debug_groups_out=group_debug,
     )
@@ -7452,6 +7470,65 @@ def main():
             scene_objects=scene["objects"],
             axis_alignment=axis_align,
         )
+        _cache_miss = object()
+        scene_image_cache: dict[str, np.ndarray | None] = {}
+        scene_depth_cache: dict[str, np.ndarray | None] = {}
+        frame_clarity_cache: dict[str, dict[str, Any] | None] = {}
+        referability_entry_cache: dict[str, dict[str, Any] | None] = {}
+
+        def _load_scene_image(image_name: str) -> np.ndarray | None:
+            cached_image = scene_image_cache.get(image_name, _cache_miss)
+            if cached_image is _cache_miss:
+                image_path = scene_dir / "color" / image_name
+                cached_image = cv2.imread(str(image_path))
+                if cached_image is None:
+                    logger.warning("Cannot read image %s", image_path)
+                scene_image_cache[image_name] = cached_image
+            return cached_image if isinstance(cached_image, np.ndarray) else None
+
+        def _load_scene_depth_image(image_name: str) -> np.ndarray | None:
+            cached_depth = scene_depth_cache.get(image_name, _cache_miss)
+            if cached_depth is not _cache_miss:
+                return cached_depth if isinstance(cached_depth, np.ndarray) else None
+
+            depth_image = None
+            frame_id = Path(image_name).stem
+            depth_path = scene_dir / "depth" / f"{frame_id}.png"
+            if depth_intrinsics is not None and depth_path.exists():
+                try:
+                    depth_image = load_depth_image(depth_path)
+                except Exception as exc:
+                    logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
+            scene_depth_cache[image_name] = depth_image
+            return depth_image
+
+        def _get_reviewed_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
+            image_name = str(frame.get("image_name", "")).strip()
+            if not image_name:
+                return None
+
+            cached_frame_info = frame_clarity_cache.get(image_name, _cache_miss)
+            if cached_frame_info is _cache_miss:
+                image = _load_scene_image(image_name)
+                if image is None:
+                    frame_clarity_cache[image_name] = None
+                    return None
+                cached_frame_info = _normalize_frame_review(_frame_decision(client, model_name, image))
+                frame_clarity_cache[image_name] = cached_frame_info
+            if not isinstance(cached_frame_info, dict):
+                return None
+
+            selector_score = int(
+                frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0
+            )
+            frame_info = dict(cached_frame_info)
+            return {
+                **frame,
+                "selector_score": selector_score,
+                "frame_info": frame_info,
+                "frame_selection_score": _frame_selection_score(selector_score, frame_info),
+            }
+
         attachment_candidate_frames = [
             frame
             for frame in frame_candidates
@@ -7473,7 +7550,7 @@ def main():
             non_attachment_group_count,
             scene_id,
         )
-        def _build_frame_referability_entry(
+        def _get_referability_entry(
             frame: dict[str, Any],
             reviewed_frame: dict[str, Any],
         ) -> dict[str, Any] | None:
@@ -7481,10 +7558,14 @@ def main():
             if not image_name or image_name not in poses:
                 return None
 
+            cached_entry = referability_entry_cache.get(image_name, _cache_miss)
+            if cached_entry is not _cache_miss:
+                return dict(cached_entry) if isinstance(cached_entry, dict) else None
+
             image_path = scene_dir / "color" / image_name
-            image = cv2.imread(str(image_path))
+            image = _load_scene_image(image_name)
             if image is None:
-                logger.warning("Cannot read image %s", image_path)
+                referability_entry_cache[image_name] = None
                 return None
 
             camera_pose = poses[image_name]
@@ -7493,16 +7574,9 @@ def main():
                 for obj_id in frame.get("visible_object_ids", [])
                 if int(obj_id) in objects_by_id
             ]
-            depth_image = None
-            frame_id = Path(image_name).stem
-            depth_path = scene_dir / "depth" / f"{frame_id}.png"
-            if depth_intrinsics is not None and depth_path.exists():
-                try:
-                    depth_image = load_depth_image(depth_path)
-                except Exception as exc:
-                    logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
+            depth_image = _load_scene_depth_image(image_name)
 
-            return _compute_frame_referability_entry(
+            entry = _compute_frame_referability_entry(
                 client=client,
                 model_name=model_name,
                 scene_objects=scene["objects"],
@@ -7528,6 +7602,8 @@ def main():
                 ray_caster_getter=ray_caster_getter,
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
+            referability_entry_cache[image_name] = dict(entry) if isinstance(entry, dict) else None
+            return dict(entry) if isinstance(entry, dict) else None
 
         scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         scene_grouping_summary["non_attachment_candidate_frame_count"] = len(non_attachment_candidate_frames)
@@ -7541,7 +7617,8 @@ def main():
             max_frames=int(args.max_frames),
             poses=poses,
             vlm_workers=int(args.vlm_workers),
-            referability_entry_builder=_build_frame_referability_entry,
+            frame_review_getter=_get_reviewed_frame,
+            referability_entry_builder=_get_referability_entry,
             debug_output=scene_grouping_summary,
         ) if non_attachment_candidate_frames else []
 
@@ -7549,7 +7626,7 @@ def main():
             frame: dict[str, Any],
             reviewed_frame: dict[str, Any],
         ) -> dict[str, Any] | None:
-            return _build_frame_referability_entry(frame, reviewed_frame)
+            return _get_referability_entry(frame, reviewed_frame)
 
         attachment_selected_frames = _select_attachment_group_representatives(
             client=client,
@@ -7558,6 +7635,7 @@ def main():
             frames=attachment_candidate_frames,
             attachment_graph=attachment_graph,
             poses=poses,
+            frame_review_getter=_get_reviewed_frame,
             attachment_entry_builder=_build_attachment_entry,
             max_accepted_frame_count=int(args.max_frames),
             vlm_workers=int(args.vlm_workers),
@@ -7575,6 +7653,8 @@ def main():
                 attachment_edges=final_attachment_edges,
                 frames=attachment_candidate_frames,
                 poses=poses,
+                frame_review_getter=_get_reviewed_frame,
+                scene_image_getter=_load_scene_image,
                 attachment_entry_builder=_build_attachment_entry,
                 bbox_hard_fail_min=float(args.attachment_pair_salvage_bbox_hard_fail_min),
                 projected_area_hard_fail_min=float(
@@ -7681,50 +7761,18 @@ def main():
             if not image_name or image_name not in poses:
                 continue
 
-            image_path = scene_dir / "color" / image_name
-            image = cv2.imread(str(image_path))
-            if image is None:
-                logger.warning("Cannot read image %s", image_path)
-                continue
-
-            camera_pose = poses[image_name]
-            selector_visible_object_ids = [
-                int(obj_id)
-                for obj_id in frame.get("visible_object_ids", [])
-                if int(obj_id) in objects_by_id
-            ]
-            depth_image = None
-            frame_id = Path(image_name).stem
-            depth_path = scene_dir / "depth" / f"{frame_id}.png"
-            if depth_intrinsics is not None and depth_path.exists():
-                try:
-                    depth_image = load_depth_image(depth_path)
-                except Exception as exc:
-                    logger.warning("Depth load failed for %s/%s: %s", scene_id, image_name, exc)
-
             cached_entry = frame.get("_referability_entry")
             if isinstance(cached_entry, dict):
                 entry = dict(cached_entry)
             else:
-                entry = _compute_frame_referability_entry(
-                    client=client,
-                    model_name=model_name,
-                    scene_objects=scene["objects"],
-                    objects_by_id=objects_by_id,
-                    image=image,
-                    image_path=image_path,
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                    depth_image=depth_image,
-                    depth_intrinsics=depth_intrinsics,
-                    selector_visible_object_ids=selector_visible_object_ids,
-                    selector_score=int(frame.get("selector_score", frame.get("score", len(selector_visible_object_ids))) or 0),
-                    frame_info=dict(frame.get("frame_info", {})),
-                    frame_selection_score=int(frame.get("frame_selection_score", 0) or 0),
-                    vlm_workers=int(args.vlm_workers),
-                    ray_caster_getter=ray_caster_getter,
-                    instance_mesh_data_getter=instance_mesh_data_getter,
-                )
+                reviewed_frame = dict(frame)
+                if not isinstance(reviewed_frame.get("frame_info"), dict):
+                    reviewed_frame = _get_reviewed_frame(frame)
+                if reviewed_frame is None:
+                    continue
+                entry = _get_referability_entry(frame, reviewed_frame)
+                if not isinstance(entry, dict):
+                    continue
             final_scene_entries[image_name] = _attach_selection_metadata(
                 entry,
                 attachment_graph,

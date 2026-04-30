@@ -3824,6 +3824,267 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(dropped_entry["attachment_referable_pairs"], [])
         self.assertEqual(dropped_entry["attachment_referable_object_ids"], [])
 
+    def test_main_reuses_attachment_frame_reviews_and_entries_between_selection_and_salvage(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_salvage_scene_cache_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        attachment_entry = make_attachment_pair_salvage_entry(
+            candidate_visible_object_ids=[1, 2],
+            crop_label_statuses={"table": "unique", "book": "unique"},
+            full_frame_label_statuses={"table": "unique", "book": "unique"},
+            label_statuses={"table": "unique", "book": "unique"},
+            attachment_referable_pairs=[[1, 2]],
+        )
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "select_frames",
+                return_value=[
+                    {
+                        "image_name": "000001.jpg",
+                        "visible_object_ids": [1, 2],
+                        "score": 10,
+                        "attachment_viewpoint_exempt": True,
+                    }
+                ],
+            ),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose(image_name="000001.jpg")},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+            ) as imread_mock,
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clear": True,
+                    "clarity_score": 84,
+                    "frame_usable": True,
+                    "reason": "clear",
+                },
+            ) as frame_decision_mock,
+            patch.object(
+                referability_module,
+                "_compute_frame_referability_entry",
+                return_value=dict(attachment_entry),
+            ) as entry_mock,
+            patch.object(referability_module, "_image_to_data_url", return_value="data:image/jpeg;base64,stub"),
+            patch.object(
+                referability_module,
+                "_enrich_final_scene_entries_out_of_frame",
+                side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
+        scene_grouping = cache_doc["scene_grouping"]["scene0001_00"]
+        self.assertEqual(frame_decision_mock.call_count, 1)
+        self.assertEqual(entry_mock.call_count, 1)
+        self.assertEqual(imread_mock.call_count, 1)
+        self.assertEqual(scene_grouping["attachment_selected_frame_image_names"], ["000001.jpg"])
+        self.assertEqual(scene_grouping["final_cacheable_frame_image_names"], ["000001.jpg"])
+        self.assertEqual(list(cache_doc["frames"]["scene0001_00"].keys()), ["000001.jpg"])
+
+    def test_main_reuses_cached_non_attachment_entry_when_final_frame_lacks_embedded_entry(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"non_attachment_scene_cache_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        depth_dir = scene_dir / "depth"
+        depth_dir.mkdir(parents=True, exist_ok=True)
+        (depth_dir / "000101.png").write_bytes(b"depth")
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+                make_object(3, "lamp"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        computed_entry = make_debug_cache_entry()
+        computed_entry["image_name"] = "000101.jpg"
+        computed_entry["selector_visible_object_ids"] = [3]
+        computed_entry["candidate_visible_object_ids"] = [3]
+        computed_entry["referable_object_ids"] = [3]
+        computed_entry["attachment_referable_object_ids"] = []
+
+        def fake_select_and_rerank_frames(**kwargs):
+            frame = dict(kwargs["frame_candidates"][0])
+            reviewed_frame = kwargs["frame_review_getter"](frame)
+            self.assertIsInstance(reviewed_frame, dict)
+            built_entry = kwargs["referability_entry_builder"](frame, reviewed_frame)
+            self.assertEqual(built_entry["referable_object_ids"], [3])
+            debug_output = kwargs["debug_output"]
+            debug_output["reranked_accepted_frame_image_names"] = [frame["image_name"]]
+            debug_output["selected_before_attachment_slots_image_names"] = [frame["image_name"]]
+            debug_output["selected_before_attachment_slots_count"] = 1
+            debug_output["accepted_frame_count_after_group_scan"] = 1
+            debug_output["non_attachment_processed_group_count"] = 1
+            debug_output["groups"] = []
+            return [
+                {
+                    "image_name": frame["image_name"],
+                    "visible_object_ids": list(frame["visible_object_ids"]),
+                    "selector_score": int(frame["score"]),
+                    "frame_info": dict(reviewed_frame["frame_info"]),
+                    "frame_selection_score": int(reviewed_frame["frame_selection_score"]),
+                    "attachment_viewpoint_exempt": False,
+                }
+            ]
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "select_frames",
+                return_value=[
+                    {
+                        "image_name": "000101.jpg",
+                        "visible_object_ids": [3],
+                        "score": 9,
+                        "attachment_viewpoint_exempt": False,
+                    }
+                ],
+            ),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000101.jpg": make_camera_pose(image_name="000101.jpg")},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(
+                referability_module,
+                "load_scannet_depth_intrinsics",
+                return_value=make_camera_intrinsics(),
+            ),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+            ) as imread_mock,
+            patch.object(
+                referability_module,
+                "load_depth_image",
+                return_value=np.ones((120, 120), dtype=np.uint16),
+            ) as depth_mock,
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                return_value={
+                    "clear": True,
+                    "clarity_score": 88,
+                    "frame_usable": True,
+                    "reason": "clear",
+                },
+            ) as frame_decision_mock,
+            patch.object(
+                referability_module,
+                "_compute_frame_referability_entry",
+                return_value=dict(computed_entry),
+            ) as entry_mock,
+            patch.object(
+                referability_module,
+                "_enrich_final_scene_entries_out_of_frame",
+                side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+            ),
+            patch.object(
+                referability_module,
+                "_select_and_rerank_frames",
+                side_effect=fake_select_and_rerank_frames,
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            referability_module.main()
+
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
+        self.assertEqual(frame_decision_mock.call_count, 1)
+        self.assertEqual(entry_mock.call_count, 1)
+        self.assertEqual(imread_mock.call_count, 1)
+        self.assertEqual(depth_mock.call_count, 1)
+        self.assertEqual(list(cache_doc["frames"]["scene0001_00"].keys()), ["000101.jpg"])
+        self.assertEqual(
+            cache_doc["scene_grouping"]["scene0001_00"]["final_cacheable_frame_image_names"],
+            ["000101.jpg"],
+        )
+        self.assertEqual(
+            cache_doc["frames"]["scene0001_00"]["000101.jpg"]["referable_object_ids"],
+            [3],
+        )
+
     def test_main_persists_scene_grouping_summary_in_cache(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_grouping_summary_{uuid.uuid4().hex}"
         data_root = root / "data"
