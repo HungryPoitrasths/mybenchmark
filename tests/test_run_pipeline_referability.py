@@ -58,6 +58,42 @@ def write_neighbor_edited_html(cache_path: Path, html_text: str | None = None) -
     return edited_html_path
 
 
+def make_referability_batch_doc(
+    *,
+    scene_id: str,
+    model: str = "fake-vlm",
+    alias_config_version: str = "test-alias",
+) -> dict:
+    return {
+        "version": run_pipeline_module.EXPECTED_REFERABILITY_CACHE_VERSION,
+        "model": model,
+        "alias_config_version": alias_config_version,
+        "referability_backend": "crop_vlm_with_mesh_ray",
+        "label_batch_size": 1,
+        "frames": {},
+        "scene_grouping": {
+            scene_id: {
+                "scene_id": scene_id,
+                "split": "train",
+                "pipeline_outcome": "processed",
+                "scene_skip_reason": None,
+                "final_cacheable_frame_count": 0,
+            }
+        },
+        "scene_status": {
+            scene_id: {
+                "scene_id": scene_id,
+                "processed": True,
+                "pipeline_outcome": "processed",
+                "split": "train",
+                "has_cache_frames": False,
+                "final_cacheable_frame_count": 0,
+                "scene_skip_reason": None,
+            }
+        },
+    }
+
+
 def make_attachment_pair_review_html(
     *,
     scene_id: str,
@@ -1454,6 +1490,66 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(cache["scene_grouping"]["scene0000_00"]["pipeline_outcome"], "processed")
         self.assertEqual([frame["image_name"] for frame in frames], ["000123.jpg"])
         self.assertEqual(frames[0]["visible_object_ids"], [1])
+
+    def test_load_referability_cache_merges_globbed_batches(self) -> None:
+        case_dir = make_case_dir("cache_glob_merge")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_a = case_dir / "flash_a.json"
+        batch_b = case_dir / "flash_b.json"
+        batch_a.write_text(
+            json.dumps(make_referability_batch_doc(scene_id="scene0000_00"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        batch_b.write_text(
+            json.dumps(make_referability_batch_doc(scene_id="scene0001_00"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_neighbor_edited_html(batch_a)
+
+        merged = run_pipeline_module._load_referability_cache(str(case_dir / "flash*.json"))
+
+        self.assertEqual(sorted(merged["scene_grouping"].keys()), ["scene0000_00", "scene0001_00"])
+        self.assertEqual(sorted(merged["scene_status"].keys()), ["scene0000_00", "scene0001_00"])
+        self.assertEqual(merged["model"], "fake-vlm")
+        self.assertEqual(merged["alias_config_version"], "test-alias")
+
+    def test_load_referability_cache_glob_rejects_duplicate_scene(self) -> None:
+        case_dir = make_case_dir("cache_glob_duplicate")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_a = case_dir / "flash_a.json"
+        batch_b = case_dir / "flash_b.json"
+        duplicate_doc = make_referability_batch_doc(scene_id="scene0000_00")
+        batch_a.write_text(json.dumps(duplicate_doc, ensure_ascii=False), encoding="utf-8")
+        batch_b.write_text(json.dumps(duplicate_doc, ensure_ascii=False), encoding="utf-8")
+        write_neighbor_edited_html(batch_a)
+
+        with self.assertRaisesRegex(ValueError, "Duplicate referability cache scene"):
+            run_pipeline_module._load_referability_cache(str(case_dir / "flash*.json"))
+
+    def test_load_referability_cache_glob_rejects_metadata_mismatch(self) -> None:
+        case_dir = make_case_dir("cache_glob_metadata")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_a = case_dir / "flash_a.json"
+        batch_b = case_dir / "flash_b.json"
+        batch_a.write_text(
+            json.dumps(make_referability_batch_doc(scene_id="scene0000_00", model="model-a"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        batch_b.write_text(
+            json.dumps(make_referability_batch_doc(scene_id="scene0001_00", model="model-b"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_neighbor_edited_html(batch_a)
+
+        with self.assertRaisesRegex(ValueError, "metadata mismatch"):
+            run_pipeline_module._load_referability_cache(str(case_dir / "flash*.json"))
+
+    def test_load_referability_cache_glob_requires_matches(self) -> None:
+        case_dir = make_case_dir("cache_glob_missing")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+
+        with self.assertRaisesRegex(ValueError, "matched no files"):
+            run_pipeline_module._load_referability_cache(str(case_dir / "flash*.json"))
 
     def test_has_l1_visibility_candidates_only_keeps_vlm_out_of_frame_labels(self) -> None:
         self.assertTrue(

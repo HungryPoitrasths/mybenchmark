@@ -14,6 +14,7 @@ import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
+import glob
 import json
 import logging
 import os
@@ -920,7 +921,7 @@ def _referability_cache_edited_html_path(path: Path) -> Path:
     return path.parent / "edited.html"
 
 
-def _load_referability_cache(
+def _load_single_referability_cache(
     path: Path,
     *,
     repair_inconsistent_entries: bool = False,
@@ -989,6 +990,106 @@ def _load_referability_cache(
         edited_html_path,
     )
     return data
+
+
+def _expand_referability_cache_paths(path_or_pattern: str | Path) -> tuple[list[Path], bool]:
+    raw_pattern = str(path_or_pattern)
+    has_glob = glob.has_magic(raw_pattern)
+    if not has_glob:
+        return [Path(raw_pattern)], False
+    matched_paths = [
+        Path(match)
+        for match in sorted(glob.glob(raw_pattern))
+    ]
+    if not matched_paths:
+        raise ValueError(f"Referability cache glob matched no files: {raw_pattern}")
+    return matched_paths, True
+
+
+def _merge_referability_cache_docs(
+    cache_docs: list[tuple[Path, dict[str, object]]],
+) -> dict[str, object]:
+    if not cache_docs:
+        raise ValueError("No referability cache documents were provided for merging")
+
+    base_path, base_doc = cache_docs[0]
+    merged_doc = json.loads(json.dumps(base_doc, ensure_ascii=False))
+    merged_doc["frames"] = {}
+    merged_doc["scene_grouping"] = {}
+    merged_doc["scene_status"] = {}
+
+    metadata_fields = (
+        "version",
+        "referability_backend",
+        "model",
+        "alias_config_version",
+    )
+    merge_fields = ("frames", "scene_grouping", "scene_status")
+
+    for field_name in merge_fields:
+        if not isinstance(merged_doc.get(field_name), dict):
+            merged_doc[field_name] = {}
+
+    for current_path, current_doc in cache_docs:
+        for field_name in metadata_fields:
+            base_value = base_doc.get(field_name)
+            current_value = current_doc.get(field_name)
+            if current_value != base_value:
+                raise ValueError(
+                    f"Referability cache metadata mismatch for {field_name}: "
+                    f"{base_path} has {base_value!r}, but {current_path} has {current_value!r}"
+                )
+
+        for field_name in merge_fields:
+            current_field = current_doc.get(field_name, {})
+            if not isinstance(current_field, dict):
+                continue
+            merged_field = merged_doc.setdefault(field_name, {})
+            if not isinstance(merged_field, dict):
+                raise ValueError(f"Merged referability cache field {field_name} must be an object")
+            for scene_id, scene_value in current_field.items():
+                if scene_id in merged_field:
+                    raise ValueError(
+                        f"Duplicate referability cache scene {scene_id!r} found in field {field_name} "
+                        f"while merging {current_path}"
+                    )
+                merged_field[scene_id] = scene_value
+
+    return merged_doc
+
+
+def _load_referability_cache(
+    path_or_pattern: str | Path,
+    *,
+    repair_inconsistent_entries: bool = False,
+    persist_repaired_entries: bool = False,
+) -> dict | None:
+    paths, used_glob = _expand_referability_cache_paths(path_or_pattern)
+    if len(paths) == 1 and not used_glob:
+        return _load_single_referability_cache(
+            paths[0],
+            repair_inconsistent_entries=repair_inconsistent_entries,
+            persist_repaired_entries=persist_repaired_entries,
+        )
+
+    loaded_docs: list[tuple[Path, dict[str, object]]] = []
+    for path in paths:
+        loaded = _load_single_referability_cache(
+            path,
+            repair_inconsistent_entries=repair_inconsistent_entries,
+            persist_repaired_entries=persist_repaired_entries,
+        )
+        if loaded is None:
+            raise ValueError(f"Referability cache not found: {path}")
+        loaded_docs.append((path, loaded))
+
+    merged = _merge_referability_cache_docs(loaded_docs)
+    logger.info(
+        "Merged %d referability batch cache files from %s",
+        len(loaded_docs),
+        path_or_pattern,
+    )
+    return merged
 
 
 def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) -> dict | None:
@@ -4244,7 +4345,7 @@ def main():
     )
     parser.add_argument(
         "--referability_cache", type=str, required=True,
-        help="JSON cache of VLM frame/object referability decisions produced by scripts/run_vlm_referability.py",
+        help="Referability cache JSON path or glob (for example output/referability_cache/flash*.json) produced by scripts/run_vlm_referability.py",
     )
     parser.add_argument(
         "--label_map", type=str, default=None,
@@ -4318,7 +4419,7 @@ def main():
         load_scannet_label_map(args.label_map)
 
     referability_cache = _load_referability_cache(
-        Path(args.referability_cache),
+        args.referability_cache,
         repair_inconsistent_entries=args.repair_referability_cache,
         persist_repaired_entries=args.repair_referability_cache,
     )

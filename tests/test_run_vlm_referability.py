@@ -334,6 +334,35 @@ def make_fake_openai_module(model_id: str = "fake-vlm") -> SimpleNamespace:
     )
 
 
+def resolve_output_dir(output_arg: Path) -> Path:
+    return output_arg.parent if output_arg.suffix.lower() == ".json" else output_arg
+
+
+def scene_status_path_for_output(output_arg: Path) -> Path:
+    return resolve_output_dir(output_arg) / "scene_status.json"
+
+
+def load_scene_status_doc_for_output(output_arg: Path) -> dict:
+    return json.loads(scene_status_path_for_output(output_arg).read_text(encoding="utf-8"))
+
+
+def list_batch_cache_paths(output_arg: Path) -> list[Path]:
+    output_dir = resolve_output_dir(output_arg)
+    return sorted(
+        path
+        for path in output_dir.glob("*.json")
+        if path.name != "scene_status.json"
+    )
+
+
+def load_single_batch_cache_for_output(output_arg: Path) -> tuple[Path, dict]:
+    batch_paths = list_batch_cache_paths(output_arg)
+    if len(batch_paths) != 1:
+        raise AssertionError(f"Expected exactly one batch cache for {output_arg}, found {batch_paths}")
+    batch_path = batch_paths[0]
+    return batch_path, json.loads(batch_path.read_text(encoding="utf-8"))
+
+
 class _SequenceVisibilityCaster:
     def __init__(self, responses: list[tuple[int, int]]) -> None:
         self._responses = [tuple((int(visible), int(valid))) for visible, valid in responses]
@@ -3982,7 +4011,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         scene_grouping = cache_doc["scene_grouping"]["scene0001_00"]
         scene_status = cache_doc["scene_status"]["scene0001_00"]
         self.assertEqual(scene_grouping["pipeline_outcome"], "processed")
@@ -4008,6 +4037,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(scene_status["split"], "train")
         self.assertTrue(scene_status["has_cache_frames"])
         self.assertEqual(scene_status["final_cacheable_frame_count"], 2)
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(global_scene_status["split"], "train")
+        self.assertEqual(
+            global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"],
+            _batch_path.name,
+        )
 
         debug_doc = json.loads((debug_dir / "scene0001_00.json").read_text(encoding="utf-8"))
         self.assertEqual(debug_doc, scene_grouping)
@@ -4096,7 +4131,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         scene_grouping = cache_doc["scene_grouping"]["scene0001_00"]
         scene_status = cache_doc["scene_status"]["scene0001_00"]
         self.assertEqual(scene_grouping["pipeline_outcome"], "processed")
@@ -4110,26 +4145,61 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(scene_status["pipeline_outcome"], "processed")
         self.assertTrue(scene_status["has_cache_frames"])
         self.assertEqual(scene_status["final_cacheable_frame_count"], 1)
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"], _batch_path.name)
 
-    def test_main_migrates_legacy_cached_scene_to_scene_status_and_skips_processing(self) -> None:
-        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_cached_{uuid.uuid4().hex}"
+    def test_reset_scene_status_clears_global_state_but_keeps_existing_batches(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_reset_{uuid.uuid4().hex}"
         data_root = root / "data"
         scene_dir = data_root / "scene0001_00"
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / "candidate" / "referability_cache_attachment_candidate_review.json"
-        output_path.write_text(
+        first_batch_path = output_path.parent / "flash_legacy.json"
+        first_batch_doc = {
+            "version": referability_module.REFERABILITY_CACHE_VERSION,
+            "model": "fake-vlm",
+            "alias_config_version": referability_module.ALIAS_CONFIG_VERSION,
+            "referability_backend": "crop_vlm_with_mesh_ray",
+            "label_batch_size": 1,
+            "frames": {
+                "scene0001_00": {
+                    "000001.jpg": make_debug_cache_entry(),
+                }
+            },
+            "scene_grouping": {
+                "scene0001_00": {
+                    "scene_id": "scene0001_00",
+                    "split": "train",
+                    "pipeline_outcome": "processed",
+                    "scene_skip_reason": None,
+                    "final_cacheable_frame_count": 1,
+                    "final_cacheable_frame_image_names": ["000001.jpg"],
+                }
+            },
+            "scene_status": {
+                "scene0001_00": {
+                    "scene_id": "scene0001_00",
+                    "processed": True,
+                    "pipeline_outcome": "processed",
+                    "split": "train",
+                    "has_cache_frames": True,
+                    "final_cacheable_frame_count": 1,
+                    "scene_skip_reason": None,
+                }
+            },
+        }
+        first_batch_path.write_text(json.dumps(first_batch_doc, ensure_ascii=False), encoding="utf-8")
+        scene_status_path_for_output(output_path).write_text(
             json.dumps(
                 {
-                    "version": referability_module.REFERABILITY_CACHE_VERSION,
-                    "model": "fake-vlm",
-                    "alias_config_version": "test",
-                    "referability_backend": "crop_vlm_with_mesh_ray",
-                    "label_batch_size": 1,
-                    "frames": {
+                    "version": referability_module.SCENE_STATUS_VERSION,
+                    "split": "train",
+                    "completed_scenes": {
                         "scene0001_00": {
-                            "000001.jpg": make_debug_cache_entry(),
+                            "status": "completed",
+                            "batch_file": first_batch_path.name,
+                            "updated_at": "2026-04-30T12:00:00Z",
                         }
                     },
                 },
@@ -4137,47 +4207,74 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        scene = {"objects": [make_object(1, "table"), make_object(2, "book")]}
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        attachment_entry = make_debug_cache_entry()
+        attachment_entry["image_name"] = "000001.jpg"
+        attachment_entry["attachment_referable_object_ids"] = [1, 2]
+        attachment_entry["attachment_view_group_id"] = 1
 
         self.addCleanup(shutil.rmtree, root, True)
         with (
             patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
-            patch("src.scene_parser.parse_scene", side_effect=AssertionError("scene_status should skip legacy cached scene")),
-            patch("src.support_graph.enrich_scene_with_attachment", side_effect=AssertionError("scene_status should skip legacy cached scene")),
-            patch("src.support_graph.build_attachment_candidates", side_effect=AssertionError("scene_status should skip legacy cached scene")),
-            patch.object(referability_module, "select_frames", side_effect=AssertionError("select_frames should not run for cached scenes")),
-            patch.object(referability_module, "load_axis_alignment", side_effect=AssertionError("load_axis_alignment should not run for cached scenes")),
-            patch.object(referability_module, "load_scannet_poses", side_effect=AssertionError("load_scannet_poses should not run for cached scenes")),
-            patch.object(referability_module, "load_scannet_intrinsics", side_effect=AssertionError("load_scannet_intrinsics should not run for cached scenes")),
-            patch.object(referability_module, "load_scannet_depth_intrinsics", side_effect=AssertionError("load_scannet_depth_intrinsics should not run for cached scenes")),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(
+                referability_module,
+                "select_frames",
+                return_value=[
+                    {
+                        "image_name": "000001.jpg",
+                        "visible_object_ids": [1, 2],
+                        "score": 10,
+                        "attachment_viewpoint_exempt": True,
+                    }
+                ],
+            ),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(
+                referability_module,
+                "_select_attachment_group_representatives",
+                return_value=[attachment_entry],
+            ),
             patch.object(sys, "argv", [
                 "run_vlm_referability.py",
                 "--data_root",
                 str(data_root),
                 "--output",
                 str(output_path),
-                "--max_scenes",
+                "--reset_scene_status",
+                "--scene_batch_size",
                 "1",
-                "--max_frames",
-                "5",
-                "--resume",
+                "--no-write_attachment_review",
             ]),
         ):
             referability_module.main()
 
-        self.assertTrue(review_path.exists())
-        review_doc = json.loads(review_path.read_text(encoding="utf-8"))
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
-        self.assertEqual(review_doc["scene_count"], 0)
-        self.assertEqual(review_doc["raw_candidate_edge_count"], 0)
-        self.assertEqual(review_doc["raw_attachment_candidate_edge_count"], 0)
-        self.assertEqual(review_doc["final_attachment_edge_count"], 0)
-        self.assertEqual(review_doc["final_attachment_graph_edge_count"], 0)
-        self.assertEqual(review_doc["attachment_graph_layers"]["raw_candidates"]["edge_count"], 0)
-        self.assertEqual(review_doc["attachment_graph_layers"]["final_attachment_graph"]["edge_count"], 0)
-        self.assertEqual(review_doc["terminal_output_lines"], [])
-        self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"], "processed")
-        self.assertTrue(cache_doc["scene_status"]["scene0001_00"]["has_cache_frames"])
-        self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["final_cacheable_frame_count"], 1)
+        batch_paths = list_batch_cache_paths(output_path)
+        self.assertEqual(len(batch_paths), 2)
+        self.assertIn(first_batch_path, batch_paths)
+        second_batch_path = next(path for path in batch_paths if path != first_batch_path)
+        second_batch_doc = json.loads(second_batch_path.read_text(encoding="utf-8"))
+        self.assertEqual(second_batch_doc["scene_status"]["scene0001_00"]["pipeline_outcome"], "processed")
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"], second_batch_path.name)
 
     def test_main_writes_attachment_review_json_for_scene_without_attachment_relations(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_review_empty_{uuid.uuid4().hex}"
@@ -4223,6 +4320,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
+        batch_path, _cache_doc = load_single_batch_cache_for_output(output_path)
+        review_path = referability_module._attachment_review_output_path(batch_path)
         self.assertTrue(review_path.exists())
         review_doc = json.loads(review_path.read_text(encoding="utf-8"))
         scene_review = review_doc["scenes"][0]
@@ -4236,8 +4335,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(scene_review["final_attachment_graph_edge_count"], 0)
         self.assertEqual(scene_review["candidate_rows"], [])
         self.assertIn("no_attachment_relations", review_doc["terminal_output_lines"][0])
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         self.assertEqual(
-            json.loads(output_path.read_text(encoding="utf-8"))["scene_status"]["scene0001_00"]["pipeline_outcome"],
+            cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"],
             "no_attachment_relations",
         )
 
@@ -4288,12 +4388,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
+        batch_path, _cache_doc = load_single_batch_cache_for_output(output_path)
+        default_review_path = referability_module._attachment_review_output_path(batch_path)
         self.assertTrue(custom_review_path.exists())
         self.assertFalse(default_review_path.exists())
         review_doc = json.loads(custom_review_path.read_text(encoding="utf-8"))
         self.assertEqual(review_doc["scene_count"], 1)
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         self.assertEqual(
-            json.loads(output_path.read_text(encoding="utf-8"))["scene_status"]["scene0001_00"]["pipeline_outcome"],
+            cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"],
             "no_attachment_relations",
         )
 
@@ -4304,8 +4407,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        review_path = output_path.parent / "salvage" / "referability_cache_salvage_review.json"
-        review_html_path = output_path.parent / "salvage" / "referability_cache_salvage_review.html"
         edited_html_path = output_path.parent / "edited.html"
 
         scene = {
@@ -4447,6 +4548,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
+        batch_path, _cache_doc = load_single_batch_cache_for_output(output_path)
+        review_path = referability_module._attachment_pair_salvage_review_output_path(batch_path)
+        review_html_path = referability_module._attachment_pair_salvage_review_html_output_path(batch_path)
         self.assertTrue(review_path.exists())
         self.assertTrue(review_html_path.exists())
         self.assertTrue(edited_html_path.exists())
@@ -4462,7 +4566,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("000001", html_text)
         self.assertIn("1-&gt;2", html_text)
         self.assertEqual(edited_html_path.read_text(encoding="utf-8"), html_text)
-        self.assertTrue(output_path.exists())
+        self.assertTrue(batch_path.exists())
 
     def test_main_writes_scene_status_for_no_frame_candidates(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_no_frames_{uuid.uuid4().hex}"
@@ -4503,12 +4607,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         scene_status = cache_doc["scene_status"]["scene0001_00"]
         self.assertEqual(scene_status["pipeline_outcome"], "no_frame_candidates")
         self.assertEqual(scene_status["scene_skip_reason"], "no_frame_candidates")
         self.assertFalse(scene_status["has_cache_frames"])
         self.assertEqual(scene_status["final_cacheable_frame_count"], 0)
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"], _batch_path.name)
 
     def test_main_marks_scene_status_split_as_val(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_val_{uuid.uuid4().hex}"
@@ -4549,10 +4655,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         scene_status = cache_doc["scene_status"]["scene1001_00"]
         self.assertEqual(scene_status["split"], "val")
         self.assertEqual(scene_status["pipeline_outcome"], "no_frame_candidates")
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(global_scene_status["split"], "val")
+        self.assertEqual(global_scene_status["completed_scenes"]["scene1001_00"]["batch_file"], _batch_path.name)
 
     def test_no_final_referability_scene_status_prevents_repeat_processing(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_no_final_{uuid.uuid4().hex}"
@@ -4611,10 +4720,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-        first_cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        _first_batch_path, first_cache_doc = load_single_batch_cache_for_output(output_path)
         self.assertEqual(
             first_cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"],
             "no_final_referability_frames",
+        )
+        self.assertEqual(
+            load_scene_status_doc_for_output(output_path)["completed_scenes"]["scene0001_00"]["batch_file"],
+            _first_batch_path.name,
         )
 
         with (
@@ -4637,7 +4750,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-    def test_scene_batch_size_resume_migrates_legacy_cache_and_skips_to_next_unprocessed_scene(self) -> None:
+        self.assertEqual(len(list_batch_cache_paths(output_path)), 1)
+
+    def test_scene_batch_size_uses_scene_status_to_skip_completed_scenes(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_batch_resume_{uuid.uuid4().hex}"
         data_root = root / "data"
         scans_root = data_root / "scans"
@@ -4645,12 +4760,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
             make_scene_dir(scans_root, scene_id)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
+        legacy_batch_a = output_path.parent / "flash_batch_a.json"
+        legacy_batch_b = output_path.parent / "flash_batch_b.json"
+        legacy_batch_a.write_text(
             json.dumps(
                 {
                     "version": referability_module.REFERABILITY_CACHE_VERSION,
                     "model": "fake-vlm",
-                    "alias_config_version": "test",
+                    "alias_config_version": referability_module.ALIAS_CONFIG_VERSION,
                     "referability_backend": "crop_vlm_with_mesh_ray",
                     "label_batch_size": 1,
                     "frames": {
@@ -4659,12 +4776,80 @@ class RunVlmReferabilityTests(unittest.TestCase):
                         }
                     },
                     "scene_grouping": {
+                        "scene0001_00": {
+                            "scene_id": "scene0001_00",
+                            "split": "train",
+                            "pipeline_outcome": "processed",
+                            "scene_skip_reason": None,
+                            "final_cacheable_frame_count": 1,
+                        }
+                    },
+                    "scene_status": {
+                        "scene0001_00": {
+                            "scene_id": "scene0001_00",
+                            "processed": True,
+                            "pipeline_outcome": "processed",
+                            "split": "train",
+                            "has_cache_frames": True,
+                            "final_cacheable_frame_count": 1,
+                            "scene_skip_reason": None,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        legacy_batch_b.write_text(
+            json.dumps(
+                {
+                    "version": referability_module.REFERABILITY_CACHE_VERSION,
+                    "model": "fake-vlm",
+                    "alias_config_version": referability_module.ALIAS_CONFIG_VERSION,
+                    "referability_backend": "crop_vlm_with_mesh_ray",
+                    "label_batch_size": 1,
+                    "frames": {},
+                    "scene_grouping": {
                         "scene0002_00": {
                             "scene_id": "scene0002_00",
+                            "split": "train",
                             "pipeline_outcome": "no_final_referability_frames",
                             "scene_skip_reason": "no_final_referability_frames",
                             "final_cacheable_frame_count": 0,
                         }
+                    },
+                    "scene_status": {
+                        "scene0002_00": {
+                            "scene_id": "scene0002_00",
+                            "processed": True,
+                            "pipeline_outcome": "no_final_referability_frames",
+                            "split": "train",
+                            "has_cache_frames": False,
+                            "final_cacheable_frame_count": 0,
+                            "scene_skip_reason": "no_final_referability_frames",
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        scene_status_path_for_output(output_path).write_text(
+            json.dumps(
+                {
+                    "version": referability_module.SCENE_STATUS_VERSION,
+                    "split": "train",
+                    "completed_scenes": {
+                        "scene0001_00": {
+                            "status": "completed",
+                            "batch_file": legacy_batch_a.name,
+                            "updated_at": "2026-04-30T12:00:00Z",
+                        },
+                        "scene0002_00": {
+                            "status": "completed",
+                            "batch_file": legacy_batch_b.name,
+                            "updated_at": "2026-04-30T12:05:00Z",
+                        },
                     },
                 },
                 ensure_ascii=False,
@@ -4734,41 +4919,30 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
-        self.assertEqual(select_calls, ["scene0003_00"])
-        self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"], "processed")
-        self.assertEqual(
-            cache_doc["scene_status"]["scene0002_00"]["pipeline_outcome"],
-            "no_final_referability_frames",
+        batch_paths = list_batch_cache_paths(output_path)
+        self.assertEqual(len(batch_paths), 3)
+        new_batch_path = next(
+            path for path in batch_paths
+            if path not in {legacy_batch_a, legacy_batch_b}
         )
+        cache_doc = json.loads(new_batch_path.read_text(encoding="utf-8"))
+        self.assertEqual(select_calls, ["scene0003_00"])
         self.assertEqual(cache_doc["scene_status"]["scene0003_00"]["pipeline_outcome"], "processed")
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(global_scene_status["completed_scenes"]["scene0003_00"]["batch_file"], new_batch_path.name)
 
-    def test_resume_rejects_legacy_test_cache_for_val(self) -> None:
-        root = Path(__file__).resolve().parent / "_tmp" / f"legacy_test_guard_val_{uuid.uuid4().hex}"
+    def test_resume_rejects_scene_status_split_mismatch_for_val(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_split_guard_val_{uuid.uuid4().hex}"
         data_root = root / "data"
         make_scene_dir(data_root / "scans", "scene1001_00")
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
+        scene_status_path_for_output(output_path).write_text(
             json.dumps(
                 {
-                    "version": referability_module.REFERABILITY_CACHE_VERSION,
-                    "model": "fake-vlm",
-                    "alias_config_version": "test",
-                    "referability_backend": "crop_vlm_with_mesh_ray",
-                    "label_batch_size": 1,
-                    "frames": {},
-                    "scene_status": {
-                        "scene1001_00": {
-                            "scene_id": "scene1001_00",
-                            "processed": True,
-                            "pipeline_outcome": "processed",
-                            "split": "test",
-                            "has_cache_frames": False,
-                            "final_cacheable_frame_count": 0,
-                            "scene_skip_reason": None,
-                        }
-                    },
+                    "version": referability_module.SCENE_STATUS_VERSION,
+                    "split": "train",
+                    "completed_scenes": {},
                 },
                 ensure_ascii=False,
             ),
@@ -4790,33 +4964,21 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "--no-write_attachment_review",
             ]),
         ):
-            with self.assertRaisesRegex(RuntimeError, "legacy split=test entries"):
+            with self.assertRaisesRegex(RuntimeError, "scene_status split mismatch"):
                 referability_module.main()
 
-    def test_resume_rejects_legacy_test_cache_for_all(self) -> None:
-        root = Path(__file__).resolve().parent / "_tmp" / f"legacy_test_guard_all_{uuid.uuid4().hex}"
+    def test_resume_rejects_scene_status_split_mismatch_for_all(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_split_guard_all_{uuid.uuid4().hex}"
         data_root = root / "data"
         make_scene_dir(data_root / "scans", "scene0001_00")
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
+        scene_status_path_for_output(output_path).write_text(
             json.dumps(
                 {
-                    "version": referability_module.REFERABILITY_CACHE_VERSION,
-                    "model": "fake-vlm",
-                    "alias_config_version": "test",
-                    "referability_backend": "crop_vlm_with_mesh_ray",
-                    "label_batch_size": 1,
-                    "frames": {},
-                    "scene_grouping": {
-                        "scene1001_00": {
-                            "scene_id": "scene1001_00",
-                            "split": "test",
-                            "pipeline_outcome": "processed",
-                            "scene_skip_reason": None,
-                            "final_cacheable_frame_count": 0,
-                        }
-                    },
+                    "version": referability_module.SCENE_STATUS_VERSION,
+                    "split": "train",
+                    "completed_scenes": {},
                 },
                 ensure_ascii=False,
             ),
@@ -4838,7 +5000,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "--no-write_attachment_review",
             ]),
         ):
-            with self.assertRaisesRegex(RuntimeError, "legacy split=test entries"):
+            with self.assertRaisesRegex(RuntimeError, "scene_status split mismatch"):
                 referability_module.main()
 
     def test_final_scene_batch_logs_banner_and_processes_all_remaining_scenes(self) -> None:
@@ -4911,10 +5073,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
             referability_module.main()
 
         log_text = "\n".join(logs.output)
-        cache_doc = json.loads(output_path.read_text(encoding="utf-8"))
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
         self.assertIn("FINAL BATCH FOR SPLIT train", log_text)
         self.assertIn("ALL SCENES PROCESSED AFTER THIS RUN", log_text)
         self.assertEqual(sorted(cache_doc["scene_status"].keys()), ["scene0001_00", "scene0002_00"])
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(sorted(global_scene_status["completed_scenes"].keys()), ["scene0001_00", "scene0002_00"])
 
     def test_max_scenes_without_scene_batch_size_keeps_legacy_limit_behavior(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"legacy_max_scenes_{uuid.uuid4().hex}"

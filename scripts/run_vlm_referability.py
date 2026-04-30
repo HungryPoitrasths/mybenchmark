@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import html
 from html.parser import HTMLParser
 import inspect
@@ -77,9 +78,11 @@ ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION = "1.0"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME = "attachment_pair_salvage_review"
 ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE = "post_attachment_referability"
 SCANNET_METADATA_SPLIT_FILES: dict[str, Path] = {
-    "train": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_train.txt"),
-    "val": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_val.txt"),
+    "train": PROJECT_ROOT / "metadata" / "scannetv2_train.txt",
+    "val": PROJECT_ROOT / "metadata" / "scannetv2_val.txt",
 }
+SCENE_STATUS_VERSION = 1
+DEFAULT_BATCH_OUTPUT_PREFIX = "flash"
 
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
@@ -180,6 +183,162 @@ def _write_json_payload(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _timestamp_for_filename(now: datetime | None = None) -> str:
+    current = now or _utc_now()
+    return current.strftime("%Y%m%d_%H%M%S")
+
+
+def _timestamp_for_status(now: datetime | None = None) -> str:
+    current = now or _utc_now()
+    return current.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _resolve_batch_output_dir(output_arg: Path) -> Path:
+    if output_arg.suffix.lower() == ".json":
+        return output_arg.parent
+    return output_arg
+
+
+def _resolve_batch_output_prefix(output_arg: Path) -> str:
+    if output_arg.suffix.lower() == ".json":
+        prefix = output_arg.stem.strip()
+        return prefix or DEFAULT_BATCH_OUTPUT_PREFIX
+    return DEFAULT_BATCH_OUTPUT_PREFIX
+
+
+def _scene_status_output_path(output_arg: Path) -> Path:
+    return _resolve_batch_output_dir(output_arg) / "scene_status.json"
+
+
+def _build_batch_output_path(output_arg: Path, *, now: datetime | None = None) -> Path:
+    output_dir = _resolve_batch_output_dir(output_arg)
+    prefix = _resolve_batch_output_prefix(output_arg)
+    timestamp = _timestamp_for_filename(now)
+    candidate = output_dir / f"{prefix}_{timestamp}.json"
+    if not candidate.exists():
+        return candidate
+    suffix = 2
+    while True:
+        deduped_candidate = output_dir / f"{prefix}_{timestamp}_{suffix}.json"
+        if not deduped_candidate.exists():
+            return deduped_candidate
+        suffix += 1
+
+
+def _build_empty_scene_status_doc(split: str) -> dict[str, Any]:
+    return {
+        "version": SCENE_STATUS_VERSION,
+        "split": str(split),
+        "completed_scenes": {},
+    }
+
+
+def _load_scene_status_doc(
+    path: Path,
+    *,
+    split: str,
+    reset: bool = False,
+) -> dict[str, Any]:
+    if reset or not path.exists():
+        return _build_empty_scene_status_doc(split)
+
+    with open(path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"Invalid scene status document at {path}: expected JSON object")
+
+    version = int(loaded.get("version", 0) or 0)
+    if version != SCENE_STATUS_VERSION:
+        raise RuntimeError(
+            f"Unsupported scene status version {version or '<missing>'} at {path}; "
+            f"expected {SCENE_STATUS_VERSION}."
+        )
+
+    loaded_split = str(loaded.get("split", "")).strip()
+    if loaded_split != str(split):
+        raise RuntimeError(
+            f"scene_status split mismatch at {path}: found {loaded_split or '<missing>'}, expected {split}. "
+            "Use --reset_scene_status to clear the existing state before running a different split."
+        )
+
+    completed_scenes = loaded.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        raise RuntimeError(f"Invalid scene status document at {path}: completed_scenes must be an object")
+
+    return {
+        "version": SCENE_STATUS_VERSION,
+        "split": loaded_split,
+        "completed_scenes": dict(completed_scenes),
+    }
+
+
+def _batch_cache_contains_scene(cache_doc: dict[str, Any], scene_id: str) -> bool:
+    for field_name in ("frames", "scene_grouping", "scene_status"):
+        field_value = cache_doc.get(field_name)
+        if isinstance(field_value, dict) and scene_id in field_value:
+            return True
+    return False
+
+
+def _validate_scene_status_doc(
+    scene_status_doc: dict[str, Any],
+    *,
+    scene_status_path: Path,
+) -> None:
+    completed_scenes = scene_status_doc.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        raise RuntimeError(f"Invalid scene status document at {scene_status_path}: completed_scenes must be an object")
+
+    loaded_batch_docs: dict[str, dict[str, Any]] = {}
+    for scene_id, record in completed_scenes.items():
+        if not isinstance(record, dict):
+            raise RuntimeError(
+                f"Invalid scene status record for {scene_id} at {scene_status_path}: expected object"
+            )
+        batch_file = str(record.get("batch_file", "")).strip()
+        if not batch_file:
+            raise RuntimeError(
+                f"Invalid scene status record for {scene_id} at {scene_status_path}: missing batch_file"
+            )
+        batch_path = scene_status_path.parent / batch_file
+        if not batch_path.exists():
+            raise RuntimeError(
+                f"Scene status says {scene_id} completed in {batch_file}, but that batch file does not exist: {batch_path}"
+            )
+        batch_doc = loaded_batch_docs.get(batch_file)
+        if batch_doc is None:
+            with open(batch_path, "r", encoding="utf-8") as f:
+                batch_doc = json.load(f)
+            if not isinstance(batch_doc, dict):
+                raise RuntimeError(f"Invalid referability batch cache at {batch_path}: expected JSON object")
+            loaded_batch_docs[batch_file] = batch_doc
+        if not _batch_cache_contains_scene(batch_doc, str(scene_id)):
+            raise RuntimeError(
+                f"Scene status says {scene_id} completed in {batch_file}, but that batch file does not contain the scene."
+            )
+
+
+def _mark_scene_completed(
+    scene_status_doc: dict[str, Any],
+    *,
+    scene_id: str,
+    batch_file: str,
+    updated_at: str,
+) -> None:
+    completed_scenes = scene_status_doc.setdefault("completed_scenes", {})
+    if not isinstance(completed_scenes, dict):
+        raise RuntimeError("scene_status_doc.completed_scenes must be an object")
+    completed_scenes[str(scene_id)] = {
+        "status": "completed",
+        "batch_file": str(batch_file),
+        "updated_at": str(updated_at),
+    }
 
 
 def _default_review_output_prefix(output_path: Path) -> str:
@@ -6514,6 +6673,46 @@ def _persist_scene_state(
     _write_json_payload(output_path, cache)
 
 
+def _persist_scene_state_and_status(
+    *,
+    cache: dict[str, Any],
+    scene_grouping_cache: dict[str, Any],
+    scene_status_cache: dict[str, Any],
+    output_path: Path,
+    non_attachment_group_debug_dir: Path | None,
+    scene_id: str,
+    split: str,
+    pipeline_outcome: str,
+    scene_skip_reason: str | None,
+    scene_grouping_summary: dict[str, Any] | None,
+    scene_cache: dict[str, Any] | None,
+    global_scene_status_doc: dict[str, Any],
+    global_scene_status_path: Path,
+    batch_file_name: str,
+    status_updated_at: str,
+) -> None:
+    _persist_scene_state(
+        cache=cache,
+        scene_grouping_cache=scene_grouping_cache,
+        scene_status_cache=scene_status_cache,
+        output_path=output_path,
+        non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+        scene_id=scene_id,
+        split=split,
+        pipeline_outcome=pipeline_outcome,
+        scene_skip_reason=scene_skip_reason,
+        scene_grouping_summary=scene_grouping_summary,
+        scene_cache=scene_cache,
+    )
+    _mark_scene_completed(
+        global_scene_status_doc,
+        scene_id=scene_id,
+        batch_file=batch_file_name,
+        updated_at=status_updated_at,
+    )
+    _write_json_payload(global_scene_status_path, global_scene_status_doc)
+
+
 def _migrate_scene_status_cache(cache: dict[str, Any]) -> bool:
     changed = False
     if not isinstance(cache.get("frames"), dict):
@@ -6765,7 +6964,7 @@ def main():
     )
     parser.add_argument(
         "--output", type=str, required=True,
-        help="Output JSON cache path",
+        help="Batch output path or directory; each run writes one new timestamped batch JSON and stores global progress in scene_status.json beside it",
     )
     parser.add_argument(
         "--max_scenes", type=int, default=300,
@@ -6793,7 +6992,11 @@ def main():
     )
     parser.add_argument(
         "--resume", action="store_true",
-        help="Resume from an existing output cache if present",
+        help="Resume from the global scene_status.json if present",
+    )
+    parser.add_argument(
+        "--reset_scene_status", action="store_true",
+        help="Clear the current split's scene_status.json before processing; existing batch JSON files are kept",
     )
     parser.add_argument(
         "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
@@ -6891,7 +7094,40 @@ def main():
 
     data_root = Path(args.data_root)
     selected_split = args.split or _infer_default_split(data_root)
-    output_path = Path(args.output)
+    output_arg = Path(args.output)
+    batch_output_path = _build_batch_output_path(output_arg)
+    scene_status_path = _scene_status_output_path(output_arg)
+    scene_status_doc = _load_scene_status_doc(
+        scene_status_path,
+        split=selected_split,
+        reset=bool(args.reset_scene_status),
+    )
+    if args.reset_scene_status:
+        _write_json_payload(scene_status_path, scene_status_doc)
+        logger.info(
+            "Reset scene status for split=%s at %s",
+            selected_split,
+            scene_status_path,
+        )
+    _validate_scene_status_doc(
+        scene_status_doc,
+        scene_status_path=scene_status_path,
+    )
+    completed_scene_records = scene_status_doc.get("completed_scenes", {})
+    completed_scene_ids = (
+        set(completed_scene_records.keys())
+        if isinstance(completed_scene_records, dict)
+        else set()
+    )
+    if args.resume and completed_scene_ids:
+        logger.info(
+            "Resuming from %s with %d completed scene(s) for split=%s",
+            scene_status_path,
+            len(completed_scene_ids),
+            selected_split,
+        )
+
+    output_path = batch_output_path
     attachment_review_output = (
         Path(args.attachment_review_output)
         if args.attachment_review_output else _attachment_review_output_path(output_path)
@@ -6916,35 +7152,6 @@ def main():
         "scene_grouping": {},
         "scene_status": {},
     }
-    if args.resume and output_path.exists():
-        with open(output_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict) and "frames" in loaded:
-            loaded_version = str(loaded.get("version", ""))
-            if loaded_version != REFERABILITY_CACHE_VERSION:
-                raise RuntimeError(
-                    f"Cannot resume referability cache version {loaded_version or '<missing>'}; "
-                    f"expected {REFERABILITY_CACHE_VERSION}. Regenerate the cache from scratch."
-                )
-            cache = loaded
-            logger.info("Resuming from %s", output_path)
-    migrated_scene_status = _migrate_scene_status_cache(cache)
-    cache["alias_config_version"] = ALIAS_CONFIG_VERSION
-    cache["referability_backend"] = "crop_vlm_with_mesh_ray"
-    cache["label_batch_size"] = 1
-    if migrated_scene_status and args.resume and output_path.exists():
-        logger.info("Migrated legacy cache scene progress into scene_status")
-        _write_json_payload(output_path, cache)
-    if selected_split in {"val", "all"} and _cache_contains_legacy_test_split(cache):
-        raise RuntimeError(
-            "Cannot resume a cache containing legacy split=test entries while running "
-            f"--split {selected_split}. Use a new output path to avoid mixing legacy test cache "
-            "content with metadata-based val processing."
-        )
-    if not isinstance(cache.get("scene_grouping"), dict):
-        cache["scene_grouping"] = {}
-    if not isinstance(cache.get("scene_status"), dict):
-        cache["scene_status"] = {}
     scene_grouping_cache = cache["scene_grouping"]
     scene_status_cache = cache["scene_status"]
 
@@ -7012,6 +7219,33 @@ def main():
             logger.info("%s", line)
         _write_attachment_pair_salvage_review()
 
+    def _persist_current_scene(
+        *,
+        scene_id: str,
+        split: str,
+        pipeline_outcome: str,
+        scene_skip_reason: str | None,
+        scene_grouping_summary: dict[str, Any] | None,
+        scene_cache: dict[str, Any] | None,
+    ) -> None:
+        _persist_scene_state_and_status(
+            cache=cache,
+            scene_grouping_cache=scene_grouping_cache,
+            scene_status_cache=scene_status_cache,
+            output_path=output_path,
+            non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            scene_id=scene_id,
+            split=split,
+            pipeline_outcome=pipeline_outcome,
+            scene_skip_reason=scene_skip_reason,
+            scene_grouping_summary=scene_grouping_summary,
+            scene_cache=scene_cache,
+            global_scene_status_doc=scene_status_doc,
+            global_scene_status_path=scene_status_path,
+            batch_file_name=output_path.name,
+            status_updated_at=_timestamp_for_status(),
+        )
+
     scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
     logger.info(
         "Found %d candidate scenes for split=%s",
@@ -7019,9 +7253,15 @@ def main():
         selected_split,
     )
     selected_scene_ids = [scene_dir.name for _, scene_dir in scene_entries]
-
-    def _processed_scene_count() -> int:
-        return sum(1 for scene_id in selected_scene_ids if scene_id in scene_status_cache)
+    scene_index_by_id = {
+        scene_dir.name: index
+        for index, (_scene_split, scene_dir) in enumerate(scene_entries, start=1)
+    }
+    pending_scene_entries = [
+        (scene_split, scene_dir)
+        for scene_split, scene_dir in scene_entries
+        if scene_dir.name not in completed_scene_ids
+    ]
 
     batch_target = (
         None
@@ -7030,7 +7270,7 @@ def main():
     )
     final_batch_mode = False
     if batch_target is not None:
-        remaining_unprocessed = max(0, len(scene_entries) - _processed_scene_count())
+        remaining_unprocessed = len(pending_scene_entries)
         if 0 < remaining_unprocessed < batch_target:
             final_batch_mode = True
             _log_final_batch_banner(
@@ -7040,49 +7280,34 @@ def main():
                 remaining_scene_count=remaining_unprocessed,
             )
 
+    if batch_target is not None:
+        target_scene_entries = pending_scene_entries[:batch_target]
+    else:
+        target_scene_entries = pending_scene_entries[:max(0, int(args.max_scenes))]
+
+    if not target_scene_entries:
+        logger.info(
+            "No unprocessed scenes remain for split=%s according to %s",
+            selected_split,
+            scene_status_path,
+        )
+
     processed = 0
     newly_processed = 0
-    for scene_index, (scene_split, scene_dir) in enumerate(scene_entries, start=1):
-        if batch_target is None:
-            if processed >= args.max_scenes:
-                break
-        elif not final_batch_mode and newly_processed >= batch_target:
-            break
-
+    for scene_split, scene_dir in target_scene_entries:
         scene_id = scene_dir.name
-        existing_status = scene_status_cache.get(scene_id)
-        if isinstance(existing_status, dict):
-            if existing_status.get("split") != scene_split:
-                existing_status["split"] = scene_split
-                scene_status_cache[scene_id] = existing_status
-            existing_grouping = scene_grouping_cache.get(scene_id)
-            if isinstance(existing_grouping, dict) and existing_grouping.get("split") != scene_split:
-                existing_grouping["split"] = scene_split
-                scene_grouping_cache[scene_id] = existing_grouping
-            logger.info(
-                "Scene %s already recorded in scene_status (%s) -> skipping",
-                scene_id,
-                existing_status.get("pipeline_outcome", "processed"),
-            )
-            continue
-
         logger.info(
             "=== Referability scene %s [split=%s] (%d/%d) ===",
             scene_id,
             scene_split,
-            scene_index,
+            scene_index_by_id.get(scene_id, newly_processed + 1),
             len(scene_entries),
         )
 
         attachment_pair_salvage_scene_review: dict[str, Any] | None = None
         scene = parse_scene(scene_dir)
         if scene is None:
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="parse_scene_failed",
@@ -7125,12 +7350,7 @@ def main():
 
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="no_attachment_relations",
@@ -7165,12 +7385,7 @@ def main():
             existing_summary["grouping_available"] = _scene_grouping_has_details(
                 scene_grouping_cache.get(scene_id)
             )
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="already_cached",
@@ -7203,12 +7418,7 @@ def main():
             keep_all_attachment_frames=True,
         )
         if not frame_candidates:
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="no_frame_candidates",
@@ -7237,12 +7447,7 @@ def main():
             color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception as exc:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, exc)
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="color_intrinsics_load_failed",
@@ -7456,12 +7661,7 @@ def main():
         if not selected_attachment_frames and not selected_non_attachment_frames:
             scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
             scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="no_final_referability_frames",
@@ -7566,12 +7766,7 @@ def main():
         if not final_scene_entries:
             scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
             scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
-            _persist_scene_state(
-                cache=cache,
-                scene_grouping_cache=scene_grouping_cache,
-                scene_status_cache=scene_status_cache,
-                output_path=output_path,
-                non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+            _persist_current_scene(
                 scene_id=scene_id,
                 split=scene_split,
                 pipeline_outcome="no_cacheable_referability_entries",
@@ -7619,12 +7814,7 @@ def main():
             for image_name in scene_cache.keys()
         ]
         scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
-        _persist_scene_state(
-            cache=cache,
-            scene_grouping_cache=scene_grouping_cache,
-            scene_status_cache=scene_status_cache,
-            output_path=output_path,
-            non_attachment_group_debug_dir=non_attachment_group_debug_dir,
+        _persist_current_scene(
             scene_id=scene_id,
             split=scene_split,
             pipeline_outcome="processed",
@@ -7645,11 +7835,19 @@ def main():
         processed += 1
         newly_processed += 1
 
-    _write_json_payload(output_path, cache)
-    _write_attachment_review()
-    _write_attachment_pair_salvage_review()
+    batch_scene_count = len(scene_status_cache)
+    if batch_scene_count > 0:
+        _write_json_payload(output_path, cache)
+        _write_attachment_review()
+        _write_attachment_pair_salvage_review()
     if batch_target is not None and final_batch_mode:
-        remaining_unprocessed = max(0, len(scene_entries) - _processed_scene_count())
+        completed_scene_ids_after_run = set(
+            scene_status_doc.get("completed_scenes", {}).keys()
+        )
+        remaining_unprocessed = sum(
+            1 for scene_id in selected_scene_ids
+            if scene_id not in completed_scene_ids_after_run
+        )
         _log_final_batch_banner(
             split=selected_split,
             total_scene_count=len(scene_entries),
@@ -7657,7 +7855,14 @@ def main():
             remaining_scene_count=remaining_unprocessed,
             completed=True,
         )
-    logger.info("Saved referability cache to %s", output_path)
+    if batch_scene_count > 0:
+        logger.info("Saved referability batch cache to %s", output_path)
+    else:
+        logger.info(
+            "No new referability batch cache written for split=%s; scene_status remains at %s",
+            selected_split,
+            scene_status_path,
+        )
     logger.info("VLM call failures: %d", _get_vlm_call_failure_count())
 
 
