@@ -1,6 +1,7 @@
 import json
 import shutil
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -5226,6 +5227,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
             patch("src.support_graph.build_attachment_candidates", return_value=[]),
             patch.object(referability_module, "select_frames", return_value=[]),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
             patch.object(sys, "argv", [
                 "run_vlm_referability.py",
                 "--data_root",
@@ -5274,6 +5282,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
             patch("src.support_graph.build_attachment_candidates", return_value=[]),
             patch.object(referability_module, "select_frames", return_value=[]),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
             patch.object(sys, "argv", [
                 "run_vlm_referability.py",
                 "--data_root",
@@ -5831,6 +5846,412 @@ class RunVlmReferabilityTests(unittest.TestCase):
             referability_module.main()
 
         self.assertIn(call("VLM call failures: %d", 0), info_mock.call_args_list)
+
+    def test_scene_workers_merge_scene_results_in_deterministic_order(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_workers_order_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        for scene_id in ("scene0001_00", "scene0002_00"):
+            make_scene_dir(scans_root, scene_id)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        scene_two_started = threading.Event()
+
+        def fake_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            if scene_dir.name == "scene0001_00":
+                self.assertTrue(scene_two_started.wait(timeout=1.0))
+            else:
+                scene_two_started.set()
+            return {"objects": [make_object(1, "table"), make_object(2, "book")]}
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_select_frames(scene_dir: Path, *args, **kwargs):
+            return [
+                {
+                    "image_name": "000001.jpg",
+                    "visible_object_ids": [1, 2],
+                    "score": 10,
+                    "attachment_viewpoint_exempt": True,
+                }
+            ]
+
+        def fake_attachment_select(**kwargs):
+            entry = make_debug_cache_entry()
+            entry["image_name"] = "000001.jpg"
+            entry["attachment_referable_object_ids"] = [1, 2]
+            entry["attachment_view_group_id"] = 1
+            return [entry]
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(referability_module, "_load_scene_geometry", return_value="preloaded-geometry"),
+            patch("src.scene_parser.parse_scene", side_effect=fake_parse_scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(referability_module, "_select_attachment_group_representatives", side_effect=fake_attachment_select),
+            patch.object(
+                referability_module,
+                "_enrich_final_scene_entries_out_of_frame",
+                side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--scene_workers",
+                "2",
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            referability_module.main()
+
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
+        self.assertEqual(list(cache_doc["frames"].keys()), ["scene0001_00", "scene0002_00"])
+        self.assertEqual(list(cache_doc["scene_status"].keys()), ["scene0001_00", "scene0002_00"])
+        self.assertEqual(
+            [cache_doc["scene_status"][scene_id]["pipeline_outcome"] for scene_id in cache_doc["scene_status"]],
+            ["processed", "processed"],
+        )
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(
+            list(global_scene_status["completed_scenes"].keys()),
+            ["scene0001_00", "scene0002_00"],
+        )
+
+    def test_scene_workers_respect_global_vlm_worker_cap(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_workers_vlm_cap_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        for scene_id in ("scene0001_00", "scene0002_00"):
+            make_scene_dir(scans_root, scene_id)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = threading.Lock()
+        in_flight = 0
+        max_in_flight = 0
+
+        def fake_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            return {
+                "objects": [
+                    make_object(1, "table"),
+                    make_object(2, "book"),
+                    make_object(3, "lamp"),
+                    make_object(4, "chair"),
+                ]
+            }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_select_frames(scene_dir: Path, *args, **kwargs):
+            return [
+                {
+                    "image_name": "000101.jpg",
+                    "visible_object_ids": [3],
+                    "score": 9,
+                    "attachment_viewpoint_exempt": False,
+                },
+                {
+                    "image_name": "000102.jpg",
+                    "visible_object_ids": [4],
+                    "score": 8,
+                    "attachment_viewpoint_exempt": False,
+                },
+            ]
+
+        def fake_vlm_call_impl(client, model, content, default, max_tokens=512):
+            nonlocal in_flight, max_in_flight
+            _ = (client, model, content, max_tokens)
+            with lock:
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+            time.sleep(0.05)
+            with lock:
+                in_flight -= 1
+            return dict(default), json.dumps(default)
+
+        def fake_compute_entry(**kwargs):
+            selector_ids = [int(obj_id) for obj_id in kwargs["selector_visible_object_ids"]]
+            entry = make_debug_cache_entry()
+            entry["image_name"] = kwargs["image_path"].name
+            entry["selector_visible_object_ids"] = list(selector_ids)
+            entry["candidate_visible_object_ids"] = list(selector_ids)
+            entry["referable_object_ids"] = list(selector_ids)
+            entry["attachment_referable_object_ids"] = []
+            return entry
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(referability_module, "_load_scene_geometry", return_value="preloaded-geometry"),
+            patch("src.scene_parser.parse_scene", side_effect=fake_parse_scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={
+                    "000101.jpg": make_camera_pose(image_name="000101.jpg"),
+                    "000102.jpg": make_camera_pose(image_name="000102.jpg", yaw_deg=25.0),
+                },
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(referability_module.cv2, "imread", return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+                    2: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+                    3: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+                    4: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+                },
+            ),
+            patch.object(referability_module, "_compute_frame_referability_entry", side_effect=fake_compute_entry),
+            patch.object(
+                referability_module,
+                "_enrich_final_scene_entries_out_of_frame",
+                side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+            ),
+            patch.object(referability_module, "_call_vlm_json_impl", side_effect=fake_vlm_call_impl),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--scene_workers",
+                "2",
+                "--vlm_workers",
+                "2",
+                "--max_frames",
+                "2",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertLessEqual(max_in_flight, 2)
+
+    def test_scene_worker_reuses_preloaded_geometry_and_selector_metadata(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_worker_geometry_reuse_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        make_scene_dir(scans_root, "scene0001_00")
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sentinel_geometry = object()
+        selector_mesh = object()
+        mesh_load_calls: list[dict] = []
+
+        def fake_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            self.assertIs(preloaded_geometry, sentinel_geometry)
+            return {"objects": [make_object(1, "table"), make_object(2, "book")]}
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_load_instance_mesh_data(scene_dir, instance_ids=None, n_surface_samples=512, preloaded_geometry=None):
+            mesh_load_calls.append(
+                {
+                    "scene_dir": scene_dir,
+                    "instance_ids": list(instance_ids or []),
+                    "n_surface_samples": int(n_surface_samples),
+                    "preloaded_geometry": preloaded_geometry,
+                }
+            )
+            if int(n_surface_samples) == 1:
+                return selector_mesh
+            return object()
+
+        def fake_select_frames(scene_dir: Path, objects, attachment_graph, max_frames, **kwargs):
+            self.assertIs(kwargs["preloaded_geometry"], sentinel_geometry)
+            self.assertIs(kwargs["instance_mesh_data"], selector_mesh)
+            self.assertIsNotNone(kwargs["color_intrinsics"])
+            self.assertIsNotNone(kwargs["axis_alignment"])
+            self.assertIsNotNone(kwargs["poses"])
+            return [
+                {
+                    "image_name": "000001.jpg",
+                    "visible_object_ids": [1, 2],
+                    "score": 10,
+                    "attachment_viewpoint_exempt": True,
+                }
+            ]
+
+        def fake_attachment_select(**kwargs):
+            entry = make_debug_cache_entry()
+            entry["image_name"] = "000001.jpg"
+            entry["attachment_referable_object_ids"] = [1, 2]
+            entry["attachment_view_group_id"] = 1
+            return [entry]
+
+        def fake_enrich_out_of_frame(**kwargs):
+            kwargs["instance_mesh_data_getter"](64)
+            return kwargs["final_scene_entries"]
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(referability_module, "_load_scene_geometry", return_value=sentinel_geometry) as geometry_mock,
+            patch("src.scene_parser.parse_scene", side_effect=fake_parse_scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "load_instance_mesh_data", side_effect=fake_load_instance_mesh_data),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(referability_module, "_select_attachment_group_representatives", side_effect=fake_attachment_select),
+            patch.object(referability_module, "_enrich_final_scene_entries_out_of_frame", side_effect=fake_enrich_out_of_frame),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertEqual(geometry_mock.call_count, 1)
+        self.assertEqual([call["n_surface_samples"] for call in mesh_load_calls], [1, 64])
+        self.assertTrue(all(call["preloaded_geometry"] is sentinel_geometry for call in mesh_load_calls))
+
+    def test_scene_worker_failure_keeps_only_committed_scenes(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_worker_failure_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        for scene_id in ("scene0001_00", "scene0002_00"):
+            make_scene_dir(scans_root, scene_id)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def fake_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            if scene_dir.name == "scene0002_00":
+                time.sleep(0.05)
+                raise RuntimeError("scene2 failure")
+            return {"objects": [make_object(1, "table"), make_object(2, "book")]}
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_select_frames(scene_dir: Path, *args, **kwargs):
+            return [
+                {
+                    "image_name": "000001.jpg",
+                    "visible_object_ids": [1, 2],
+                    "score": 10,
+                    "attachment_viewpoint_exempt": True,
+                }
+            ]
+
+        def fake_attachment_select(**kwargs):
+            entry = make_debug_cache_entry()
+            entry["image_name"] = "000001.jpg"
+            entry["attachment_referable_object_ids"] = [1, 2]
+            entry["attachment_view_group_id"] = 1
+            return [entry]
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch.object(referability_module, "_load_scene_geometry", return_value="preloaded-geometry"),
+            patch("src.scene_parser.parse_scene", side_effect=fake_parse_scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(referability_module, "_select_attachment_group_representatives", side_effect=fake_attachment_select),
+            patch.object(
+                referability_module,
+                "_enrich_final_scene_entries_out_of_frame",
+                side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--scene_workers",
+                "2",
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "scene2 failure"):
+                referability_module.main()
+
+        batch_paths = list_batch_cache_paths(output_path)
+        self.assertEqual(len(batch_paths), 1)
+        cache_doc = json.loads(batch_paths[0].read_text(encoding="utf-8"))
+        self.assertEqual(list(cache_doc["scene_status"].keys()), ["scene0001_00"])
+        self.assertEqual(list(cache_doc["frames"].keys()), ["scene0001_00"])
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(list(global_scene_status["completed_scenes"].keys()), ["scene0001_00"])
 
 
 if __name__ == "__main__":

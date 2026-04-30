@@ -7507,86 +7507,117 @@ def main():
             status_updated_at=_timestamp_for_status(),
         )
 
-    scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
-    logger.info(
-        "Found %d candidate scenes for split=%s",
-        len(scene_entries),
-        selected_split,
-    )
-    selected_scene_ids = [scene_dir.name for _, scene_dir in scene_entries]
-    scene_index_by_id = {
-        scene_dir.name: index
-        for index, (_scene_split, scene_dir) in enumerate(scene_entries, start=1)
-    }
-    pending_scene_entries = [
-        (scene_split, scene_dir)
-        for scene_split, scene_dir in scene_entries
-        if scene_dir.name not in completed_scene_ids
-    ]
+    def _finalize_attachment_pair_salvage_review_record(record: dict[str, Any]) -> None:
+        if not args.write_attachment_pair_salvage_review:
+            return
+        attachment_pair_salvage_review_scenes.append(record)
+        for line in record.get("terminal_output_lines", []):
+            logger.info("%s", line)
 
-    batch_target = (
-        None
-        if args.scene_batch_size is None
-        else max(0, int(args.scene_batch_size))
-    )
-    final_batch_mode = False
-    if batch_target is not None:
-        remaining_unprocessed = len(pending_scene_entries)
-        if 0 < remaining_unprocessed < batch_target:
-            final_batch_mode = True
-            _log_final_batch_banner(
-                split=selected_split,
-                total_scene_count=len(scene_entries),
-                processed_scene_count=len(scene_entries) - remaining_unprocessed,
-                remaining_scene_count=remaining_unprocessed,
-            )
-
-    if batch_target is not None:
-        target_scene_entries = pending_scene_entries[:batch_target]
-    else:
-        target_scene_entries = pending_scene_entries[:max(0, int(args.max_scenes))]
-
-    if not target_scene_entries:
-        logger.info(
-            "No unprocessed scenes remain for split=%s according to %s",
-            selected_split,
-            scene_status_path,
+    def _commit_scene_result(result: SceneWorkerResult) -> None:
+        frames_cache = cache.setdefault("frames", {})
+        if isinstance(result.scene_cache, dict):
+            frames_cache[result.scene_id] = {
+                str(image_name): dict(entry)
+                for image_name, entry in result.scene_cache.items()
+            }
+        else:
+            frames_cache.pop(result.scene_id, None)
+        _persist_current_scene(
+            scene_id=result.scene_id,
+            split=result.split,
+            pipeline_outcome=result.pipeline_outcome,
+            scene_skip_reason=result.scene_skip_reason,
+            scene_grouping_summary=result.scene_grouping_summary,
+            scene_cache=result.scene_cache,
         )
+        if isinstance(result.frame_sidecar_cache, dict):
+            _write_frame_sidecar_scene_cache(
+                output_path=output_path,
+                scene_id=result.scene_id,
+                model_name=model_name,
+                referability_backend=REFERABILITY_BACKEND,
+                frame_records=result.frame_sidecar_cache,
+            )
+        if isinstance(result.attachment_review_record, dict):
+            _finalize_attachment_review_scene(result.attachment_review_record)
+        if isinstance(result.attachment_pair_salvage_review_record, dict):
+            _finalize_attachment_pair_salvage_review_record(
+                result.attachment_pair_salvage_review_record
+            )
+        _write_attachment_review()
+        _write_attachment_pair_salvage_review()
 
-    processed = 0
-    newly_processed = 0
-    for scene_split, scene_dir in target_scene_entries:
+    def _process_scene_worker(
+        scene_position: int,
+        scene_split: str,
+        scene_dir: Path,
+    ) -> SceneWorkerResult:
         scene_id = scene_dir.name
+        scene_index = scene_index_by_id.get(scene_id, scene_position + 1)
         logger.info(
             "=== Referability scene %s [split=%s] (%d/%d) ===",
             scene_id,
             scene_split,
-            scene_index_by_id.get(scene_id, newly_processed + 1),
+            scene_index,
             len(scene_entries),
         )
+        scene_client = worker_client_factory
 
-        attachment_pair_salvage_scene_review: dict[str, Any] | None = None
-        scene = parse_scene(scene_dir)
-        if scene is None:
-            _persist_current_scene(
+        def _build_attachment_pair_record(
+            pipeline_outcome: str,
+            scene_review: dict[str, Any] | None,
+        ) -> dict[str, Any] | None:
+            if not args.write_attachment_pair_salvage_review:
+                return None
+            return _build_attachment_pair_salvage_review_scene_record(
                 scene_id=scene_id,
                 split=scene_split,
+                pipeline_outcome=pipeline_outcome,
+                scene_review=scene_review,
+            )
+
+        def _build_result(
+            *,
+            pipeline_outcome: str,
+            scene_skip_reason: str | None,
+            scene_grouping_summary: dict[str, Any] | None,
+            scene_cache: dict[str, Any] | None,
+            attachment_review_record: dict[str, Any] | None,
+            attachment_pair_salvage_review_record: dict[str, Any] | None,
+            frame_sidecar_cache: dict[str, dict[str, Any]] | None = None,
+        ) -> SceneWorkerResult:
+            return SceneWorkerResult(
+                scene_index=scene_index,
+                scene_id=scene_id,
+                split=scene_split,
+                pipeline_outcome=pipeline_outcome,
+                scene_skip_reason=scene_skip_reason,
+                scene_cache=scene_cache,
+                scene_grouping_summary=scene_grouping_summary,
+                attachment_review_record=attachment_review_record,
+                attachment_pair_salvage_review_record=attachment_pair_salvage_review_record,
+                frame_sidecar_cache=frame_sidecar_cache,
+            )
+
+        preloaded_geometry = None
+        try:
+            preloaded_geometry = _load_scene_geometry(scene_dir)
+        except Exception as exc:
+            logger.warning("Scene geometry preload failed for %s: %s", scene_id, exc)
+        scene = parse_scene(scene_dir, preloaded_geometry=preloaded_geometry)
+        if scene is None:
+            return _build_result(
                 pipeline_outcome="parse_scene_failed",
                 scene_skip_reason="parse_scene_failed",
-                scene_grouping_summary=_prepare_scene_grouping_summary(
-                    scene_id,
-                    scene_split,
-                ),
+                scene_grouping_summary=_prepare_scene_grouping_summary(scene_id, scene_split),
                 scene_cache=None,
+                attachment_review_record=None,
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "parse_scene_failed",
+                    None,
+                ),
             )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="parse_scene_failed",
-                scene_review=None,
-            )
-            newly_processed += 1
-            continue
 
         enrich_scene_with_attachment(scene)
         attachment_graph = get_scene_attachment_graph(scene, scene_id=scene_id)
@@ -7600,7 +7631,9 @@ def main():
             if isinstance(edge, dict)
         ]
 
-        def _make_attachment_review_record(pipeline_outcome: str) -> dict[str, Any]:
+        def _make_attachment_review_record(pipeline_outcome: str) -> dict[str, Any] | None:
+            if not args.write_attachment_review:
+                return None
             return _build_attachment_review_scene_record(
                 scene_id=scene_id,
                 objects=scene["objects"],
@@ -7611,94 +7644,19 @@ def main():
 
         if not has_nontrivial_attachment(attachment_graph):
             logger.info("Scene %s has no attachment relations -> skipping", scene_id)
-            _persist_current_scene(
-                scene_id=scene_id,
-                split=scene_split,
+            return _build_result(
                 pipeline_outcome="no_attachment_relations",
                 scene_skip_reason="no_attachment_relations",
-                scene_grouping_summary=_prepare_scene_grouping_summary(
-                    scene_id,
-                    scene_split,
-                ),
+                scene_grouping_summary=_prepare_scene_grouping_summary(scene_id, scene_split),
                 scene_cache=None,
-            )
-            _finalize_attachment_review_scene(
-                _make_attachment_review_record("no_attachment_relations")
-            )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="no_attachment_relations",
-                scene_review=None,
-            )
-            newly_processed += 1
-            continue
-        frames_cache = cache.setdefault("frames", {})
-        existing_scene_cache = frames_cache.get(scene_id)
-        if isinstance(existing_scene_cache, dict) and existing_scene_cache and all(
-            _frame_entry_has_debug_fields(entry) for entry in existing_scene_cache.values()
-        ):
-            existing_summary = _prepare_scene_grouping_summary(
-                scene_id,
-                scene_split,
-                scene_grouping_cache.get(scene_id),
-            )
-            existing_summary["grouping_available"] = _scene_grouping_has_details(
-                scene_grouping_cache.get(scene_id)
-            )
-            _persist_current_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="already_cached",
-                scene_skip_reason=None,
-                scene_grouping_summary=existing_summary,
-                scene_cache=existing_scene_cache,
-            )
-            logger.info(
-                "Scene %s already cached -> skipping",
-                scene_id,
-            )
-            _finalize_attachment_review_scene(
-                _make_attachment_review_record("already_cached")
-            )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="already_cached",
-                scene_review=None,
-            )
-            continue
-
-        frame_candidates = select_frames(
-            scene_dir,
-            scene["objects"],
-            attachment_graph,
-            int(args.max_frames),
-            keep_all_attachment_frames=True,
-        )
-        if not frame_candidates:
-            _persist_current_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="no_frame_candidates",
-                scene_skip_reason="no_frame_candidates",
-                scene_grouping_summary=_prepare_scene_grouping_summary(
-                    scene_id,
-                    scene_split,
+                attachment_review_record=_make_attachment_review_record(
+                    "no_attachment_relations"
                 ),
-                scene_cache=None,
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "no_attachment_relations",
+                    None,
+                ),
             )
-            _finalize_attachment_review_scene(
-                _make_attachment_review_record("no_frame_candidates")
-            )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="no_frame_candidates",
-                scene_review=None,
-            )
-            newly_processed += 1
-            continue
 
         axis_align = load_axis_alignment(scene_dir)
         poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
@@ -7706,28 +7664,64 @@ def main():
             color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception as exc:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, exc)
-            _persist_current_scene(
-                scene_id=scene_id,
-                split=scene_split,
+            return _build_result(
                 pipeline_outcome="color_intrinsics_load_failed",
                 scene_skip_reason="color_intrinsics_load_failed",
-                scene_grouping_summary=_prepare_scene_grouping_summary(
-                    scene_id,
-                    scene_split,
-                ),
+                scene_grouping_summary=_prepare_scene_grouping_summary(scene_id, scene_split),
                 scene_cache=None,
+                attachment_review_record=_make_attachment_review_record(
+                    "color_intrinsics_load_failed"
+                ),
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "color_intrinsics_load_failed",
+                    None,
+                ),
             )
-            _finalize_attachment_review_scene(
-                _make_attachment_review_record("color_intrinsics_load_failed")
+        selector_instance_mesh_data: InstanceMeshData | None = None
+        try:
+            selector_instance_mesh_data = load_instance_mesh_data(
+                scene_dir,
+                instance_ids=[
+                    int(obj["id"])
+                    for obj in scene["objects"]
+                    if obj.get("id") is not None
+                ],
+                n_surface_samples=1,
+                preloaded_geometry=preloaded_geometry,
             )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="color_intrinsics_load_failed",
-                scene_review=None,
+        except Exception as exc:
+            logger.warning(
+                "Instance mesh preload failed for %s; selector falls back to bbox ratio: %s",
+                scene_id,
+                exc,
             )
-            newly_processed += 1
-            continue
+        frame_candidates = select_frames(
+            scene_dir,
+            scene["objects"],
+            attachment_graph,
+            int(args.max_frames),
+            keep_all_attachment_frames=True,
+            color_intrinsics=color_intrinsics,
+            axis_alignment=axis_align,
+            poses=poses,
+            instance_mesh_data=selector_instance_mesh_data,
+            preloaded_geometry=preloaded_geometry,
+        )
+        if not frame_candidates:
+            return _build_result(
+                pipeline_outcome="no_frame_candidates",
+                scene_skip_reason="no_frame_candidates",
+                scene_grouping_summary=_prepare_scene_grouping_summary(scene_id, scene_split),
+                scene_cache=None,
+                attachment_review_record=_make_attachment_review_record(
+                    "no_frame_candidates"
+                ),
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "no_frame_candidates",
+                    None,
+                ),
+            )
+
         try:
             depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
         except Exception as exc:
@@ -7739,7 +7733,9 @@ def main():
             scene_dir=scene_dir,
             scene_objects=scene["objects"],
             axis_alignment=axis_align,
+            preloaded_geometry=preloaded_geometry,
         )
+        attachment_pair_salvage_scene_review: dict[str, Any] | None = None
         _cache_miss = object()
         scene_image_cache: dict[str, np.ndarray | None] = {}
         scene_depth_cache: dict[str, np.ndarray | None] = {}
@@ -7852,23 +7848,6 @@ def main():
                 scene_frame_sidecar_cache[image_name] = updated_record
                 sidecar_dirty = True
 
-        def _flush_scene_frame_sidecar() -> None:
-            nonlocal sidecar_dirty
-            if not sidecar_dirty:
-                return
-            sidecar_path = _frame_cache_sidecar_path(output_path, scene_id)
-            sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-            _write_json_payload(
-                sidecar_path,
-                _build_frame_sidecar_scene_doc(
-                    scene_id=scene_id,
-                    model_name=model_name,
-                    referability_backend=REFERABILITY_BACKEND,
-                    frame_records=scene_frame_sidecar_cache,
-                ),
-            )
-            sidecar_dirty = False
-
         def _get_scene_visibility_by_obj_id(
             image_name: str,
         ) -> dict[int, dict[str, Any]] | None:
@@ -7913,7 +7892,7 @@ def main():
                 scene_out_of_frame_review_cache[image_name] = None
                 return None
             cached_review = _review_out_of_frame_label_candidates(
-                client=client,
+                client=scene_client,
                 model_name=model_name,
                 image=image,
                 image_b64=image_b64,
@@ -7983,7 +7962,7 @@ def main():
             )
             image_b64 = _get_scene_image_b64(image_name)
             entry = _compute_frame_referability_entry(
-                client=client,
+                client=scene_client,
                 model_name=model_name,
                 scene_objects=scene["objects"],
                 objects_by_id=objects_by_id,
@@ -8054,7 +8033,7 @@ def main():
                     return None
                 cached_frame_info = _normalize_frame_review(
                     _frame_decision(
-                        client,
+                        scene_client,
                         model_name,
                         image,
                         image_b64=_get_scene_image_b64(image_name),
@@ -8103,6 +8082,7 @@ def main():
             non_attachment_group_count,
             scene_id,
         )
+
         def _get_referability_entry(
             frame: dict[str, Any],
             reviewed_frame: dict[str, Any],
@@ -8117,9 +8097,8 @@ def main():
         scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         scene_grouping_summary["non_attachment_candidate_frame_count"] = len(non_attachment_candidate_frames)
         scene_grouping_summary["non_attachment_visible_object_group_count"] = non_attachment_group_count
-        scene_grouping_cache[scene_id] = scene_grouping_summary
         non_attachment_frames = _select_and_rerank_frames(
-            client=client,
+            client=scene_client,
             model_name=model_name,
             scene_dir=scene_dir,
             frame_candidates=non_attachment_candidate_frames,
@@ -8138,7 +8117,7 @@ def main():
             return _get_referability_entry(frame, reviewed_frame)
 
         attachment_selected_frames = _select_attachment_group_representatives(
-            client=client,
+            client=scene_client,
             model_name=model_name,
             scene_dir=scene_dir,
             frames=attachment_candidate_frames,
@@ -8151,7 +8130,7 @@ def main():
         ) if attachment_candidate_frames else []
         if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
             attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
-                client=client,
+                client=scene_client,
                 model_name=model_name,
                 scene_id=scene_id,
                 split=scene_split,
@@ -8218,154 +8197,221 @@ def main():
                     group.get("status_before_attachment_slots", "dropped_by_group_rerank")
                 )
 
-        try:
-            if not selected_attachment_frames and not selected_non_attachment_frames:
-                scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
-                scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
-                _persist_current_scene(
-                    scene_id=scene_id,
-                    split=scene_split,
-                    pipeline_outcome="no_final_referability_frames",
-                    scene_skip_reason="no_final_referability_frames",
-                    scene_grouping_summary=scene_grouping_summary,
-                    scene_cache=None,
-                )
-                logger.info("Scene %s has no final referability frames -> skipping", scene_id)
-                _finalize_attachment_review_scene(
-                    _make_attachment_review_record("no_final_referability_frames")
-                )
-                _finalize_attachment_pair_salvage_review_scene(
-                    scene_id=scene_id,
-                    split=scene_split,
-                    pipeline_outcome="no_final_referability_frames",
-                    scene_review=attachment_pair_salvage_scene_review,
-                )
-                newly_processed += 1
-                continue
-
-            logger.info(
-                "Processing referability scene %s [split=%s] with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
-                scene_id,
-                scene_split,
-                len(selected_attachment_frames),
-                len(selected_non_attachment_frames),
-            )
-
-            final_scene_entries: dict[str, dict[str, Any]] = {}
-            final_selection_rank = 0
-
-            for frame in selected_attachment_frames:
-                image_name = str(frame.get("image_name", "")).strip()
-                final_scene_entries[image_name] = _attach_selection_metadata(
-                    frame,
-                    attachment_graph,
-                    final_selection_rank=final_selection_rank,
-                    attachment_view_group_id=frame.get("attachment_view_group_id"),
-                    attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
-                    attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
-                )
-                final_selection_rank += 1
-
-            for frame in selected_non_attachment_frames:
-                image_name = str(frame.get("image_name", "")).strip()
-                if not image_name or image_name not in poses:
-                    continue
-
-                cached_entry = frame.get("_referability_entry")
-                if isinstance(cached_entry, dict):
-                    entry = dict(cached_entry)
-                else:
-                    reviewed_frame = dict(frame)
-                    if not isinstance(reviewed_frame.get("frame_info"), dict):
-                        reviewed_frame = _get_reviewed_frame(frame)
-                    if reviewed_frame is None:
-                        continue
-                    entry = _get_referability_entry(frame, reviewed_frame)
-                    if not isinstance(entry, dict):
-                        continue
-                final_scene_entries[image_name] = _attach_selection_metadata(
-                    entry,
-                    attachment_graph,
-                    final_selection_rank=final_selection_rank,
-                    attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
-                    attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
-                )
-                final_selection_rank += 1
-
-            if not final_scene_entries:
-                scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
-                scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
-                _persist_current_scene(
-                    scene_id=scene_id,
-                    split=scene_split,
-                    pipeline_outcome="no_cacheable_referability_entries",
-                    scene_skip_reason="no_cacheable_referability_entries",
-                    scene_grouping_summary=scene_grouping_summary,
-                    scene_cache=None,
-                )
-                logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
-                _finalize_attachment_review_scene(
-                    _make_attachment_review_record("no_cacheable_referability_entries")
-                )
-                _finalize_attachment_pair_salvage_review_scene(
-                    scene_id=scene_id,
-                    split=scene_split,
-                    pipeline_outcome="no_cacheable_referability_entries",
-                    scene_review=attachment_pair_salvage_scene_review,
-                )
-                newly_processed += 1
-                continue
-
-            final_scene_entries = _enrich_final_scene_entries_out_of_frame(
-                client=client,
-                model_name=model_name,
-                scene_dir=scene_dir,
-                final_scene_entries=final_scene_entries,
-                scene_objects=scene["objects"],
-                objects_by_id=objects_by_id,
-                poses=poses,
-                color_intrinsics=color_intrinsics,
-                depth_intrinsics=depth_intrinsics,
-                referability_entry_getter=lambda image_name: _get_referability_entry_by_image_name(image_name),
-                instance_mesh_data_getter=instance_mesh_data_getter,
-            )
-
-            scene_cache = frames_cache.setdefault(scene_id, {})
-            scene_cache.clear()
-            for image_name, entry in sorted(
-                final_scene_entries.items(),
-                key=lambda item: int(item[1].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)),
-            ):
-                scene_cache[image_name] = entry
-            scene_grouping_summary["pipeline_outcome"] = "processed"
-            scene_grouping_summary["scene_skip_reason"] = None
-            scene_grouping_summary["final_cacheable_frame_image_names"] = [
-                str(image_name)
-                for image_name in scene_cache.keys()
-            ]
-            scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
-            _persist_current_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="processed",
-                scene_skip_reason=None,
+        if not selected_attachment_frames and not selected_non_attachment_frames:
+            scene_grouping_summary["pipeline_outcome"] = "no_final_referability_frames"
+            scene_grouping_summary["scene_skip_reason"] = "no_final_referability_frames"
+            logger.info("Scene %s has no final referability frames -> skipping", scene_id)
+            return _build_result(
+                pipeline_outcome="no_final_referability_frames",
+                scene_skip_reason="no_final_referability_frames",
                 scene_grouping_summary=scene_grouping_summary,
-                scene_cache=scene_cache,
-            )
-            _finalize_attachment_review_scene(
-                _make_attachment_review_record("processed")
-            )
-            _finalize_attachment_pair_salvage_review_scene(
-                scene_id=scene_id,
-                split=scene_split,
-                pipeline_outcome="processed",
-                scene_review=attachment_pair_salvage_scene_review,
+                scene_cache=None,
+                attachment_review_record=_make_attachment_review_record(
+                    "no_final_referability_frames"
+                ),
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "no_final_referability_frames",
+                    attachment_pair_salvage_scene_review,
+                ),
+                frame_sidecar_cache=scene_frame_sidecar_cache if sidecar_dirty else None,
             )
 
-            processed += 1
-            newly_processed += 1
-        finally:
-            _flush_scene_frame_sidecar()
+        logger.info(
+            "Processing referability scene %s [split=%s] with %d attachment-selected frame(s) and %d non-attachment fallback(s)",
+            scene_id,
+            scene_split,
+            len(selected_attachment_frames),
+            len(selected_non_attachment_frames),
+        )
+
+        final_scene_entries: dict[str, dict[str, Any]] = {}
+        final_selection_rank = 0
+
+        for frame in selected_attachment_frames:
+            image_name = str(frame.get("image_name", "")).strip()
+            final_scene_entries[image_name] = _attach_selection_metadata(
+                frame,
+                attachment_graph,
+                final_selection_rank=final_selection_rank,
+                attachment_view_group_id=frame.get("attachment_view_group_id"),
+                attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
+                attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
+            )
+            final_selection_rank += 1
+
+        for frame in selected_non_attachment_frames:
+            image_name = str(frame.get("image_name", "")).strip()
+            if not image_name or image_name not in poses:
+                continue
+
+            cached_entry = frame.get("_referability_entry")
+            if isinstance(cached_entry, dict):
+                entry = dict(cached_entry)
+            else:
+                reviewed_frame = dict(frame)
+                if not isinstance(reviewed_frame.get("frame_info"), dict):
+                    reviewed_frame = _get_reviewed_frame(frame)
+                if reviewed_frame is None:
+                    continue
+                entry = _get_referability_entry(frame, reviewed_frame)
+                if not isinstance(entry, dict):
+                    continue
+            final_scene_entries[image_name] = _attach_selection_metadata(
+                entry,
+                attachment_graph,
+                final_selection_rank=final_selection_rank,
+                attachment_selector_pair_count=frame.get("attachment_pair_ge_50_count", 0),
+                attachment_selector_viewpoint_exempt=frame.get("attachment_viewpoint_exempt", False),
+            )
+            final_selection_rank += 1
+
+        if not final_scene_entries:
+            scene_grouping_summary["pipeline_outcome"] = "no_cacheable_referability_entries"
+            scene_grouping_summary["scene_skip_reason"] = "no_cacheable_referability_entries"
+            logger.info("Scene %s produced no cacheable referability entries -> skipping", scene_id)
+            return _build_result(
+                pipeline_outcome="no_cacheable_referability_entries",
+                scene_skip_reason="no_cacheable_referability_entries",
+                scene_grouping_summary=scene_grouping_summary,
+                scene_cache=None,
+                attachment_review_record=_make_attachment_review_record(
+                    "no_cacheable_referability_entries"
+                ),
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "no_cacheable_referability_entries",
+                    attachment_pair_salvage_scene_review,
+                ),
+                frame_sidecar_cache=scene_frame_sidecar_cache if sidecar_dirty else None,
+            )
+
+        final_scene_entries = _enrich_final_scene_entries_out_of_frame(
+            client=scene_client,
+            model_name=model_name,
+            scene_dir=scene_dir,
+            final_scene_entries=final_scene_entries,
+            scene_objects=scene["objects"],
+            objects_by_id=objects_by_id,
+            poses=poses,
+            color_intrinsics=color_intrinsics,
+            depth_intrinsics=depth_intrinsics,
+            referability_entry_getter=lambda image_name: _get_referability_entry_by_image_name(image_name),
+            instance_mesh_data_getter=instance_mesh_data_getter,
+        )
+
+        scene_cache: dict[str, dict[str, Any]] = {}
+        for image_name, entry in sorted(
+            final_scene_entries.items(),
+            key=lambda item: int(item[1].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK)),
+        ):
+            scene_cache[image_name] = entry
+        scene_grouping_summary["pipeline_outcome"] = "processed"
+        scene_grouping_summary["scene_skip_reason"] = None
+        scene_grouping_summary["final_cacheable_frame_image_names"] = [
+            str(image_name)
+            for image_name in scene_cache.keys()
+        ]
+        scene_grouping_summary["final_cacheable_frame_count"] = len(scene_cache)
+        return _build_result(
+            pipeline_outcome="processed",
+            scene_skip_reason=None,
+            scene_grouping_summary=scene_grouping_summary,
+            scene_cache=scene_cache,
+            attachment_review_record=_make_attachment_review_record("processed"),
+            attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                "processed",
+                attachment_pair_salvage_scene_review,
+            ),
+            frame_sidecar_cache=scene_frame_sidecar_cache if sidecar_dirty else None,
+        )
+
+    scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
+    logger.info(
+        "Found %d candidate scenes for split=%s",
+        len(scene_entries),
+        selected_split,
+    )
+    selected_scene_ids = [scene_dir.name for _, scene_dir in scene_entries]
+    scene_index_by_id = {
+        scene_dir.name: index
+        for index, (_scene_split, scene_dir) in enumerate(scene_entries, start=1)
+    }
+    pending_scene_entries = [
+        (scene_split, scene_dir)
+        for scene_split, scene_dir in scene_entries
+        if scene_dir.name not in completed_scene_ids
+    ]
+
+    batch_target = (
+        None
+        if args.scene_batch_size is None
+        else max(0, int(args.scene_batch_size))
+    )
+    final_batch_mode = False
+    if batch_target is not None:
+        remaining_unprocessed = len(pending_scene_entries)
+        if 0 < remaining_unprocessed < batch_target:
+            final_batch_mode = True
+            _log_final_batch_banner(
+                split=selected_split,
+                total_scene_count=len(scene_entries),
+                processed_scene_count=len(scene_entries) - remaining_unprocessed,
+                remaining_scene_count=remaining_unprocessed,
+            )
+
+    if batch_target is not None:
+        target_scene_entries = pending_scene_entries[:batch_target]
+    else:
+        target_scene_entries = pending_scene_entries[:max(0, int(args.max_scenes))]
+
+    if not target_scene_entries:
+        logger.info(
+            "No unprocessed scenes remain for split=%s according to %s",
+            selected_split,
+            scene_status_path,
+        )
+    else:
+        scene_worker_count = min(int(args.scene_workers), len(target_scene_entries))
+        reorder_buffer: dict[int, SceneWorkerResult] = {}
+        next_commit_position = 0
+        next_submit_position = 0
+        executor = ThreadPoolExecutor(max_workers=scene_worker_count)
+        in_flight: dict[Any, int] = {}
+        try:
+            while next_submit_position < scene_worker_count:
+                scene_split, scene_dir = target_scene_entries[next_submit_position]
+                future = executor.submit(
+                    _process_scene_worker,
+                    next_submit_position,
+                    scene_split,
+                    scene_dir,
+                )
+                in_flight[future] = next_submit_position
+                next_submit_position += 1
+
+            while in_flight:
+                completed_future = next(as_completed(list(in_flight.keys())))
+                completed_position = in_flight.pop(completed_future)
+                reorder_buffer[completed_position] = completed_future.result()
+                while next_commit_position in reorder_buffer:
+                    _commit_scene_result(reorder_buffer.pop(next_commit_position))
+                    next_commit_position += 1
+                if next_submit_position < len(target_scene_entries):
+                    scene_split, scene_dir = target_scene_entries[next_submit_position]
+                    future = executor.submit(
+                        _process_scene_worker,
+                        next_submit_position,
+                        scene_split,
+                        scene_dir,
+                    )
+                    in_flight[future] = next_submit_position
+                    next_submit_position += 1
+        except Exception:
+            for future in in_flight:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True, cancel_futures=False)
 
     batch_scene_count = len(scene_status_cache)
     if batch_scene_count > 0:

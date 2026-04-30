@@ -1001,6 +1001,11 @@ def select_frames(
     *,
     keep_all_attachment_frames: bool = False,
     non_attachment_limit: int | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
+    axis_alignment: np.ndarray | None = None,
+    poses: dict[str, CameraPose] | None = None,
+    instance_mesh_data: InstanceMeshData | None = None,
+    preloaded_geometry: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Select representative frames for a ScanNet scene.
 
@@ -1025,34 +1030,40 @@ def select_frames(
     """
     scene_path = Path(scene_path)
 
-    # Support both intrinsic/intrinsic_color.txt and intrinsic_color.txt (at root)
-    intr_path = scene_path / "intrinsic" / "intrinsic_color.txt"
-    if not intr_path.exists():
-        intr_path = scene_path / "intrinsic_color.txt"
-    pose_dir  = scene_path / "pose"
+    intrinsics = color_intrinsics
+    loaded_poses = poses
+    axis_align = axis_alignment
+    if intrinsics is None or loaded_poses is None:
+        # Support both intrinsic/intrinsic_color.txt and intrinsic_color.txt (at root)
+        intr_path = scene_path / "intrinsic" / "intrinsic_color.txt"
+        if not intr_path.exists():
+            intr_path = scene_path / "intrinsic_color.txt"
+        pose_dir = scene_path / "pose"
+        if (intrinsics is None and not intr_path.exists()) or (loaded_poses is None and not pose_dir.exists()):
+            logger.warning("Intrinsic or pose directory missing for %s", scene_path.name)
+            return []
+    if intrinsics is None:
+        intrinsics = load_scannet_intrinsics(scene_path)
+    if axis_align is None:
+        axis_align = load_axis_alignment(scene_path)
+    if loaded_poses is None:
+        loaded_poses = load_scannet_poses(scene_path, axis_alignment=axis_align)
+    if instance_mesh_data is None:
+        try:
+            instance_mesh_data = load_instance_mesh_data(
+                scene_path,
+                instance_ids=[int(obj["id"]) for obj in objects if obj.get("id") is not None],
+                n_surface_samples=1,
+                preloaded_geometry=preloaded_geometry,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Instance mesh preload failed for %s; selector falls back to bbox ratio: %s",
+                scene_path.name,
+                exc,
+            )
 
-    if not intr_path.exists() or not pose_dir.exists():
-        logger.warning("Intrinsic or pose directory missing for %s", scene_path.name)
-        return []
-
-    intrinsics = load_scannet_intrinsics(scene_path)
-    axis_align = load_axis_alignment(scene_path)
-    poses      = load_scannet_poses(scene_path, axis_alignment=axis_align)
-    instance_mesh_data: InstanceMeshData | None = None
-    try:
-        instance_mesh_data = load_instance_mesh_data(
-            scene_path,
-            instance_ids=[int(obj["id"]) for obj in objects if obj.get("id") is not None],
-            n_surface_samples=1,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Instance mesh preload failed for %s; selector falls back to bbox ratio: %s",
-            scene_path.name,
-            exc,
-        )
-
-    if not poses:
+    if not loaded_poses:
         logger.warning("No valid poses found for %s", scene_path.name)
         return []
 
@@ -1070,7 +1081,7 @@ def select_frames(
     n_quality_rejected = 0
     n_missing_images = 0
     frame_entries: list[dict[str, Any]] = []
-    for i, (image_name, pose) in enumerate(poses.items()):
+    for i, (image_name, pose) in enumerate(loaded_poses.items()):
         if i % FRAME_STRIDE != 0:
             continue
 

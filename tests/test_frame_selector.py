@@ -744,6 +744,75 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(results, [])
 
+    def test_select_frames_uses_preloaded_metadata_and_mesh_inputs(self) -> None:
+        root = make_case_dir("frame_selector_preloaded_inputs")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "color").mkdir(parents=True)
+        image_name = "000000.jpg"
+        (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        objects = [make_object(1, "table"), make_object(2, "book"), make_object(3, "lamp")]
+        preloaded_intrinsics = make_camera_intrinsics()
+        preloaded_axis = np.eye(4, dtype=np.float64)
+        preloaded_poses = {image_name: make_camera_pose(image_name)}
+        preloaded_mesh = InstanceMeshData(
+            vertices=np.zeros((0, 3), dtype=np.float64),
+            faces=np.zeros((0, 3), dtype=np.int32),
+            triangle_ids_by_instance={},
+            boundary_triangle_ids_by_instance={},
+            surface_points_by_instance={},
+            surface_triangle_ids_by_instance={},
+        )
+        visibility_audits = {
+            1: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+            2: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+            3: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+        }
+
+        with (
+            patch.object(
+                frame_selector,
+                "load_scannet_intrinsics",
+                side_effect=AssertionError("preloaded intrinsics should be reused"),
+            ),
+            patch.object(
+                frame_selector,
+                "load_axis_alignment",
+                side_effect=AssertionError("preloaded axis alignment should be reused"),
+            ),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                side_effect=AssertionError("preloaded poses should be reused"),
+            ),
+            patch.object(
+                frame_selector,
+                "load_instance_mesh_data",
+                side_effect=AssertionError("preloaded selector mesh should be reused"),
+            ),
+            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(
+                frame_selector,
+                "get_visible_objects",
+                return_value=([dict(objects[0]), dict(objects[1]), dict(objects[2])], visibility_audits),
+            ),
+        ):
+            results = frame_selector.select_frames(
+                scene_dir,
+                objects,
+                {1: [2]},
+                max_frames=1,
+                color_intrinsics=preloaded_intrinsics,
+                axis_alignment=preloaded_axis,
+                poses=preloaded_poses,
+                instance_mesh_data=preloaded_mesh,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["image_name"], image_name)
+        self.assertEqual(results[0]["visible_object_ids"], [1, 2, 3])
+
 
 if __name__ == "__main__":
     unittest.main()
