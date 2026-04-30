@@ -3105,22 +3105,82 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
     def test_render_attachment_pair_salvage_review_html_lists_included_scenes_in_deduped_order(self) -> None:
         review_doc = {
-            "scene_count": 3,
-            "group_count_total": 0,
-            "group_count_with_clarity_pass_images": 0,
-            "group_count_with_multi_image_cover": 0,
-            "pair_count_total": 0,
-            "pair_count_kept": 0,
-            "pair_count_auto_drop_hard_fail": 0,
-            "pair_count_needs_vlm_salvage_review": 0,
-            "pair_count_uncertain": 0,
-            "pair_count_vlm_salvageable": 0,
-            "pair_count_vlm_not_salvageable": 0,
-            "pair_count_vlm_uncertain": 0,
             "scenes": [
-                {"scene_id": "scene0002_00", "pipeline_outcome": "processed", "groups": []},
-                {"scene_id": "scene0001_00", "pipeline_outcome": "processed", "groups": []},
-                {"scene_id": "scene0002_00", "pipeline_outcome": "processed", "groups": []},
+                {
+                    "scene_id": "scene0002_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0002_00:group_0",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "000201.jpg",
+                                    "image_stem": "000201",
+                                    "data_url": "data:image/jpeg;base64,c2NlbmUy",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "2->3",
+                                    "parent_id": 2,
+                                    "parent_label": "chair",
+                                    "child_id": 3,
+                                    "child_label": "bag",
+                                    "first_covered_image_name": "000201.jpg",
+                                    "program_reason_codes": ["coverage_uncertain"],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "scene_id": "scene0001_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0001_00:group_0",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "000101.jpg",
+                                    "image_stem": "000101",
+                                    "data_url": "data:image/jpeg;base64,c2NlbmUx",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "1->2",
+                                    "parent_id": 1,
+                                    "parent_label": "table",
+                                    "child_id": 2,
+                                    "child_label": "book",
+                                    "first_covered_image_name": "000101.jpg",
+                                    "program_reason_codes": ["status_conflict"],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "scene_id": "scene0002_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0002_00:group_1",
+                            "selected_cover_images": [],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "9->10",
+                                    "parent_id": 9,
+                                    "parent_label": "desk",
+                                    "child_id": 10,
+                                    "child_label": "monitor",
+                                    "first_covered_image_name": "000299.jpg",
+                                    "program_reason_codes": ["coverage_uncertain"],
+                                }
+                            ],
+                        }
+                    ],
+                },
             ],
         }
 
@@ -3128,6 +3188,111 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertIn(
             "included scenes:</strong> scene0002_00, scene0001_00",
+            html_text,
+        )
+        self.assertIn("scene count:</strong> 2", html_text)
+        self.assertIn("group count:</strong> 2", html_text)
+        self.assertIn("pair count:</strong> 2", html_text)
+
+    def test_render_attachment_pair_salvage_review_html_filters_unrenderable_pairs_and_renders_chinese_reasons(
+        self,
+    ) -> None:
+        review_doc = {
+            "scenes": [
+                {
+                    "scene_id": "scene0001_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0001_00:group_keep",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "000001.jpg",
+                                    "image_stem": "000001",
+                                    "data_url": "data:image/jpeg;base64,cover_kept",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "1->2",
+                                    "parent_id": 1,
+                                    "parent_label": "table",
+                                    "child_id": 2,
+                                    "child_label": "book",
+                                    "first_covered_image_name": "000001.jpg",
+                                    "program_reason_codes": [
+                                        "no_coverable_clarity_pass_image",
+                                        "child_final_multiple",
+                                        "mystery_reason_code",
+                                    ],
+                                    "parent_crop_image_data_url": "data:image/jpeg;base64,parent_crop_should_not_render",
+                                    "child_crop_image_data_url": "data:image/jpeg;base64,child_crop_should_not_render",
+                                },
+                                {
+                                    "pair_id": "1->3",
+                                    "parent_id": 1,
+                                    "parent_label": "table",
+                                    "child_id": 3,
+                                    "child_label": "lamp",
+                                    "first_covered_image_name": "000099.jpg",
+                                    "program_reason_codes": ["missing_referability_entry"],
+                                },
+                            ],
+                        },
+                        {
+                            "group_id": "scene0001_00:group_drop",
+                            "selected_cover_images": [],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "4->5",
+                                    "parent_id": 4,
+                                    "parent_label": "sofa",
+                                    "child_id": 5,
+                                    "child_label": "pillow",
+                                    "first_covered_image_name": "000004.jpg",
+                                    "program_reason_codes": ["coverage_uncertain"],
+                                }
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "scene_id": "scene0002_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0002_00:group_drop",
+                            "selected_cover_images": [],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "7->8",
+                                    "parent_id": 7,
+                                    "parent_label": "cabinet",
+                                    "child_id": 8,
+                                    "child_label": "cup",
+                                    "first_covered_image_name": "000007.jpg",
+                                    "program_reason_codes": ["status_conflict"],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+
+        html_text = referability_module._render_attachment_pair_salvage_review_html(review_doc)
+
+        self.assertIn("scene0001_00", html_text)
+        self.assertNotIn("scene0002_00", html_text)
+        self.assertIn("scene0001_00:group_keep", html_text)
+        self.assertNotIn("scene0001_00:group_drop", html_text)
+        self.assertIn("data:image/jpeg;base64,cover_kept", html_text)
+        self.assertNotIn("parent_crop_should_not_render", html_text)
+        self.assertNotIn("child_crop_should_not_render", html_text)
+        self.assertIn("pair id</strong> 1-&gt;2", html_text)
+        self.assertNotIn("1-&gt;3", html_text)
+        self.assertIn(
+            "筛除理由</strong> 没有可覆盖该 attachment pair 的清晰图像，子物体最终判定中存在多个同类目标，mystery_reason_code",
             html_text,
         )
 
@@ -3718,7 +3883,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
                     "sampled_frame_image_names": ["000001.jpg"],
                     "clarity_pass_image_names": ["000001.jpg"],
                     "selected_cover_image_names": ["000001.jpg"],
-                    "selected_cover_images": [],
+                    "selected_cover_images": [
+                        {
+                            "image_name": "000001.jpg",
+                            "image_stem": "000001",
+                            "covered_pair_ids": ["1->2"],
+                            "data_url": "data:image/jpeg;base64,cover_for_html",
+                        }
+                    ],
                     "group_frame_stride": 1,
                     "pair_count_total": 1,
                     "kept_pair_ids": [],

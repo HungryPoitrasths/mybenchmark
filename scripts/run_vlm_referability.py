@@ -2596,124 +2596,159 @@ def _build_attachment_pair_salvage_review_document(
     }
 
 
-def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
-    def _render_image_name_list(image_names: list[str]) -> str:
-        if not image_names:
-            return "-"
-        return ", ".join(html.escape(_image_name_stem(name) or str(name)) for name in image_names)
+_ATTACHMENT_PAIR_REASON_CODE_ZH = {
+    "attachment_pair_referable": "该 attachment pair 已可指代",
+    "coverage_uncertain": "覆盖情况不确定",
+    "missing_referability_entry": "缺少 referability 条目",
+    "no_clarity_pass_images": "没有清晰可用图像",
+    "no_coverable_clarity_pass_image": "没有可覆盖该 attachment pair 的清晰图像",
+    "status_conflict": "状态冲突，无法稳定判定",
+}
 
+_ATTACHMENT_PAIR_REASON_SUFFIX_ZH = {
+    "bbox_in_frame_ratio_too_small": "框在画面中的占比过小",
+    "candidate_not_visible": "在候选可见物体中不可见",
+    "final_status_missing": "最终状态缺失",
+    "label_missing": "标签缺失",
+    "missing_candidate_visible_object_ids": "缺少候选可见物体列表",
+    "missing_object_review": "缺少物体审阅结果",
+    "object_missing": "对象缺失",
+    "projected_area_too_small": "投影面积过小",
+    "vlm_status_absent": "被判定为不存在",
+}
+
+_ATTACHMENT_PAIR_REASON_SCOPE_ZH = {
+    "crop": "裁剪图中",
+    "final": "最终判定中",
+    "full_frame": "整图中",
+}
+
+_ATTACHMENT_PAIR_REASON_LOCAL_OUTCOME_ZH = {
+    "empty_or_invalid_crop": "裁剪为空或无效",
+    "excluded": "被局部规则排除",
+    "missing": "局部结果缺失",
+    "not_visible": "局部视图中不可见",
+    "out_of_frame": "已出框",
+    "reviewed": "已审阅",
+}
+
+
+def _attachment_pair_reason_code_to_zh(reason_code: Any) -> str:
+    code = str(reason_code or "").strip()
+    if not code:
+        return "-"
+    mapped = _ATTACHMENT_PAIR_REASON_CODE_ZH.get(code)
+    if mapped is not None:
+        return mapped
+
+    for role_prefix, role_zh in (("parent_", "父物体"), ("child_", "子物体")):
+        if not code.startswith(role_prefix):
+            continue
+        suffix = code[len(role_prefix):]
+        mapped_suffix = _ATTACHMENT_PAIR_REASON_SUFFIX_ZH.get(suffix)
+        if mapped_suffix is not None:
+            return f"{role_zh}{mapped_suffix}"
+        if suffix.startswith("local_outcome_"):
+            outcome = suffix[len("local_outcome_"):]
+            return f"{role_zh}{_ATTACHMENT_PAIR_REASON_LOCAL_OUTCOME_ZH.get(outcome, suffix)}"
+        for scope, scope_zh in _ATTACHMENT_PAIR_REASON_SCOPE_ZH.items():
+            if suffix == f"{scope}_multiple":
+                return f"{role_zh}{scope_zh}存在多个同类目标"
+            if suffix == f"{scope}_unsure":
+                return f"{role_zh}{scope_zh}判定不确定"
+        return code
+
+    return code
+
+
+def _attachment_pair_reason_codes_to_zh(reason_codes: list[Any]) -> str:
+    rendered: list[str] = []
+    seen: set[str] = set()
+    for reason_code in reason_codes:
+        text = _attachment_pair_reason_code_to_zh(reason_code)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        rendered.append(text)
+    return "，".join(rendered) if rendered else "-"
+
+
+def _attachment_pair_renderable_cover(
+    group: dict[str, Any],
+    pair_row: dict[str, Any],
+) -> dict[str, str] | None:
+    image_name = str(pair_row.get("first_covered_image_name", "") or "").strip()
+    if not image_name:
+        return None
+    for item in group.get("selected_cover_images", []):
+        if str(item.get("image_name", "")).strip() != image_name:
+            continue
+        data_url = str(item.get("data_url", "")).strip()
+        if not data_url:
+            return None
+        return {
+            "image_name": image_name,
+            "image_stem": str(item.get("image_stem", "")).strip() or _image_name_stem(image_name),
+            "data_url": data_url,
+        }
+    return None
+
+
+def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
     def _render_simple_list(values: list[str]) -> str:
         if not values:
             return "-"
         return ", ".join(html.escape(str(value)) for value in values)
 
+    rendered_scene_count = 0
+    rendered_group_count = 0
+    rendered_pair_count = 0
     included_scene_ids: list[str] = []
     seen_scene_ids: set[str] = set()
-    for scene in review_doc.get("scenes", []):
-        scene_id = str(scene.get("scene_id", "")).strip()
-        if not scene_id or scene_id in seen_scene_ids:
-            continue
-        seen_scene_ids.add(scene_id)
-        included_scene_ids.append(scene_id)
-
-    pair_cards: list[str] = []
     scene_sections: list[str] = []
     for scene in review_doc.get("scenes", []):
+        scene_id = str(scene.get("scene_id", "")).strip()
         group_cards: list[str] = []
         for group in scene.get("groups", []):
-            cover_gallery = "".join(
-                (
-                    '<div class="cover-item">'
-                    f'<div class="cover-title">{html.escape(item.get("image_stem", ""))}</div>'
-                    f'<img src="{html.escape(item.get("data_url", ""))}" alt="{html.escape(item.get("image_name", ""))}">'
-                    f'<div class="cover-subtitle">covers: {html.escape(", ".join(item.get("covered_pair_ids", [])) or "-")}</div>'
-                    "</div>"
-                )
-                for item in group.get("selected_cover_images", [])
-                if str(item.get("data_url", "")).strip()
-            )
-            if not cover_gallery:
-                cover_gallery = '<div class="empty-state">No selected cover images.</div>'
-
-            pair_cards.clear()
+            pair_cards: list[str] = []
             for pair_row in group.get("dropped_pairs", []):
-                vlm_review = pair_row.get("vlm_review") if isinstance(pair_row.get("vlm_review"), dict) else None
-                parent_crop = str(pair_row.get("parent_crop_image_data_url", "")).strip()
-                child_crop = str(pair_row.get("child_crop_image_data_url", "")).strip()
-                crop_gallery = ""
-                if parent_crop:
-                    crop_gallery += (
-                        '<div class="crop-item">'
-                        f'<div class="crop-title">parent {html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)}</div>'
-                        f'<img src="{html.escape(parent_crop)}" alt="parent crop">'
-                        "</div>"
-                    )
-                if child_crop:
-                    crop_gallery += (
-                        '<div class="crop-item">'
-                        f'<div class="crop-title">child {html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)}</div>'
-                        f'<img src="{html.escape(child_crop)}" alt="child crop">'
-                        "</div>"
-                    )
-                if not crop_gallery:
-                    crop_gallery = '<div class="empty-state">No pair crops available.</div>'
-
-                vlm_html = (
-                    '<div class="pair-meta">'
-                    f'<div><strong>vlm decision:</strong> {html.escape(str(vlm_review.get("decision", "-")))}</div>'
-                    f'<div><strong>parent visibility:</strong> {html.escape(str(vlm_review.get("parent_visibility", "-")))}</div>'
-                    f'<div><strong>child visibility:</strong> {html.escape(str(vlm_review.get("child_visibility", "-")))}</div>'
-                    f'<div><strong>unique with modifiers:</strong> {html.escape(str(vlm_review.get("pair_unique_with_modifiers", "-")))}</div>'
-                    f'<div><strong>parent modifiers:</strong> {html.escape(", ".join(vlm_review.get("parent_modifier_candidates", [])) or "-")}</div>'
-                    f'<div><strong>child modifiers:</strong> {html.escape(", ".join(vlm_review.get("child_modifier_candidates", [])) or "-")}</div>'
-                    f'<div><strong>phrase candidates:</strong> {html.escape(", ".join(vlm_review.get("pair_reference_phrase_candidates", [])) or "-")}</div>'
-                    f'<div><strong>reason:</strong> {html.escape(str(vlm_review.get("reason", "-")))}</div>'
-                    "</div>"
-                ) if vlm_review else '<div class="pair-meta"><div><strong>vlm decision:</strong> -</div></div>'
-
+                cover = _attachment_pair_renderable_cover(group, pair_row)
+                if cover is None:
+                    continue
+                rendered_pair_count += 1
+                reason_text = _attachment_pair_reason_codes_to_zh(pair_row.get("program_reason_codes", []))
                 pair_cards.append(
                     '<div class="pair-card">'
-                    f'<div class="pair-title">{html.escape(pair_row.get("pair_id", ""))} '
-                    f'({html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)} -> '
-                    f'{html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)})</div>'
-                    '<div class="pair-meta">'
-                    f'<div><strong>program status:</strong> {html.escape(str(pair_row.get("program_status", "-")))}</div>'
-                    f'<div><strong>program decision:</strong> {html.escape(str(pair_row.get("program_decision", "-")))}</div>'
-                    f'<div><strong>reason codes:</strong> {html.escape(", ".join(pair_row.get("program_reason_codes", [])) or "-")}</div>'
-                    f'<div><strong>cover images:</strong> {html.escape(", ".join(_image_name_stem(name) for name in pair_row.get("cover_image_names", [])) or "-")}</div>'
-                    f'<div><strong>human_decision:</strong> {html.escape(str(pair_row.get("human_decision") or "-"))}</div>'
-                    f'<div><strong>human_notes:</strong> {html.escape(str(pair_row.get("human_notes", "") or "-"))}</div>'
+                    '<div class="pair-visual">'
+                    f'<img src="{html.escape(cover["data_url"])}" alt="{html.escape(cover["image_name"])}">'
+                    f'<div class="pair-image-name">{html.escape(cover["image_stem"] or cover["image_name"])}</div>'
                     "</div>"
-                    f"{vlm_html}"
-                    f'<div class="crop-grid">{crop_gallery}</div>'
+                    '<div class="pair-copy">'
+                    f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)} -> '
+                    f'{html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)}</div>'
+                    f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_row.get("pair_id", ""))}</div>'
+                    f'<div class="pair-text"><strong>筛除理由</strong> {html.escape(reason_text)}</div>'
+                    "</div>"
                     "</div>"
                 )
-            dropped_pairs_html = "".join(pair_cards) or '<div class="empty-state">No dropped pairs in this group.</div>'
+            if not pair_cards:
+                continue
+            rendered_group_count += 1
             group_cards.append(
                 '<section class="group-card">'
                 f'<h3>{html.escape(group.get("group_id", ""))}</h3>'
-                '<div class="group-meta">'
-                f'<div><strong>visible ids:</strong> {_render_simple_list(group.get("visible_object_labels", []))}</div>'
-                f'<div><strong>group frames:</strong> {_render_image_name_list(group.get("group_frame_image_names", []))}</div>'
-                f'<div><strong>clarity pass:</strong> {_render_image_name_list(group.get("clarity_pass_image_names", []))}</div>'
-                f'<div><strong>selected cover:</strong> {_render_image_name_list(group.get("selected_cover_image_names", []))}</div>'
-                f'<div><strong>kept pairs:</strong> {_render_simple_list(group.get("kept_pair_ids", []))}</div>'
-                "</div>"
-                f'<div class="cover-grid">{cover_gallery}</div>'
-                f'<div class="pair-list">{dropped_pairs_html}</div>'
+                f'<div class="pair-list">{"".join(pair_cards)}</div>'
                 "</section>"
             )
+        if not group_cards:
+            continue
+        rendered_scene_count += 1
+        if scene_id and scene_id not in seen_scene_ids:
+            seen_scene_ids.add(scene_id)
+            included_scene_ids.append(scene_id)
         scene_sections.append(
             '<section class="scene-card">'
-            f'<h2>{html.escape(scene.get("scene_id", ""))} [{html.escape(scene.get("pipeline_outcome", ""))}]</h2>'
-            '<div class="scene-meta">'
-            f'<div><strong>groups:</strong> {int(scene.get("group_count_total", 0) or 0)}</div>'
-            f'<div><strong>pairs:</strong> {int(scene.get("pair_count_total", 0) or 0)}</div>'
-            f'<div><strong>kept:</strong> {int(scene.get("pair_count_kept", 0) or 0)}</div>'
-            f'<div><strong>hard fail:</strong> {int(scene.get("pair_count_auto_drop_hard_fail", 0) or 0)}</div>'
-            f'<div><strong>salvage review:</strong> {int(scene.get("pair_count_needs_vlm_salvage_review", 0) or 0)}</div>'
-            f'<div><strong>uncertain:</strong> {int(scene.get("pair_count_uncertain", 0) or 0)}</div>'
-            "</div>"
+            f'<h2>{html.escape(scene_id)} [{html.escape(scene.get("pipeline_outcome", ""))}]</h2>'
             + "".join(group_cards)
             + "</section>"
         )
@@ -2725,23 +2760,27 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Attachment Pair Salvage Review</title>
   <style>
-    body{{margin:0;background:#f4f1ea;color:#1f2937;font:14px/1.5 Georgia, 'Times New Roman', serif;}}
-    .page{{max-width:1400px;margin:0 auto;padding:28px 20px 60px;}}
+    body{{margin:0;background:linear-gradient(180deg,#efe7dc 0%,#f7f3ee 48%,#f4efe8 100%);color:#1f2937;font:14px/1.5 Georgia, 'Times New Roman', serif;}}
+    .page{{max-width:1200px;margin:0 auto;padding:28px 20px 60px;}}
     h1,h2,h3{{margin:0 0 12px;color:#111827;}}
     .summary,.scene-card,.group-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
     .summary{{padding:18px 20px;margin-bottom:22px;}}
-    .summary-grid,.scene-meta,.group-meta,.pair-meta{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
+    .summary-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
     .summary-scenes{{margin-top:16px;padding-top:14px;border-top:1px solid #e7dfd1;}}
     .scene-card{{padding:18px 20px;margin-bottom:24px;}}
     .group-card{{padding:16px 18px;margin:18px 0;}}
-    .cover-grid,.crop-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin:14px 0;}}
-    .cover-item,.crop-item{{background:#f8f6f1;border:1px solid #e7dfd1;border-radius:12px;padding:10px;}}
-    img{{width:100%;display:block;border-radius:10px;background:#d1d5db;}}
-    .cover-title,.crop-title,.pair-title{{font-weight:700;color:#111827;}}
-    .cover-subtitle{{font-size:12px;color:#6b7280;margin-top:6px;}}
     .pair-list{{display:grid;gap:14px;margin-top:16px;}}
-    .pair-card{{padding:14px 16px;}}
+    .pair-card{{padding:14px 16px;display:grid;grid-template-columns:180px 1fr;gap:16px;align-items:start;}}
+    .pair-visual{{display:grid;gap:8px;}}
+    .pair-visual img{{width:100%;height:132px;object-fit:cover;display:block;border-radius:12px;background:#d1d5db;}}
+    .pair-image-name{{font-size:12px;color:#6b7280;letter-spacing:.02em;}}
+    .pair-copy{{display:grid;gap:10px;align-content:start;}}
+    .pair-text{{padding:10px 12px;border-radius:12px;background:#f8f6f1;border:1px solid #e7dfd1;}}
     .empty-state{{padding:14px;border:1px dashed #c7bba7;border-radius:12px;background:#faf7f2;color:#6b7280;}}
+    @media (max-width: 720px){{
+      .pair-card{{grid-template-columns:1fr;}}
+      .pair-visual img{{height:auto;max-height:220px;}}
+    }}
   </style>
 </head>
 <body>
@@ -2749,18 +2788,9 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     <section class="summary">
       <h1>Attachment Pair Salvage Review</h1>
       <div class="summary-grid">
-        <div><strong>scene count:</strong> {int(review_doc.get("scene_count", 0) or 0)}</div>
-        <div><strong>group count:</strong> {int(review_doc.get("group_count_total", 0) or 0)}</div>
-        <div><strong>groups with clarity pass:</strong> {int(review_doc.get("group_count_with_clarity_pass_images", 0) or 0)}</div>
-        <div><strong>multi-image cover groups:</strong> {int(review_doc.get("group_count_with_multi_image_cover", 0) or 0)}</div>
-        <div><strong>pair count:</strong> {int(review_doc.get("pair_count_total", 0) or 0)}</div>
-        <div><strong>kept pairs:</strong> {int(review_doc.get("pair_count_kept", 0) or 0)}</div>
-        <div><strong>hard fail pairs:</strong> {int(review_doc.get("pair_count_auto_drop_hard_fail", 0) or 0)}</div>
-        <div><strong>salvage review pairs:</strong> {int(review_doc.get("pair_count_needs_vlm_salvage_review", 0) or 0)}</div>
-        <div><strong>uncertain pairs:</strong> {int(review_doc.get("pair_count_uncertain", 0) or 0)}</div>
-        <div><strong>VLM salvageable:</strong> {int(review_doc.get("pair_count_vlm_salvageable", 0) or 0)}</div>
-        <div><strong>VLM not salvageable:</strong> {int(review_doc.get("pair_count_vlm_not_salvageable", 0) or 0)}</div>
-        <div><strong>VLM uncertain:</strong> {int(review_doc.get("pair_count_vlm_uncertain", 0) or 0)}</div>
+        <div><strong>scene count:</strong> {rendered_scene_count}</div>
+        <div><strong>group count:</strong> {rendered_group_count}</div>
+        <div><strong>pair count:</strong> {rendered_pair_count}</div>
       </div>
       <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
     </section>
