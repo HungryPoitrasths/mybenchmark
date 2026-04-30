@@ -2031,16 +2031,6 @@ def _visible_object_frame_group_key(frame: dict[str, Any]) -> tuple[Any, ...] | 
     return None
 
 
-def _count_visible_object_frame_groups(frames: list[dict[str, Any]]) -> int:
-    return len(
-        {
-            group_key
-            for group_key in (_visible_object_frame_group_key(frame) for frame in frames)
-            if group_key is not None
-        }
-    )
-
-
 def _group_frame_sampling_stride(group_frame_count: int) -> int:
     count = max(0, int(group_frame_count))
     if count <= 10:
@@ -2116,6 +2106,69 @@ def _attachment_frame_merge_metrics(
     return True, angle_deg, symmetric_diff_size
 
 
+def _build_visible_object_pose_merged_groups(
+    *,
+    frames: list[dict[str, Any]],
+    poses: dict[str, CameraPose] | None,
+) -> list[dict[str, Any]]:
+    merged_groups: list[dict[str, Any]] = []
+    for frame in frames:
+        frame_visible_ids = _visible_object_frame_group_key(frame)
+        if frame_visible_ids is None:
+            continue
+        matching_groups: list[tuple[float, int, int]] = []
+        for group_index, group in enumerate(merged_groups):
+            metrics = _attachment_frame_merge_metrics(
+                group["anchor_frame"],
+                frame,
+                poses,
+            )
+            if metrics is None:
+                continue
+            _merge_allowed, angle_deg, symmetric_diff_size = metrics
+            matching_groups.append(
+                (
+                    float("inf") if angle_deg is None else float(angle_deg),
+                    int(symmetric_diff_size),
+                    int(group_index),
+                )
+            )
+        if matching_groups:
+            _, _, best_group_index = min(matching_groups)
+            best_group = merged_groups[best_group_index]
+            best_group["frames"].append(frame)
+            best_group["visible_object_ids"].update(frame_visible_ids)
+            continue
+        merged_groups.append(
+            {
+                "anchor_frame": frame,
+                "frames": [frame],
+                "visible_object_ids": set(frame_visible_ids),
+            }
+        )
+
+    return [
+        {
+            "anchor_frame": group["anchor_frame"],
+            "frames": list(group["frames"]),
+            "visible_object_ids": sorted(int(obj_id) for obj_id in group["visible_object_ids"]),
+        }
+        for group in merged_groups
+    ]
+
+
+def _count_visible_object_frame_groups(
+    frames: list[dict[str, Any]],
+    poses: dict[str, CameraPose] | None = None,
+) -> int:
+    return len(
+        _build_visible_object_pose_merged_groups(
+            frames=frames,
+            poses=poses,
+        )
+    )
+
+
 def _build_attachment_frame_groups(
     *,
     frames: list[dict[str, Any]],
@@ -2131,47 +2184,18 @@ def _build_attachment_frame_groups(
 
     merged_groups: list[dict[str, Any]] = []
     for pair_set_key, bucket_frames in pair_buckets.items():
-        bucket_clusters: list[dict[str, Any]] = []
-        for frame in bucket_frames:
-            frame_visible_ids = _visible_object_frame_group_key(frame)
-            if frame_visible_ids is None:
-                continue
-            matching_clusters: list[tuple[float, int, int]] = []
-            for cluster_index, cluster in enumerate(bucket_clusters):
-                metrics = _attachment_frame_merge_metrics(
-                    cluster["anchor_frame"],
-                    frame,
-                    poses,
-                )
-                if metrics is None:
-                    continue
-                _merge_allowed, angle_deg, symmetric_diff_size = metrics
-                matching_clusters.append(
-                    (
-                        float("inf") if angle_deg is None else float(angle_deg),
-                        int(symmetric_diff_size),
-                        int(cluster_index),
-                    )
-                )
-            if matching_clusters:
-                _, _, best_cluster_index = min(matching_clusters)
-                best_cluster = bucket_clusters[best_cluster_index]
-                best_cluster["frames"].append(frame)
-                best_cluster["visible_object_ids"].update(frame_visible_ids)
-                continue
-            bucket_clusters.append(
-                {
-                    "anchor_frame": frame,
-                    "frames": [frame],
-                    "visible_object_ids": set(frame_visible_ids),
-                }
-            )
-
-        for cluster in bucket_clusters:
-            visible_object_ids = sorted(int(obj_id) for obj_id in cluster["visible_object_ids"])
+        bucket_groups = _build_visible_object_pose_merged_groups(
+            frames=bucket_frames,
+            poses=poses,
+        )
+        for group in bucket_groups:
+            visible_object_ids = [
+                int(obj_id) for obj_id in group.get("visible_object_ids", [])
+            ]
             merged_groups.append(
                 {
-                    "frames": list(cluster["frames"]),
+                    "anchor_frame": group.get("anchor_frame"),
+                    "frames": list(group.get("frames", [])),
                     "visible_object_ids": visible_object_ids,
                     "group_pairs": _attachment_pairs_for_visible_group(
                         attachment_graph,
@@ -3442,6 +3466,7 @@ def _select_non_attachment_group_representatives(
     model_name: str,
     scene_dir: Path,
     frames: list[dict[str, Any]],
+    poses: dict[str, CameraPose] | None = None,
     max_group_count: int | None = None,
     max_accepted_frame_count: int | None = None,
     vlm_workers: int = 1,
@@ -3452,13 +3477,10 @@ def _select_non_attachment_group_representatives(
         return []
 
     color_dir = scene_dir / "color"
-    grouped_frames: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
-    for frame in frames:
-        group_key = _visible_object_frame_group_key(frame)
-        if group_key is None:
-            continue
-        grouped_frames.setdefault(group_key, []).append(frame)
-    grouped_items = list(grouped_frames.items())
+    grouped_items = _build_visible_object_pose_merged_groups(
+        frames=frames,
+        poses=poses,
+    )
     if max_group_count is not None:
         grouped_items = grouped_items[:max(0, int(max_group_count))]
     accepted_target: int | None = None
@@ -3470,9 +3492,11 @@ def _select_non_attachment_group_representatives(
             return []
 
     def _select_group(
-        item: tuple[int, tuple[tuple[Any, ...], list[dict[str, Any]]]]
+        item: tuple[int, dict[str, Any]]
     ) -> dict[str, Any]:
-        group_index, (group_key, group_frames) = item
+        group_index, group_doc = item
+        group_key = tuple(int(obj_id) for obj_id in group_doc.get("visible_object_ids", []))
+        group_frames = list(group_doc.get("frames", []))
         accepted: list[dict[str, Any]] = []
         fallback_frame: dict[str, Any] | None = None
         attempts: list[dict[str, Any]] = []
@@ -6592,6 +6616,7 @@ def _select_and_rerank_frames(
     frame_candidates: list[dict[str, Any]],
     max_frames: int,
     max_group_count: int | None = None,
+    poses: dict[str, CameraPose] | None = None,
     vlm_workers: int = 1,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     stats_output: dict[str, Any] | None = None,
@@ -6602,7 +6627,10 @@ def _select_and_rerank_frames(
 
     reranked: list[dict[str, Any]] = []
     accepted_frame_count = 0
-    group_count = _count_visible_object_frame_groups(frame_candidates)
+    group_count = _count_visible_object_frame_groups(
+        frame_candidates,
+        poses=poses,
+    )
     group_limit = group_count
     if max_group_count is not None:
         group_limit = max(0, min(group_count, int(max_group_count)))
@@ -6619,6 +6647,7 @@ def _select_and_rerank_frames(
         model_name=model_name,
         scene_dir=scene_dir,
         frames=frame_candidates,
+        poses=poses,
         max_group_count=group_limit,
         max_accepted_frame_count=int(max_frames),
         vlm_workers=vlm_workers,
@@ -7258,7 +7287,8 @@ def main():
             if not bool(frame.get("attachment_viewpoint_exempt"))
         ]
         non_attachment_group_count = _count_visible_object_frame_groups(
-            non_attachment_candidate_frames
+            non_attachment_candidate_frames,
+            poses=poses,
         )
         logger.info(
             "Selected %d attachment-qualified and %d non-attachment frame candidates across %d visible-object groups for %s before VLM review",
@@ -7333,6 +7363,7 @@ def main():
             scene_dir=scene_dir,
             frame_candidates=non_attachment_candidate_frames,
             max_frames=int(args.max_frames),
+            poses=poses,
             vlm_workers=int(args.vlm_workers),
             referability_entry_builder=_build_frame_referability_entry,
             debug_output=scene_grouping_summary,

@@ -2254,7 +2254,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
     def test_select_and_rerank_frames_limits_non_attachment_group_count(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
-            {"image_name": "000030.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [3, 4]},
+            {"image_name": "000030.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [1, 2, 9]},
             {"image_name": "000060.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [5, 6]},
         ]
         frame_decisions = [
@@ -2297,14 +2297,29 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 frame_candidates=frame_candidates,
                 max_frames=3,
                 max_group_count=2,
+                poses={
+                    "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                    "000030.jpg": make_camera_pose(image_name="000030.jpg", yaw_deg=10.0),
+                    "000060.jpg": make_camera_pose(image_name="000060.jpg", yaw_deg=45.0),
+                },
                 debug_output=debug_output,
             )
 
         self.assertEqual(frame_decision_mock.call_count, 2)
-        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000030.jpg"])
-        self.assertEqual(debug_output["non_attachment_visible_object_group_count"], 3)
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000060.jpg"])
+        self.assertEqual(debug_output["non_attachment_visible_object_group_count"], 2)
         self.assertEqual(debug_output["non_attachment_processed_group_count"], 2)
         self.assertEqual(len(debug_output["groups"]), 2)
+        self.assertEqual(debug_output["groups"][0]["group_key_visible_object_ids"], [1, 2, 9])
+        self.assertEqual(
+            debug_output["groups"][0]["candidate_frame_image_names"],
+            ["000000.jpg", "000030.jpg"],
+        )
+        self.assertEqual(
+            debug_output["groups"][0]["sampled_frame_image_names"],
+            ["000000.jpg", "000030.jpg"],
+        )
+        self.assertEqual(debug_output["groups"][0]["accepted_frame_image_names"], ["000000.jpg"])
 
     def test_select_and_rerank_frames_non_attachment_group_requires_two_referables_for_early_stop(self) -> None:
         frame_candidates = [
@@ -2549,6 +2564,145 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(build_calls, ["000000.jpg", "000030.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000030.jpg"])
         self.assertEqual(stats_output["non_attachment_visible_object_group_count"], 4)
+        self.assertEqual(stats_output["non_attachment_processed_group_count"], 2)
+        self.assertEqual(stats_output["accepted_frame_count_after_group_scan"], 2)
+
+    def test_build_visible_object_pose_merged_groups_merges_when_visible_diff_and_pose_match(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000020.jpg", "visible_object_ids": [9, 2, 1]},
+        ]
+
+        groups = referability_module._build_visible_object_pose_merged_groups(
+            frames=frames,
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+                "000020.jpg": make_camera_pose(image_name="000020.jpg", yaw_deg=12.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            [frame["image_name"] for frame in groups[0]["frames"]],
+            ["000000.jpg", "000010.jpg", "000020.jpg"],
+        )
+        self.assertEqual(groups[0]["visible_object_ids"], [1, 2, 9])
+        self.assertEqual(groups[0]["anchor_frame"]["image_name"], "000000.jpg")
+
+    def test_build_visible_object_pose_merged_groups_keeps_separate_groups_when_pose_angle_exceeds_threshold(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9]},
+        ]
+
+        groups = referability_module._build_visible_object_pose_merged_groups(
+            frames=frames,
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=25.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]["visible_object_ids"], [1, 2])
+        self.assertEqual(groups[1]["visible_object_ids"], [1, 2, 9])
+
+    def test_build_visible_object_pose_merged_groups_keeps_separate_groups_when_visible_symmetric_diff_is_too_large(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9, 10, 11, 12]},
+        ]
+
+        groups = referability_module._build_visible_object_pose_merged_groups(
+            frames=frames,
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 2)
+
+    def test_build_visible_object_pose_merged_groups_missing_pose_only_allows_exact_visible_match(self) -> None:
+        mergeable_frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [2, 1]},
+        ]
+        non_mergeable_frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000020.jpg", "visible_object_ids": [1, 2, 9]},
+        ]
+
+        merged_groups = referability_module._build_visible_object_pose_merged_groups(
+            frames=mergeable_frames,
+            poses={"000000.jpg": make_camera_pose(image_name="000000.jpg")},
+        )
+        split_groups = referability_module._build_visible_object_pose_merged_groups(
+            frames=non_mergeable_frames,
+            poses={"000000.jpg": make_camera_pose(image_name="000000.jpg")},
+        )
+
+        self.assertEqual(len(merged_groups), 1)
+        self.assertEqual(merged_groups[0]["visible_object_ids"], [1, 2])
+        self.assertEqual(len(split_groups), 2)
+
+    def test_select_and_rerank_frames_stats_use_merged_non_attachment_groups(self) -> None:
+        frame_candidates = [
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
+            {"image_name": "000030.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000060.jpg", "score": 18, "n_visible": 3, "visible_object_ids": [5, 6]},
+        ]
+        frame_decisions = [
+            {
+                "clear": True,
+                "clarity_score": 81,
+                "frame_usable": True,
+                "reason": "sharp enough",
+            },
+            {
+                "clear": True,
+                "clarity_score": 79,
+                "frame_usable": True,
+                "reason": "also sharp",
+            },
+        ]
+        stats_output: dict[str, Any] = {}
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"rerank_stats_merged_groups_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+
+        with (
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision",
+                side_effect=frame_decisions,
+            ),
+        ):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=frame_candidates,
+                max_frames=3,
+                poses={
+                    "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                    "000030.jpg": make_camera_pose(image_name="000030.jpg", yaw_deg=10.0),
+                    "000060.jpg": make_camera_pose(image_name="000060.jpg", yaw_deg=45.0),
+                },
+                stats_output=stats_output,
+            )
+
+        self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000060.jpg"])
+        self.assertEqual(stats_output["non_attachment_visible_object_group_count"], 2)
         self.assertEqual(stats_output["non_attachment_processed_group_count"], 2)
         self.assertEqual(stats_output["accepted_frame_count_after_group_scan"], 2)
 
