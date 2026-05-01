@@ -49,6 +49,7 @@ from src.referability_checks import (
     normalize_object_ids as _shared_normalize_object_ids,
 )
 from src.scene_parser import InstanceMeshData, _load_scene_geometry, load_instance_mesh_data
+from src.image_quality import BrisqueScorer, compute_brisque_score
 from src.utils import RayCaster
 from src.utils.colmap_loader import (
     CameraIntrinsics,
@@ -110,7 +111,7 @@ REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 FRAME_CLARITY_BATCH_SIZE = 6
 FRAME_CLARITY_MAX_TOKENS_PER_IMAGE = 128
 FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
-DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 65
+DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 70
 VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
 ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
 DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE = 70
@@ -119,6 +120,7 @@ NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT = 2
 NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT = 2
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
+FRAME_BRISQUE_MAX_SIDE = 0
 
 ATTACHMENT_PAIR_PROGRAM_DECISION_KEPT = "kept"
 ATTACHMENT_PAIR_PROGRAM_DECISION_AUTO_DROP_HARD_FAIL = "auto_drop_hard_fail"
@@ -2390,6 +2392,20 @@ def _normalize_clarity_score(value: object, *, default: int = 60) -> int:
     return max(0, min(100, score))
 
 
+def _normalize_optional_int(value: object) -> int | None:
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_optional_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _legacy_frame_clear(parsed: dict[str, Any]) -> bool:
     if isinstance(parsed.get("frame_usable"), bool):
         return bool(parsed.get("frame_usable"))
@@ -2410,12 +2426,24 @@ def _normalize_frame_review(value: dict[str, Any] | None) -> dict[str, Any]:
     parsed = value if isinstance(value, dict) else {}
     clear = _coerce_bool(parsed.get("clear"), default=_legacy_frame_clear(parsed))
     clarity_score = _normalize_clarity_score(parsed.get("clarity_score"), default=60)
-    return {
+    normalized = {
         "clear": clear,
         "clarity_score": clarity_score,
         "frame_usable": clear,
         "reason": str(parsed.get("reason", "")).strip() or "frame_clarity_parse_fallback",
     }
+    brisque_score = _normalize_optional_float(parsed.get("brisque_score"))
+    brisque_input_width = _normalize_optional_int(parsed.get("brisque_input_width"))
+    brisque_input_height = _normalize_optional_int(parsed.get("brisque_input_height"))
+    if (
+        brisque_score is not None
+        or brisque_input_width is not None
+        or brisque_input_height is not None
+    ):
+        normalized["brisque_score"] = brisque_score
+        normalized["brisque_input_width"] = brisque_input_width
+        normalized["brisque_input_height"] = brisque_input_height
+    return normalized
 
 
 def _chunk_list(items: list[Any], chunk_size: int) -> list[list[Any]]:
@@ -2705,6 +2733,165 @@ def _resolve_group_frame_reviews(
     return reviewed_by_image_name
 
 
+_BRISQUE_SCORER_LOCAL = threading.local()
+
+
+def _get_brisque_scorer() -> BrisqueScorer:
+    scorer = getattr(_BRISQUE_SCORER_LOCAL, "scorer", None)
+    if scorer is None:
+        scorer = BrisqueScorer()
+        _BRISQUE_SCORER_LOCAL.scorer = scorer
+    return scorer
+
+
+def _load_scene_image_for_brisque(
+    *,
+    color_dir: Path,
+    image_name: str,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
+) -> np.ndarray | None:
+    if callable(scene_image_getter):
+        image = scene_image_getter(image_name)
+        return image if isinstance(image, np.ndarray) else None
+    image = cv2.imread(str(color_dir / image_name))
+    if image is None:
+        logger.warning("Cannot read image %s", color_dir / image_name)
+    return image
+
+
+def _score_group_frames_by_brisque(
+    *,
+    sampled_frames: list[dict[str, Any]],
+    color_dir: Path,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
+) -> list[dict[str, Any]]:
+    if not sampled_frames:
+        return []
+
+    scorer = _get_brisque_scorer()
+    scored_frames: list[dict[str, Any]] = []
+    for original_index, frame in enumerate(sampled_frames):
+        image_name = str(frame.get("image_name", "")).strip()
+        brisque_info = {
+            "brisque_score": None,
+            "brisque_input_width": None,
+            "brisque_input_height": None,
+        }
+        if image_name:
+            image = _load_scene_image_for_brisque(
+                color_dir=color_dir,
+                image_name=image_name,
+                scene_image_getter=scene_image_getter,
+            )
+            if image is not None:
+                brisque_info = compute_brisque_score(
+                    image,
+                    scorer=scorer,
+                    max_side=FRAME_BRISQUE_MAX_SIDE,
+                )
+        scored_frames.append(
+            {
+                "frame": frame,
+                "image_name": image_name,
+                "original_index": int(original_index),
+                "brisque_score": brisque_info["brisque_score"],
+                "brisque_input_width": brisque_info["brisque_input_width"],
+                "brisque_input_height": brisque_info["brisque_input_height"],
+            }
+        )
+    return scored_frames
+
+
+def _sort_group_frames_for_clarity_review(
+    scored_frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return sorted(
+        scored_frames,
+        key=lambda item: (
+            item.get("brisque_score") is None,
+            float(item.get("brisque_score")) if item.get("brisque_score") is not None else float("inf"),
+            int(item.get("original_index", 0)),
+            str(item.get("image_name", "")),
+        ),
+    )
+
+
+def _attach_brisque_to_reviewed_frame(
+    reviewed_frame: dict[str, Any] | None,
+    brisque_doc: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not isinstance(reviewed_frame, dict):
+        return reviewed_frame
+    updated = dict(reviewed_frame)
+    frame_info = _normalize_frame_review(updated.get("frame_info"))
+    frame_info["brisque_score"] = brisque_doc.get("brisque_score")
+    frame_info["brisque_input_width"] = brisque_doc.get("brisque_input_width")
+    frame_info["brisque_input_height"] = brisque_doc.get("brisque_input_height")
+    updated["frame_info"] = frame_info
+    return updated
+
+
+def _review_group_frames_until_stop(
+    *,
+    ordered_scored_frames: list[dict[str, Any]],
+    client,
+    model_name: str,
+    color_dir: Path,
+    frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+    frame_review_batch_getter: Callable[[list[dict[str, Any]]], dict[str, Any] | None] | None = None,
+    frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
+    stop_on_reviewed_frame: Callable[[dict[str, Any], dict[str, Any]], str | None] | None = None,
+) -> dict[str, Any]:
+    reviewed_by_image_name: dict[str, dict[str, Any] | None] = {}
+    reviewed_image_names_in_order: list[str] = []
+    early_stop_image_name: str | None = None
+    early_stop_reason: str | None = None
+
+    batch_size = frame_clarity_batch_size if callable(frame_review_batch_getter) else 1
+    for batch in _chunk_list(ordered_scored_frames, batch_size):
+        batch_frames = [
+            item.get("frame")
+            for item in batch
+            if isinstance(item.get("frame"), dict)
+        ]
+        batch_reviews = _resolve_group_frame_reviews(
+            sampled_frames=batch_frames,
+            client=client,
+            model_name=model_name,
+            color_dir=color_dir,
+            frame_review_getter=frame_review_getter,
+            frame_review_batch_getter=frame_review_batch_getter,
+            frame_clarity_batch_size=frame_clarity_batch_size,
+        )
+        for scored_frame in batch:
+            image_name = str(scored_frame.get("image_name", "")).strip()
+            reviewed_frame = _attach_brisque_to_reviewed_frame(
+                batch_reviews.get(image_name),
+                scored_frame,
+            )
+            reviewed_by_image_name[image_name] = reviewed_frame
+            reviewed_image_names_in_order.append(image_name)
+            if not isinstance(reviewed_frame, dict) or not callable(stop_on_reviewed_frame):
+                continue
+            stop_reason = stop_on_reviewed_frame(scored_frame, reviewed_frame)
+            if stop_reason:
+                early_stop_image_name = image_name
+                early_stop_reason = str(stop_reason)
+                return {
+                    "reviewed_by_image_name": reviewed_by_image_name,
+                    "reviewed_image_names_in_order": reviewed_image_names_in_order,
+                    "early_stop_image_name": early_stop_image_name,
+                    "early_stop_reason": early_stop_reason,
+                }
+
+    return {
+        "reviewed_by_image_name": reviewed_by_image_name,
+        "reviewed_image_names_in_order": reviewed_image_names_in_order,
+        "early_stop_image_name": early_stop_image_name,
+        "early_stop_reason": early_stop_reason,
+    }
+
+
 def _visible_object_frame_group_key(frame: dict[str, Any]) -> tuple[Any, ...] | None:
     visible_object_ids = frame.get("visible_object_ids")
     if isinstance(visible_object_ids, list):
@@ -2951,55 +3138,59 @@ def _select_attachment_group_representatives(
         group_id, group_doc = item
         group_frames = list(group_doc.get("frames", []))
         sampled_frames, _group_frame_stride = _sample_group_frames(group_frames)
-        reviewed_by_image_name = (
-            _resolve_group_frame_reviews(
-                sampled_frames=sampled_frames,
-                client=client,
-                model_name=model_name,
-                color_dir=color_dir,
-                frame_review_getter=frame_review_getter,
-                frame_review_batch_getter=frame_review_batch_getter,
-                frame_clarity_batch_size=frame_clarity_batch_size,
-            )
-            if callable(frame_review_batch_getter)
-            else {}
+        scored_frames = _score_group_frames_by_brisque(
+            sampled_frames=sampled_frames,
+            color_dir=color_dir,
         )
-        for frame in sampled_frames:
-            if callable(frame_review_batch_getter):
-                reviewed_frame = reviewed_by_image_name.get(str(frame.get("image_name", "")).strip())
-            elif callable(frame_review_getter):
-                reviewed_frame = frame_review_getter(frame)
-            else:
-                reviewed_frame = _review_frame_clarity(
-                    client=client,
-                    model_name=model_name,
-                    color_dir=color_dir,
-                    frame=frame,
-                )
-            if reviewed_frame is None:
-                continue
-            reviewed_frame["attachment_view_group_id"] = group_id
-            if int(reviewed_frame.get("frame_info", {}).get("clarity_score", 0) or 0) < int(attachment_clarity_min_score):
-                continue
+        ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
+        accepted_frame: dict[str, Any] | None = None
+
+        def _stop_on_reviewed_frame(
+            scored_frame: dict[str, Any],
+            reviewed_frame: dict[str, Any],
+        ) -> str | None:
+            nonlocal accepted_frame
+            frame = scored_frame.get("frame")
+            if not isinstance(frame, dict):
+                return None
+            frame_info = reviewed_frame.get("frame_info", {})
+            if (
+                not bool(frame_info.get("frame_usable", True))
+                or int(frame_info.get("clarity_score", 0) or 0) < int(attachment_clarity_min_score)
+            ):
+                return None
             combined = dict(reviewed_frame)
+            combined["attachment_view_group_id"] = group_id
             if attachment_entry_builder is not None:
-                entry = attachment_entry_builder(frame, reviewed_frame)
+                entry = attachment_entry_builder(frame, combined)
                 if not isinstance(entry, dict):
-                    continue
+                    return None
                 combined.update(entry)
             attachment_pairs = _build_attachment_referable_pairs(
                 attachment_graph,
                 combined.get("attachment_referable_object_ids"),
             )
             if not attachment_pairs:
-                continue
-            return _with_attachment_pair_metadata(
+                return None
+            accepted_frame = _with_attachment_pair_metadata(
                 combined,
                 combined,
                 attachment_graph,
                 attachment_view_group_id=group_id,
             )
-        return None
+            return "accepted_attachment_referable_frame"
+
+        _review_group_frames_until_stop(
+            ordered_scored_frames=ordered_scored_frames,
+            client=client,
+            model_name=model_name,
+            color_dir=color_dir,
+            frame_review_getter=frame_review_getter,
+            frame_review_batch_getter=frame_review_batch_getter,
+            frame_clarity_batch_size=frame_clarity_batch_size,
+            stop_on_reviewed_frame=_stop_on_reviewed_frame,
+        )
+        return accepted_frame
 
     selected_by_group: list[tuple[int, dict[str, Any]]] = []
     next_group_index = 0
@@ -3222,44 +3413,31 @@ def _build_attachment_pair_salvage_scene_review(
             continue
 
         sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
+        scored_frames = _score_group_frames_by_brisque(
+            sampled_frames=sampled_frames,
+            color_dir=color_dir,
+            scene_image_getter=scene_image_getter,
+        )
+        ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         clarity_pass_frames: list[dict[str, Any]] = []
         clarity_pass_image_names: list[str] = []
         frame_records_by_image_name: dict[str, dict[str, Any]] = {}
-        reviewed_by_image_name = (
-            _resolve_group_frame_reviews(
-                sampled_frames=sampled_frames,
-                client=client,
-                model_name=model_name,
-                color_dir=color_dir,
-                frame_review_getter=frame_review_getter,
-                frame_review_batch_getter=frame_review_batch_getter,
-                frame_clarity_batch_size=frame_clarity_batch_size,
-            )
-            if callable(frame_review_batch_getter)
-            else {}
-        )
-        for frame in sampled_frames:
-            if callable(frame_review_batch_getter):
-                reviewed_frame = reviewed_by_image_name.get(str(frame.get("image_name", "")).strip())
-            elif callable(frame_review_getter):
-                reviewed_frame = frame_review_getter(frame)
-            else:
-                reviewed_frame = _review_frame_clarity(
-                    client=client,
-                    model_name=model_name,
-                    color_dir=color_dir,
-                    frame=frame,
-                )
-            if reviewed_frame is None:
-                continue
+        clarity_min_score = int(attachment_clarity_min_score)
+
+        def _stop_on_reviewed_frame(
+            scored_frame: dict[str, Any],
+            reviewed_frame: dict[str, Any],
+        ) -> str | None:
+            frame = scored_frame.get("frame")
+            if not isinstance(frame, dict):
+                return None
             frame_info = reviewed_frame.get("frame_info", {})
-            image_name = str(frame.get("image_name", "")).strip()
-            clarity_score = int(frame_info.get("clarity_score", 0) or 0)
-            if not bool(frame_info.get("frame_usable", True)):
-                continue
-            if clarity_score < int(attachment_clarity_min_score):
-                continue
-            clarity_pass_image_names.append(image_name)
+            if (
+                not bool(frame_info.get("frame_usable", True))
+                or int(frame_info.get("clarity_score", 0) or 0) < clarity_min_score
+            ):
+                return None
+            image_name = str(scored_frame.get("image_name", "")).strip()
             entry = None
             if attachment_entry_builder is not None:
                 entry = attachment_entry_builder(frame, reviewed_frame)
@@ -3273,12 +3451,27 @@ def _build_attachment_pair_salvage_scene_review(
             frame_record = {
                 "image_name": image_name,
                 "image_stem": _image_name_stem(image_name),
-                "clarity_score": clarity_score,
+                "clarity_score": int(frame_info.get("clarity_score", 0) or 0),
                 "frame_info": dict(frame_info),
                 "entry": dict(entry) if isinstance(entry, dict) else None,
             }
             clarity_pass_frames.append(frame_record)
+            clarity_pass_image_names.append(image_name)
             frame_records_by_image_name[image_name] = frame_record
+            if isinstance(entry, dict) and entry.get("attachment_referable_pairs"):
+                return "accepted_attachment_referable_frame"
+            return None
+
+        review_result = _review_group_frames_until_stop(
+            ordered_scored_frames=ordered_scored_frames,
+            client=client,
+            model_name=model_name,
+            color_dir=color_dir,
+            frame_review_getter=frame_review_getter,
+            frame_review_batch_getter=frame_review_batch_getter,
+            frame_clarity_batch_size=frame_clarity_batch_size,
+            stop_on_reviewed_frame=_stop_on_reviewed_frame,
+        )
 
         pair_rows = [
             _build_attachment_pair_salvage_pair_row(
@@ -3401,7 +3594,22 @@ def _build_attachment_pair_salvage_scene_review(
                     str(frame.get("image_name", "")).strip()
                     for frame in sampled_frames
                 ],
+                "sampled_frames": [
+                    {
+                        "image_name": str(item.get("image_name", "")).strip(),
+                        "brisque_score": item.get("brisque_score"),
+                        "brisque_input_width": item.get("brisque_input_width"),
+                        "brisque_input_height": item.get("brisque_input_height"),
+                    }
+                    for item in scored_frames
+                ],
+                "brisque_sorted_frame_image_names": [
+                    str(item.get("image_name", "")).strip()
+                    for item in ordered_scored_frames
+                ],
                 "clarity_pass_image_names": clarity_pass_image_names,
+                "early_stop_image_name": review_result["early_stop_image_name"],
+                "early_stop_reason": review_result["early_stop_reason"],
                 "selected_cover_image_names": selected_cover_image_names,
                 "selected_cover_images": selected_cover_images,
                 "group_frame_stride": int(group_frame_stride),
@@ -4258,138 +4466,162 @@ def _select_non_attachment_group_representatives(
         accepted: list[dict[str, Any]] = []
         attempts: list[dict[str, Any]] = []
         stopped_after_image_name: str | None = None
+        early_stop_image_name: str | None = None
+        early_stop_reason: str | None = None
         stop_reason = "exhausted_group_frames"
         sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
-        reviewed_by_image_name = _resolve_group_frame_reviews(
+        scored_frames = _score_group_frames_by_brisque(
             sampled_frames=sampled_frames,
+            color_dir=color_dir,
+        )
+        ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
+        clarity_min_score = int(non_attachment_clarity_min_score)
+        referable_object_ids_by_image_name: dict[str, list[int]] = {}
+        accepted_frames_by_image_name: dict[str, dict[str, Any]] = {}
+        accepted_image_names: set[str] = set()
+
+        def _stop_on_reviewed_frame(
+            scored_frame: dict[str, Any],
+            reviewed_frame: dict[str, Any],
+        ) -> str | None:
+            frame = scored_frame.get("frame")
+            if not isinstance(frame, dict):
+                return None
+            frame_info = reviewed_frame.get("frame_info", {})
+            if (
+                not bool(frame_info.get("frame_usable", True))
+                or int(frame_info.get("clarity_score", 0) or 0) < clarity_min_score
+            ):
+                return None
+            image_name = str(scored_frame.get("image_name", "")).strip()
+            referable_entry = None
+            referable_object_ids: list[int] = []
+            if referability_entry_builder is not None:
+                referable_entry = referability_entry_builder(frame, reviewed_frame)
+                if isinstance(referable_entry, dict):
+                    referable_object_ids = _normalize_cached_object_ids(
+                        referable_entry.get("referable_object_ids")
+                    )
+            referable_object_ids_by_image_name[image_name] = list(referable_object_ids)
+            accepted_for_group = bool(
+                referability_entry_builder is None
+                or len(referable_object_ids) >= NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT
+            )
+            if not accepted_for_group:
+                return None
+            accepted_image_names.add(image_name)
+            accepted_frame = dict(reviewed_frame)
+            if isinstance(referable_entry, dict):
+                accepted_frame["_referability_entry"] = referable_entry
+                accepted_frame["referable_object_ids"] = referable_object_ids
+            accepted_frames_by_image_name[image_name] = accepted_frame
+            return "accepted_frame_has_min_referable_objects"
+
+        review_result = _review_group_frames_until_stop(
+            ordered_scored_frames=ordered_scored_frames,
             client=client,
             model_name=model_name,
             color_dir=color_dir,
             frame_review_getter=frame_review_getter,
             frame_review_batch_getter=frame_review_batch_getter,
             frame_clarity_batch_size=frame_clarity_batch_size,
+            stop_on_reviewed_frame=_stop_on_reviewed_frame,
         )
-        attempts_by_image_name: dict[str, dict[str, Any]] = {}
-        eligible_frames: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        reviewed_by_image_name = review_result["reviewed_by_image_name"]
+        reviewed_name_set = set(review_result["reviewed_image_names_in_order"])
+        early_stop_image_name = review_result["early_stop_image_name"]
+        early_stop_reason = review_result["early_stop_reason"]
         clarity_batch_image_names = [
-            str(frame.get("image_name", "")).strip()
-            for frame in sampled_frames
-            if str(frame.get("image_name", "")).strip()
+            str(item.get("image_name", "")).strip()
+            for item in ordered_scored_frames
+            if str(item.get("image_name", "")).strip()
         ]
-        for frame in sampled_frames:
-            image_name = str(frame.get("image_name", "")).strip()
+        attempts_by_image_name: dict[str, dict[str, Any]] = {}
+        for scored_frame in scored_frames:
+            frame = scored_frame.get("frame")
+            if not isinstance(frame, dict):
+                continue
+            image_name = str(scored_frame.get("image_name", "")).strip()
             selector_score = int(
                 frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))) or 0
             )
-            reviewed_frame = reviewed_by_image_name.get(image_name)
-            if reviewed_frame is None:
-                attempt = {
-                    "image_name": image_name,
-                    "selector_score": selector_score,
-                    "review_status": "review_failed_or_missing_image",
-                    "frame_usable": False,
-                    "clarity_score": None,
-                    "frame_quality_reason": None,
-                    "frame_selection_score": None,
-                    "referable_object_count": 0,
-                    "referable_object_ids": [],
-                    "accepted_for_group": False,
-                    "stop_after_this_frame": False,
-                }
-                attempts.append(attempt)
-                attempts_by_image_name[image_name] = attempt
-                continue
-            frame_info = reviewed_frame.get("frame_info", {})
-            frame_usable = bool(frame_info.get("frame_usable", True))
-            clarity_score = int(frame_info.get("clarity_score", 0) or 0)
-            review_status = "reviewed"
-            if not frame_usable:
-                review_status = "frame_not_usable"
-            elif clarity_score < int(non_attachment_clarity_min_score):
-                review_status = "below_clarity_threshold"
             attempt = {
                 "image_name": image_name,
                 "selector_score": selector_score,
-                "review_status": review_status,
-                "frame_usable": frame_usable,
-                "clarity_score": clarity_score,
-                "frame_quality_reason": str(frame_info.get("reason", "")).strip() or None,
-                "frame_selection_score": int(reviewed_frame.get("frame_selection_score", 0) or 0),
+                "review_status": "not_reviewed",
+                "frame_usable": False,
+                "clarity_score": None,
+                "frame_quality_reason": None,
+                "frame_selection_score": None,
                 "referable_object_count": 0,
                 "referable_object_ids": [],
                 "accepted_for_group": False,
                 "stop_after_this_frame": False,
+                "brisque_score": scored_frame.get("brisque_score"),
+                "brisque_input_width": scored_frame.get("brisque_input_width"),
+                "brisque_input_height": scored_frame.get("brisque_input_height"),
             }
+            reviewed_frame = reviewed_by_image_name.get(image_name)
+            if image_name in reviewed_name_set:
+                if not isinstance(reviewed_frame, dict):
+                    attempt["review_status"] = "review_failed_or_missing_image"
+                else:
+                    frame_info = reviewed_frame.get("frame_info", {})
+                    frame_usable = bool(frame_info.get("frame_usable", True))
+                    clarity_score = int(frame_info.get("clarity_score", 0) or 0)
+                    attempt["frame_usable"] = frame_usable
+                    attempt["clarity_score"] = clarity_score
+                    attempt["frame_quality_reason"] = str(frame_info.get("reason", "")).strip() or None
+                    attempt["frame_selection_score"] = int(reviewed_frame.get("frame_selection_score", 0) or 0)
+                    if not frame_usable:
+                        attempt["review_status"] = "frame_not_usable"
+                    elif clarity_score < clarity_min_score:
+                        attempt["review_status"] = "below_clarity_threshold"
+                    else:
+                        referable_object_ids = referable_object_ids_by_image_name.get(image_name, [])
+                        accepted_for_group = image_name in accepted_image_names
+                        attempt["referable_object_count"] = len(referable_object_ids)
+                        attempt["referable_object_ids"] = list(referable_object_ids)
+                        attempt["accepted_for_group"] = accepted_for_group
+                        attempt["review_status"] = (
+                            "accepted_for_group"
+                            if accepted_for_group
+                            else "clarity_pass_not_referable"
+                        )
+                        if accepted_for_group and image_name == early_stop_image_name:
+                            attempt["stop_after_this_frame"] = True
+            elif early_stop_image_name:
+                attempt["review_status"] = "skipped_after_early_stop"
             attempts.append(attempt)
             attempts_by_image_name[image_name] = attempt
-            if frame_usable and clarity_score >= int(non_attachment_clarity_min_score):
-                eligible_frames.append((frame, reviewed_frame))
 
-        eligible_frames.sort(
-            key=lambda item: (
-                -int(item[1].get("frame_info", {}).get("clarity_score", 0) or 0),
-                str(item[0].get("image_name", "")),
-            )
-        )
         clarity_eligible_image_names = [
-            str(frame.get("image_name", "")).strip()
-            for frame, _reviewed_frame in eligible_frames
+            str(item.get("image_name", "")).strip()
+            for item in ordered_scored_frames
+            if isinstance(reviewed_by_image_name.get(str(item.get("image_name", "")).strip()), dict)
+            and bool(
+                reviewed_by_image_name[str(item.get("image_name", "")).strip()]
+                .get("frame_info", {})
+                .get("frame_usable", True)
+            )
+            and int(
+                reviewed_by_image_name[str(item.get("image_name", "")).strip()]
+                .get("frame_info", {})
+                .get("clarity_score", 0)
+                or 0
+            ) >= clarity_min_score
         ]
-        shortlist_count = max(1, int(non_attachment_referability_shortlist))
-        shortlist_items = eligible_frames[:shortlist_count]
-        remaining_items = eligible_frames[shortlist_count:]
-        referability_shortlist_image_names = [
-            str(frame.get("image_name", "")).strip()
-            for frame, _reviewed_frame in shortlist_items
-        ]
+        referability_shortlist_image_names = list(clarity_batch_image_names)
 
-        def _evaluate_referability(
-            review_items: list[tuple[dict[str, Any], dict[str, Any]]],
-        ) -> bool:
-            nonlocal stopped_after_image_name, stop_reason
-            for frame, reviewed_frame in review_items:
-                image_name = str(frame.get("image_name", "")).strip()
-                attempt = attempts_by_image_name.get(image_name)
-                if not isinstance(attempt, dict):
-                    continue
-                referable_entry = None
-                referable_object_ids: list[int] = []
-                if referability_entry_builder is not None:
-                    referable_entry = referability_entry_builder(frame, reviewed_frame)
-                    if isinstance(referable_entry, dict):
-                        referable_object_ids = _normalize_cached_object_ids(
-                            referable_entry.get("referable_object_ids")
-                        )
-                accepted_for_group = bool(
-                    referability_entry_builder is None
-                    or len(referable_object_ids) >= NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT
-                )
-                stop_after_this_frame = bool(
-                    referability_entry_builder is None
-                    or len(referable_object_ids) >= NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT
-                )
-                attempt["referable_object_count"] = len(referable_object_ids)
-                attempt["referable_object_ids"] = list(referable_object_ids)
-                attempt["accepted_for_group"] = accepted_for_group
-                attempt["stop_after_this_frame"] = stop_after_this_frame
-                if accepted_for_group:
-                    accepted_frame = dict(reviewed_frame)
-                    if isinstance(referable_entry, dict):
-                        accepted_frame["_referability_entry"] = referable_entry
-                        accepted_frame["referable_object_ids"] = referable_object_ids
-                    accepted.append(accepted_frame)
-                if stop_after_this_frame:
-                    stopped_after_image_name = image_name
-                    stop_reason = "accepted_frame_has_min_referable_objects"
-                    return True
-            return False
-
-        early_stop = _evaluate_referability(shortlist_items)
-        if not early_stop and _evaluate_referability(remaining_items):
-            pass
-        if not accepted and not clarity_eligible_image_names:
+        if early_stop_image_name:
+            stopped_after_image_name = early_stop_image_name
+            stop_reason = str(early_stop_reason or "accepted_frame_has_min_referable_objects")
+            accepted_frame = accepted_frames_by_image_name.get(early_stop_image_name)
+            if isinstance(accepted_frame, dict):
+                accepted.append(accepted_frame)
+        elif not clarity_eligible_image_names:
             stop_reason = "no_clarity_eligible_frames"
-        elif not accepted:
+        else:
             stop_reason = "exhausted_clarity_eligible_frames"
         return {
             "group_index": int(group_index),
@@ -4402,12 +4634,24 @@ def _select_non_attachment_group_representatives(
                 str(frame.get("image_name", "")).strip()
                 for frame in sampled_frames
             ],
+            "sampled_frames": [
+                {
+                    "image_name": str(item.get("image_name", "")).strip(),
+                    "brisque_score": item.get("brisque_score"),
+                    "brisque_input_width": item.get("brisque_input_width"),
+                    "brisque_input_height": item.get("brisque_input_height"),
+                }
+                for item in scored_frames
+            ],
             "group_frame_stride": group_frame_stride,
             "clarity_batch_image_names": clarity_batch_image_names,
             "clarity_eligible_image_names": clarity_eligible_image_names,
+            "brisque_sorted_frame_image_names": clarity_batch_image_names,
             "referability_shortlist_image_names": referability_shortlist_image_names,
             "attempts": attempts,
             "stopped_after_image_name": stopped_after_image_name,
+            "early_stop_image_name": early_stop_image_name,
+            "early_stop_reason": early_stop_reason,
             "stop_reason": stop_reason,
             "_accepted_frames": accepted,
         }
@@ -4488,15 +4732,19 @@ def _select_non_attachment_group_representatives(
                 "group_key_visible_object_ids": list(doc.get("group_key_visible_object_ids", [])),
                 "candidate_frame_image_names": list(doc.get("candidate_frame_image_names", [])),
                 "sampled_frame_image_names": list(doc.get("sampled_frame_image_names", [])),
+                "sampled_frames": list(doc.get("sampled_frames", [])),
                 "group_frame_stride": int(doc.get("group_frame_stride", 1)),
                 "clarity_batch_image_names": list(doc.get("clarity_batch_image_names", [])),
                 "clarity_eligible_image_names": list(doc.get("clarity_eligible_image_names", [])),
+                "brisque_sorted_frame_image_names": list(doc.get("brisque_sorted_frame_image_names", [])),
                 "referability_shortlist_image_names": list(doc.get("referability_shortlist_image_names", [])),
                 "attempts": list(doc.get("attempts", [])),
                 "accepted_frame_image_names": accepted_image_names,
                 "accepted_frame_count": len(accepted_image_names),
                 "best_accepted_clarity": best_accepted_clarity,
                 "stopped_after_image_name": doc.get("stopped_after_image_name"),
+                "early_stop_image_name": doc.get("early_stop_image_name"),
+                "early_stop_reason": doc.get("early_stop_reason"),
                 "stop_reason": str(doc.get("stop_reason", "exhausted_group_frames")),
                 "group_exhausted_without_usable_frame": not any_usable_frame,
                 "group_exhausted_without_referable_frame": len(accepted_image_names) == 0,
@@ -7707,19 +7955,19 @@ def main():
         "--non_attachment_referability_shortlist",
         type=int,
         default=DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST,
-        help="Number of top-clarity non-attachment frames per group to try before expanding remaining clarity-eligible frames",
+        help="Legacy compatibility flag; non-attachment group review now follows BRISQUE order and stops at the first clarity-pass frame",
     )
     parser.add_argument(
         "--non_attachment_clarity_min_score",
         type=int,
         default=DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
-        help="Minimum clarity score required before a non-attachment frame can enter referability review",
+        help="Clarity early-stop threshold for non-attachment groups; the first BRISQUE-ordered usable frame at or above this score is selected for referability review",
     )
     parser.add_argument(
         "--attachment_clarity_min_score",
         type=int,
         default=DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
-        help="Minimum clarity score required before an attachment frame can enter attachment selection or salvage review",
+        help="Clarity early-stop threshold for attachment groups; the first BRISQUE-ordered usable frame at or above this score is selected for attachment review",
     )
     parser.add_argument(
         "--scene_workers", type=int, default=1,

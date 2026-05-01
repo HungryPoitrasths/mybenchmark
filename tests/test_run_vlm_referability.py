@@ -404,6 +404,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self._split_patch.start()
         self.addCleanup(self._split_patch.stop)
+        self._brisque_patch = patch.object(
+            referability_module,
+            "_score_group_frames_by_brisque",
+            side_effect=self._default_score_group_frames_by_brisque,
+        )
+        self._brisque_patch.start()
+        self.addCleanup(self._brisque_patch.stop)
         self.addCleanup(shutil.rmtree, self._split_metadata_root, True)
 
     def write_split_file(self, split: str, scene_ids: list[str]) -> None:
@@ -412,6 +419,28 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "val": self._val_split_path,
         }[split]
         split_path.write_text("\n".join(scene_ids) + "\n", encoding="utf-8")
+
+    def _default_score_group_frames_by_brisque(
+        self,
+        *,
+        sampled_frames: list[dict[str, object]],
+        color_dir: Path,
+        scene_image_getter=None,
+    ) -> list[dict[str, object]]:
+        del color_dir, scene_image_getter
+        scored: list[dict[str, object]] = []
+        for original_index, frame in enumerate(sampled_frames):
+            scored.append(
+                {
+                    "frame": frame,
+                    "image_name": str(frame.get("image_name", "")).strip(),
+                    "original_index": int(original_index),
+                    "brisque_score": float(frame.get("test_brisque_score", original_index)),
+                    "brisque_input_width": int(frame.get("test_brisque_input_width", 640)),
+                    "brisque_input_height": int(frame.get("test_brisque_input_height", 480)),
+                }
+            )
+        return scored
 
     def test_reset_completed_scene_status_removes_newest_scene_first(self) -> None:
         scene_status_doc = {
@@ -2564,7 +2593,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 max_frames=1,
             )
 
-        self.assertEqual(frame_decision_mock.call_count, 2)
+        self.assertEqual(frame_decision_mock.call_count, 1)
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
         self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [72])
 
@@ -2620,9 +2649,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 max_frames=2,
             )
 
-        self.assertEqual(frame_decision_mock.call_count, 3)
+        self.assertEqual(frame_decision_mock.call_count, 2)
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000060.jpg"])
-        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [81, 74])
+        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [81, 70])
 
     def test_select_and_rerank_frames_discards_candidates_without_visible_object_ids(self) -> None:
         frame_candidates = [
@@ -2726,7 +2755,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 debug_output=debug_output,
             )
 
-        self.assertEqual(frame_decision_mock.call_count, 3)
+        self.assertEqual(frame_decision_mock.call_count, 2)
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg", "000060.jpg"])
         self.assertEqual(debug_output["non_attachment_visible_object_group_count"], 2)
         self.assertEqual(debug_output["non_attachment_processed_group_count"], 2)
@@ -2742,7 +2771,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(debug_output["groups"][0]["accepted_frame_image_names"], ["000000.jpg"])
 
-    def test_select_and_rerank_frames_non_attachment_group_requires_two_referables_for_early_stop(self) -> None:
+    def test_select_and_rerank_frames_non_attachment_continues_until_first_referable_hit(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
             {"image_name": "000030.jpg", "score": 19, "n_visible": 4, "visible_object_ids": [2, 1]},
@@ -2873,25 +2902,27 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(build_calls, ["000000.jpg", "000030.jpg"])
         self.assertEqual(selected, [])
 
-    def test_select_and_rerank_frames_non_attachment_shortlists_top_clarity_before_referability(self) -> None:
+    def test_select_and_rerank_frames_reviews_non_attachment_group_in_brisque_order_then_early_stops(self) -> None:
         frame_candidates = [
-            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
-            {"image_name": "000010.jpg", "score": 19, "n_visible": 5, "visible_object_ids": [2, 1]},
-            {"image_name": "000020.jpg", "score": 18, "n_visible": 5, "visible_object_ids": [1, 2]},
-            {"image_name": "000030.jpg", "score": 17, "n_visible": 5, "visible_object_ids": [2, 1]},
-            {"image_name": "000040.jpg", "score": 16, "n_visible": 5, "visible_object_ids": [1, 2]},
+            {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2], "test_brisque_score": 40.0},
+            {"image_name": "000010.jpg", "score": 19, "n_visible": 5, "visible_object_ids": [2, 1], "test_brisque_score": 30.0},
+            {"image_name": "000020.jpg", "score": 18, "n_visible": 5, "visible_object_ids": [1, 2], "test_brisque_score": 10.0},
+            {"image_name": "000030.jpg", "score": 17, "n_visible": 5, "visible_object_ids": [2, 1], "test_brisque_score": 50.0},
+            {"image_name": "000040.jpg", "score": 16, "n_visible": 5, "visible_object_ids": [1, 2], "test_brisque_score": 20.0},
         ]
         reviewed_by_image_name = {
             "000000.jpg": {"image_name": "000000.jpg", "frame_info": {"clear": True, "clarity_score": 95, "frame_usable": True, "reason": "95"}, "frame_selection_score": 100095},
-            "000010.jpg": {"image_name": "000010.jpg", "frame_info": {"clear": True, "clarity_score": 94, "frame_usable": True, "reason": "94"}, "frame_selection_score": 100094},
-            "000020.jpg": {"image_name": "000020.jpg", "frame_info": {"clear": True, "clarity_score": 93, "frame_usable": True, "reason": "93"}, "frame_selection_score": 100093},
+            "000010.jpg": {"image_name": "000010.jpg", "frame_info": {"clear": True, "clarity_score": 72, "frame_usable": True, "reason": "72"}, "frame_selection_score": 100072},
+            "000020.jpg": {"image_name": "000020.jpg", "frame_info": {"clear": True, "clarity_score": 65, "frame_usable": True, "reason": "65"}, "frame_selection_score": 100065},
             "000030.jpg": {"image_name": "000030.jpg", "frame_info": {"clear": True, "clarity_score": 92, "frame_usable": True, "reason": "92"}, "frame_selection_score": 100092},
-            "000040.jpg": {"image_name": "000040.jpg", "frame_info": {"clear": True, "clarity_score": 91, "frame_usable": True, "reason": "91"}, "frame_selection_score": 100091},
+            "000040.jpg": {"image_name": "000040.jpg", "frame_info": {"clear": True, "clarity_score": 69, "frame_usable": True, "reason": "69"}, "frame_selection_score": 100069},
         }
         debug_output: dict[str, Any] = {}
         build_calls: list[str] = []
+        batch_inputs: list[list[str]] = []
 
         def batch_getter(frames: list[dict]) -> dict[str, dict]:
+            batch_inputs.append([frame["image_name"] for frame in frames])
             return {
                 frame["image_name"]: dict(reviewed_by_image_name[frame["image_name"]], selector_score=int(frame["score"]))
                 for frame in frames
@@ -2899,7 +2930,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         def build_entry(frame: dict, reviewed_frame: dict) -> dict:
             build_calls.append(frame["image_name"])
-            if frame["image_name"] == "000020.jpg":
+            if frame["image_name"] == "000010.jpg":
                 return {"referable_object_ids": [1, 2]}
             return {"referable_object_ids": []}
 
@@ -2914,22 +2945,28 @@ class RunVlmReferabilityTests(unittest.TestCase):
             debug_output=debug_output,
         )
 
-        self.assertEqual(build_calls, ["000000.jpg", "000010.jpg", "000020.jpg"])
-        self.assertEqual([entry["image_name"] for entry in selected], ["000020.jpg"])
+        self.assertEqual(batch_inputs, [["000020.jpg", "000040.jpg", "000010.jpg", "000000.jpg", "000030.jpg"]])
+        self.assertEqual(build_calls, ["000010.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg"])
         self.assertEqual(debug_output["non_attachment_bbox_in_frame_ratio_min"], 0.7)
         self.assertEqual(debug_output["non_attachment_min_referable_object_count"], 2)
         self.assertEqual(
-            debug_output["groups"][0]["referability_shortlist_image_names"],
-            ["000000.jpg", "000010.jpg", "000020.jpg"],
+            debug_output["groups"][0]["brisque_sorted_frame_image_names"],
+            ["000020.jpg", "000040.jpg", "000010.jpg", "000000.jpg", "000030.jpg"],
         )
         self.assertEqual(debug_output["groups"][0]["non_attachment_bbox_in_frame_ratio_min"], 0.7)
         self.assertEqual(debug_output["groups"][0]["non_attachment_min_referable_object_count"], 2)
         self.assertEqual(
             debug_output["groups"][0]["clarity_eligible_image_names"],
-            ["000000.jpg", "000010.jpg", "000020.jpg", "000030.jpg", "000040.jpg"],
+            ["000010.jpg"],
+        )
+        self.assertEqual(debug_output["groups"][0]["early_stop_image_name"], "000010.jpg")
+        self.assertEqual(
+            debug_output["groups"][0]["early_stop_reason"],
+            "accepted_frame_has_min_referable_objects",
         )
 
-    def test_select_and_rerank_frames_non_attachment_expands_after_shortlist_miss(self) -> None:
+    def test_select_and_rerank_frames_non_attachment_continues_after_clarity_pass_not_referable(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 5, "visible_object_ids": [2, 1]},
@@ -2943,6 +2980,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "000030.jpg": {"image_name": "000030.jpg", "frame_info": {"clear": True, "clarity_score": 92, "frame_usable": True, "reason": "92"}, "frame_selection_score": 100092},
         }
         build_calls: list[str] = []
+        debug_output: dict[str, Any] = {}
 
         def batch_getter(frames: list[dict]) -> dict[str, dict]:
             return {
@@ -2964,10 +3002,26 @@ class RunVlmReferabilityTests(unittest.TestCase):
             max_frames=1,
             frame_review_batch_getter=batch_getter,
             referability_entry_builder=build_entry,
+            debug_output=debug_output,
         )
 
         self.assertEqual(build_calls, ["000000.jpg", "000010.jpg", "000020.jpg", "000030.jpg"])
         self.assertEqual(selected, [])
+        group = debug_output["groups"][0]
+        self.assertIsNone(group["early_stop_image_name"])
+        self.assertEqual(
+            group["clarity_eligible_image_names"],
+            ["000000.jpg", "000010.jpg", "000020.jpg", "000030.jpg"],
+        )
+        self.assertEqual(
+            [attempt["review_status"] for attempt in group["attempts"]],
+            [
+                "clarity_pass_not_referable",
+                "clarity_pass_not_referable",
+                "clarity_pass_not_referable",
+                "clarity_pass_not_referable",
+            ],
+        )
 
     def test_select_and_rerank_frames_stats_report_only_successful_group_count(self) -> None:
         frame_candidates = [
@@ -3416,7 +3470,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
         self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [0])
 
-    def test_select_attachment_group_representatives_checks_group_frames_until_first_clear_pair_frame(self) -> None:
+    def test_select_attachment_group_representatives_continues_after_clarity_pass_nonreferable_pair(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 3, "visible_object_ids": [9, 1, 2]},
@@ -3487,9 +3541,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_decision_mock.call_count, 3)
         self.assertEqual(build_calls, ["000010.jpg", "000020.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000020.jpg"])
-        self.assertEqual(selected[0]["attachment_referable_pairs"], [[1, 2]])
-        self.assertEqual(selected[0]["attachment_referable_pair_count"], 1)
-        self.assertEqual(selected[0]["attachment_view_group_id"], 0)
 
     def test_select_attachment_group_representatives_skips_groups_without_clear_pair_frame(self) -> None:
         frames = [
@@ -3633,7 +3684,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg", "000020.jpg"])
         self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [1, 2])
 
-    def test_select_attachment_group_representatives_accepts_frames_at_attachment_clarity_65(self) -> None:
+    def test_select_attachment_group_representatives_accepts_frames_at_attachment_clarity_70(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 2, "visible_object_ids": [2, 1]},
@@ -3641,19 +3692,19 @@ class RunVlmReferabilityTests(unittest.TestCase):
         frame_decisions = [
             {
                 "clear": True,
-                "clarity_score": 66,
+                "clarity_score": 70,
                 "frame_usable": True,
                 "reason": "clear enough for attachment",
             },
             {
                 "clear": True,
-                "clarity_score": 64,
+                "clarity_score": 69,
                 "frame_usable": True,
                 "reason": "below attachment threshold",
             },
         ]
 
-        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_group_clarity65_{uuid.uuid4().hex}"
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_group_clarity70_{uuid.uuid4().hex}"
         root.mkdir(parents=True, exist_ok=False)
         self.addCleanup(shutil.rmtree, root, True)
         scene_dir = root / "scene0000_00"
@@ -3739,7 +3790,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(group["clarity_pass_image_names"], ["000001.jpg"])
         self.assertEqual(scene_review["pair_count_kept"], 1)
 
-    def test_build_attachment_pair_salvage_scene_review_includes_frames_at_attachment_clarity_65(self) -> None:
+    def test_build_attachment_pair_salvage_scene_review_includes_frames_at_attachment_clarity_70(self) -> None:
         objects = [make_object(1, "table"), make_object(2, "book")]
         frames = [
             {
@@ -3756,7 +3807,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             label_statuses={"table": "unique", "book": "unique"},
             attachment_referable_pairs=[[1, 2]],
         )
-        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_clarity65_{uuid.uuid4().hex}"
+        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_clarity70_{uuid.uuid4().hex}"
         scene_dir = make_scene_dir(root, "scene0001_00")
         self.addCleanup(shutil.rmtree, root, True)
 
@@ -3774,7 +3825,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             poses={"000001.jpg": make_camera_pose(image_name="000001.jpg")},
             frame_review_getter=lambda frame: {
                 "image_name": frame["image_name"],
-                "frame_info": {"clear": True, "clarity_score": 66, "frame_usable": True, "reason": "clear"},
+                "frame_info": {"clear": True, "clarity_score": 70, "frame_usable": True, "reason": "clear"},
             },
             attachment_entry_builder=lambda frame, reviewed_frame: dict(entry),
             bbox_hard_fail_min=0.15,
@@ -3859,11 +3910,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(group["pair_count_total"], 1)
         self.assertEqual([pair["pair_id"] for pair in group["pairs"]], ["1->2"])
 
-    def test_build_attachment_pair_salvage_scene_review_uses_multi_image_cover_when_needed(self) -> None:
+    def test_build_attachment_pair_salvage_scene_review_only_uses_checked_frames_before_attachment_referable_hit(self) -> None:
         objects = [make_object(1, "table"), make_object(2, "book"), make_object(3, "lamp")]
         frames = [
             {"image_name": "000001.jpg", "visible_object_ids": [1, 2, 3], "score": 10, "attachment_viewpoint_exempt": True},
             {"image_name": "000002.jpg", "visible_object_ids": [1, 2, 3], "score": 9, "attachment_viewpoint_exempt": True},
+            {"image_name": "000003.jpg", "visible_object_ids": [1, 2, 3], "score": 8, "attachment_viewpoint_exempt": True},
         ]
         entries = {
             "000001.jpg": make_attachment_pair_salvage_entry(
@@ -3873,11 +3925,18 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             "000002.jpg": make_attachment_pair_salvage_entry(
                 candidate_visible_object_ids=[1, 3],
-                crop_label_statuses={"table": "unique", "lamp": "multiple"},
-                label_statuses={"table": "unique", "lamp": "multiple"},
+                crop_label_statuses={"table": "unique", "lamp": "unique"},
+                label_statuses={"table": "unique", "lamp": "unique"},
+                attachment_referable_pairs=[[1, 3]],
+            ),
+            "000003.jpg": make_attachment_pair_salvage_entry(
+                candidate_visible_object_ids=[1, 2],
+                crop_label_statuses={"table": "unique", "book": "unique"},
+                label_statuses={"table": "unique", "book": "unique"},
+                attachment_referable_pairs=[[1, 2]],
             ),
         }
-        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_multi_cover_{uuid.uuid4().hex}"
+        root = Path(__file__).resolve().parent / "_tmp" / f"salvage_early_stop_cover_{uuid.uuid4().hex}"
         scene_dir = make_scene_dir(root, "scene0001_00")
         self.addCleanup(shutil.rmtree, root, True)
 
@@ -3888,8 +3947,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 side_effect=[
                     {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 81, "frame_usable": True, "reason": "clear"}},
                     {"image_name": "000002.jpg", "frame_info": {"clear": True, "clarity_score": 80, "frame_usable": True, "reason": "clear"}},
+                    {"image_name": "000003.jpg", "frame_info": {"clear": True, "clarity_score": 79, "frame_usable": True, "reason": "clear"}},
                 ],
-            ),
+            ) as review_mock,
             patch.object(
                 referability_module.cv2,
                 "imread",
@@ -3913,6 +3973,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 poses={
                     "000001.jpg": make_camera_pose(image_name="000001.jpg"),
                     "000002.jpg": make_camera_pose(image_name="000002.jpg"),
+                    "000003.jpg": make_camera_pose(image_name="000003.jpg"),
                 },
                 attachment_entry_builder=lambda frame, reviewed_frame: dict(entries[frame["image_name"]]),
                 bbox_hard_fail_min=0.15,
@@ -3920,7 +3981,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         group = scene_review["groups"][0]
+        self.assertEqual(review_mock.call_count, 2)
+        self.assertEqual(group["clarity_pass_image_names"], ["000001.jpg", "000002.jpg"])
         self.assertEqual(group["selected_cover_image_names"], ["000001.jpg", "000002.jpg"])
+        self.assertEqual(group["early_stop_image_name"], "000002.jpg")
+        self.assertEqual(group["early_stop_reason"], "accepted_attachment_referable_frame")
         self.assertEqual(scene_review["group_count_with_multi_image_cover"], 1)
 
     def test_attachment_pair_salvage_pair_row_does_not_mark_hard_fail_when_any_clarity_image_covers_pair(self) -> None:
@@ -7024,6 +7089,30 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(list(cache_doc["frames"].keys()), ["scene0001_00"])
         global_scene_status = load_scene_status_doc_for_output(output_path)
         self.assertEqual(list(global_scene_status["completed_scenes"].keys()), ["scene0001_00"])
+
+
+class RunVlmReferabilityBrisqueTests(unittest.TestCase):
+    def test_score_group_frames_by_brisque_raises_when_dependency_is_missing(self) -> None:
+        if hasattr(referability_module._BRISQUE_SCORER_LOCAL, "scorer"):
+            delattr(referability_module._BRISQUE_SCORER_LOCAL, "scorer")
+
+        with (
+            patch.object(
+                referability_module,
+                "BrisqueScorer",
+                side_effect=RuntimeError("BRISQUE scorer is unavailable"),
+            ),
+            patch.object(
+                referability_module.cv2,
+                "imread",
+                return_value=np.zeros((32, 32, 3), dtype=np.uint8),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "BRISQUE scorer is unavailable"):
+                referability_module._score_group_frames_by_brisque(
+                    sampled_frames=[{"image_name": "000000.jpg"}],
+                    color_dir=Path("scene0000_00") / "color",
+                )
 
 
 if __name__ == "__main__":

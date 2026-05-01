@@ -67,6 +67,19 @@ class FilterImageQualityTests(unittest.TestCase):
 
         self.assertIs(resized, image)
 
+    def test_compute_brisque_score_returns_score_and_input_dimensions(self) -> None:
+        image = np.zeros((1000, 800, 3), dtype=np.uint8)
+
+        result = quality_module.compute_brisque_score(
+            image,
+            scorer=_StubBrisqueScorer([21.5]),
+            max_side=512,
+        )
+
+        self.assertEqual(result["brisque_score"], 21.5)
+        self.assertEqual(result["brisque_input_width"], 410)
+        self.assertEqual(result["brisque_input_height"], 512)
+
     def test_apply_brisque_filter_only_scores_stage1_survivors(self) -> None:
         image = np.zeros((32, 32, 3), dtype=np.uint8)
         records = [

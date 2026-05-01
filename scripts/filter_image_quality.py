@@ -41,11 +41,17 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+from src.image_quality import (
+    BrisqueScorer,
+    DEFAULT_BRISQUE_MAX_SIDE,
+    compute_brisque_score,
+    resize_for_brisque,
+)
+
 DEFAULT_IMAGE_PATTERNS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
 DEFAULT_LAPLACIAN_THRESHOLD = 120.0
 DEFAULT_TENENGRAD_THRESHOLD = 15.0
 DEFAULT_BRISQUE_THRESHOLD = 35.0
-DEFAULT_BRISQUE_MAX_SIDE = 0
 DEFAULT_REPORT_IMAGE_MAX_SIDE = 0
 DEFAULT_REPORT_JPEG_QUALITY = 85
 _NATURAL_SORT_PATTERN = re.compile(r"(\d+)")
@@ -80,35 +86,6 @@ class ImageQualityRecord:
             "stage2_pass": None if self.stage2_pass is None else bool(self.stage2_pass),
             "final_pass": bool(self.final_pass),
         }
-
-
-class BrisqueScorer:
-    def __init__(self) -> None:
-        try:
-            from brisque import BRISQUE
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "BRISQUE scorer is unavailable. Install it with `python -m pip install brisque` "
-                "and rerun this script."
-            ) from exc
-
-        try:
-            self._model = BRISQUE(url=False)
-        except TypeError:
-            self._model = BRISQUE()
-
-    def score(self, image_bgr: np.ndarray) -> float:
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        try:
-            score = self._model.score(image_rgb)
-        except TypeError:
-            try:
-                score = self._model.score(img=image_rgb)
-            except TypeError:
-                score = self._model.score(image=image_rgb)
-        if score is None:
-            raise RuntimeError("BRISQUE scorer returned no score")
-        return float(score)
 
 
 def _natural_sort_tokens(value: str) -> tuple[tuple[int, Any], ...]:
@@ -177,25 +154,6 @@ def compute_tenengrad(gray_image: np.ndarray) -> float:
     grad_y = cv2.Sobel(gray_float, cv2.CV_32F, 0, 1, ksize=3)
     gradient_magnitude = cv2.magnitude(grad_x, grad_y)
     return float(np.mean(gradient_magnitude))
-
-
-def resize_for_brisque(image_bgr: np.ndarray, *, max_side: int | None) -> np.ndarray:
-    if max_side is None or int(max_side) <= 0:
-        return image_bgr
-
-    height, width = image_bgr.shape[:2]
-    longest_side = max(int(width), int(height))
-    if longest_side <= int(max_side):
-        return image_bgr
-
-    scale = float(max_side) / float(longest_side)
-    resized_width = max(1, int(round(width * scale)))
-    resized_height = max(1, int(round(height * scale)))
-    return cv2.resize(
-        image_bgr,
-        (resized_width, resized_height),
-        interpolation=cv2.INTER_AREA,
-    )
 
 
 def read_image(image_path: Path) -> np.ndarray:
@@ -277,11 +235,15 @@ def apply_brisque_filter(
             results.append(record)
             continue
 
-        brisque_image = resize_for_brisque(image, max_side=brisque_max_side)
-        record.brisque_input_width = int(brisque_image.shape[1])
-        record.brisque_input_height = int(brisque_image.shape[0])
-        score = scorer.score(brisque_image)
-        record.brisque_score = float(score)
+        brisque_info = compute_brisque_score(
+            image,
+            scorer=scorer,
+            max_side=brisque_max_side,
+        )
+        record.brisque_input_width = int(brisque_info["brisque_input_width"])
+        record.brisque_input_height = int(brisque_info["brisque_input_height"])
+        score = float(brisque_info["brisque_score"])
+        record.brisque_score = score
         record.stage2_pass = score <= float(brisque_threshold)
         record.final_pass = bool(record.stage2_pass)
         results.append(record)
