@@ -3012,6 +3012,30 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ],
         )
 
+    def test_geometry_signature_object_ids_keeps_threshold_edges_and_is_order_insensitive(self) -> None:
+        container = {
+            "4": {"obj_id": 4, "bbox_in_frame_ratio": 0.95, "projected_area_px": 799.0},
+            "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.70, "projected_area_px": 800.0},
+            "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.71, "projected_area_px": 900.0},
+            "3": {"obj_id": 3, "bbox_in_frame_ratio": 0.69, "projected_area_px": 1200.0},
+        }
+
+        signature = referability_module._geometry_signature_object_ids(
+            container,
+            bbox_in_frame_ratio_min=0.7,
+            projected_area_px_min=800.0,
+        )
+
+        self.assertEqual(signature, (1, 2))
+        self.assertEqual(
+            referability_module._geometry_signature_object_ids(
+                {},
+                bbox_in_frame_ratio_min=0.7,
+                projected_area_px_min=800.0,
+            ),
+            (),
+        )
+
     def test_failed_referability_object_id_signature_filters_projected_area_and_is_order_insensitive(self) -> None:
         entry = {
             "object_reviews": {
@@ -3050,9 +3074,27 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
     def test_select_and_rerank_frames_skips_duplicate_failed_signatures_across_non_attachment_groups(self) -> None:
         frame_candidates = [
-            {"image_name": "000001.jpg", "score": 30, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
-            {"image_name": "000002.jpg", "score": 29, "n_visible": 4, "visible_object_ids": [1, 2, 10, 11]},
-            {"image_name": "000003.jpg", "score": 28, "n_visible": 3, "visible_object_ids": [3, 4, 12]},
+            {
+                "image_name": "000001.jpg",
+                "score": 30,
+                "n_visible": 3,
+                "visible_object_ids": [1, 2, 9],
+                "failed_signature_candidate_object_ids": [1, 2],
+            },
+            {
+                "image_name": "000002.jpg",
+                "score": 29,
+                "n_visible": 4,
+                "visible_object_ids": [1, 2, 10, 11],
+                "failed_signature_candidate_object_ids": [1, 2],
+            },
+            {
+                "image_name": "000003.jpg",
+                "score": 28,
+                "n_visible": 3,
+                "visible_object_ids": [3, 4, 12],
+                "failed_signature_candidate_object_ids": [3, 4],
+            },
         ]
         reviewed_by_image_name = {
             "000001.jpg": {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 92, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100092},
@@ -3061,8 +3103,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         }
         debug_output: dict[str, Any] = {}
         build_calls: list[str] = []
+        batch_inputs: list[list[str]] = []
 
         def batch_getter(frames: list[dict]) -> dict[str, dict]:
+            batch_inputs.append([frame["image_name"] for frame in frames])
             return {
                 frame["image_name"]: dict(reviewed_by_image_name[frame["image_name"]], selector_score=int(frame["score"]))
                 for frame in frames
@@ -3115,18 +3159,143 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 debug_output=debug_output,
             )
 
-        self.assertEqual(build_calls, ["000001.jpg", "000002.jpg", "000003.jpg"])
+        self.assertEqual(batch_inputs, [["000001.jpg"], ["000003.jpg"]])
+        self.assertEqual(build_calls, ["000001.jpg", "000003.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000003.jpg"])
         self.assertEqual(
             debug_output["groups"][0]["attempts"][0]["review_status"],
             "frame_usable_not_referable",
         )
+        self.assertEqual(debug_output["groups"][1]["clarity_batch_image_names"], [])
         self.assertEqual(
             debug_output["groups"][1]["attempts"][0]["review_status"],
-            "frame_usable_duplicate_failed_signature_skip",
+            "skipped_before_clarity_duplicate_failed_signature",
         )
         self.assertEqual(debug_output["groups"][1]["attempts"][0]["failed_signature_object_ids"], [1, 2])
         self.assertEqual(debug_output["groups"][2]["attempts"][0]["review_status"], "accepted_for_group")
+
+    def test_select_and_rerank_frames_pre_skip_duplicate_failed_signature_does_not_call_referability(self) -> None:
+        frame_candidates = [
+            {
+                "image_name": "000001.jpg",
+                "score": 30,
+                "n_visible": 3,
+                "visible_object_ids": [1, 2, 9],
+                "failed_signature_candidate_object_ids": [1, 2],
+            },
+            {
+                "image_name": "000002.jpg",
+                "score": 29,
+                "n_visible": 4,
+                "visible_object_ids": [1, 2, 10, 11],
+                "failed_signature_candidate_object_ids": [1, 2],
+            },
+        ]
+        reviewed_by_image_name = {
+            "000001.jpg": {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 92, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100092},
+        }
+        build_calls: list[str] = []
+
+        def batch_getter(frames: list[dict]) -> dict[str, dict]:
+            return {
+                frame["image_name"]: dict(reviewed_by_image_name[frame["image_name"]], selector_score=int(frame["score"]))
+                for frame in frames
+            }
+
+        def build_entry(frame: dict, reviewed_frame: dict) -> dict:
+            build_calls.append(frame["image_name"])
+            return {
+                "referable_object_ids": [1],
+                "object_reviews": {
+                    "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.95, "projected_area_px": 900.0},
+                    "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 830.0},
+                },
+                "visibility_audit_by_object_id": {},
+            }
+
+        selected = referability_module._select_and_rerank_frames(
+            client=object(),
+            model_name="fake-vlm",
+            scene_dir=Path("scene0000_00"),
+            frame_candidates=frame_candidates,
+            max_frames=1,
+            frame_review_batch_getter=batch_getter,
+            referability_entry_builder=build_entry,
+        )
+
+        self.assertEqual(selected, [])
+        self.assertEqual(build_calls, ["000001.jpg"])
+
+    def test_select_and_rerank_frames_continues_review_when_failed_signature_candidate_differs(self) -> None:
+        frame_candidates = [
+            {
+                "image_name": "000001.jpg",
+                "score": 30,
+                "n_visible": 3,
+                "visible_object_ids": [1, 2, 9],
+                "failed_signature_candidate_object_ids": [1, 2],
+            },
+            {
+                "image_name": "000002.jpg",
+                "score": 29,
+                "n_visible": 4,
+                "visible_object_ids": [1, 3, 10, 11],
+                "failed_signature_candidate_object_ids": [1, 3],
+            },
+        ]
+        reviewed_by_image_name = {
+            "000001.jpg": {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 92, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100092},
+            "000002.jpg": {"image_name": "000002.jpg", "frame_info": {"clear": True, "clarity_score": 91, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100091},
+        }
+        build_calls: list[str] = []
+        batch_inputs: list[list[str]] = []
+        debug_output: dict[str, Any] = {}
+
+        def batch_getter(frames: list[dict]) -> dict[str, dict]:
+            batch_inputs.append([frame["image_name"] for frame in frames])
+            return {
+                frame["image_name"]: dict(reviewed_by_image_name[frame["image_name"]], selector_score=int(frame["score"]))
+                for frame in frames
+            }
+
+        def build_entry(frame: dict, reviewed_frame: dict) -> dict:
+            build_calls.append(frame["image_name"])
+            if frame["image_name"] == "000001.jpg":
+                return {
+                    "referable_object_ids": [1],
+                    "object_reviews": {
+                        "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.95, "projected_area_px": 900.0},
+                        "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 830.0},
+                    },
+                    "visibility_audit_by_object_id": {},
+                }
+            return {
+                "referable_object_ids": [1, 3],
+                "object_reviews": {
+                    "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+                    "3": {"obj_id": 3, "bbox_in_frame_ratio": 0.82, "projected_area_px": 860.0},
+                },
+                "visibility_audit_by_object_id": {},
+            }
+
+        selected = referability_module._select_and_rerank_frames(
+            client=object(),
+            model_name="fake-vlm",
+            scene_dir=Path("scene0000_00"),
+            frame_candidates=frame_candidates,
+            max_frames=1,
+            frame_review_batch_getter=batch_getter,
+            referability_entry_builder=build_entry,
+            debug_output=debug_output,
+        )
+
+        self.assertEqual(batch_inputs, [["000001.jpg"], ["000002.jpg"]])
+        self.assertEqual(build_calls, ["000001.jpg", "000002.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000002.jpg"])
+        self.assertEqual(
+            debug_output["groups"][1]["attempts"][0]["review_status"],
+            "accepted_for_group",
+        )
 
     def test_select_and_rerank_frames_stats_report_only_successful_group_count(self) -> None:
         frame_candidates = [
