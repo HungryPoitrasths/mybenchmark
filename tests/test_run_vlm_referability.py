@@ -6283,7 +6283,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(len(list_batch_cache_paths(output_path)), 1)
 
-    def test_scene_number_after_reset_reprocesses_same_fixed_interval(self) -> None:
+    def test_scene_number_after_reset_reprocesses_same_scene(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_batch_resume_{uuid.uuid4().hex}"
         data_root = root / "data"
         scans_root = data_root / "scans"
@@ -6443,8 +6443,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "train",
                 "--output",
                 str(output_path),
-                "--reset_number",
-                "1-1",
+                "--reset",
+                "1",
                 "--scene_number",
                 "1-1",
                 "--resume",
@@ -6454,7 +6454,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             referability_module.main()
 
         log_output = "\n".join(logs.output)
-        self.assertIn("Fixed reset cleared 1 completed scene(s): scene0002_00", log_output)
+        self.assertIn("Reset cleared 1 completed scene(s): scene0002_00", log_output)
         batch_paths = list_batch_cache_paths(output_path)
         self.assertEqual(len(batch_paths), 3)
         new_batch_path = next(
@@ -6655,23 +6655,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.code, 2)
 
-    def test_reset_and_reset_number_are_mutually_exclusive(self) -> None:
-        with patch.object(sys, "argv", [
-            "run_vlm_referability.py",
-            "--data_root",
-            "data",
-            "--output",
-            "output/referability_cache.json",
-            "--reset",
-            "1",
-            "--reset_number",
-            "0-0",
-        ]):
-            with self.assertRaises(SystemExit) as exc_info:
-                referability_module.main()
-
-        self.assertEqual(exc_info.exception.code, 2)
-
     def test_scene_number_rejects_split_all(self) -> None:
         with patch.object(sys, "argv", [
             "run_vlm_referability.py",
@@ -6682,23 +6665,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "--output",
             "output/referability_cache.json",
             "--scene_number",
-            "0-0",
-        ]):
-            with self.assertRaises(SystemExit) as exc_info:
-                referability_module.main()
-
-        self.assertEqual(exc_info.exception.code, 2)
-
-    def test_reset_number_rejects_split_all(self) -> None:
-        with patch.object(sys, "argv", [
-            "run_vlm_referability.py",
-            "--data_root",
-            "data",
-            "--split",
-            "all",
-            "--output",
-            "output/referability_cache.json",
-            "--reset_number",
             "0-0",
         ]):
             with self.assertRaises(SystemExit) as exc_info:

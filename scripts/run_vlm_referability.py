@@ -8037,10 +8037,6 @@ def main():
         help="Remove the most recently completed N scene entries from scene_status.json before processing; existing batch JSON files, frame sidecars, and review artifacts are kept",
     )
     parser.add_argument(
-        "--reset_number", type=str, default=None,
-        help="Remove completed scene entries for a fixed START-END interval using the same 0-based inclusive split ordering as --scene_number; existing batch JSON files, frame sidecars, and review artifacts are kept",
-    )
-    parser.add_argument(
         "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
         help="Legacy compatibility flag; per-object review now issues one VLM request per valid crop",
     )
@@ -8122,8 +8118,6 @@ def main():
     _reset_vlm_call_failure_count()
     if args.reset is not None and int(args.reset) <= 0:
         parser.error("--reset must be >= 1")
-    if args.reset is not None and args.reset_number is not None:
-        parser.error("--reset and --reset_number are mutually exclusive")
     try:
         scene_number_range = (
             None
@@ -8132,16 +8126,8 @@ def main():
         )
     except ValueError as exc:
         parser.error(str(exc))
-    try:
-        reset_number_range = (
-            None
-            if args.reset_number is None
-            else _parse_closed_scene_range(args.reset_number, arg_name="--reset_number")
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
-    if (scene_number_range is not None or reset_number_range is not None) and args.split == "all":
-        parser.error("--scene_number and --reset_number only support --split train or --split val; --split all is ambiguous")
+    if scene_number_range is not None and args.split == "all":
+        parser.error("--scene_number only supports --split train or --split val; --split all is ambiguous")
     if int(args.vlm_workers) <= 0:
         parser.error("--vlm_workers must be >= 1")
     if int(args.frame_clarity_batch_size) <= 0:
@@ -8203,7 +8189,7 @@ def main():
     output_arg = Path(args.output)
     batch_output_path = _build_batch_output_path(output_arg)
     scene_status_path = _scene_status_output_path(output_arg)
-    if scene_number_range is not None or reset_number_range is not None:
+    if scene_number_range is not None:
         logger.warning(
             "Fixed scene shards require distinct --output directories per tmux/process. Do not share scene_status.json, attachment review JSON, salvage review JSON, salvage review HTML, or edited.html across concurrent runs."
         )
@@ -8211,22 +8197,6 @@ def main():
         scene_status_path,
         split=selected_split,
     )
-    reset_scene_entries: list[tuple[str, Path]] | None = None
-    if reset_number_range is not None:
-        reset_start, reset_end = reset_number_range
-        reset_scene_entries = _select_scene_entries_by_closed_range(
-            scene_entries,
-            start=reset_start,
-            end=reset_end,
-        )
-        logger.info(
-            "Fixed reset requested for split=%s interval=%d-%d at %s: mapped to %d scene(s)",
-            selected_split,
-            reset_start,
-            reset_end,
-            scene_status_path,
-            len(reset_scene_entries),
-        )
     if args.reset is not None:
         logger.info(
             "Reset requested for split=%s at %s: removing up to %d most recently completed scene(s)",
@@ -8252,28 +8222,6 @@ def main():
         else:
             logger.info(
                 "Reset cleared 0 completed scene(s) at %s because there was nothing to reset",
-                scene_status_path,
-            )
-    if reset_scene_entries is not None:
-        reset_scene_ids = [scene_dir.name for _scene_split, scene_dir in reset_scene_entries]
-        removed_scene_ids = _reset_completed_scene_status_for_scene_ids(
-            scene_status_doc,
-            scene_ids=reset_scene_ids,
-        )
-        if removed_scene_ids:
-            _write_json_payload(scene_status_path, scene_status_doc)
-            scene_status_doc = _load_scene_status_doc(
-                scene_status_path,
-                split=selected_split,
-            )
-            logger.info(
-                "Fixed reset cleared %d completed scene(s): %s",
-                len(removed_scene_ids),
-                ", ".join(removed_scene_ids),
-            )
-        else:
-            logger.info(
-                "Fixed reset cleared 0 completed scene(s) at %s because none of the interval scenes were marked completed",
                 scene_status_path,
             )
     _validate_scene_status_doc(
