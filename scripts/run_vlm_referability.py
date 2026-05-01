@@ -92,7 +92,7 @@ QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
-REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.70
+REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.50
 ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.50
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
 SEGMENTATION_EXTREME_NOISE_MIN_SCORE = 0.10
@@ -116,6 +116,7 @@ ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
 DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE = 70
 DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST = 3
 NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT = 2
+NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT = 2
 FRAME_USABLE_BONUS = 100000
 FRAME_SELECTION_FALLBACK_RANK = 1_000_000
 
@@ -4255,7 +4256,6 @@ def _select_non_attachment_group_representatives(
         group_key = tuple(int(obj_id) for obj_id in group_doc.get("visible_object_ids", []))
         group_frames = list(group_doc.get("frames", []))
         accepted: list[dict[str, Any]] = []
-        fallback_frame: dict[str, Any] | None = None
         attempts: list[dict[str, Any]] = []
         stopped_after_image_name: str | None = None
         stop_reason = "exhausted_group_frames"
@@ -4346,7 +4346,7 @@ def _select_non_attachment_group_representatives(
         def _evaluate_referability(
             review_items: list[tuple[dict[str, Any], dict[str, Any]]],
         ) -> bool:
-            nonlocal fallback_frame, stopped_after_image_name, stop_reason
+            nonlocal stopped_after_image_name, stop_reason
             for frame, reviewed_frame in review_items:
                 image_name = str(frame.get("image_name", "")).strip()
                 attempt = attempts_by_image_name.get(image_name)
@@ -4354,7 +4354,6 @@ def _select_non_attachment_group_representatives(
                     continue
                 referable_entry = None
                 referable_object_ids: list[int] = []
-                current_accepted_frame: dict[str, Any] | None = None
                 if referability_entry_builder is not None:
                     referable_entry = referability_entry_builder(frame, reviewed_frame)
                     if isinstance(referable_entry, dict):
@@ -4363,7 +4362,7 @@ def _select_non_attachment_group_representatives(
                         )
                 accepted_for_group = bool(
                     referability_entry_builder is None
-                    or referable_object_ids
+                    or len(referable_object_ids) >= NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT
                 )
                 stop_after_this_frame = bool(
                     referability_entry_builder is None
@@ -4378,32 +4377,17 @@ def _select_non_attachment_group_representatives(
                     if isinstance(referable_entry, dict):
                         accepted_frame["_referability_entry"] = referable_entry
                         accepted_frame["referable_object_ids"] = referable_object_ids
-                    current_accepted_frame = accepted_frame
-                    if fallback_frame is None:
-                        fallback_frame = accepted_frame
+                    accepted.append(accepted_frame)
                 if stop_after_this_frame:
-                    accepted.append(
-                        current_accepted_frame
-                        if current_accepted_frame is not None
-                        else (fallback_frame if fallback_frame is not None else dict(reviewed_frame))
-                    )
                     stopped_after_image_name = image_name
                     stop_reason = "accepted_frame_has_min_referable_objects"
                     return True
             return False
 
         early_stop = _evaluate_referability(shortlist_items)
-        if not early_stop and fallback_frame is not None:
-            accepted.append(fallback_frame)
-            stopped_after_image_name = str(fallback_frame.get("image_name", "")).strip() or None
-            stop_reason = "shortlist_found_referable_fallback"
-        elif not early_stop and _evaluate_referability(remaining_items):
+        if not early_stop and _evaluate_referability(remaining_items):
             pass
-        if not accepted and fallback_frame is not None:
-            accepted.append(fallback_frame)
-            stopped_after_image_name = str(fallback_frame.get("image_name", "")).strip() or None
-            stop_reason = "group_exhausted_using_single_referable_fallback"
-        elif not accepted and not clarity_eligible_image_names:
+        if not accepted and not clarity_eligible_image_names:
             stop_reason = "no_clarity_eligible_frames"
         elif not accepted:
             stop_reason = "exhausted_clarity_eligible_frames"
@@ -4499,6 +4483,8 @@ def _select_non_attachment_group_representatives(
         debug_groups_out.append(
             {
                 "group_index": int(doc.get("group_index", 0)),
+                "non_attachment_bbox_in_frame_ratio_min": REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                "non_attachment_min_referable_object_count": NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT,
                 "group_key_visible_object_ids": list(doc.get("group_key_visible_object_ids", [])),
                 "candidate_frame_image_names": list(doc.get("candidate_frame_image_names", [])),
                 "sampled_frame_image_names": list(doc.get("sampled_frame_image_names", [])),
@@ -7563,6 +7549,8 @@ def _select_and_rerank_frames(
         stats_output.update(
             {
                 "scene_id": scene_dir.name,
+                "non_attachment_bbox_in_frame_ratio_min": REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                "non_attachment_min_referable_object_count": NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT,
                 "non_attachment_candidate_frame_count": len(frame_candidates),
                 "non_attachment_visible_object_group_count": group_count,
                 "non_attachment_processed_group_count": processed_group_count,
@@ -7607,6 +7595,8 @@ def _select_and_rerank_frames(
                 "pipeline_outcome": None,
                 "grouping_available": True,
                 "scene_skip_reason": None,
+                "non_attachment_bbox_in_frame_ratio_min": REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                "non_attachment_min_referable_object_count": NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT,
                 "non_attachment_candidate_frame_count": len(frame_candidates),
                 "non_attachment_visible_object_group_count": group_count,
                 "non_attachment_processed_group_count": processed_group_count,
@@ -7626,13 +7616,14 @@ def _select_and_rerank_frames(
         )
     if reranked:
         logger.info(
-            "VLM non-attachment group filtering for %d geometric frame candidates after reviewing %d/%d visible-object groups in %s: %d accepted frame(s) with referable objects, selected %d fallback frame(s) (best clarity=%d)",
+            "VLM non-attachment group filtering for %d geometric frame candidates after reviewing %d/%d visible-object groups in %s: %d accepted frame(s) meeting bbox_in_frame_ratio >= %.2f with at least %d referable objects (best clarity=%d)",
             len(frame_candidates),
             processed_group_count,
             group_count,
             scene_dir.name,
             accepted_frame_count,
-            len(selected),
+            REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+            NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT,
             int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
         )
     elif processed_group_count < group_count:

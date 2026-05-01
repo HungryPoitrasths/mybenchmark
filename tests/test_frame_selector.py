@@ -312,6 +312,22 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
 
+    def test_count_visible_objects_with_min_bbox_in_frame_ratio_supports_50_percent_threshold(self) -> None:
+        visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+        audits = {
+            1: {"bbox_in_frame_ratio": 0.50},
+            2: {"bbox_in_frame_ratio": 0.49},
+            3: {"bbox_in_frame_ratio": 0.90},
+        }
+
+        count = frame_selector._count_visible_objects_with_min_bbox_in_frame_ratio(
+            visible,
+            bbox_in_frame_ratio_min=0.50,
+            visibility_audits_by_obj_id=audits,
+        )
+
+        self.assertEqual(count, 2)
+
     def test_count_well_cropped_attachment_pairs_uses_50_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
         audits = {
@@ -484,6 +500,11 @@ class FrameSelectorTests(unittest.TestCase):
                 "_count_well_cropped_attachment_pairs",
                 side_effect=[1, 1, 1, 1, 0, 0, 0],
             ),
+            patch.object(
+                frame_selector,
+                "_count_visible_objects_with_min_bbox_in_frame_ratio",
+                return_value=3,
+            ),
         ):
             results = frame_selector.select_frames(
                 scene_dir,
@@ -555,6 +576,11 @@ class FrameSelectorTests(unittest.TestCase):
                 "_count_well_cropped_attachment_pairs",
                 side_effect=[1, 1, 1, 1, 0, 0, 0],
             ),
+            patch.object(
+                frame_selector,
+                "_count_visible_objects_with_min_bbox_in_frame_ratio",
+                return_value=3,
+            ),
         ):
             results = frame_selector.select_frames(
                 scene_dir,
@@ -570,6 +596,46 @@ class FrameSelectorTests(unittest.TestCase):
         )
         self.assertEqual(sum(1 for entry in results if entry["attachment_viewpoint_exempt"]), 4)
         self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 3)
+
+    def test_select_frames_prefers_non_attachment_frames_with_two_bbox_ge_50_objects(self) -> None:
+        root = make_case_dir("frame_selector_non_attachment_bbox50")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(6)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
+            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_count_attachment_objects", return_value=0),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[0, 1]),
+            patch.object(
+                frame_selector,
+                "_count_visible_objects_with_min_bbox_in_frame_ratio",
+                side_effect=[2, 1],
+            ),
+            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", return_value=0),
+        ):
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["image_name"], "000000.jpg")
+        self.assertEqual(results[0]["visible_bbox_ge_50_count"], 2)
+        self.assertEqual(results[0]["crop_ge_70_count"], 0)
+        self.assertFalse(results[0]["attachment_viewpoint_exempt"])
 
     def test_select_frames_prefers_ge70_pool_before_score(self) -> None:
         root = make_case_dir("frame_selector")
