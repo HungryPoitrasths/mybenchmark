@@ -698,7 +698,7 @@ VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 800.0
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.70
-NON_ATTACHMENT_VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.50
+NON_ATTACHMENT_VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.70
 NON_ATTACHMENT_MIN_VISIBLE_BBOX_COUNT = 2
 ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN = 0.50
 ATTACHMENT_PAIR_BONUS_WEIGHT = 15
@@ -1138,7 +1138,7 @@ def select_frames(
             visible,
             visibility_audits_by_obj_id=visibility_audits_by_obj_id,
         )
-        visible_bbox_ge_50_count = _count_visible_objects_with_min_bbox_in_frame_ratio(
+        visible_bbox_ge_70_count = _count_visible_objects_with_min_bbox_in_frame_ratio(
             visible,
             pose,
             intrinsics,
@@ -1164,7 +1164,7 @@ def select_frames(
                 "n_visible":         len(visible),
                 "base_score":        base_score,
                 "crop_ge_70_count":  crop_ge_70_count,
-                "visible_bbox_ge_50_count": visible_bbox_ge_50_count,
+                "visible_bbox_ge_70_count": visible_bbox_ge_70_count,
                 "attachment_pair_ge_50_count": attachment_pair_ge_50_count,
                 "score":             score,
             }
@@ -1201,7 +1201,7 @@ def select_frames(
     preferred_non_attachment_entries = [
         entry
         for entry in non_attachment_candidates
-        if int(entry.get("visible_bbox_ge_50_count", 0) or 0)
+        if int(entry.get("visible_bbox_ge_70_count", 0) or 0)
         >= NON_ATTACHMENT_MIN_VISIBLE_BBOX_COUNT
     ]
     non_attachment_entries = (
@@ -1271,7 +1271,7 @@ def select_frames(
                 "n_visible":         s["n_visible"],
                 "base_score":        s["base_score"],
                 "crop_ge_70_count":  s["crop_ge_70_count"],
-                "visible_bbox_ge_50_count": s["visible_bbox_ge_50_count"],
+                "visible_bbox_ge_70_count": s["visible_bbox_ge_70_count"],
                 "attachment_pair_ge_50_count": s["attachment_pair_ge_50_count"],
                 "attachment_viewpoint_exempt": bool(
                     int(s.get("attachment_pair_ge_50_count", 0) or 0) > 0

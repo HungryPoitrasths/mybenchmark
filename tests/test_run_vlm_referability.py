@@ -1967,11 +1967,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIs(captured["instance_mesh_data"], sentinel_instance_mesh_data)
         self.assertEqual(frame_entry["referable_object_ids"], [1])
 
-    def test_compute_frame_referability_entry_applies_50_percent_bbox_ratio_gate_to_final_referable_ids(self) -> None:
+    def test_compute_frame_referability_entry_applies_70_percent_bbox_ratio_gate_to_final_referable_ids(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.49),
+            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.69),
         }
 
         with (
@@ -2035,14 +2035,14 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["crop_referable_object_ids"], [1])
         self.assertEqual(frame_entry["full_frame_label_statuses"], {"chair": "unique"})
         self.assertEqual(frame_entry["label_statuses"], {"chair": "unique"})
-        self.assertEqual(frame_entry["attachment_referable_object_ids"], [])
+        self.assertEqual(frame_entry["attachment_referable_object_ids"], [1])
         self.assertEqual(frame_entry["referable_object_ids"], [])
 
-    def test_compute_frame_referability_entry_keeps_final_referable_ids_at_50_percent_boundary(self) -> None:
+    def test_compute_frame_referability_entry_keeps_final_referable_ids_at_70_percent_boundary(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.50),
+            1: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.70),
         }
 
         with (
@@ -2916,13 +2916,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(build_calls, ["000000.jpg", "000010.jpg", "000020.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000020.jpg"])
-        self.assertEqual(debug_output["non_attachment_bbox_in_frame_ratio_min"], 0.5)
+        self.assertEqual(debug_output["non_attachment_bbox_in_frame_ratio_min"], 0.7)
         self.assertEqual(debug_output["non_attachment_min_referable_object_count"], 2)
         self.assertEqual(
             debug_output["groups"][0]["referability_shortlist_image_names"],
             ["000000.jpg", "000010.jpg", "000020.jpg"],
         )
-        self.assertEqual(debug_output["groups"][0]["non_attachment_bbox_in_frame_ratio_min"], 0.5)
+        self.assertEqual(debug_output["groups"][0]["non_attachment_bbox_in_frame_ratio_min"], 0.7)
         self.assertEqual(debug_output["groups"][0]["non_attachment_min_referable_object_count"], 2)
         self.assertEqual(
             debug_output["groups"][0]["clarity_eligible_image_names"],
@@ -3029,7 +3029,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual([entry["image_name"] for entry in selected], ["000030.jpg"])
-        self.assertEqual(stats_output["non_attachment_bbox_in_frame_ratio_min"], 0.5)
+        self.assertEqual(stats_output["non_attachment_bbox_in_frame_ratio_min"], 0.7)
         self.assertEqual(stats_output["non_attachment_min_referable_object_count"], 2)
         self.assertEqual(stats_output["non_attachment_visible_object_group_count"], 2)
         self.assertEqual(stats_output["non_attachment_processed_group_count"], 2)

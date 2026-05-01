@@ -312,17 +312,17 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
 
-    def test_count_visible_objects_with_min_bbox_in_frame_ratio_supports_50_percent_threshold(self) -> None:
+    def test_count_visible_objects_with_min_bbox_in_frame_ratio_supports_70_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
         audits = {
-            1: {"bbox_in_frame_ratio": 0.50},
-            2: {"bbox_in_frame_ratio": 0.49},
+            1: {"bbox_in_frame_ratio": 0.70},
+            2: {"bbox_in_frame_ratio": 0.69},
             3: {"bbox_in_frame_ratio": 0.90},
         }
 
         count = frame_selector._count_visible_objects_with_min_bbox_in_frame_ratio(
             visible,
-            bbox_in_frame_ratio_min=0.50,
+            bbox_in_frame_ratio_min=0.70,
             visibility_audits_by_obj_id=audits,
         )
 
@@ -597,8 +597,8 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertEqual(sum(1 for entry in results if entry["attachment_viewpoint_exempt"]), 4)
         self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 3)
 
-    def test_select_frames_prefers_non_attachment_frames_with_two_bbox_ge_50_objects(self) -> None:
-        root = make_case_dir("frame_selector_non_attachment_bbox50")
+    def test_select_frames_prefers_non_attachment_frames_with_two_bbox_ge_70_objects(self) -> None:
+        root = make_case_dir("frame_selector_non_attachment_bbox70")
         self.addCleanup(shutil.rmtree, root, True)
         scene_dir = root / "scene0000_00"
         (scene_dir / "pose").mkdir(parents=True)
@@ -633,7 +633,7 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["image_name"], "000000.jpg")
-        self.assertEqual(results[0]["visible_bbox_ge_50_count"], 2)
+        self.assertEqual(results[0]["visible_bbox_ge_70_count"], 2)
         self.assertEqual(results[0]["crop_ge_70_count"], 0)
         self.assertFalse(results[0]["attachment_viewpoint_exempt"])
 
