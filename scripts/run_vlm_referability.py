@@ -348,6 +348,33 @@ def _parse_scene_status_updated_at(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _parse_closed_scene_range(raw_value: str, *, arg_name: str) -> tuple[int, int]:
+    candidate = str(raw_value or "").strip()
+    match = re.fullmatch(r"(\d+)-(\d+)", candidate)
+    if match is None:
+        raise ValueError(f"{arg_name} must use START-END with 0-based inclusive indexes")
+    start = int(match.group(1))
+    end = int(match.group(2))
+    if start < 0 or end < 0:
+        raise ValueError(f"{arg_name} does not allow negative indexes")
+    if start > end:
+        raise ValueError(f"{arg_name} must satisfy START <= END")
+    return start, end
+
+
+def _select_scene_entries_by_closed_range(
+    scene_entries: list[tuple[str, Path]],
+    *,
+    start: int,
+    end: int,
+) -> list[tuple[str, Path]]:
+    if start < 0 or end < 0:
+        raise ValueError("scene range indexes must be >= 0")
+    if start > end:
+        raise ValueError("scene range start must be <= end")
+    return list(scene_entries[start : end + 1])
+
+
 def _reset_completed_scene_status(
     scene_status_doc: dict[str, Any],
     *,
@@ -369,6 +396,28 @@ def _reset_completed_scene_status(
     removed_scene_ids = [str(scene_id) for scene_id, _ in ranked_items[: int(count)]]
     for scene_id in removed_scene_ids:
         completed_scenes.pop(scene_id, None)
+    return removed_scene_ids
+
+
+def _reset_completed_scene_status_for_scene_ids(
+    scene_status_doc: dict[str, Any],
+    *,
+    scene_ids: list[str],
+) -> list[str]:
+    completed_scenes = scene_status_doc.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        raise RuntimeError("scene_status_doc.completed_scenes must be an object")
+
+    removed_scene_ids: list[str] = []
+    seen_scene_ids: set[str] = set()
+    for raw_scene_id in scene_ids:
+        scene_id = str(raw_scene_id)
+        if scene_id in seen_scene_ids:
+            continue
+        seen_scene_ids.add(scene_id)
+        if scene_id in completed_scenes:
+            completed_scenes.pop(scene_id, None)
+            removed_scene_ids.append(scene_id)
     return removed_scene_ids
 
 
@@ -7587,15 +7636,15 @@ def main():
     )
     parser.add_argument(
         "--output", type=str, required=True,
-        help="Batch output path or directory; each run writes one new timestamped batch JSON and stores global progress in scene_status.json beside it",
+        help="Batch output path or directory; each run writes one new timestamped batch JSON and stores global progress in scene_status.json beside it. Concurrent shard runs must use different --output directories.",
     )
     parser.add_argument(
         "--max_scenes", type=int, default=300,
-        help="Legacy scene cap for non-batch runs; not recommended for long resume-heavy experiments",
+        help="Legacy scene cap used only when --scene_number is omitted; not recommended for long resume-heavy experiments",
     )
     parser.add_argument(
-        "--scene_batch_size", type=int, default=None,
-        help="Process the next N unprocessed scenes, skipping any scene already present in scene_status",
+        "--scene_number", type=str, default=None,
+        help="Fixed scene interval START-END using 0-based inclusive indexes over the full ordered split scene list; e.g. 0-20 selects 21 scenes",
     )
     parser.add_argument(
         "--max_frames", type=int, default=5,
@@ -7615,11 +7664,15 @@ def main():
     )
     parser.add_argument(
         "--resume", action="store_true",
-        help="Resume from the global scene_status.json if present",
+        help="Resume from the global scene_status.json if present; with --scene_number, only scenes inside that fixed interval are considered",
     )
     parser.add_argument(
         "--reset", type=int, default=None,
         help="Remove the most recently completed N scene entries from scene_status.json before processing; existing batch JSON files, frame sidecars, and review artifacts are kept",
+    )
+    parser.add_argument(
+        "--reset_number", type=str, default=None,
+        help="Remove completed scene entries for a fixed START-END interval using the same 0-based inclusive split ordering as --scene_number; existing batch JSON files, frame sidecars, and review artifacts are kept",
     )
     parser.add_argument(
         "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
@@ -7701,10 +7754,28 @@ def main():
     )
     args = parser.parse_args()
     _reset_vlm_call_failure_count()
-    if args.scene_batch_size is not None and int(args.scene_batch_size) <= 0:
-        parser.error("--scene_batch_size must be >= 1")
     if args.reset is not None and int(args.reset) <= 0:
         parser.error("--reset must be >= 1")
+    if args.reset is not None and args.reset_number is not None:
+        parser.error("--reset and --reset_number are mutually exclusive")
+    try:
+        scene_number_range = (
+            None
+            if args.scene_number is None
+            else _parse_closed_scene_range(args.scene_number, arg_name="--scene_number")
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    try:
+        reset_number_range = (
+            None
+            if args.reset_number is None
+            else _parse_closed_scene_range(args.reset_number, arg_name="--reset_number")
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    if (scene_number_range is not None or reset_number_range is not None) and args.split == "all":
+        parser.error("--scene_number and --reset_number only support --split train or --split val; --split all is ambiguous")
     if int(args.vlm_workers) <= 0:
         parser.error("--vlm_workers must be >= 1")
     if int(args.frame_clarity_batch_size) <= 0:
@@ -7761,13 +7832,39 @@ def main():
 
     data_root = Path(args.data_root)
     selected_split = args.split or _infer_default_split(data_root)
+    scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
+    logger.info(
+        "Found %d candidate scenes for split=%s",
+        len(scene_entries),
+        selected_split,
+    )
     output_arg = Path(args.output)
     batch_output_path = _build_batch_output_path(output_arg)
     scene_status_path = _scene_status_output_path(output_arg)
+    if scene_number_range is not None or reset_number_range is not None:
+        logger.warning(
+            "Fixed scene shards require distinct --output directories per tmux/process. Do not share scene_status.json, attachment review JSON, salvage review JSON, salvage review HTML, or edited.html across concurrent runs."
+        )
     scene_status_doc = _load_scene_status_doc(
         scene_status_path,
         split=selected_split,
     )
+    reset_scene_entries: list[tuple[str, Path]] | None = None
+    if reset_number_range is not None:
+        reset_start, reset_end = reset_number_range
+        reset_scene_entries = _select_scene_entries_by_closed_range(
+            scene_entries,
+            start=reset_start,
+            end=reset_end,
+        )
+        logger.info(
+            "Fixed reset requested for split=%s interval=%d-%d at %s: mapped to %d scene(s)",
+            selected_split,
+            reset_start,
+            reset_end,
+            scene_status_path,
+            len(reset_scene_entries),
+        )
     if args.reset is not None:
         logger.info(
             "Reset requested for split=%s at %s: removing up to %d most recently completed scene(s)",
@@ -7781,6 +7878,10 @@ def main():
         )
         if removed_scene_ids:
             _write_json_payload(scene_status_path, scene_status_doc)
+            scene_status_doc = _load_scene_status_doc(
+                scene_status_path,
+                split=selected_split,
+            )
             logger.info(
                 "Reset cleared %d completed scene(s): %s",
                 len(removed_scene_ids),
@@ -7789,6 +7890,28 @@ def main():
         else:
             logger.info(
                 "Reset cleared 0 completed scene(s) at %s because there was nothing to reset",
+                scene_status_path,
+            )
+    if reset_scene_entries is not None:
+        reset_scene_ids = [scene_dir.name for _scene_split, scene_dir in reset_scene_entries]
+        removed_scene_ids = _reset_completed_scene_status_for_scene_ids(
+            scene_status_doc,
+            scene_ids=reset_scene_ids,
+        )
+        if removed_scene_ids:
+            _write_json_payload(scene_status_path, scene_status_doc)
+            scene_status_doc = _load_scene_status_doc(
+                scene_status_path,
+                split=selected_split,
+            )
+            logger.info(
+                "Fixed reset cleared %d completed scene(s): %s",
+                len(removed_scene_ids),
+                ", ".join(removed_scene_ids),
+            )
+        else:
+            logger.info(
+                "Fixed reset cleared 0 completed scene(s) at %s because none of the interval scenes were marked completed",
                 scene_status_path,
             )
     _validate_scene_status_doc(
@@ -8803,42 +8926,48 @@ def main():
             frame_sidecar_cache=scene_frame_sidecar_cache if sidecar_dirty else None,
         )
 
-    scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
-    logger.info(
-        "Found %d candidate scenes for split=%s",
-        len(scene_entries),
-        selected_split,
-    )
-    selected_scene_ids = [scene_dir.name for _, scene_dir in scene_entries]
+    if scene_number_range is not None:
+        shard_start, shard_end = scene_number_range
+        selected_scene_entries = _select_scene_entries_by_closed_range(
+            scene_entries,
+            start=shard_start,
+            end=shard_end,
+        )
+        logger.info(
+            "Fixed scene shard for split=%s interval=%d-%d resolved to %d scene(s)",
+            selected_split,
+            shard_start,
+            shard_end,
+            len(selected_scene_entries),
+        )
+    else:
+        selected_scene_entries = list(scene_entries)
+    selected_scene_ids = [scene_dir.name for _, scene_dir in selected_scene_entries]
     scene_index_by_id = {
         scene_dir.name: index
-        for index, (_scene_split, scene_dir) in enumerate(scene_entries, start=1)
+        for index, (_scene_split, scene_dir) in enumerate(selected_scene_entries, start=1)
     }
     pending_scene_entries = [
         (scene_split, scene_dir)
-        for scene_split, scene_dir in scene_entries
+        for scene_split, scene_dir in selected_scene_entries
         if scene_dir.name not in completed_scene_ids
     ]
 
-    batch_target = (
-        None
-        if args.scene_batch_size is None
-        else max(0, int(args.scene_batch_size))
-    )
     final_batch_mode = False
-    if batch_target is not None:
+    if scene_number_range is not None:
+        requested_scene_count = (scene_number_range[1] - scene_number_range[0]) + 1
         remaining_unprocessed = len(pending_scene_entries)
-        if 0 < remaining_unprocessed < batch_target:
+        if 0 < remaining_unprocessed < requested_scene_count:
             final_batch_mode = True
             _log_final_batch_banner(
                 split=selected_split,
-                total_scene_count=len(scene_entries),
-                processed_scene_count=len(scene_entries) - remaining_unprocessed,
+                total_scene_count=len(selected_scene_entries),
+                processed_scene_count=len(selected_scene_entries) - remaining_unprocessed,
                 remaining_scene_count=remaining_unprocessed,
             )
 
-    if batch_target is not None:
-        target_scene_entries = pending_scene_entries[:batch_target]
+    if scene_number_range is not None:
+        target_scene_entries = pending_scene_entries
     else:
         target_scene_entries = pending_scene_entries[:max(0, int(args.max_scenes))]
 
@@ -8897,7 +9026,7 @@ def main():
         _write_json_payload(output_path, cache)
         _write_attachment_review()
         _write_attachment_pair_salvage_review()
-    if batch_target is not None and final_batch_mode:
+    if scene_number_range is not None and final_batch_mode:
         completed_scene_ids_after_run = set(
             scene_status_doc.get("completed_scenes", {}).keys()
         )
@@ -8907,8 +9036,8 @@ def main():
         )
         _log_final_batch_banner(
             split=selected_split,
-            total_scene_count=len(scene_entries),
-            processed_scene_count=len(scene_entries) - remaining_unprocessed,
+            total_scene_count=len(selected_scene_entries),
+            processed_scene_count=len(selected_scene_entries) - remaining_unprocessed,
             remaining_scene_count=remaining_unprocessed,
             completed=True,
         )
