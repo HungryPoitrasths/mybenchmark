@@ -1015,6 +1015,64 @@ def _lookup_object_payload(container: object, obj_id: int) -> dict[str, Any] | N
     return None
 
 
+def _object_payload_object_ids(container: object) -> list[int]:
+    object_ids: set[int] = set()
+    if isinstance(container, dict):
+        for key, payload in container.items():
+            if not isinstance(payload, dict):
+                continue
+            try:
+                object_ids.add(int(key))
+            except (TypeError, ValueError):
+                payload_obj_id = payload.get("obj_id")
+                try:
+                    object_ids.add(int(payload_obj_id))
+                except (TypeError, ValueError):
+                    continue
+        return sorted(object_ids)
+    if isinstance(container, list):
+        for item in container:
+            if not isinstance(item, dict):
+                continue
+            try:
+                object_ids.add(int(item.get("obj_id")))
+            except (TypeError, ValueError):
+                continue
+    return sorted(object_ids)
+
+
+def _failed_referability_object_id_signature(
+    entry: object,
+    *,
+    bbox_in_frame_ratio_min: float,
+    projected_area_px_min: float,
+) -> tuple[int, ...]:
+    if not isinstance(entry, dict):
+        return ()
+
+    object_reviews = entry.get("object_reviews")
+    visibility_audit_by_object_id = entry.get("visibility_audit_by_object_id")
+    candidate_object_ids = sorted(
+        set(_object_payload_object_ids(object_reviews))
+        | set(_object_payload_object_ids(visibility_audit_by_object_id))
+    )
+    signature: list[int] = []
+    for obj_id in candidate_object_ids:
+        payload = _lookup_object_payload(object_reviews, int(obj_id))
+        if not isinstance(payload, dict):
+            payload = _lookup_object_payload(visibility_audit_by_object_id, int(obj_id))
+        if not isinstance(payload, dict):
+            continue
+        bbox_in_frame_ratio = _safe_float(payload.get("bbox_in_frame_ratio"), default=-1.0)
+        projected_area_px = _safe_float(payload.get("projected_area_px"), default=-1.0)
+        if bbox_in_frame_ratio < float(bbox_in_frame_ratio_min):
+            continue
+        if projected_area_px < float(projected_area_px_min):
+            continue
+        signature.append(int(obj_id))
+    return tuple(sorted(set(signature)))
+
+
 def _normalize_attachment_pair_string_list(values: object) -> list[str]:
     if not isinstance(values, list):
         return []
@@ -3114,6 +3172,7 @@ def _select_attachment_group_representatives(
     vlm_workers: int = 1,
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
     attachment_clarity_min_score: int = DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
+    failed_signatures_seen: set[tuple[int, ...]] | None = None,
 ) -> list[dict[str, Any]]:
     if not frames:
         return []
@@ -3133,6 +3192,9 @@ def _select_attachment_group_representatives(
         accepted_target = max(0, int(max_accepted_frame_count))
         if accepted_target <= 0:
             return []
+    scene_failed_signatures_seen = (
+        failed_signatures_seen if failed_signatures_seen is not None else set()
+    )
 
     def _select_group(item: tuple[int, dict[str, Any]]) -> dict[str, Any] | None:
         group_id, group_doc = item
@@ -3168,6 +3230,15 @@ def _select_attachment_group_representatives(
                 combined.get("attachment_referable_object_ids"),
             )
             if not attachment_pairs:
+                failed_signature = _failed_referability_object_id_signature(
+                    combined,
+                    bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                )
+                if failed_signature:
+                    if failed_signature in scene_failed_signatures_seen:
+                        return None
+                    scene_failed_signatures_seen.add(failed_signature)
                 return None
             accepted_frame = _with_attachment_pair_metadata(
                 combined,
@@ -3204,11 +3275,8 @@ def _select_attachment_group_representatives(
             else len(grouped_items) - next_group_index
         )
         batch_items = grouped_items[next_group_index : next_group_index + batch_size]
-        batch_results = _run_in_thread_pool(
-            batch_items,
-            _select_group,
-            max_workers=vlm_workers,
-        )
+        # Scene-level failed-signature reuse needs deterministic group order.
+        batch_results = [_select_group(item) for item in batch_items]
         for batch_item, reviewed_selection in zip(batch_items, batch_results):
             if isinstance(reviewed_selection, dict):
                 selected_by_group.append((int(batch_item[0]), reviewed_selection))
@@ -3377,6 +3445,7 @@ def _build_attachment_pair_salvage_scene_review(
     projected_area_hard_fail_min: float,
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
     attachment_clarity_min_score: int = DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
+    failed_signatures_seen: set[tuple[int, ...]] | None = None,
 ) -> dict[str, Any]:
     relation_type_map = _attachment_edge_relation_type_map(attachment_edges)
     color_dir = scene_dir / "color"
@@ -3386,6 +3455,9 @@ def _build_attachment_pair_salvage_scene_review(
         frames=frames,
         attachment_graph=attachment_graph,
         poses=poses,
+    )
+    scene_failed_signatures_seen = (
+        failed_signatures_seen if failed_signatures_seen is not None else set()
     )
 
     def _load_scene_image(image_name: str) -> np.ndarray | None:
@@ -3419,6 +3491,8 @@ def _build_attachment_pair_salvage_scene_review(
         clarity_pass_frames: list[dict[str, Any]] = []
         clarity_pass_image_names: list[str] = []
         frame_records_by_image_name: dict[str, dict[str, Any]] = {}
+        duplicate_failed_signature_image_names: list[str] = []
+        duplicate_failed_signature_object_ids_by_image_name: dict[str, list[int]] = {}
 
         def _stop_on_reviewed_frame(
             scored_frame: dict[str, Any],
@@ -3441,6 +3515,21 @@ def _build_attachment_pair_salvage_scene_review(
                         attachment_graph,
                         attachment_view_group_id=group_index,
                     )
+            failed_signature: tuple[int, ...] = ()
+            if isinstance(entry, dict) and not entry.get("attachment_referable_pairs"):
+                failed_signature = _failed_referability_object_id_signature(
+                    entry,
+                    bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                )
+                if failed_signature:
+                    if failed_signature in scene_failed_signatures_seen:
+                        duplicate_failed_signature_image_names.append(image_name)
+                        duplicate_failed_signature_object_ids_by_image_name[image_name] = list(
+                            failed_signature
+                        )
+                        return None
+                    scene_failed_signatures_seen.add(failed_signature)
             frame_record = {
                 "image_name": image_name,
                 "image_stem": _image_name_stem(image_name),
@@ -3574,7 +3663,8 @@ def _build_attachment_pair_salvage_scene_review(
             (
                 f"[attachment-pair-salvage] scene={scene_id} group={group_index} "
                 f"pairs={len(pair_rows)} clarity_pass={len(clarity_pass_image_names)} "
-                f"cover={len(selected_cover_image_names)} dropped={len(dropped_pairs)}"
+                f"cover={len(selected_cover_image_names)} dropped={len(dropped_pairs)} "
+                f"duplicate_failed_signature_skips={len(duplicate_failed_signature_image_names)}"
             )
         )
         groups.append(
@@ -3608,6 +3698,10 @@ def _build_attachment_pair_salvage_scene_review(
                     for item in ordered_scored_frames
                 ],
                 "clarity_pass_image_names": clarity_pass_image_names,
+                "duplicate_failed_signature_image_names": duplicate_failed_signature_image_names,
+                "duplicate_failed_signature_object_ids_by_image_name": (
+                    duplicate_failed_signature_object_ids_by_image_name
+                ),
                 "early_stop_image_name": review_result["early_stop_image_name"],
                 "early_stop_reason": review_result["early_stop_reason"],
                 "selected_cover_image_names": selected_cover_image_names,
@@ -4456,6 +4550,7 @@ def _select_non_attachment_group_representatives(
             if debug_groups_out is not None:
                 debug_groups_out.clear()
             return []
+    scene_failed_signatures_seen: set[tuple[int, ...]] = set()
 
     def _select_group(
         item: tuple[int, dict[str, Any]]
@@ -4478,6 +4573,8 @@ def _select_non_attachment_group_representatives(
         referable_object_ids_by_image_name: dict[str, list[int]] = {}
         accepted_frames_by_image_name: dict[str, dict[str, Any]] = {}
         accepted_image_names: set[str] = set()
+        failed_signature_object_ids_by_image_name: dict[str, list[int]] = {}
+        duplicate_failed_signature_image_names: set[str] = set()
 
         def _stop_on_reviewed_frame(
             scored_frame: dict[str, Any],
@@ -4504,6 +4601,17 @@ def _select_non_attachment_group_representatives(
                 or len(referable_object_ids) >= NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT
             )
             if not accepted_for_group:
+                failed_signature = _failed_referability_object_id_signature(
+                    referable_entry,
+                    bbox_in_frame_ratio_min=REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                )
+                if failed_signature:
+                    failed_signature_object_ids_by_image_name[image_name] = list(failed_signature)
+                    if failed_signature in scene_failed_signatures_seen:
+                        duplicate_failed_signature_image_names.add(image_name)
+                        return None
+                    scene_failed_signatures_seen.add(failed_signature)
                 return None
             accepted_image_names.add(image_name)
             accepted_frame = dict(reviewed_frame)
@@ -4552,6 +4660,8 @@ def _select_non_attachment_group_representatives(
                 "referable_object_count": 0,
                 "referable_object_ids": [],
                 "accepted_for_group": False,
+                "failed_signature_object_ids": [],
+                "duplicate_failed_signature_skip": False,
                 "stop_after_this_frame": False,
                 "brisque_score": scored_frame.get("brisque_score"),
                 "brisque_input_width": scored_frame.get("brisque_input_width"),
@@ -4577,11 +4687,20 @@ def _select_non_attachment_group_representatives(
                         attempt["referable_object_count"] = len(referable_object_ids)
                         attempt["referable_object_ids"] = list(referable_object_ids)
                         attempt["accepted_for_group"] = accepted_for_group
-                        attempt["review_status"] = (
-                            "accepted_for_group"
-                            if accepted_for_group
-                            else "frame_usable_not_referable"
+                        attempt["failed_signature_object_ids"] = list(
+                            failed_signature_object_ids_by_image_name.get(image_name, [])
                         )
+                        if image_name in duplicate_failed_signature_image_names:
+                            attempt["duplicate_failed_signature_skip"] = True
+                            attempt["review_status"] = (
+                                "frame_usable_duplicate_failed_signature_skip"
+                            )
+                        else:
+                            attempt["review_status"] = (
+                                "accepted_for_group"
+                                if accepted_for_group
+                                else "frame_usable_not_referable"
+                            )
                         if accepted_for_group and image_name == early_stop_image_name:
                             attempt["stop_after_this_frame"] = True
             elif early_stop_image_name:
@@ -4664,11 +4783,8 @@ def _select_non_attachment_group_representatives(
                 start=next_group_index,
             )
         )
-        batch_results = _run_in_thread_pool(
-            batch_items,
-            _select_group,
-            max_workers=vlm_workers,
-        )
+        # Scene-level failed-signature reuse needs deterministic group order.
+        batch_results = [_select_group(item) for item in batch_items]
         selected_groups.extend(
             doc for doc in batch_results
             if isinstance(doc, dict)
@@ -8958,6 +9074,7 @@ def main():
         ) -> dict[str, Any] | None:
             return _get_referability_entry(frame, reviewed_frame)
 
+        attachment_failed_signatures_seen: set[tuple[int, ...]] = set()
         attachment_selected_frames = _select_attachment_group_representatives(
             client=scene_client,
             model_name=model_name,
@@ -8972,6 +9089,7 @@ def main():
             vlm_workers=int(args.vlm_workers),
             frame_clarity_batch_size=int(args.frame_clarity_batch_size),
             attachment_clarity_min_score=int(args.attachment_clarity_min_score),
+            failed_signatures_seen=attachment_failed_signatures_seen,
         ) if attachment_candidate_frames else []
         if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
             attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
@@ -8996,6 +9114,7 @@ def main():
                 ),
                 frame_clarity_batch_size=int(args.frame_clarity_batch_size),
                 attachment_clarity_min_score=int(args.attachment_clarity_min_score),
+                failed_signatures_seen=attachment_failed_signatures_seen,
             )
         selected_attachment_frames = attachment_selected_frames
         remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))

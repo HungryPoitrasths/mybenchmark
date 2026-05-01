@@ -3012,6 +3012,122 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ],
         )
 
+    def test_failed_referability_object_id_signature_filters_projected_area_and_is_order_insensitive(self) -> None:
+        entry = {
+            "object_reviews": {
+                "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.95, "projected_area_px": 810.0},
+                "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.71, "projected_area_px": 900.0},
+                "3": {"obj_id": 3, "bbox_in_frame_ratio": 0.99, "projected_area_px": 799.0},
+            },
+            "visibility_audit_by_object_id": {},
+        }
+
+        signature = referability_module._failed_referability_object_id_signature(
+            entry,
+            bbox_in_frame_ratio_min=0.7,
+            projected_area_px_min=800.0,
+        )
+
+        self.assertEqual(signature, (1, 2))
+
+    def test_failed_referability_object_id_signature_falls_back_to_visibility_audit(self) -> None:
+        entry = {
+            "object_reviews": {},
+            "visibility_audit_by_object_id": {
+                "5": {"obj_id": 5, "bbox_in_frame_ratio": 0.8, "projected_area_px": 850.0},
+                "4": {"obj_id": 4, "bbox_in_frame_ratio": 0.9, "projected_area_px": 800.0},
+                "6": {"obj_id": 6, "bbox_in_frame_ratio": 0.95, "projected_area_px": 799.0},
+            },
+        }
+
+        signature = referability_module._failed_referability_object_id_signature(
+            entry,
+            bbox_in_frame_ratio_min=0.7,
+            projected_area_px_min=800.0,
+        )
+
+        self.assertEqual(signature, (4, 5))
+
+    def test_select_and_rerank_frames_skips_duplicate_failed_signatures_across_non_attachment_groups(self) -> None:
+        frame_candidates = [
+            {"image_name": "000001.jpg", "score": 30, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000002.jpg", "score": 29, "n_visible": 4, "visible_object_ids": [1, 2, 10, 11]},
+            {"image_name": "000003.jpg", "score": 28, "n_visible": 3, "visible_object_ids": [3, 4, 12]},
+        ]
+        reviewed_by_image_name = {
+            "000001.jpg": {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 92, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100092},
+            "000002.jpg": {"image_name": "000002.jpg", "frame_info": {"clear": True, "clarity_score": 91, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100091},
+            "000003.jpg": {"image_name": "000003.jpg", "frame_info": {"clear": True, "clarity_score": 90, "frame_usable": True, "reason": "clear"}, "frame_selection_score": 100090},
+        }
+        debug_output: dict[str, Any] = {}
+        build_calls: list[str] = []
+
+        def batch_getter(frames: list[dict]) -> dict[str, dict]:
+            return {
+                frame["image_name"]: dict(reviewed_by_image_name[frame["image_name"]], selector_score=int(frame["score"]))
+                for frame in frames
+            }
+
+        def build_entry(frame: dict, reviewed_frame: dict) -> dict:
+            build_calls.append(frame["image_name"])
+            if frame["image_name"] == "000001.jpg":
+                return {
+                    "referable_object_ids": [1],
+                    "object_reviews": {
+                        "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.72, "projected_area_px": 850.0},
+                        "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.95, "projected_area_px": 900.0},
+                    },
+                    "visibility_audit_by_object_id": {},
+                }
+            if frame["image_name"] == "000002.jpg":
+                return {
+                    "referable_object_ids": [1],
+                    "object_reviews": {
+                        "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
+                        "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 830.0},
+                    },
+                    "visibility_audit_by_object_id": {},
+                }
+            if frame["image_name"] == "000003.jpg":
+                return {
+                    "referable_object_ids": [3, 4],
+                    "object_reviews": {
+                        "3": {"obj_id": 3, "bbox_in_frame_ratio": 0.85, "projected_area_px": 900.0},
+                        "4": {"obj_id": 4, "bbox_in_frame_ratio": 0.86, "projected_area_px": 880.0},
+                    },
+                    "visibility_audit_by_object_id": {},
+                }
+            raise AssertionError(f"unexpected frame {frame['image_name']}")
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"non_attachment_duplicate_signature_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        with patch.object(referability_module.cv2, "imread", return_value=np.zeros((32, 32, 3), dtype=np.uint8)):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=make_scene_dir(root, "scene0000_00"),
+                frame_candidates=frame_candidates,
+                max_frames=1,
+                frame_review_batch_getter=batch_getter,
+                referability_entry_builder=build_entry,
+                debug_output=debug_output,
+            )
+
+        self.assertEqual(build_calls, ["000001.jpg", "000002.jpg", "000003.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000003.jpg"])
+        self.assertEqual(
+            debug_output["groups"][0]["attempts"][0]["review_status"],
+            "frame_usable_not_referable",
+        )
+        self.assertEqual(
+            debug_output["groups"][1]["attempts"][0]["review_status"],
+            "frame_usable_duplicate_failed_signature_skip",
+        )
+        self.assertEqual(debug_output["groups"][1]["attempts"][0]["failed_signature_object_ids"], [1, 2])
+        self.assertEqual(debug_output["groups"][2]["attempts"][0]["review_status"], "accepted_for_group")
+
     def test_select_and_rerank_frames_stats_report_only_successful_group_count(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
@@ -3723,6 +3839,186 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
+
+    def test_attachment_failed_signatures_are_shared_between_representative_scan_and_salvage_review(self) -> None:
+        frames = [
+            {"image_name": "000001.jpg", "score": 30, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
+            {"image_name": "000002.jpg", "score": 29, "n_visible": 4, "visible_object_ids": [1, 2, 3, 10]},
+            {"image_name": "000003.jpg", "score": 28, "n_visible": 2, "visible_object_ids": [4, 5]},
+        ]
+        frame_reviews = {
+            "000001.jpg": {"image_name": "000001.jpg", "frame_info": {"clear": True, "clarity_score": 75, "frame_usable": True, "reason": "clear"}},
+            "000002.jpg": {"image_name": "000002.jpg", "frame_info": {"clear": True, "clarity_score": 74, "frame_usable": True, "reason": "clear"}},
+            "000003.jpg": {"image_name": "000003.jpg", "frame_info": {"clear": True, "clarity_score": 73, "frame_usable": True, "reason": "clear"}},
+        }
+        attachment_entries = {
+            "000001.jpg": {"attachment_referable_object_ids": [], "object_reviews": {"1": {"obj_id": 1, "bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0}, "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.72, "projected_area_px": 850.0}}, "visibility_audit_by_object_id": {}},
+            "000002.jpg": {"attachment_referable_object_ids": [], "object_reviews": {"1": {"obj_id": 1, "bbox_in_frame_ratio": 0.91, "projected_area_px": 900.0}, "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 830.0}, "3": {"obj_id": 3, "bbox_in_frame_ratio": 0.68, "projected_area_px": 799.0}}, "visibility_audit_by_object_id": {}},
+            "000003.jpg": {"attachment_referable_object_ids": [4, 5], "object_reviews": {"4": {"obj_id": 4, "bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0}, "5": {"obj_id": 5, "bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0}}, "visibility_audit_by_object_id": {}},
+        }
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_shared_signatures_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = make_scene_dir(root, "scene0001_00")
+        shared_failed_signatures: set[tuple[int, ...]] = set()
+
+        def frame_review_getter(frame: dict) -> dict:
+            return dict(frame_reviews[frame["image_name"]])
+
+        def attachment_entry_builder(frame: dict, reviewed_frame: dict) -> dict:
+            return dict(attachment_entries[frame["image_name"]])
+
+        with patch.object(referability_module.cv2, "imread", return_value=np.zeros((32, 32, 3), dtype=np.uint8)):
+            selected = referability_module._select_attachment_group_representatives(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frames=frames,
+                attachment_graph={1: [2, 3], 4: [5]},
+                poses={
+                    "000001.jpg": make_camera_pose(image_name="000001.jpg", yaw_deg=0.0),
+                    "000002.jpg": make_camera_pose(image_name="000002.jpg", yaw_deg=12.0),
+                    "000003.jpg": make_camera_pose(image_name="000003.jpg", yaw_deg=25.0),
+                },
+                frame_review_getter=frame_review_getter,
+                attachment_entry_builder=attachment_entry_builder,
+                failed_signatures_seen=shared_failed_signatures,
+            )
+
+        self.assertEqual([entry["image_name"] for entry in selected], ["000003.jpg"])
+
+        salvage_review = referability_module._build_attachment_pair_salvage_scene_review(
+            client=object(),
+            model_name="fake-vlm",
+            scene_id="scene0001_00",
+            split="train",
+            scene_dir=scene_dir,
+            objects=[make_object(1, "table"), make_object(2, "book"), make_object(3, "lamp"), make_object(4, "cup"), make_object(5, "box")],
+            objects_by_id={1: make_object(1, "table"), 2: make_object(2, "book"), 3: make_object(3, "lamp"), 4: make_object(4, "cup"), 5: make_object(5, "box")},
+            attachment_graph={1: [2, 3], 4: [5]},
+            attachment_edges=[
+                {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                {"parent_id": 1, "child_id": 3, "type": "next_to"},
+                {"parent_id": 4, "child_id": 5, "type": "supported_by"},
+            ],
+            frames=frames,
+            poses={
+                "000001.jpg": make_camera_pose(image_name="000001.jpg", yaw_deg=0.0),
+                "000002.jpg": make_camera_pose(image_name="000002.jpg", yaw_deg=12.0),
+                "000003.jpg": make_camera_pose(image_name="000003.jpg", yaw_deg=25.0),
+            },
+            frame_review_getter=frame_review_getter,
+            attachment_entry_builder=attachment_entry_builder,
+            bbox_hard_fail_min=0.15,
+            projected_area_hard_fail_min=800.0,
+            failed_signatures_seen=shared_failed_signatures,
+        )
+
+        self.assertEqual(salvage_review["groups"][0]["clarity_pass_image_names"], [])
+        self.assertEqual(salvage_review["groups"][1]["clarity_pass_image_names"], [])
+        self.assertEqual(salvage_review["groups"][2]["clarity_pass_image_names"], ["000003.jpg"])
+        self.assertEqual(salvage_review["groups"][0]["duplicate_failed_signature_image_names"], ["000001.jpg"])
+        self.assertEqual(salvage_review["groups"][1]["duplicate_failed_signature_image_names"], ["000002.jpg"])
+
+        non_attachment_debug: dict[str, Any] = {}
+        non_attachment_selected = referability_module._select_and_rerank_frames(
+            client=object(),
+            model_name="fake-vlm",
+            scene_dir=scene_dir,
+            frame_candidates=[
+                {"image_name": "000101.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
+            ],
+            max_frames=1,
+            frame_review_getter=lambda frame: {
+                "image_name": frame["image_name"],
+                "frame_info": {"clear": True, "clarity_score": 80, "frame_usable": True, "reason": "clear"},
+                "frame_selection_score": 100080,
+            },
+            referability_entry_builder=lambda frame, reviewed_frame: {
+                "referable_object_ids": [1],
+                "object_reviews": {
+                    "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.92, "projected_area_px": 900.0},
+                    "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 850.0},
+                },
+                "visibility_audit_by_object_id": {},
+            },
+            debug_output=non_attachment_debug,
+        )
+
+        self.assertEqual(non_attachment_selected, [])
+        self.assertEqual(
+            non_attachment_debug["groups"][0]["attempts"][0]["review_status"],
+            "frame_usable_not_referable",
+        )
+
+    def test_non_attachment_failed_signatures_do_not_leak_into_attachment_salvage_review(self) -> None:
+        scene_dir = Path(__file__).resolve().parent / "_tmp" / f"non_attachment_to_attachment_{uuid.uuid4().hex}" / "scene0001_00"
+        scene_dir.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, scene_dir.parent, True)
+
+        non_attachment_debug: dict[str, Any] = {}
+        with patch.object(referability_module.cv2, "imread", return_value=np.zeros((32, 32, 3), dtype=np.uint8)):
+            referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=[
+                    {"image_name": "000101.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
+                ],
+                max_frames=1,
+                frame_review_getter=lambda frame: {
+                    "image_name": frame["image_name"],
+                    "frame_info": {"clear": True, "clarity_score": 82, "frame_usable": True, "reason": "clear"},
+                    "frame_selection_score": 100082,
+                },
+                referability_entry_builder=lambda frame, reviewed_frame: {
+                    "referable_object_ids": [1],
+                    "object_reviews": {
+                        "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.92, "projected_area_px": 900.0},
+                        "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 850.0},
+                    },
+                    "visibility_audit_by_object_id": {},
+                },
+                debug_output=non_attachment_debug,
+            )
+
+            salvage_review = referability_module._build_attachment_pair_salvage_scene_review(
+                client=object(),
+                model_name="fake-vlm",
+                scene_id="scene0001_00",
+                split="train",
+                scene_dir=scene_dir,
+                objects=[make_object(1, "table"), make_object(2, "book")],
+                objects_by_id={1: make_object(1, "table"), 2: make_object(2, "book")},
+                attachment_graph={1: [2]},
+                attachment_edges=[{"parent_id": 1, "child_id": 2, "type": "supported_by"}],
+                frames=[
+                    {"image_name": "000201.jpg", "score": 10, "n_visible": 2, "visible_object_ids": [1, 2], "attachment_viewpoint_exempt": True},
+                ],
+                poses={"000201.jpg": make_camera_pose(image_name="000201.jpg")},
+                frame_review_getter=lambda frame: {
+                    "image_name": frame["image_name"],
+                    "frame_info": {"clear": True, "clarity_score": 81, "frame_usable": True, "reason": "clear"},
+                },
+                attachment_entry_builder=lambda frame, reviewed_frame: {
+                    "attachment_referable_object_ids": [],
+                    "object_reviews": {
+                        "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.92, "projected_area_px": 900.0},
+                        "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.8, "projected_area_px": 850.0},
+                    },
+                    "visibility_audit_by_object_id": {},
+                },
+                bbox_hard_fail_min=0.15,
+                projected_area_hard_fail_min=800.0,
+            )
+
+        self.assertEqual(
+            non_attachment_debug["groups"][0]["attempts"][0]["review_status"],
+            "frame_usable_not_referable",
+        )
+        self.assertEqual(salvage_review["groups"][0]["clarity_pass_image_names"], ["000201.jpg"])
+        self.assertEqual(salvage_review["groups"][0]["duplicate_failed_signature_image_names"], [])
 
     def test_build_attachment_pair_salvage_scene_review_uses_single_cover_image_when_one_image_covers_pair(self) -> None:
         objects = [make_object(1, "table"), make_object(2, "book")]
