@@ -3287,7 +3287,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(groups[0]["visible_object_ids"], [1, 2])
         self.assertEqual(groups[1]["visible_object_ids"], [1, 2, 9])
 
-    def test_build_attachment_frame_groups_keeps_separate_groups_when_visible_symmetric_diff_is_too_large(self) -> None:
+    def test_build_attachment_frame_groups_merges_frames_with_same_pair_set_even_when_visible_symmetric_diff_is_large(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9, 10, 11, 12]},
@@ -3302,7 +3302,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(len(groups), 2)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            [frame["image_name"] for frame in groups[0]["frames"]],
+            ["000000.jpg", "000010.jpg"],
+        )
+        self.assertEqual(groups[0]["visible_object_ids"], [1, 2, 9, 10, 11, 12])
 
     def test_build_attachment_frame_groups_never_merges_different_pair_sets(self) -> None:
         frames = [
@@ -3323,10 +3328,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(groups[0]["group_pairs"], [(1, 2)])
         self.assertEqual(groups[1]["group_pairs"], [(1, 2), (1, 3)])
 
-    def test_build_attachment_frame_groups_missing_pose_only_allows_exact_visible_match(self) -> None:
+    def test_build_attachment_frame_groups_missing_pose_only_allows_exact_same_image_identity(self) -> None:
         mergeable_frames = [
             {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
-            {"image_name": "000010.jpg", "visible_object_ids": [2, 1]},
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2, 9]},
         ]
         non_mergeable_frames = [
             {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
@@ -3345,7 +3350,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(len(merged_groups), 1)
-        self.assertEqual(merged_groups[0]["visible_object_ids"], [1, 2])
+        self.assertEqual(merged_groups[0]["visible_object_ids"], [1, 2, 9])
         self.assertEqual(len(split_groups), 2)
 
     def test_select_attachment_group_representatives_merges_near_duplicate_visible_groups_when_pair_set_and_pose_match(self) -> None:
@@ -3465,6 +3470,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 scene_dir=scene_dir,
                 frames=frames,
                 attachment_graph={1: [2]},
+                poses={
+                    "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                    "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+                    "000020.jpg": make_camera_pose(image_name="000020.jpg", yaw_deg=12.0),
+                },
                 attachment_entry_builder=build_entry,
             )
 
@@ -3768,10 +3778,17 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(scene_review["groups"][0]["clarity_pass_image_names"], ["000001.jpg"])
 
     def test_build_attachment_pair_salvage_scene_review_merges_attachment_groups_and_uses_visible_id_union(self) -> None:
-        objects = [make_object(1, "table"), make_object(2, "book"), make_object(9, "lamp")]
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "book"),
+            make_object(9, "lamp"),
+            make_object(10, "plant"),
+            make_object(11, "cup"),
+            make_object(12, "box"),
+        ]
         frames = [
             {"image_name": "000001.jpg", "visible_object_ids": [1, 2], "score": 10, "attachment_viewpoint_exempt": True},
-            {"image_name": "000002.jpg", "visible_object_ids": [1, 2, 9], "score": 9, "attachment_viewpoint_exempt": True},
+            {"image_name": "000002.jpg", "visible_object_ids": [1, 2, 9, 10, 11, 12], "score": 9, "attachment_viewpoint_exempt": True},
         ]
         entries = {
             "000001.jpg": make_attachment_pair_salvage_entry(
@@ -3782,10 +3799,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 attachment_referable_pairs=[[1, 2]],
             ),
             "000002.jpg": make_attachment_pair_salvage_entry(
-                candidate_visible_object_ids=[1, 2, 9],
-                crop_label_statuses={"table": "unique", "book": "unique", "lamp": "unique"},
-                full_frame_label_statuses={"table": "unique", "book": "unique", "lamp": "unique"},
-                label_statuses={"table": "unique", "book": "unique", "lamp": "unique"},
+                candidate_visible_object_ids=[1, 2, 9, 10, 11, 12],
+                crop_label_statuses={"table": "unique", "book": "unique", "lamp": "unique", "plant": "unique", "cup": "unique", "box": "unique"},
+                full_frame_label_statuses={"table": "unique", "book": "unique", "lamp": "unique", "plant": "unique", "cup": "unique", "box": "unique"},
+                label_statuses={"table": "unique", "book": "unique", "lamp": "unique", "plant": "unique", "cup": "unique", "box": "unique"},
                 attachment_referable_pairs=[[1, 2]],
             ),
         }
@@ -3831,7 +3848,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(scene_review["group_count_total"], 1)
         self.assertEqual(scene_review["pair_count_total"], 1)
         group = scene_review["groups"][0]
-        self.assertEqual(group["visible_object_ids"], [1, 2, 9])
+        self.assertEqual(group["visible_object_ids"], [1, 2, 9, 10, 11, 12])
         self.assertEqual(group["group_frame_image_names"], ["000001.jpg", "000002.jpg"])
         self.assertEqual(group["pair_count_total"], 1)
         self.assertEqual([pair["pair_id"] for pair in group["pairs"]], ["1->2"])

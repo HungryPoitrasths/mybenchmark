@@ -111,7 +111,7 @@ FRAME_CLARITY_BATCH_SIZE = 6
 FRAME_CLARITY_MAX_TOKENS_PER_IMAGE = 128
 FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
 DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 65
-ATTACHMENT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
+VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
 ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
 DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE = 70
 DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST = 3
@@ -2711,6 +2711,10 @@ def _visible_object_frame_group_key(frame: dict[str, Any]) -> tuple[Any, ...] | 
     return None
 
 
+def _frame_image_name(frame: dict[str, Any]) -> str:
+    return str(frame.get("image_name", "")).strip()
+
+
 def _group_frame_sampling_stride(group_frame_count: int) -> int:
     count = max(0, int(group_frame_count))
     if count <= 10:
@@ -2745,8 +2749,8 @@ def _attachment_frame_pose_angle_deg(
 ) -> float | None:
     if not poses:
         return None
-    image_name_a = str(frame_a.get("image_name", "")).strip()
-    image_name_b = str(frame_b.get("image_name", "")).strip()
+    image_name_a = _frame_image_name(frame_a)
+    image_name_b = _frame_image_name(frame_b)
     if not image_name_a or not image_name_b:
         return None
     pose_a = poses.get(image_name_a)
@@ -2762,34 +2766,53 @@ def _attachment_frame_pose_angle_deg(
     return float(np.degrees(np.arccos(cosine)))
 
 
-def _attachment_frame_merge_metrics(
+def _visible_object_frame_merge_metrics(
     anchor_frame: dict[str, Any],
     candidate_frame: dict[str, Any],
     poses: dict[str, CameraPose] | None,
-) -> tuple[bool, float | None, int] | None:
+) -> tuple[float | None, int] | None:
     anchor_visible_ids = _visible_object_frame_group_key(anchor_frame)
     candidate_visible_ids = _visible_object_frame_group_key(candidate_frame)
     if anchor_visible_ids is None or candidate_visible_ids is None:
         return None
 
     symmetric_diff_size = len(set(anchor_visible_ids) ^ set(candidate_visible_ids))
-    if symmetric_diff_size > ATTACHMENT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF:
+    if symmetric_diff_size > VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF:
         return None
 
     angle_deg = _attachment_frame_pose_angle_deg(anchor_frame, candidate_frame, poses)
     if angle_deg is None:
         if symmetric_diff_size == 0:
-            return True, None, symmetric_diff_size
+            return None, symmetric_diff_size
         return None
     if angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG:
         return None
-    return True, angle_deg, symmetric_diff_size
+    return angle_deg, symmetric_diff_size
+
+
+def _attachment_frame_merge_metrics(
+    anchor_frame: dict[str, Any],
+    candidate_frame: dict[str, Any],
+    poses: dict[str, CameraPose] | None,
+) -> tuple[float | None, int] | None:
+    angle_deg = _attachment_frame_pose_angle_deg(anchor_frame, candidate_frame, poses)
+    if angle_deg is None:
+        if _frame_image_name(anchor_frame) and _frame_image_name(anchor_frame) == _frame_image_name(candidate_frame):
+            return None, 0
+        return None
+    if angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG:
+        return None
+    return angle_deg, 0
 
 
 def _build_visible_object_pose_merged_groups(
     *,
     frames: list[dict[str, Any]],
     poses: dict[str, CameraPose] | None,
+    merge_metrics_getter: Callable[
+        [dict[str, Any], dict[str, Any], dict[str, CameraPose] | None],
+        tuple[float | None, int] | None,
+    ] = _visible_object_frame_merge_metrics,
 ) -> list[dict[str, Any]]:
     merged_groups: list[dict[str, Any]] = []
     for frame in frames:
@@ -2798,18 +2821,18 @@ def _build_visible_object_pose_merged_groups(
             continue
         matching_groups: list[tuple[float, int, int]] = []
         for group_index, group in enumerate(merged_groups):
-            metrics = _attachment_frame_merge_metrics(
+            metrics = merge_metrics_getter(
                 group["anchor_frame"],
                 frame,
                 poses,
             )
             if metrics is None:
                 continue
-            _merge_allowed, angle_deg, symmetric_diff_size = metrics
+            angle_deg, merge_tiebreaker = metrics
             matching_groups.append(
                 (
                     float("inf") if angle_deg is None else float(angle_deg),
-                    int(symmetric_diff_size),
+                    int(merge_tiebreaker),
                     int(group_index),
                 )
             )
@@ -2867,6 +2890,7 @@ def _build_attachment_frame_groups(
         bucket_groups = _build_visible_object_pose_merged_groups(
             frames=bucket_frames,
             poses=poses,
+            merge_metrics_getter=_attachment_frame_merge_metrics,
         )
         for group in bucket_groups:
             visible_object_ids = [
@@ -2877,10 +2901,10 @@ def _build_attachment_frame_groups(
                     "anchor_frame": group.get("anchor_frame"),
                     "frames": list(group.get("frames", [])),
                     "visible_object_ids": visible_object_ids,
-                    "group_pairs": _attachment_pairs_for_visible_group(
-                        attachment_graph,
-                        visible_object_ids,
-                    ),
+                    "group_pairs": [
+                        (int(parent_id), int(child_id))
+                        for parent_id, child_id in pair_set_key
+                    ],
                     "pair_set_key": [list(pair) for pair in pair_set_key],
                 }
             )
