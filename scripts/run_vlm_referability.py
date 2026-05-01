@@ -297,9 +297,8 @@ def _load_scene_status_doc(
     path: Path,
     *,
     split: str,
-    reset: bool = False,
 ) -> dict[str, Any]:
-    if reset or not path.exists():
+    if not path.exists():
         return _build_empty_scene_status_doc(split)
 
     with open(path, "r", encoding="utf-8") as f:
@@ -318,7 +317,7 @@ def _load_scene_status_doc(
     if loaded_split != str(split):
         raise RuntimeError(
             f"scene_status split mismatch at {path}: found {loaded_split or '<missing>'}, expected {split}. "
-            "Use --reset_scene_status to clear the existing state before running a different split."
+            "Use --reset N to remove existing completed scenes before running a different split."
         )
 
     completed_scenes = loaded.get("completed_scenes")
@@ -330,6 +329,47 @@ def _load_scene_status_doc(
         "split": loaded_split,
         "completed_scenes": dict(completed_scenes),
     }
+
+
+def _parse_scene_status_updated_at(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if candidate.endswith("Z"):
+        candidate = f"{candidate[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _reset_completed_scene_status(
+    scene_status_doc: dict[str, Any],
+    *,
+    count: int,
+) -> list[str]:
+    if int(count) <= 0:
+        raise ValueError("count must be >= 1")
+    completed_scenes = scene_status_doc.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        raise RuntimeError("scene_status_doc.completed_scenes must be an object")
+
+    ranked_items = sorted(completed_scenes.items(), key=lambda item: str(item[0]))
+    ranked_items.sort(
+        key=lambda item: _parse_scene_status_updated_at(
+            item[1].get("updated_at") if isinstance(item[1], dict) else None
+        ) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    removed_scene_ids = [str(scene_id) for scene_id, _ in ranked_items[: int(count)]]
+    for scene_id in removed_scene_ids:
+        completed_scenes.pop(scene_id, None)
+    return removed_scene_ids
 
 
 def _batch_cache_contains_scene(cache_doc: dict[str, Any], scene_id: str) -> bool:
@@ -7578,8 +7618,8 @@ def main():
         help="Resume from the global scene_status.json if present",
     )
     parser.add_argument(
-        "--reset_scene_status", action="store_true",
-        help="Clear the current split's scene_status.json before processing; existing batch JSON files are kept",
+        "--reset", type=int, default=None,
+        help="Remove the most recently completed N scene entries from scene_status.json before processing; existing batch JSON files, frame sidecars, and review artifacts are kept",
     )
     parser.add_argument(
         "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
@@ -7663,6 +7703,8 @@ def main():
     _reset_vlm_call_failure_count()
     if args.scene_batch_size is not None and int(args.scene_batch_size) <= 0:
         parser.error("--scene_batch_size must be >= 1")
+    if args.reset is not None and int(args.reset) <= 0:
+        parser.error("--reset must be >= 1")
     if int(args.vlm_workers) <= 0:
         parser.error("--vlm_workers must be >= 1")
     if int(args.frame_clarity_batch_size) <= 0:
@@ -7725,15 +7767,30 @@ def main():
     scene_status_doc = _load_scene_status_doc(
         scene_status_path,
         split=selected_split,
-        reset=bool(args.reset_scene_status),
     )
-    if args.reset_scene_status:
-        _write_json_payload(scene_status_path, scene_status_doc)
+    if args.reset is not None:
         logger.info(
-            "Reset scene status for split=%s at %s",
+            "Reset requested for split=%s at %s: removing up to %d most recently completed scene(s)",
             selected_split,
             scene_status_path,
+            int(args.reset),
         )
+        removed_scene_ids = _reset_completed_scene_status(
+            scene_status_doc,
+            count=int(args.reset),
+        )
+        if removed_scene_ids:
+            _write_json_payload(scene_status_path, scene_status_doc)
+            logger.info(
+                "Reset cleared %d completed scene(s): %s",
+                len(removed_scene_ids),
+                ", ".join(removed_scene_ids),
+            )
+        else:
+            logger.info(
+                "Reset cleared 0 completed scene(s) at %s because there was nothing to reset",
+                scene_status_path,
+            )
     _validate_scene_status_doc(
         scene_status_doc,
         scene_status_path=scene_status_path,

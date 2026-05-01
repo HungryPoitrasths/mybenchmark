@@ -413,6 +413,127 @@ class RunVlmReferabilityTests(unittest.TestCase):
         }[split]
         split_path.write_text("\n".join(scene_ids) + "\n", encoding="utf-8")
 
+    def test_reset_completed_scene_status_removes_newest_scene_first(self) -> None:
+        scene_status_doc = {
+            "version": referability_module.SCENE_STATUS_VERSION,
+            "split": "train",
+            "completed_scenes": {
+                "scene0001_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_a.json",
+                    "updated_at": "2026-04-30T12:00:00Z",
+                },
+                "scene0002_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_b.json",
+                    "updated_at": "2026-04-30T12:05:00Z",
+                },
+            },
+        }
+
+        removed_scene_ids = referability_module._reset_completed_scene_status(
+            scene_status_doc,
+            count=1,
+        )
+
+        self.assertEqual(removed_scene_ids, ["scene0002_00"])
+        self.assertEqual(list(scene_status_doc["completed_scenes"].keys()), ["scene0001_00"])
+
+    def test_reset_completed_scene_status_removes_two_newest_with_deterministic_tiebreak(self) -> None:
+        scene_status_doc = {
+            "version": referability_module.SCENE_STATUS_VERSION,
+            "split": "train",
+            "completed_scenes": {
+                "scene0002_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_b.json",
+                    "updated_at": "2026-04-30T12:05:00Z",
+                },
+                "scene0001_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_a.json",
+                    "updated_at": "2026-04-30T12:05:00Z",
+                },
+                "scene0003_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_c.json",
+                    "updated_at": "2026-04-30T12:00:00Z",
+                },
+            },
+        }
+
+        removed_scene_ids = referability_module._reset_completed_scene_status(
+            scene_status_doc,
+            count=2,
+        )
+
+        self.assertEqual(removed_scene_ids, ["scene0001_00", "scene0002_00"])
+        self.assertEqual(list(scene_status_doc["completed_scenes"].keys()), ["scene0003_00"])
+
+    def test_reset_completed_scene_status_clears_all_when_count_exceeds_completed_scenes(self) -> None:
+        scene_status_doc = {
+            "version": referability_module.SCENE_STATUS_VERSION,
+            "split": "train",
+            "completed_scenes": {
+                "scene0001_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_a.json",
+                    "updated_at": "2026-04-30T12:00:00Z",
+                },
+                "scene0002_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_b.json",
+                    "updated_at": "2026-04-30T12:05:00Z",
+                },
+            },
+        }
+
+        removed_scene_ids = referability_module._reset_completed_scene_status(
+            scene_status_doc,
+            count=5,
+        )
+
+        self.assertEqual(removed_scene_ids, ["scene0002_00", "scene0001_00"])
+        self.assertEqual(scene_status_doc["completed_scenes"], {})
+
+    def test_reset_completed_scene_status_treats_missing_or_malformed_updated_at_as_oldest(self) -> None:
+        scene_status_doc = {
+            "version": referability_module.SCENE_STATUS_VERSION,
+            "split": "train",
+            "completed_scenes": {
+                "scene0002_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_b.json",
+                },
+                "scene0003_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_c.json",
+                    "updated_at": "not-a-timestamp",
+                },
+                "scene0001_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_a.json",
+                    "updated_at": "2026-04-30T12:05:00Z",
+                },
+                "scene0004_00": {
+                    "status": "completed",
+                    "batch_file": "flash_batch_d.json",
+                    "updated_at": "2026-04-30T12:00:00Z",
+                },
+            },
+        }
+
+        removed_scene_ids = referability_module._reset_completed_scene_status(
+            scene_status_doc,
+            count=2,
+        )
+
+        self.assertEqual(removed_scene_ids, ["scene0001_00", "scene0004_00"])
+        self.assertEqual(
+            list(scene_status_doc["completed_scenes"].keys()),
+            ["scene0002_00", "scene0003_00"],
+        )
+
     def test_default_review_output_prefix_uses_trailing_flash_suffix(self) -> None:
         output_path = Path("output/pilot_referability_cache_qwen3_vl_flash12.json")
 
@@ -4572,7 +4693,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
             self.assertEqual(loaded, {})
 
-    def test_main_reuses_frame_sidecar_across_reset_scene_status_runs(self) -> None:
+    def test_main_reuses_frame_sidecar_across_reset_runs(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_main_{uuid.uuid4().hex}"
         data_root = root / "data"
         scene_dir = data_root / "scene0001_00"
@@ -4606,7 +4727,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.addCleanup(shutil.rmtree, root, True)
 
-        def run_once(*, reset_scene_status: bool, frame_decision_batch_side_effect, entry_side_effect) -> None:
+        def run_once(*, reset: int | None, frame_decision_batch_side_effect, entry_side_effect) -> None:
             def fake_select_and_rerank_frames(**kwargs):
                 frame = dict(kwargs["frame_candidates"][0])
                 reviewed_frame = kwargs["frame_review_getter"](frame)
@@ -4643,8 +4764,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "--no-write_attachment_review",
                 "--no-write_attachment_pair_salvage_review",
             ]
-            if reset_scene_status:
-                argv.append("--reset_scene_status")
+            if reset is not None:
+                argv.extend(["--reset", str(reset)])
             with (
                 patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
                 patch.object(
@@ -4710,7 +4831,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module.main()
 
         run_once(
-            reset_scene_status=False,
+            reset=None,
             frame_decision_batch_side_effect=lambda *args, **kwargs: {
                 "000101.jpg": {
                     "clear": True,
@@ -4729,7 +4850,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(sidecar_path.exists())
 
         run_once(
-            reset_scene_status=True,
+            reset=1,
             frame_decision_batch_side_effect=AssertionError("frame sidecar should skip _frame_decision_batch"),
             entry_side_effect=AssertionError("frame sidecar should skip _compute_frame_referability_entry"),
         )
@@ -5112,7 +5233,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         global_scene_status = load_scene_status_doc_for_output(output_path)
         self.assertEqual(global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"], _batch_path.name)
 
-    def test_reset_scene_status_clears_global_state_but_keeps_existing_batches(self) -> None:
+    def test_reset_reprocesses_cleared_scene_but_keeps_existing_batches(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_reset_{uuid.uuid4().hex}"
         data_root = root / "data"
         scene_dir = data_root / "scene0001_00"
@@ -5188,6 +5309,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.addCleanup(shutil.rmtree, root, True)
         with (
+            self.assertLogs(referability_module.logger.name, level="INFO") as logs,
             patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
             patch("src.scene_parser.parse_scene", return_value=scene),
             patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
@@ -5223,7 +5345,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 str(data_root),
                 "--output",
                 str(output_path),
-                "--reset_scene_status",
+                "--reset",
+                "1",
                 "--scene_batch_size",
                 "1",
                 "--no-write_attachment_review",
@@ -5231,6 +5354,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
+        log_output = "\n".join(logs.output)
+        self.assertIn("Reset requested", log_output)
+        self.assertIn("Reset cleared 1 completed scene(s): scene0001_00", log_output)
         batch_paths = list_batch_cache_paths(output_path)
         self.assertEqual(len(batch_paths), 2)
         self.assertIn(first_batch_path, batch_paths)
@@ -5730,7 +5856,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(len(list_batch_cache_paths(output_path)), 1)
 
-    def test_scene_batch_size_uses_scene_status_to_skip_completed_scenes(self) -> None:
+    def test_scene_batch_size_after_reset_uses_scene_status_to_pick_next_pending_scene(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_batch_resume_{uuid.uuid4().hex}"
         data_root = root / "data"
         scans_root = data_root / "scans"
@@ -5863,6 +5989,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.addCleanup(shutil.rmtree, root, True)
         with (
+            self.assertLogs(referability_module.logger.name, level="INFO") as logs,
             patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
             patch("src.scene_parser.parse_scene", return_value=scene),
             patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
@@ -5889,6 +6016,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "train",
                 "--output",
                 str(output_path),
+                "--reset",
+                "1",
                 "--scene_batch_size",
                 "1",
                 "--resume",
@@ -5897,6 +6026,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ):
             referability_module.main()
 
+        log_output = "\n".join(logs.output)
+        self.assertIn("Reset cleared 1 completed scene(s): scene0002_00", log_output)
         batch_paths = list_batch_cache_paths(output_path)
         self.assertEqual(len(batch_paths), 3)
         new_batch_path = next(
@@ -5904,10 +6035,41 @@ class RunVlmReferabilityTests(unittest.TestCase):
             if path not in {legacy_batch_a, legacy_batch_b}
         )
         cache_doc = json.loads(new_batch_path.read_text(encoding="utf-8"))
-        self.assertEqual(select_calls, ["scene0003_00"])
-        self.assertEqual(cache_doc["scene_status"]["scene0003_00"]["pipeline_outcome"], "processed")
+        self.assertEqual(select_calls, ["scene0002_00"])
+        self.assertEqual(cache_doc["scene_status"]["scene0002_00"]["pipeline_outcome"], "processed")
         global_scene_status = load_scene_status_doc_for_output(output_path)
-        self.assertEqual(global_scene_status["completed_scenes"]["scene0003_00"]["batch_file"], new_batch_path.name)
+        self.assertEqual(global_scene_status["completed_scenes"]["scene0001_00"]["batch_file"], legacy_batch_a.name)
+        self.assertEqual(global_scene_status["completed_scenes"]["scene0002_00"]["batch_file"], new_batch_path.name)
+        self.assertNotIn("scene0003_00", global_scene_status["completed_scenes"])
+
+    def test_old_reset_scene_status_flag_is_rejected(self) -> None:
+        with patch.object(sys, "argv", [
+            "run_vlm_referability.py",
+            "--data_root",
+            "data",
+            "--output",
+            "output/referability_cache.json",
+            "--reset_scene_status",
+        ]):
+            with self.assertRaises(SystemExit) as exc_info:
+                referability_module.main()
+
+        self.assertEqual(exc_info.exception.code, 2)
+
+    def test_reset_zero_is_rejected(self) -> None:
+        with patch.object(sys, "argv", [
+            "run_vlm_referability.py",
+            "--data_root",
+            "data",
+            "--output",
+            "output/referability_cache.json",
+            "--reset",
+            "0",
+        ]):
+            with self.assertRaises(SystemExit) as exc_info:
+                referability_module.main()
+
+        self.assertEqual(exc_info.exception.code, 2)
 
     def test_resume_rejects_scene_status_split_mismatch_for_val(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_status_split_guard_val_{uuid.uuid4().hex}"
