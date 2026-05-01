@@ -1357,12 +1357,12 @@ def _select_attachment_pair_cover_images(
     pair_rows: list[dict[str, Any]],
 ) -> list[str]:
     image_to_pair_ids: dict[str, set[str]] = defaultdict(set)
-    clarity_scores: dict[str, int] = {}
+    frame_selection_scores: dict[str, int] = {}
     for frame in clarity_pass_frames:
         image_name = str(frame.get("image_name", "")).strip()
         if not image_name:
             continue
-        clarity_scores[image_name] = int(frame.get("clarity_score", 0) or 0)
+        frame_selection_scores[image_name] = int(frame.get("frame_selection_score", 0) or 0)
     for pair_row in pair_rows:
         pair_id = str(pair_row.get("pair_id", "")).strip()
         if not pair_id:
@@ -1382,7 +1382,7 @@ def _select_attachment_pair_cover_images(
             remaining_images,
             key=lambda image_name: (
                 len(image_to_pair_ids.get(image_name, set()) & uncovered),
-                clarity_scores.get(image_name, 0),
+                frame_selection_scores.get(image_name, 0),
                 image_name,
             ),
         )
@@ -1682,32 +1682,24 @@ def _run_in_thread_pool(
 
 def _frame_prompt() -> str:
     return (
-        "You are judging only the perceived visual clarity of this image as a human viewer would. "
-        "Look at the full image and decide whether it appears clear overall at normal viewing size. "
-        "Ignore scene semantics, downstream task usefulness, and object categories. "
-        "Focus only on whether the image looks visually clear or blurry overall. "
-        "Slight softness is acceptable. "
-        "Mark clear=true if a human would naturally consider the image clear overall. "
-        "Mark clear=false if the image has obvious blur, defocus, motion blur, or strong softness that makes the scene look unclear overall. "
-        "Return a clarity_score from 0 to 100, where higher means clearer and sharper. "
-        'Answer with strict JSON only: {"clear": true, "clarity_score": 82, "reason": "overall clear with slight softness"}'
+        "You are given one original scene image. "
+        "Decide whether this frame is usable for object-level visual spatial-reasoning questions. "
+        "A usable frame should allow several scene objects to be recognized and referred to reliably from the image alone. "
+        "Reject frames that are too blurry, too dark, too unclear, or where most candidate objects are hard to identify or distinguish. "
+        'Answer with strict JSON only: {"frame_usable": true, "reason": "clear_scene"}'
     )
 
 
 def _frame_batch_prompt(image_names: list[str]) -> str:
     rendered_names = ", ".join(json.dumps(str(name), ensure_ascii=False) for name in image_names)
     return (
-        "You are judging only the perceived visual clarity of each image as a human viewer would. "
-        "Look at each full image independently and decide whether it appears clear overall at normal viewing size. "
-        "Ignore scene semantics, downstream task usefulness, and object categories. "
-        "Focus only on whether each image looks visually clear or blurry overall. "
-        "Slight softness is acceptable. "
-        "Mark clear=true for an image if a human would naturally consider that image clear overall. "
-        "Mark clear=false if that image has obvious blur, defocus, motion blur, or strong softness that makes the scene look unclear overall. "
-        "Return a clarity_score from 0 to 100 for each image, where higher means clearer and sharper. "
+        "You are given multiple original scene images. "
+        "For each image independently, decide whether that frame is usable for object-level visual spatial-reasoning questions. "
+        "A usable frame should allow several scene objects to be recognized and referred to reliably from the image alone. "
+        "Reject frames that are too blurry, too dark, too unclear, or where most candidate objects are hard to identify or distinguish. "
         "You will receive image_name text before each image. "
         f"Return exactly one result for each of these image_name values: {rendered_names}. "
-        'Answer with strict JSON only using this schema: {"images":[{"image_name":"000001.jpg","clear":true,"clarity_score":82,"reason":"overall clear with slight softness"}]}'
+        'Answer with strict JSON only using this schema: {"images":[{"image_name":"000001.jpg","frame_usable":true,"reason":"clear_scene"}]}'
     )
 
 
@@ -2424,13 +2416,16 @@ def _legacy_frame_clear(parsed: dict[str, Any]) -> bool:
 
 def _normalize_frame_review(value: dict[str, Any] | None) -> dict[str, Any]:
     parsed = value if isinstance(value, dict) else {}
-    clear = _coerce_bool(parsed.get("clear"), default=_legacy_frame_clear(parsed))
+    frame_usable = _legacy_frame_clear(parsed)
+    if "clear" in parsed and "frame_usable" not in parsed:
+        frame_usable = _coerce_bool(parsed.get("clear"), default=frame_usable)
+    clear = _coerce_bool(parsed.get("clear"), default=frame_usable)
     clarity_score = _normalize_clarity_score(parsed.get("clarity_score"), default=60)
     normalized = {
         "clear": clear,
         "clarity_score": clarity_score,
-        "frame_usable": clear,
-        "reason": str(parsed.get("reason", "")).strip() or "frame_clarity_parse_fallback",
+        "frame_usable": frame_usable,
+        "reason": str(parsed.get("reason", "")).strip() or "frame_usable_parse_fallback",
     }
     brisque_score = _normalize_optional_float(parsed.get("brisque_score"))
     brisque_input_width = _normalize_optional_int(parsed.get("brisque_input_width"))
@@ -2464,7 +2459,12 @@ def _normalize_frame_batch_item(
     image_name = str(value.get("image_name", "") or "").strip()
     if not image_name or image_name not in expected_image_names:
         return None
-    if "clear" not in value or "clarity_score" not in value or "reason" not in value:
+    if (
+        "frame_usable" not in value
+        and "clear" not in value
+        and "usable_for_spatial_reasoning" not in value
+        and "severely_out_of_focus" not in value
+    ):
         return None
     return image_name, _normalize_frame_review(value)
 
@@ -3154,10 +3154,7 @@ def _select_attachment_group_representatives(
             if not isinstance(frame, dict):
                 return None
             frame_info = reviewed_frame.get("frame_info", {})
-            if (
-                not bool(frame_info.get("frame_usable", True))
-                or int(frame_info.get("clarity_score", 0) or 0) < int(attachment_clarity_min_score)
-            ):
+            if not bool(frame_info.get("frame_usable", True)):
                 return None
             combined = dict(reviewed_frame)
             combined["attachment_view_group_id"] = group_id
@@ -3422,7 +3419,6 @@ def _build_attachment_pair_salvage_scene_review(
         clarity_pass_frames: list[dict[str, Any]] = []
         clarity_pass_image_names: list[str] = []
         frame_records_by_image_name: dict[str, dict[str, Any]] = {}
-        clarity_min_score = int(attachment_clarity_min_score)
 
         def _stop_on_reviewed_frame(
             scored_frame: dict[str, Any],
@@ -3432,10 +3428,7 @@ def _build_attachment_pair_salvage_scene_review(
             if not isinstance(frame, dict):
                 return None
             frame_info = reviewed_frame.get("frame_info", {})
-            if (
-                not bool(frame_info.get("frame_usable", True))
-                or int(frame_info.get("clarity_score", 0) or 0) < clarity_min_score
-            ):
+            if not bool(frame_info.get("frame_usable", True)):
                 return None
             image_name = str(scored_frame.get("image_name", "")).strip()
             entry = None
@@ -3452,6 +3445,13 @@ def _build_attachment_pair_salvage_scene_review(
                 "image_name": image_name,
                 "image_stem": _image_name_stem(image_name),
                 "clarity_score": int(frame_info.get("clarity_score", 0) or 0),
+                "frame_selection_score": int(
+                    reviewed_frame.get(
+                        "frame_selection_score",
+                        frame.get("selector_score", frame.get("score", frame.get("n_visible", 0))),
+                    )
+                    or 0
+                ),
                 "frame_info": dict(frame_info),
                 "entry": dict(entry) if isinstance(entry, dict) else None,
             }
@@ -4475,7 +4475,6 @@ def _select_non_attachment_group_representatives(
             color_dir=color_dir,
         )
         ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
-        clarity_min_score = int(non_attachment_clarity_min_score)
         referable_object_ids_by_image_name: dict[str, list[int]] = {}
         accepted_frames_by_image_name: dict[str, dict[str, Any]] = {}
         accepted_image_names: set[str] = set()
@@ -4488,10 +4487,7 @@ def _select_non_attachment_group_representatives(
             if not isinstance(frame, dict):
                 return None
             frame_info = reviewed_frame.get("frame_info", {})
-            if (
-                not bool(frame_info.get("frame_usable", True))
-                or int(frame_info.get("clarity_score", 0) or 0) < clarity_min_score
-            ):
+            if not bool(frame_info.get("frame_usable", True)):
                 return None
             image_name = str(scored_frame.get("image_name", "")).strip()
             referable_entry = None
@@ -4575,8 +4571,6 @@ def _select_non_attachment_group_representatives(
                     attempt["frame_selection_score"] = int(reviewed_frame.get("frame_selection_score", 0) or 0)
                     if not frame_usable:
                         attempt["review_status"] = "frame_not_usable"
-                    elif clarity_score < clarity_min_score:
-                        attempt["review_status"] = "below_clarity_threshold"
                     else:
                         referable_object_ids = referable_object_ids_by_image_name.get(image_name, [])
                         accepted_for_group = image_name in accepted_image_names
@@ -4586,7 +4580,7 @@ def _select_non_attachment_group_representatives(
                         attempt["review_status"] = (
                             "accepted_for_group"
                             if accepted_for_group
-                            else "clarity_pass_not_referable"
+                            else "frame_usable_not_referable"
                         )
                         if accepted_for_group and image_name == early_stop_image_name:
                             attempt["stop_after_this_frame"] = True
@@ -4604,12 +4598,6 @@ def _select_non_attachment_group_representatives(
                 .get("frame_info", {})
                 .get("frame_usable", True)
             )
-            and int(
-                reviewed_by_image_name[str(item.get("image_name", "")).strip()]
-                .get("frame_info", {})
-                .get("clarity_score", 0)
-                or 0
-            ) >= clarity_min_score
         ]
         referability_shortlist_image_names = list(clarity_batch_image_names)
 
@@ -4620,9 +4608,9 @@ def _select_non_attachment_group_representatives(
             if isinstance(accepted_frame, dict):
                 accepted.append(accepted_frame)
         elif not clarity_eligible_image_names:
-            stop_reason = "no_clarity_eligible_frames"
+            stop_reason = "no_usable_frames"
         else:
-            stop_reason = "exhausted_clarity_eligible_frames"
+            stop_reason = "exhausted_usable_frames"
         return {
             "group_index": int(group_index),
             "group_key_visible_object_ids": [int(obj_id) for obj_id in group_key],
@@ -4814,9 +4802,8 @@ def _frame_decision(
 ) -> dict[str, Any]:
     full_b64 = str(image_b64 or "") or _image_to_base64(image)
     default = {
-        "clear": True,
-        "clarity_score": 60,
-        "reason": "frame_clarity_parse_fallback",
+        "frame_usable": True,
+        "reason": "frame_usable_parse_fallback",
     }
     parsed, _raw_text = _call_vlm_json(
         client,
@@ -7762,7 +7749,7 @@ def _select_and_rerank_frames(
 
     def _sort_key(entry: dict[str, Any]) -> tuple[int, str]:
         return (
-            -int(entry.get("frame_info", {}).get("clarity_score", 0) or 0),
+            -int(entry.get("frame_selection_score", 0) or 0),
             str(entry.get("image_name", "")),
         )
 
@@ -7864,7 +7851,7 @@ def _select_and_rerank_frames(
         )
     if reranked:
         logger.info(
-            "VLM non-attachment group filtering for %d geometric frame candidates after reviewing %d/%d visible-object groups in %s: %d accepted frame(s) meeting bbox_in_frame_ratio >= %.2f with at least %d referable objects (best clarity=%d)",
+            "VLM non-attachment group filtering for %d geometric frame candidates after reviewing %d/%d visible-object groups in %s: %d accepted frame(s) meeting bbox_in_frame_ratio >= %.2f with at least %d referable objects (best selection score=%d)",
             len(frame_candidates),
             processed_group_count,
             group_count,
@@ -7872,7 +7859,7 @@ def _select_and_rerank_frames(
             accepted_frame_count,
             REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
             NON_ATTACHMENT_GROUP_MIN_REFERABLE_OBJECT_COUNT,
-            int(reranked[0].get("frame_info", {}).get("clarity_score", 0)),
+            int(reranked[0].get("frame_selection_score", 0) or 0),
         )
     elif processed_group_count < group_count:
         logger.info(
@@ -7961,13 +7948,13 @@ def main():
         "--non_attachment_clarity_min_score",
         type=int,
         default=DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
-        help="Clarity early-stop threshold for non-attachment groups; the first BRISQUE-ordered usable frame at or above this score is selected for referability review",
+        help="Legacy compatibility flag; retained for older scripts but ignored by the current frame-usable VLM review path",
     )
     parser.add_argument(
         "--attachment_clarity_min_score",
         type=int,
         default=DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
-        help="Clarity early-stop threshold for attachment groups; the first BRISQUE-ordered usable frame at or above this score is selected for attachment review",
+        help="Legacy compatibility flag; retained for older scripts but ignored by the current frame-usable VLM review path",
     )
     parser.add_argument(
         "--scene_workers", type=int, default=1,
@@ -8045,10 +8032,6 @@ def main():
         parser.error("--frame_clarity_batch_size must be >= 1")
     if int(args.non_attachment_referability_shortlist) <= 0:
         parser.error("--non_attachment_referability_shortlist must be >= 1")
-    if int(args.non_attachment_clarity_min_score) <= 0:
-        parser.error("--non_attachment_clarity_min_score must be >= 1")
-    if int(args.attachment_clarity_min_score) <= 0:
-        parser.error("--attachment_clarity_min_score must be >= 1")
     if int(args.scene_workers) <= 0:
         parser.error("--scene_workers must be >= 1")
 

@@ -908,24 +908,18 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(referable_ids, [1])
 
-    def test_normalize_frame_review_uses_clear_output_for_frame_gate(self) -> None:
+    def test_normalize_frame_review_uses_frame_usable_output_for_frame_gate(self) -> None:
         normalized = referability_module._normalize_frame_review(
             {
-                "clear": False,
-                "clarity_score": 28,
+                "frame_usable": False,
                 "reason": "obviously blurry overall",
             }
         )
 
-        self.assertEqual(
-            normalized,
-            {
-                "clear": False,
-                "clarity_score": 28,
-                "frame_usable": False,
-                "reason": "obviously blurry overall",
-            },
-        )
+        self.assertEqual(normalized["clear"], False)
+        self.assertEqual(normalized["frame_usable"], False)
+        self.assertEqual(normalized["clarity_score"], 60)
+        self.assertEqual(normalized["reason"], "obviously blurry overall")
 
     def test_normalize_frame_review_accepts_legacy_frame_quality_fields(self) -> None:
         normalized = referability_module._normalize_frame_review(
@@ -948,8 +942,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ]
         parsed = {
             "images": [
-                {"image_name": "000002.jpg", "clear": False, "clarity_score": 41, "reason": "blurred"},
-                {"image_name": "000001.jpg", "clear": True, "clarity_score": 83, "reason": "clear"},
+                {"image_name": "000002.jpg", "frame_usable": False, "reason": "blurred"},
+                {"image_name": "000001.jpg", "frame_usable": True, "reason": "clear_scene"},
             ]
         }
 
@@ -965,7 +959,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         single_mock.assert_not_called()
         self.assertEqual(sorted(batch_results.keys()), ["000001.jpg", "000002.jpg"])
-        self.assertEqual(batch_results["000001.jpg"]["clarity_score"], 83)
+        self.assertEqual(batch_results["000001.jpg"]["frame_usable"], True)
+        self.assertEqual(batch_results["000001.jpg"]["reason"], "clear_scene")
         self.assertEqual(batch_results["000002.jpg"]["frame_usable"], False)
 
     def test_frame_decision_batch_falls_back_only_for_missing_items(self) -> None:
@@ -975,7 +970,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         ]
         parsed = {
             "images": [
-                {"image_name": "000001.jpg", "clear": True, "clarity_score": 82, "reason": "clear"},
+                {"image_name": "000001.jpg", "frame_usable": True, "reason": "clear_scene"},
             ]
         }
 
@@ -985,8 +980,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_frame_decision",
                 return_value={
-                    "clear": True,
-                    "clarity_score": 77,
                     "frame_usable": True,
                     "reason": "single fallback",
                 },
@@ -999,8 +992,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(single_mock.call_count, 1)
-        self.assertEqual(batch_results["000001.jpg"]["clarity_score"], 82)
-        self.assertEqual(batch_results["000002.jpg"]["clarity_score"], 77)
+        self.assertEqual(batch_results["000001.jpg"]["frame_usable"], True)
+        self.assertEqual(batch_results["000001.jpg"]["reason"], "clear_scene")
+        self.assertEqual(batch_results["000002.jpg"]["reason"], "single fallback")
 
     def test_frame_decision_batch_falls_back_when_batch_parse_fails(self) -> None:
         batch_items = [
@@ -1015,14 +1009,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "_frame_decision",
                 side_effect=[
                     {
-                        "clear": True,
-                        "clarity_score": 74,
                         "frame_usable": True,
                         "reason": "fallback one",
                     },
                     {
-                        "clear": False,
-                        "clarity_score": 38,
                         "frame_usable": False,
                         "reason": "fallback two",
                     },
@@ -1036,7 +1026,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(single_mock.call_count, 2)
-        self.assertEqual(batch_results["000001.jpg"]["clarity_score"], 74)
+        self.assertEqual(batch_results["000001.jpg"]["reason"], "fallback one")
         self.assertEqual(batch_results["000002.jpg"]["frame_usable"], False)
 
     def test_full_frame_label_vlm_review_maps_count_to_label_status(self) -> None:
@@ -2491,7 +2481,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             {"selected_for_final_cache": True, "selection_rank": 0},
         )
 
-    def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_clarity_score(self) -> None:
+    def test_select_and_rerank_frames_filters_unusable_frames_then_prefers_selector_score(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2, 3]},
             {"image_name": "000030.jpg", "score": 9, "n_visible": 3, "visible_object_ids": [4, 5]},
@@ -2543,10 +2533,9 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 max_frames=2,
             )
 
-        self.assertEqual([entry["image_name"] for entry in selected], ["000060.jpg"])
+        self.assertEqual([entry["image_name"] for entry in selected], ["000030.jpg", "000060.jpg"])
         self.assertTrue(all(entry["frame_info"]["frame_usable"] for entry in selected))
-        self.assertEqual([entry["frame_info"]["clarity_score"] for entry in selected], [95])
-        self.assertEqual(selected[0]["frame_selection_score"], 100007)
+        self.assertEqual([entry["frame_selection_score"] for entry in selected], [100009, 100007])
 
     def test_select_and_rerank_frames_keeps_group_input_order_before_clarity_review(self) -> None:
         frame_candidates = [
@@ -2946,7 +2935,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(batch_inputs, [["000020.jpg", "000040.jpg", "000010.jpg", "000000.jpg", "000030.jpg"]])
-        self.assertEqual(build_calls, ["000010.jpg"])
+        self.assertEqual(build_calls, ["000020.jpg", "000040.jpg", "000010.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg"])
         self.assertEqual(debug_output["non_attachment_bbox_in_frame_ratio_min"], 0.7)
         self.assertEqual(debug_output["non_attachment_min_referable_object_count"], 2)
@@ -2958,7 +2947,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(debug_output["groups"][0]["non_attachment_min_referable_object_count"], 2)
         self.assertEqual(
             debug_output["groups"][0]["clarity_eligible_image_names"],
-            ["000010.jpg"],
+            ["000020.jpg", "000040.jpg", "000010.jpg"],
         )
         self.assertEqual(debug_output["groups"][0]["early_stop_image_name"], "000010.jpg")
         self.assertEqual(
@@ -2966,7 +2955,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "accepted_frame_has_min_referable_objects",
         )
 
-    def test_select_and_rerank_frames_non_attachment_continues_after_clarity_pass_not_referable(self) -> None:
+    def test_select_and_rerank_frames_non_attachment_continues_after_usable_not_referable(self) -> None:
         frame_candidates = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 5, "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 5, "visible_object_ids": [2, 1]},
@@ -3016,10 +3005,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(
             [attempt["review_status"] for attempt in group["attempts"]],
             [
-                "clarity_pass_not_referable",
-                "clarity_pass_not_referable",
-                "clarity_pass_not_referable",
-                "clarity_pass_not_referable",
+                "frame_usable_not_referable",
+                "frame_usable_not_referable",
+                "frame_usable_not_referable",
+                "frame_usable_not_referable",
             ],
         )
 
@@ -3470,7 +3459,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
         self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [0])
 
-    def test_select_attachment_group_representatives_continues_after_clarity_pass_nonreferable_pair(self) -> None:
+    def test_select_attachment_group_representatives_continues_after_usable_nonreferable_pair(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 3, "visible_object_ids": [1, 2, 9]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 3, "visible_object_ids": [9, 1, 2]},
@@ -3518,6 +3507,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
             def build_entry(frame: dict, reviewed_frame: dict) -> dict:
                 build_calls.append(frame["image_name"])
+                if frame["image_name"] == "000000.jpg":
+                    return {"attachment_referable_object_ids": [1]}
                 if frame["image_name"] == "000010.jpg":
                     return {"attachment_referable_object_ids": [1]}
                 if frame["image_name"] == "000020.jpg":
@@ -3539,10 +3530,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(frame_decision_mock.call_count, 3)
-        self.assertEqual(build_calls, ["000010.jpg", "000020.jpg"])
+        self.assertEqual(build_calls, ["000000.jpg", "000010.jpg", "000020.jpg"])
         self.assertEqual([entry["image_name"] for entry in selected], ["000020.jpg"])
 
-    def test_select_attachment_group_representatives_skips_groups_without_clear_pair_frame(self) -> None:
+    def test_select_attachment_group_representatives_skips_groups_without_referable_pair_frame(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 2, "visible_object_ids": [2, 1]},
@@ -3609,7 +3600,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(frame_decision_mock.call_count, 4)
-        self.assertEqual(build_calls, ["000020.jpg", "000030.jpg"])
+        self.assertEqual(build_calls, ["000000.jpg", "000010.jpg", "000020.jpg", "000030.jpg"])
         self.assertEqual(selected, [])
 
     def test_select_attachment_group_representatives_continues_later_groups_until_target_met(self) -> None:
@@ -3684,7 +3675,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual([entry["image_name"] for entry in selected], ["000010.jpg", "000020.jpg"])
         self.assertEqual([entry["attachment_view_group_id"] for entry in selected], [1, 2])
 
-    def test_select_attachment_group_representatives_accepts_frames_at_attachment_clarity_70(self) -> None:
+    def test_select_attachment_group_representatives_accepts_first_usable_attachment_frame(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "score": 19, "n_visible": 2, "visible_object_ids": [2, 1]},
@@ -3694,13 +3685,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "clear": True,
                 "clarity_score": 70,
                 "frame_usable": True,
-                "reason": "clear enough for attachment",
+                "reason": "usable_for_spatial_reasoning",
             },
             {
                 "clear": True,
                 "clarity_score": 69,
                 "frame_usable": True,
-                "reason": "below attachment threshold",
+                "reason": "also usable but not reached",
             },
         ]
 
@@ -3728,6 +3719,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 frames=frames,
                 attachment_graph={1: [2]},
                 attachment_entry_builder=lambda frame, reviewed_frame: {"attachment_referable_object_ids": [1, 2]},
+                max_accepted_frame_count=1,
             )
 
         self.assertEqual([entry["image_name"] for entry in selected], ["000000.jpg"])
@@ -5233,6 +5225,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "--max_frames",
                 "2",
                 "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
             ]),
         ):
             referability_module.main()
