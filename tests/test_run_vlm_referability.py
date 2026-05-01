@@ -1031,9 +1031,24 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
     def test_full_frame_label_vlm_review_maps_count_to_label_status(self) -> None:
         cases = [
-            ({"count": 0, "status": "absent", "reason": "no visible chair"}, "absent", 0, "no visible chair"),
-            ({"count": 1, "status": "unique", "reason": "exactly one chair"}, "unique", 1, "exactly one chair"),
-            ({"count": 3, "status": "multiple", "reason": "three chairs visible"}, "multiple", 3, "three chairs visible"),
+            (
+                {"results": [{"label": "chair", "count": 0, "status": "absent", "reason": "no visible chair"}]},
+                "absent",
+                0,
+                "no visible chair",
+            ),
+            (
+                {"results": [{"label": "chair", "count": 1, "status": "unique", "reason": "exactly one chair"}]},
+                "unique",
+                1,
+                "exactly one chair",
+            ),
+            (
+                {"results": [{"label": "chair", "count": 3, "status": "multiple", "reason": "three chairs visible"}]},
+                "multiple",
+                3,
+                "three chairs visible",
+            ),
         ]
 
         for parsed, expected_status, expected_count, expected_reason in cases:
@@ -1121,8 +1136,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_object_review_decision",
-                side_effect=[("absent", '{"status":"absent"}')],
+                "_object_review_decision_batch",
+                return_value=[("absent", '{"status":"absent"}')],
             ) as review_mock,
             patch.object(
                 referability_module,
@@ -1215,8 +1230,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_object_review_decision",
-                return_value=("clear", '{"status":"clear"}'),
+                "_object_review_decision_batch",
+                return_value=[("clear", '{"status":"clear"}')],
             ),
             patch.object(
                 referability_module,
@@ -1356,19 +1371,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_object_review_decision",
-                return_value=("clear", '{"status":"clear"}'),
+                "_object_review_decision_batch",
+                return_value=[("clear", '{"status":"clear"}')],
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_vlm_review",
-                return_value={
-                    "backend": "vlm",
-                    "count": 0,
-                    "status": "absent",
-                    "reason": "no visible shelves",
-                    "raw_response": None,
-                },
+                "_full_frame_label_vlm_review_batch",
+                return_value=[
+                    {
+                        "backend": "vlm",
+                        "label": "shelves",
+                        "count": 0,
+                        "status": "absent",
+                        "reason": "no visible shelves",
+                        "raw_response": None,
+                    }
+                ],
             ),
             patch.object(
                 referability_module,
@@ -1948,19 +1966,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_object_review_decision",
-                return_value=("clear", '{"status":"clear"}'),
+                "_object_review_decision_batch",
+                return_value=[("clear", '{"status":"clear"}')],
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_vlm_review",
-                return_value={
-                    "backend": "vlm",
-                    "count": 1,
-                    "status": "unique",
-                    "reason": "exactly one chair is visible",
-                    "raw_response": None,
-                },
+                "_full_frame_label_vlm_review_batch",
+                return_value=[
+                    {
+                        "backend": "vlm",
+                        "label": "chair",
+                        "count": 1,
+                        "status": "unique",
+                        "reason": "exactly one chair is visible",
+                        "raw_response": None,
+                    }
+                ],
             ),
             patch.object(
                 referability_module,
@@ -2016,19 +2037,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_object_review_decision",
-                return_value=("clear", '{"status":"clear"}'),
+                "_object_review_decision_batch",
+                return_value=[("clear", '{"status":"clear"}')],
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_vlm_review",
-                return_value={
-                    "backend": "vlm",
-                    "count": 1,
-                    "status": "unique",
-                    "reason": "exactly one chair is visible",
-                    "raw_response": None,
-                },
+                "_full_frame_label_vlm_review_batch",
+                return_value=[
+                    {
+                        "backend": "vlm",
+                        "label": "chair",
+                        "count": 1,
+                        "status": "unique",
+                        "reason": "exactly one chair is visible",
+                        "raw_response": None,
+                    }
+                ],
             ),
             patch.object(
                 referability_module,
@@ -2087,19 +2111,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "_object_review_decision",
-                return_value=("clear", '{"status":"clear"}'),
+                "_object_review_decision_batch",
+                return_value=[("clear", '{"status":"clear"}')],
             ),
             patch.object(
                 referability_module,
-                "_full_frame_label_vlm_review",
-                return_value={
-                    "backend": "vlm",
-                    "count": 1,
-                    "status": "unique",
-                    "reason": "exactly one chair is visible",
-                    "raw_response": None,
-                },
+                "_full_frame_label_vlm_review_batch",
+                return_value=[
+                    {
+                        "backend": "vlm",
+                        "label": "chair",
+                        "count": 1,
+                        "status": "unique",
+                        "reason": "exactly one chair is visible",
+                        "raw_response": None,
+                    }
+                ],
             ),
             patch.object(
                 referability_module,
