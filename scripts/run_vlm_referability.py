@@ -71,7 +71,8 @@ logger = logging.getLogger("vlm_referability")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 DEFAULT_VLM_MODEL = "Qwen2.5-VL-72B-Instruct"
 EXCLUDED_LABELS: set[str] = set()
-LABEL_BATCH_SIZE = 1
+LABEL_BATCH_SIZE = 4
+OBJECT_REVIEW_BATCH_SIZE = 4
 REFERABILITY_CACHE_VERSION = "20.0"
 REFERABILITY_BACKEND = "crop_vlm_with_mesh_ray"
 ATTACHMENT_REVIEW_VERSION = "1.0"
@@ -1041,6 +1042,28 @@ def _object_payload_object_ids(container: object) -> list[int]:
     return sorted(object_ids)
 
 
+def _geometry_signature_object_ids(
+    container: object,
+    *,
+    bbox_in_frame_ratio_min: float,
+    projected_area_px_min: float,
+) -> tuple[int, ...]:
+    candidate_object_ids = _object_payload_object_ids(container)
+    signature: list[int] = []
+    for obj_id in candidate_object_ids:
+        payload = _lookup_object_payload(container, int(obj_id))
+        if not isinstance(payload, dict):
+            continue
+        bbox_in_frame_ratio = _safe_float(payload.get("bbox_in_frame_ratio"), default=-1.0)
+        projected_area_px = _safe_float(payload.get("projected_area_px"), default=-1.0)
+        if bbox_in_frame_ratio < float(bbox_in_frame_ratio_min):
+            continue
+        if projected_area_px < float(projected_area_px_min):
+            continue
+        signature.append(int(obj_id))
+    return tuple(sorted(set(signature)))
+
+
 def _failed_referability_object_id_signature(
     entry: object,
     *,
@@ -1052,25 +1075,24 @@ def _failed_referability_object_id_signature(
 
     object_reviews = entry.get("object_reviews")
     visibility_audit_by_object_id = entry.get("visibility_audit_by_object_id")
-    candidate_object_ids = sorted(
-        set(_object_payload_object_ids(object_reviews))
-        | set(_object_payload_object_ids(visibility_audit_by_object_id))
+    return tuple(
+        sorted(
+            set(
+                _geometry_signature_object_ids(
+                    object_reviews,
+                    bbox_in_frame_ratio_min=bbox_in_frame_ratio_min,
+                    projected_area_px_min=projected_area_px_min,
+                )
+            )
+            | set(
+                _geometry_signature_object_ids(
+                    visibility_audit_by_object_id,
+                    bbox_in_frame_ratio_min=bbox_in_frame_ratio_min,
+                    projected_area_px_min=projected_area_px_min,
+                )
+            )
+        )
     )
-    signature: list[int] = []
-    for obj_id in candidate_object_ids:
-        payload = _lookup_object_payload(object_reviews, int(obj_id))
-        if not isinstance(payload, dict):
-            payload = _lookup_object_payload(visibility_audit_by_object_id, int(obj_id))
-        if not isinstance(payload, dict):
-            continue
-        bbox_in_frame_ratio = _safe_float(payload.get("bbox_in_frame_ratio"), default=-1.0)
-        projected_area_px = _safe_float(payload.get("projected_area_px"), default=-1.0)
-        if bbox_in_frame_ratio < float(bbox_in_frame_ratio_min):
-            continue
-        if projected_area_px < float(projected_area_px_min):
-            continue
-        signature.append(int(obj_id))
-    return tuple(sorted(set(signature)))
 
 
 def _normalize_attachment_pair_string_list(values: object) -> list[str]:
@@ -1774,6 +1796,19 @@ def _object_review_prompt(label: str) -> str:
     )
 
 
+def _object_review_batch_prompt(labels: list[str]) -> str:
+    items = "\n".join(
+        f'{index + 1}. {json.dumps(str(label), ensure_ascii=False)}'
+        for index, label in enumerate(labels)
+    )
+    return (
+        f"You will see a full scene image followed by {len(labels)} cropped regions.\n"
+        "For each numbered crop, decide if the labeled object is clearly and unambiguously visible.\n"
+        f"Labels:\n{items}\n"
+        'Reply with JSON only: {"results": [{"index": 1, "status": "clear|absent|unsure", "reason": "..."}]}'
+    )
+
+
 def _full_frame_label_count_prompt(label: str) -> str:
     return (
         "You are given one full scene image. "
@@ -1787,6 +1822,23 @@ def _full_frame_label_count_prompt(label: str) -> str:
         "If two or more are clearly visible, use the best exact integer count you can and status=multiple. "
         "If you cannot judge confidently, use status=unsure and count=null. "
         'Answer with strict JSON only using this schema: {"count": 1, "status": "unique", "reason": "short reason"}'
+    )
+
+
+def _full_frame_label_count_batch_prompt(normalized_labels: list[str]) -> str:
+    labels_str = ", ".join(json.dumps(str(label), ensure_ascii=False) for label in normalized_labels)
+    return (
+        "You are given one full scene image. "
+        "For each target label independently, count how many clearly identifiable instances are visible in the image. "
+        f"Objects to count: {labels_str}. "
+        "Count only objects that are visually present and identifiable in the image itself. "
+        "Do not infer hidden objects, off-screen objects, or objects that are too ambiguous to recognize. "
+        "If none are visible, use count=0 and status=absent. "
+        "If exactly one is clearly visible, use count=1 and status=unique. "
+        "If two or more are clearly visible, use the best exact integer count you can and status=multiple. "
+        "If you cannot judge confidently, use status=unsure and count=null. "
+        "Return exactly one result for each label above. "
+        'Reply with JSON only: {"results": [{"label": "...", "count": 1, "status": "unique", "reason": "short reason"}]}'
     )
 
 
@@ -4575,6 +4627,30 @@ def _select_non_attachment_group_representatives(
         accepted_image_names: set[str] = set()
         failed_signature_object_ids_by_image_name: dict[str, list[int]] = {}
         duplicate_failed_signature_image_names: set[str] = set()
+        skipped_before_clarity_duplicate_failed_signature_image_names: set[str] = set()
+        ordered_scored_frames_for_review: list[dict[str, Any]] = []
+        for scored_frame in ordered_scored_frames:
+            frame = scored_frame.get("frame")
+            if not isinstance(frame, dict):
+                ordered_scored_frames_for_review.append(scored_frame)
+                continue
+            image_name = str(scored_frame.get("image_name", "")).strip()
+            failed_signature_candidate = tuple(
+                _normalize_cached_object_ids(
+                    frame.get("failed_signature_candidate_object_ids")
+                )
+            )
+            if (
+                failed_signature_candidate
+                and failed_signature_candidate in scene_failed_signatures_seen
+            ):
+                skipped_before_clarity_duplicate_failed_signature_image_names.add(image_name)
+                duplicate_failed_signature_image_names.add(image_name)
+                failed_signature_object_ids_by_image_name[image_name] = list(
+                    failed_signature_candidate
+                )
+                continue
+            ordered_scored_frames_for_review.append(scored_frame)
 
         def _stop_on_reviewed_frame(
             scored_frame: dict[str, Any],
@@ -4608,9 +4684,6 @@ def _select_non_attachment_group_representatives(
                 )
                 if failed_signature:
                     failed_signature_object_ids_by_image_name[image_name] = list(failed_signature)
-                    if failed_signature in scene_failed_signatures_seen:
-                        duplicate_failed_signature_image_names.add(image_name)
-                        return None
                     scene_failed_signatures_seen.add(failed_signature)
                 return None
             accepted_image_names.add(image_name)
@@ -4622,7 +4695,7 @@ def _select_non_attachment_group_representatives(
             return "accepted_frame_has_min_referable_objects"
 
         review_result = _review_group_frames_until_stop(
-            ordered_scored_frames=ordered_scored_frames,
+            ordered_scored_frames=ordered_scored_frames_for_review,
             client=client,
             model_name=model_name,
             color_dir=color_dir,
@@ -4637,7 +4710,7 @@ def _select_non_attachment_group_representatives(
         early_stop_reason = review_result["early_stop_reason"]
         clarity_batch_image_names = [
             str(item.get("image_name", "")).strip()
-            for item in ordered_scored_frames
+            for item in ordered_scored_frames_for_review
             if str(item.get("image_name", "")).strip()
         ]
         attempts_by_image_name: dict[str, dict[str, Any]] = {}
@@ -4668,7 +4741,15 @@ def _select_non_attachment_group_representatives(
                 "brisque_input_height": scored_frame.get("brisque_input_height"),
             }
             reviewed_frame = reviewed_by_image_name.get(image_name)
-            if image_name in reviewed_name_set:
+            if image_name in skipped_before_clarity_duplicate_failed_signature_image_names:
+                attempt["review_status"] = (
+                    "skipped_before_clarity_duplicate_failed_signature"
+                )
+                attempt["failed_signature_object_ids"] = list(
+                    failed_signature_object_ids_by_image_name.get(image_name, [])
+                )
+                attempt["duplicate_failed_signature_skip"] = True
+            elif image_name in reviewed_name_set:
                 if not isinstance(reviewed_frame, dict):
                     attempt["review_status"] = "review_failed_or_missing_image"
                 else:
@@ -4710,7 +4791,7 @@ def _select_non_attachment_group_representatives(
 
         clarity_eligible_image_names = [
             str(item.get("image_name", "")).strip()
-            for item in ordered_scored_frames
+            for item in ordered_scored_frames_for_review
             if isinstance(reviewed_by_image_name.get(str(item.get("image_name", "")).strip()), dict)
             and bool(
                 reviewed_by_image_name[str(item.get("image_name", "")).strip()]
@@ -4957,6 +5038,61 @@ def _object_review_decision(
     return status, raw_text
 
 
+def _object_review_decision_batch(
+    client,
+    model: str,
+    image_b64: str,
+    crop_b64_list: list[str],
+    labels: list[str],
+) -> list[tuple[str, str]]:
+    """Evaluate multiple object crops in one VLM call."""
+    batch_size = min(len(crop_b64_list), len(labels))
+    if batch_size <= 0:
+        return []
+    content: list[dict[str, Any]] = [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+    ]
+    for crop_b64 in crop_b64_list[:batch_size]:
+        content.append(
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{crop_b64}"}}
+        )
+    content.append(
+        {"type": "text", "text": _object_review_batch_prompt(labels[:batch_size])}
+    )
+    parsed, raw_text = _call_vlm_json(
+        client,
+        model,
+        content,
+        default={"results": []},
+        max_tokens=min(512, 128 * max(1, batch_size)),
+    )
+    fallback_raw = raw_text or ""
+    results: list[tuple[str, str]] = [
+        (OBJECT_STATUS_UNSURE, fallback_raw)
+        for _ in range(batch_size)
+    ]
+    raw_items = parsed.get("results") if isinstance(parsed, dict) else None
+    if not isinstance(raw_items, list):
+        return results
+    seen_indices: set[int] = set()
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        raw_index = raw_item.get("index")
+        if isinstance(raw_index, bool) or raw_index is None:
+            continue
+        try:
+            item_index = int(raw_index) - 1
+        except (TypeError, ValueError):
+            continue
+        if item_index < 0 or item_index >= batch_size or item_index in seen_indices:
+            continue
+        seen_indices.add(item_index)
+        status = _normalize_object_review_status(raw_item.get("status")) or OBJECT_STATUS_UNSURE
+        results[item_index] = (status, json.dumps(raw_item, ensure_ascii=False))
+    return results
+
+
 def _full_frame_label_vlm_review(
     *,
     client,
@@ -4964,52 +5100,106 @@ def _full_frame_label_vlm_review(
     image_b64: str,
     label: str,
 ) -> dict[str, Any]:
+    batch_reviews = _full_frame_label_vlm_review_batch(
+        client=client,
+        model=model,
+        image_b64=image_b64,
+        labels=[label],
+    )
+    if batch_reviews:
+        return batch_reviews[0]
     normalized_label = str(label or "").strip().lower()
-    review = {
+    return {
         "backend": "vlm",
         "label": normalized_label,
         "status": LABEL_STATUS_UNSURE,
         "count": None,
-        "reason": "pending",
+        "reason": "missing_label" if not normalized_label else "parse_fallback",
         "raw_response": None,
     }
-    if not normalized_label:
-        review["reason"] = "missing_label"
-        return review
 
-    default = {
-        "count": None,
-        "status": LABEL_STATUS_UNSURE,
-        "reason": "parse_fallback",
-    }
+
+def _full_frame_label_vlm_review_batch(
+    *,
+    client,
+    model: str,
+    image_b64: str,
+    labels: list[str],
+) -> list[dict[str, Any]]:
+    """Evaluate multiple labels in a single VLM call."""
+
+    def _default_review(normalized_label: str, *, reason: str) -> dict[str, Any]:
+        return {
+            "backend": "vlm",
+            "label": normalized_label,
+            "status": LABEL_STATUS_UNSURE,
+            "count": None,
+            "reason": reason,
+            "raw_response": None,
+        }
+
+    normalized_labels = [str(label or "").strip().lower() for label in labels]
+    reviews = [
+        _default_review(normalized_label, reason="missing_label" if not normalized_label else "pending")
+        for normalized_label in normalized_labels
+    ]
+    expected_labels = [normalized_label for normalized_label in normalized_labels if normalized_label]
+    if not expected_labels:
+        return reviews
+
     parsed, raw_text = _call_vlm_json(
         client,
         model,
         [
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            {"type": "text", "text": _full_frame_label_count_prompt(normalized_label)},
+            {"type": "text", "text": _full_frame_label_count_batch_prompt(expected_labels)},
         ],
-        default=default,
-        max_tokens=128,
+        default={"results": []},
+        max_tokens=128 * max(1, len(expected_labels)),
     )
-    count = _normalize_full_frame_label_count(
-        parsed.get("count", parsed.get("visible_count", parsed.get("label_count")))
-    )
-    status = (
-        _normalize_full_frame_label_status(parsed.get("status"), count=count)
-        or LABEL_STATUS_UNSURE
-    )
-    reason = str(parsed.get("reason", "")).strip() or "parse_fallback"
 
-    review.update(
-        {
-            "status": status,
-            "count": count,
-            "reason": reason,
-            "raw_response": raw_text or None,
-        }
-    )
-    return review
+    raw_items = parsed.get("results") if isinstance(parsed, dict) else None
+    parsed_by_label: dict[str, list[dict[str, Any]]] = {}
+    if isinstance(raw_items, list):
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            item_label = str(raw_item.get("label", "")).strip().lower()
+            if not item_label:
+                continue
+            parsed_by_label.setdefault(item_label, []).append(raw_item)
+
+    consumed_by_label: dict[str, int] = {}
+    for index, normalized_label in enumerate(normalized_labels):
+        if not normalized_label:
+            continue
+        label_items = parsed_by_label.get(normalized_label, [])
+        item_index = consumed_by_label.get(normalized_label, 0)
+        if item_index >= len(label_items):
+            reviews[index]["reason"] = "parse_fallback"
+            reviews[index]["raw_response"] = raw_text or None
+            continue
+        consumed_by_label[normalized_label] = item_index + 1
+
+        parsed_item = label_items[item_index]
+        count = _normalize_full_frame_label_count(
+            parsed_item.get("count", parsed_item.get("visible_count", parsed_item.get("label_count")))
+        )
+        status = (
+            _normalize_full_frame_label_status(parsed_item.get("status"), count=count)
+            or LABEL_STATUS_UNSURE
+        )
+        reason = str(parsed_item.get("reason", "")).strip() or "parse_fallback"
+        reviews[index].update(
+            {
+                "status": status,
+                "count": count,
+                "reason": reason,
+                "raw_response": raw_text or None,
+            }
+        )
+
+    return reviews
 
 
 def _out_of_frame_label_vlm_review(
@@ -7082,26 +7272,38 @@ def _compute_frame_referability_entry(
                 continue
             object_reviews[int(obj_id)] = review
 
-        def _run_object_review_job(job: tuple[int, str, str, dict[str, Any]]) -> tuple[int, dict[str, Any]]:
-            obj_id, label, crop_b64, review = job
-            status, raw_response = _object_review_decision(
+        pending_object_review_batches = _chunk_list(
+            pending_object_review_jobs,
+            OBJECT_REVIEW_BATCH_SIZE,
+        )
+
+        def _run_object_review_batch(
+            batch: list[tuple[int, str, str, dict[str, Any]]],
+        ) -> list[tuple[int, dict[str, Any]]]:
+            if not batch:
+                return []
+            statuses = _object_review_decision_batch(
                 client,
                 model_name,
                 str(image_b64 or ""),
-                crop_b64,
-                label,
+                [str(crop_b64 or "") for _obj_id, _label, crop_b64, _review in batch],
+                [str(label or "") for _obj_id, label, _crop_b64, _review in batch],
             )
-            updated_review = dict(review)
-            updated_review["vlm_status"] = status
-            updated_review["raw_response"] = raw_response or None
-            return int(obj_id), updated_review
+            batch_results: list[tuple[int, dict[str, Any]]] = []
+            for (obj_id, _label, _crop_b64, review), (status, raw_response) in zip(batch, statuses):
+                updated_review = dict(review)
+                updated_review["vlm_status"] = status
+                updated_review["raw_response"] = raw_response or None
+                batch_results.append((int(obj_id), updated_review))
+            return batch_results
 
-        for obj_id, review in _run_in_thread_pool(
-            pending_object_review_jobs,
-            _run_object_review_job,
+        for batch_results in _run_in_thread_pool(
+            pending_object_review_batches,
+            _run_object_review_batch,
             max_workers=vlm_workers,
         ):
-            object_reviews[int(obj_id)] = review
+            for obj_id, review in batch_results:
+                object_reviews[int(obj_id)] = review
 
         crop_label_statuses, crop_label_counts, crop_referable_object_ids, crop_unique_label_object_ids = (
             _aggregate_crop_label_reviews(
@@ -7129,14 +7331,12 @@ def _compute_frame_referability_entry(
             if image_b64 is None:
                 image_b64 = _image_to_base64(image)
 
-            def _run_full_frame_label_review_job(item: tuple[str, int]) -> dict[str, Any]:
-                label, obj_id = item
-                vlm_review = _full_frame_label_vlm_review(
-                    client=client,
-                    model=model_name,
-                    image_b64=str(image_b64 or ""),
-                    label=label,
-                )
+            def _build_full_frame_label_review_payload(
+                *,
+                label: str,
+                obj_id: int,
+                vlm_review: dict[str, Any],
+            ) -> dict[str, Any]:
                 count = _normalize_full_frame_label_count(vlm_review.get("count"))
                 status = (
                     _normalize_full_frame_label_status(vlm_review.get("status"), count=count)
@@ -7162,13 +7362,37 @@ def _compute_frame_referability_entry(
                     "raw_response": vlm_review.get("raw_response"),
                 }
 
-            for review_payload in _run_in_thread_pool(
-                list(sorted(crop_unique_label_object_ids.items())),
-                _run_full_frame_label_review_job,
+            def _run_full_frame_label_review_batch_job(
+                batch_items: list[tuple[str, int]],
+            ) -> list[dict[str, Any]]:
+                batch_reviews = _full_frame_label_vlm_review_batch(
+                    client=client,
+                    model=model_name,
+                    image_b64=str(image_b64 or ""),
+                    labels=[label for label, _obj_id in batch_items],
+                )
+                review_payloads: list[dict[str, Any]] = []
+                for index, (label, obj_id) in enumerate(batch_items):
+                    vlm_review = batch_reviews[index] if index < len(batch_reviews) else {}
+                    review_payloads.append(
+                        _build_full_frame_label_review_payload(
+                            label=label,
+                            obj_id=obj_id,
+                            vlm_review=vlm_review,
+                        )
+                    )
+                return review_payloads
+
+            for batch_review_payloads in _run_in_thread_pool(
+                _chunk_list(list(sorted(crop_unique_label_object_ids.items())), LABEL_BATCH_SIZE),
+                _run_full_frame_label_review_batch_job,
                 max_workers=vlm_workers,
             ):
-                full_frame_label_reviews.append(review_payload)
-                full_frame_label_statuses[str(review_payload["label"])] = str(review_payload["status"])
+                for review_payload in batch_review_payloads:
+                    full_frame_label_reviews.append(review_payload)
+                    full_frame_label_statuses[str(review_payload["label"])] = str(
+                        review_payload["status"]
+                    )
 
         full_frame_label_statuses = dict(sorted(full_frame_label_statuses.items()))
         full_frame_label_counts = {
@@ -8969,10 +9193,21 @@ def main():
             if bool(frame.get("attachment_viewpoint_exempt"))
         ]
         non_attachment_candidate_frames = [
-            frame
+            dict(frame)
             for frame in frame_candidates
             if not bool(frame.get("attachment_viewpoint_exempt"))
         ]
+        for frame in non_attachment_candidate_frames:
+            image_name = str(frame.get("image_name", "")).strip()
+            visibility_by_obj_id = _get_scene_visibility_by_obj_id(image_name)
+            failed_signature_candidate = _geometry_signature_object_ids(
+                visibility_by_obj_id,
+                bbox_in_frame_ratio_min=REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+            )
+            frame["failed_signature_candidate_object_ids"] = list(
+                failed_signature_candidate
+            )
         non_attachment_group_count = _count_visible_object_frame_groups(
             non_attachment_candidate_frames,
             poses=poses,
