@@ -771,7 +771,6 @@ def main() -> None:
             depth_image=depth_image,
             depth_intrinsics=depth_intrinsics,
             instance_mesh_data=instance_mesh_data,
-            strict_mode=False,
         )
         topology_quality_by_obj_id = {
             int(obj_id): _compute_topology_quality_for_object(

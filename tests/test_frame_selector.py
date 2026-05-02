@@ -212,6 +212,41 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertNotIn("zbuffer_mask_area_px", meta)
         self.assertNotIn("has_zbuffer_mask_area", meta)
 
+    def test_compute_frame_object_visibility_preserves_non_strict_metadata_fields(self) -> None:
+        obj = make_object(1, "cup")
+
+        with (
+            patch.object(
+                frame_selector,
+                "project_to_image",
+                return_value=(np.array([320.0, 240.0], dtype=np.float64), 2.0),
+            ),
+            patch.object(frame_selector, "is_in_image", return_value=True),
+            patch.object(
+                frame_selector,
+                "_project_object_roi",
+                return_value={
+                    "valid_projection_count": 9,
+                    "bbox_in_frame_ratio": 0.9,
+                    "projected_area_px": 900.0,
+                    "edge_margin_px": 24.0,
+                    "roi_bounds": (0, 20, 0, 20),
+                },
+            ),
+            patch.object(frame_selector, "_compute_roi_sharpness", return_value=55.0),
+        ):
+            visibility = frame_selector.compute_frame_object_visibility(
+                [obj],
+                make_camera_pose("000000.jpg"),
+                make_camera_intrinsics(),
+            )
+
+        self.assertEqual(visibility[1]["rejection_reasons"], [])
+        self.assertTrue(visibility[1]["eligible_as_reference"])
+        self.assertTrue(visibility[1]["eligible_as_target"])
+        self.assertTrue(visibility[1]["label_unique_in_frame"])
+        self.assertEqual(visibility[1]["roi_bounds_px"], [0, 20, 0, 20])
+
     def test_count_well_cropped_visible_objects_uses_70_percent_threshold(self) -> None:
         visible = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 

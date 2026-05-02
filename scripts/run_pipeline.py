@@ -1542,7 +1542,6 @@ def _build_question_review_frame_context(
                 image_path=image_path,
                 depth_image=None,
                 depth_intrinsics=None,
-                strict_mode=False,
             )
             visibility_by_obj_id = {
                 int(obj_id): meta
@@ -2627,7 +2626,6 @@ def _build_visible_object_in_frame_ratio_map(
             image_path=None,
             depth_image=None,
             depth_intrinsics=None,
-            strict_mode=False,
         )
         for obj_id, meta in fallback_visibility.items():
             try:
@@ -2706,7 +2704,6 @@ def _build_visible_object_projected_area_map(
             image_path=None,
             depth_image=None,
             depth_intrinsics=None,
-            strict_mode=False,
         )
         for obj_id, meta in fallback_visibility.items():
             try:

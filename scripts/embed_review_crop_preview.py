@@ -499,7 +499,6 @@ def build_crop_map(
         image_path=image_path_for_visibility,
         depth_image=None,
         depth_intrinsics=None,
-        strict_mode=False,
     )
     crop_by_obj_id: dict[int, dict[str, object]] = {}
     src_width = int(getattr(color_intrinsics, "width", 0) or 0)

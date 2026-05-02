@@ -166,9 +166,9 @@ def zh_relation_value(value: Any) -> str:
 def zh_skip_reason(value: Any) -> str:
     mapping = {
         None: "正常生成",
-        "strict_mode_missing_depth": "strict_mode 跳过：缺少深度图",
-        "strict_mode_missing_color": "strict_mode 跳过：缺少彩色图或内参",
-        "strict_mode_too_few_objects": "strict_mode 跳过：严格可用物体少于 3 个",
+        "strict_mode_missing_depth": "旧版跳过原因：缺少深度图",
+        "strict_mode_missing_color": "旧版跳过原因：缺少彩色图或内参",
+        "strict_mode_too_few_objects": "旧版跳过原因：可用物体少于 3 个",
         "no_referable_objects_or_l1_candidates": "跳过：没有可指代物体，也没有 L1 候选",
         "missing_pose": "跳过：缺少 pose",
     }
@@ -718,7 +718,7 @@ def render_rejected_frames(rejected_frames: list[dict[str, str]]) -> str:
 def render_metric_notes() -> str:
     return """
 <section class="card"><h2>指标说明</h2>
-<div class="muted">页面默认只展示 VLM 通过帧；这里保留的是当前真实流程仍在使用的数据，而不是旧的 strict_mode 二次几何过滤结果。</div>
+<div class="muted">页面默认只展示 VLM 通过帧；这里保留的是当前真实流程仍在使用的数据，而不是旧版二次几何过滤结果。</div>
 <table><thead><tr><th>字段</th><th>含义</th></tr></thead><tbody>
 <tr><td>VLM候选</td><td>最前面的几何候选池，通常来自 referability cache 里的 candidate_visible_object_ids。</td></tr>
 <tr><td>VLM唯一</td><td>VLM 判断该标签在这一帧里可以稳定唯一指代，因此对象进入 referable_object_ids。</td></tr>
@@ -764,7 +764,7 @@ table{{width:100%;border-collapse:collapse}} th,td{{padding:8px 10px;border-bott
 pre{{background:#101722;color:#d7e0ea;padding:14px;border-radius:14px;overflow:auto}} ul{{margin:8px 0 0 18px}} details summary{{cursor:pointer;font-weight:700;margin-bottom:10px}} @media(max-width:1180px){{.metrics,.twocol{{grid-template-columns:1fr}}}}
 </style></head><body><div class="page">
 <section class="card"><h1>{h(scene_id)}</h1><div class="muted">主页面默认只显示 VLM 通过帧。页面优先读取 frame_debug/<scene_id>.json 的真实运行结果；如果没有，再回退到 viewer 现场重算。</div>
-<div class="metrics" style="margin-top:12px"><div class="metric"><div class="k">数据来源</div><div class="v">{h(source_mode)}</div><div class="s">{h(source_detail)}</div></div><div class="metric"><div class="k">展示帧数</div><div class="v">{len(frames)}</div><div class="s">VLM 拒绝帧={len(rejected_frames)}</div></div><div class="metric"><div class="k">题目统计</div><div class="v">{question_summary['total']}</div><div class="s">错题={question_summary['wrong']}</div></div><div class="metric"><div class="k">场景 attachment</div><div class="v">{len(scene_attachment_rows)}</div><div class="s">viewer 不再展示 strict_mode 二次过滤</div></div></div>
+<div class="metrics" style="margin-top:12px"><div class="metric"><div class="k">数据来源</div><div class="v">{h(source_mode)}</div><div class="s">{h(source_detail)}</div></div><div class="metric"><div class="k">展示帧数</div><div class="v">{len(frames)}</div><div class="s">VLM 拒绝帧={len(rejected_frames)}</div></div><div class="metric"><div class="k">题目统计</div><div class="v">{question_summary['total']}</div><div class="s">错题={question_summary['wrong']}</div></div><div class="metric"><div class="k">场景 attachment</div><div class="v">{len(scene_attachment_rows)}</div><div class="s">viewer 不再展示旧版二次过滤</div></div></div>
 <h3>Open3D 几何检查</h3><pre>{h(open3d_cmd)}</pre><h3>备注</h3><ul>{note_html}</ul><h3>帧索引</h3>{frame_nav or '<div class="muted">没有可展示的 VLM 通过帧。</div>'}</section>
 {render_rejected_frames(rejected_frames)}{render_metric_notes()}{frame_sections}
 <section class="card"><h2>全场景 attachment</h2>{render_attachment_table(scene_attachment_rows, "整个场景没有可用的 attachment 边。")}</section>

@@ -91,17 +91,6 @@ def passes_image_quality(image_path: Path) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-#  Strict visibility constants (used by compute_frame_object_visibility)
-# ---------------------------------------------------------------------------
-
-STRICT_VISIBLE_RATIO_MIN = 0.6
-STRICT_PROJECTED_AREA_MIN = 800.0
-STRICT_IN_FRAME_RATIO_MIN = 0.6
-STRICT_EDGE_MARGIN_MIN = 12.0
-STRICT_LOCAL_SHARPNESS_MIN = 45.0
-
-
 def _project_object_roi(
     obj: dict,
     pose: CameraPose,
@@ -194,7 +183,6 @@ def compute_frame_object_visibility(
     margin: int = 80,
     min_depth: float = 0.3,
     max_depth: float = 8.0,
-    strict_mode: bool = False,
 ) -> dict[int, dict[str, Any]]:
     """Compute per-object visibility metadata for a single frame."""
     from .utils.depth_occlusion import compute_depth_occlusion
@@ -270,25 +258,6 @@ def compute_frame_object_visibility(
         reasons: list[str] = []
         if not meta["center_in_frame"]:
             reasons.append("center_out_of_frame")
-        if strict_mode:
-            if depth_image is None or depth_intrinsics is None:
-                reasons.append("missing_depth")
-            elif meta["occlusion_status"] == "not visible":
-                reasons.append("depth_occluded")
-            elif meta["visible_ratio"] < STRICT_VISIBLE_RATIO_MIN:
-                reasons.append("low_visible_ratio")
-            if meta["projected_area_px"] < STRICT_PROJECTED_AREA_MIN:
-                reasons.append("small_projection")
-            if meta["bbox_in_frame_ratio"] < STRICT_IN_FRAME_RATIO_MIN:
-                reasons.append("bbox_cut_off")
-            if meta["edge_margin_px"] < STRICT_EDGE_MARGIN_MIN:
-                reasons.append("too_close_to_edge")
-            if meta["roi_sharpness"] is None:
-                reasons.append("missing_roi_sharpness")
-            elif meta["roi_sharpness"] < STRICT_LOCAL_SHARPNESS_MIN:
-                reasons.append("blurry_roi")
-            if not meta["label_unique_in_frame"]:
-                reasons.append("duplicate_label")
 
         meta["rejection_reasons"] = reasons
         meta["eligible_as_reference"] = len(reasons) == 0
