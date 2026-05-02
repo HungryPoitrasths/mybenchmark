@@ -11,6 +11,7 @@ corresponding camera pose in ``pose/<frame_id>.txt``.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +35,11 @@ logger = logging.getLogger(__name__)
 #  Image quality gate
 # ---------------------------------------------------------------------------
 
-# Coarse prefilter threshold for the geometric selector. Detailed image-quality
-# screening happens later in the VLM rerank stage.
-SHARPNESS_MIN = 100.0
-TENENGRAD_MIN = 16.0
+# Coarse prefilter thresholds for the geometric selector. Detailed image-
+# quality screening still happens later in the VLM rerank stage.
+QUALITY_STAGE1_DROP_FRACTION = 0.30
+QUALITY_STAGE2_LAPLACIAN_MIN = 80.0
+QUALITY_STAGE2_TENENGRAD_MIN = 12.0
 
 
 def _compute_laplacian_variance(gray_image: np.ndarray) -> float:
@@ -52,13 +54,149 @@ def _compute_tenengrad(gray_image: np.ndarray) -> float:
     return float(magnitude.mean())
 
 
-def passes_image_quality(image_path: Path) -> bool:
-    """Return True if the image passes the selector's coarse blur prefilter.
+def _read_image_quality_metrics(image_path: Path) -> dict[str, Any]:
+    """Read an image once and return the selector's coarse focus metrics."""
+    img = cv2.imread(str(image_path))
+    if img is None:
+        logger.debug("Cannot read image %s; excluding from quality filter", image_path)
+        return {
+            "readable": False,
+            "laplacian_variance": None,
+            "tenengrad": None,
+        }
 
-    The geometric selector should only remove obviously unusable blurry frames.
-    Fine-grained brightness/contrast quality is deferred to the later VLM
-    review so this stage stays recall-friendly.
-    """
+    # Downsample to 1/4 size for speed. These thresholds are calibrated for the
+    # reduced-resolution image and are not resolution-invariant.
+    small = cv2.resize(img, (0, 0), fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    denoised = cv2.GaussianBlur(gray, (3, 3), 0)
+    return {
+        "readable": True,
+        "laplacian_variance": _compute_laplacian_variance(denoised),
+        "tenengrad": _compute_tenengrad(denoised),
+    }
+
+
+def _passes_absolute_image_quality_gate(
+    laplacian_variance: float,
+    tenengrad: float,
+) -> bool:
+    return (
+        laplacian_variance >= QUALITY_STAGE2_LAPLACIAN_MIN
+        and tenengrad >= QUALITY_STAGE2_TENENGRAD_MIN
+    )
+
+
+def _assign_descending_ordinal_ranks(
+    frame_entries: list[dict[str, Any]],
+    *,
+    metric_key: str,
+    rank_key: str,
+) -> None:
+    ordered = sorted(
+        frame_entries,
+        key=lambda entry: (
+            -float(entry[metric_key]),
+            int(entry["sampled_index"]),
+        ),
+    )
+    for rank, entry in enumerate(ordered, start=1):
+        entry[rank_key] = rank
+
+
+def _filter_sampled_frames_by_quality(
+    sampled_frames: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    readable_frames: list[dict[str, Any]] = []
+    unreadable_count = 0
+    for entry in sampled_frames:
+        metrics = _read_image_quality_metrics(entry["image_path"])
+        if not bool(metrics.get("readable")):
+            unreadable_count += 1
+            continue
+        enriched_entry = dict(entry)
+        enriched_entry["laplacian_variance"] = float(metrics["laplacian_variance"])
+        enriched_entry["tenengrad"] = float(metrics["tenengrad"])
+        readable_frames.append(enriched_entry)
+
+    if not readable_frames:
+        return [], {
+            "unreadable_count": unreadable_count,
+            "stage1_rejected_count": 0,
+            "stage2_rejected_count": 0,
+            "final_quality_kept_count": 0,
+        }
+
+    _assign_descending_ordinal_ranks(
+        readable_frames,
+        metric_key="laplacian_variance",
+        rank_key="laplacian_rank",
+    )
+    _assign_descending_ordinal_ranks(
+        readable_frames,
+        metric_key="tenengrad",
+        rank_key="tenengrad_rank",
+    )
+    ranked_frames = sorted(
+        readable_frames,
+        key=lambda entry: (
+            int(entry["laplacian_rank"]) + int(entry["tenengrad_rank"]),
+            -float(entry["laplacian_variance"]),
+            -float(entry["tenengrad"]),
+            int(entry["sampled_index"]),
+        ),
+    )
+
+    stage1_rejected_count = math.floor(
+        QUALITY_STAGE1_DROP_FRACTION * len(readable_frames)
+    )
+    stage1_survivors = ranked_frames[: len(ranked_frames) - stage1_rejected_count]
+    stage1_survivors.sort(key=lambda entry: int(entry["sampled_index"]))
+
+    final_survivors: list[dict[str, Any]] = []
+    stage2_rejected_count = 0
+    for entry in stage1_survivors:
+        if _passes_absolute_image_quality_gate(
+            float(entry["laplacian_variance"]),
+            float(entry["tenengrad"]),
+        ):
+            final_survivors.append(entry)
+            continue
+        stage2_rejected_count += 1
+
+    return final_survivors, {
+        "unreadable_count": unreadable_count,
+        "stage1_rejected_count": stage1_rejected_count,
+        "stage2_rejected_count": stage2_rejected_count,
+        "final_quality_kept_count": len(final_survivors),
+    }
+
+
+def passes_image_quality(image_path: Path) -> bool:
+    """Return True if an image passes the selector's Stage-2 absolute gate."""
+    metrics = _read_image_quality_metrics(image_path)
+    if not bool(metrics.get("readable")):
+        return False
+
+    laplacian_var = float(metrics["laplacian_variance"])
+    if laplacian_var < QUALITY_STAGE2_LAPLACIAN_MIN:
+        logger.debug(
+            "Image %s too blurry (Laplacian var=%.1f < %.1f)",
+            image_path.name, laplacian_var, QUALITY_STAGE2_LAPLACIAN_MIN,
+        )
+        return False
+
+    tenengrad = float(metrics["tenengrad"])
+    if tenengrad < QUALITY_STAGE2_TENENGRAD_MIN:
+        logger.debug(
+            "Image %s too blurry (Tenengrad=%.1f < %.1f)",
+            image_path.name, tenengrad, QUALITY_STAGE2_TENENGRAD_MIN,
+        )
+        return False
+
+    return _passes_absolute_image_quality_gate(laplacian_var, tenengrad)
+
     img = cv2.imread(str(image_path))
     if img is None:
         logger.debug("Cannot read image %s — failing quality check", image_path)
@@ -678,7 +816,7 @@ def _frame_candidate_score(
     return base_score, base_score + attachment_pair_bonus
 
 
-def select_frames(
+def _legacy_select_frames(
     scene_path: str | Path,
     objects: list[dict],
     attachment_graph: dict[int, list[int]] | None = None,
@@ -928,6 +1066,262 @@ def select_frames(
                     int(s.get("attachment_pair_ge_50_count", 0) or 0) > 0
                 ),
                 "score":             s["score"],
+            }
+        )
+
+    logger.info(
+        "Selected %d frames for %s (top score=%d)",
+        len(results), scene_path.name,
+        results[0]["score"] if results else 0,
+    )
+    return results
+
+
+def select_frames(
+    scene_path: str | Path,
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]] | None = None,
+    max_frames: int = DEFAULT_MAX_FRAMES,
+    *,
+    keep_all_attachment_frames: bool = False,
+    non_attachment_limit: int | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
+    axis_alignment: np.ndarray | None = None,
+    poses: dict[str, CameraPose] | None = None,
+    instance_mesh_data: InstanceMeshData | None = None,
+    preloaded_geometry: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Select representative frames for a ScanNet scene."""
+    scene_path = Path(scene_path)
+
+    intrinsics = color_intrinsics
+    loaded_poses = poses
+    axis_align = axis_alignment
+    if intrinsics is None or loaded_poses is None:
+        intr_path = scene_path / "intrinsic" / "intrinsic_color.txt"
+        if not intr_path.exists():
+            intr_path = scene_path / "intrinsic_color.txt"
+        pose_dir = scene_path / "pose"
+        if (intrinsics is None and not intr_path.exists()) or (loaded_poses is None and not pose_dir.exists()):
+            logger.warning("Intrinsic or pose directory missing for %s", scene_path.name)
+            return []
+    if intrinsics is None:
+        intrinsics = load_scannet_intrinsics(scene_path)
+    if axis_align is None:
+        axis_align = load_axis_alignment(scene_path)
+    if loaded_poses is None:
+        loaded_poses = load_scannet_poses(scene_path, axis_alignment=axis_align)
+
+    if not loaded_poses:
+        logger.warning("No valid poses found for %s", scene_path.name)
+        return []
+
+    attachment_ids: set[int] = set()
+    if attachment_graph:
+        for parent_id, children in attachment_graph.items():
+            attachment_ids.add(int(parent_id))
+            attachment_ids.update(children)
+
+    color_dir = scene_path / "color"
+    n_sampled_frames = 0
+    n_missing_images = 0
+    sampled_frames: list[dict[str, Any]] = []
+    for i, (image_name, pose) in enumerate(loaded_poses.items()):
+        if i % FRAME_STRIDE != 0:
+            continue
+
+        n_sampled_frames += 1
+        image_path = color_dir / image_name
+        if not image_path.exists():
+            n_missing_images += 1
+            logger.debug("Missing color frame %s in %s", image_name, scene_path.name)
+            continue
+        sampled_frames.append(
+            {
+                "image_name": image_name,
+                "pose": pose,
+                "image_path": image_path,
+                "sampled_index": n_sampled_frames - 1,
+            }
+        )
+
+    quality_kept_frames, quality_stats = _filter_sampled_frames_by_quality(sampled_frames)
+    logger.info(
+        "Frame quality prefilter for %s: sampled=%d missing=%d unreadable=%d stage1_rejected=%d stage2_rejected=%d kept=%d",
+        scene_path.name,
+        n_sampled_frames,
+        n_missing_images,
+        int(quality_stats["unreadable_count"]),
+        int(quality_stats["stage1_rejected_count"]),
+        int(quality_stats["stage2_rejected_count"]),
+        int(quality_stats["final_quality_kept_count"]),
+    )
+
+    if n_missing_images:
+        logger.warning(
+            "Skipped %d frames with missing color images in %s",
+            n_missing_images, scene_path.name,
+        )
+
+    if not quality_kept_frames:
+        logger.warning("No quality-kept sampled frames in %s", scene_path.name)
+        return []
+
+    frame_entries: list[dict[str, Any]] = []
+    for quality_entry in quality_kept_frames:
+        image_name = str(quality_entry["image_name"])
+        pose = quality_entry["pose"]
+        visible_result = get_visible_objects(
+            objects,
+            pose,
+            intrinsics,
+            return_audits=True,
+        )
+        if (
+            isinstance(visible_result, tuple)
+            and len(visible_result) == 2
+            and isinstance(visible_result[1], dict)
+        ):
+            visible, visibility_audits_by_obj_id = visible_result
+        else:
+            visible = visible_result
+            visibility_audits_by_obj_id = {}
+        if len(visible) < MIN_VISIBLE_OBJECTS:
+            continue
+
+        n_attachment = _count_attachment_objects(visible, attachment_ids)
+        crop_ge_70_count = _count_well_cropped_visible_objects(
+            visible,
+            visibility_audits_by_obj_id=visibility_audits_by_obj_id,
+        )
+        visible_bbox_ge_70_count = _count_visible_objects_with_min_bbox_in_frame_ratio(
+            visible,
+            pose,
+            intrinsics,
+            bbox_in_frame_ratio_min=NON_ATTACHMENT_VISIBLE_BBOX_IN_FRAME_RATIO_MIN,
+            visibility_audits_by_obj_id=visibility_audits_by_obj_id,
+        )
+        attachment_pair_ge_50_count = _count_well_cropped_attachment_pairs(
+            visible,
+            attachment_graph,
+            visibility_audits_by_obj_id=visibility_audits_by_obj_id,
+        )
+        base_score, score = _frame_candidate_score(
+            n_visible=len(visible),
+            n_attachment=n_attachment,
+            crop_ge_70_count=crop_ge_70_count,
+            attachment_pair_ge_50_count=attachment_pair_ge_50_count,
+        )
+        frame_entries.append(
+            {
+                "image_name": image_name,
+                "pose": pose,
+                "visible_object_ids": [o["id"] for o in visible],
+                "n_visible": len(visible),
+                "base_score": base_score,
+                "crop_ge_70_count": crop_ge_70_count,
+                "visible_bbox_ge_70_count": visible_bbox_ge_70_count,
+                "attachment_pair_ge_50_count": attachment_pair_ge_50_count,
+                "score": score,
+            }
+        )
+
+    if not frame_entries:
+        logger.warning(
+            "No frames with >= %d visible objects in %s",
+            MIN_VISIBLE_OBJECTS, scene_path.name,
+        )
+        return []
+
+    attachment_entries = [
+        entry
+        for entry in frame_entries
+        if int(entry.get("attachment_pair_ge_50_count", 0) or 0) > 0
+    ]
+    non_attachment_candidates = [
+        entry
+        for entry in frame_entries
+        if int(entry.get("attachment_pair_ge_50_count", 0) or 0) <= 0
+    ]
+    preferred_non_attachment_entries = [
+        entry
+        for entry in non_attachment_candidates
+        if int(entry.get("visible_bbox_ge_70_count", 0) or 0)
+        >= NON_ATTACHMENT_MIN_VISIBLE_BBOX_COUNT
+    ]
+    non_attachment_entries = (
+        preferred_non_attachment_entries
+        if preferred_non_attachment_entries
+        else non_attachment_candidates
+    )
+    if preferred_non_attachment_entries:
+        logger.info(
+            "Restricting non-attachment frame selection for %s to %d/%d candidates with at least %d visible objects at bbox_in_frame_ratio >= %.2f",
+            scene_path.name,
+            len(preferred_non_attachment_entries),
+            len(non_attachment_candidates),
+            NON_ATTACHMENT_MIN_VISIBLE_BBOX_COUNT,
+            NON_ATTACHMENT_VISIBLE_BBOX_IN_FRAME_RATIO_MIN,
+        )
+
+    attachment_entries.sort(
+        key=lambda e: (
+            int(e.get("score", 0) or 0),
+            int(e.get("crop_ge_70_count", 0) or 0),
+        ),
+        reverse=True,
+    )
+    non_attachment_entries.sort(
+        key=lambda e: (
+            int(e.get("score", 0) or 0),
+            int(e.get("crop_ge_70_count", 0) or 0),
+        ),
+        reverse=True,
+    )
+    selection_pool = attachment_entries + non_attachment_entries
+    selection_limit = max(1, int(max_frames))
+
+    selected: list[dict[str, Any]]
+    if keep_all_attachment_frames:
+        selected = list(attachment_entries)
+    else:
+        selected = attachment_entries[:selection_limit]
+
+    if non_attachment_limit is None:
+        if keep_all_attachment_frames:
+            non_attachment_target = len(non_attachment_entries)
+        else:
+            non_attachment_target = max(0, selection_limit - len(selected))
+    else:
+        non_attachment_target = max(0, int(non_attachment_limit))
+
+    selected_non_attachment = non_attachment_entries[:non_attachment_target]
+    selected.extend(selected_non_attachment)
+
+    if len(selected) < len(selection_pool):
+        logger.info(
+            "Selected %d/%d frame candidates for %s after attachment-aware viewpoint filtering",
+            len(selected),
+            len(selection_pool),
+            scene_path.name,
+        )
+
+    results = []
+    for selected_entry in selected:
+        results.append(
+            {
+                "image_name": selected_entry["image_name"],
+                "camera_position": selected_entry["pose"].position.tolist(),
+                "visible_object_ids": selected_entry["visible_object_ids"],
+                "n_visible": selected_entry["n_visible"],
+                "base_score": selected_entry["base_score"],
+                "crop_ge_70_count": selected_entry["crop_ge_70_count"],
+                "visible_bbox_ge_70_count": selected_entry["visible_bbox_ge_70_count"],
+                "attachment_pair_ge_50_count": selected_entry["attachment_pair_ge_50_count"],
+                "attachment_viewpoint_exempt": bool(
+                    int(selected_entry.get("attachment_pair_ge_50_count", 0) or 0) > 0
+                ),
+                "score": selected_entry["score"],
             }
         )
 

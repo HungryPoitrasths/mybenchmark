@@ -58,6 +58,25 @@ def make_object(obj_id: int, label: str) -> dict:
     }
 
 
+def make_quality_metrics(
+    laplacian_variance: float = 200.0,
+    tenengrad: float = 20.0,
+    *,
+    readable: bool = True,
+) -> dict:
+    if not readable:
+        return {
+            "readable": False,
+            "laplacian_variance": None,
+            "tenengrad": None,
+        }
+    return {
+        "readable": True,
+        "laplacian_variance": float(laplacian_variance),
+        "tenengrad": float(tenengrad),
+    }
+
+
 class FrameSelectorTests(unittest.TestCase):
     def test_selector_visibility_audit_accepts_bbox_roi_fallback_at_threshold(self) -> None:
         audit = frame_selector.build_selector_visibility_audit_from_meta(
@@ -443,7 +462,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", side_effect=[5, 4]),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
         ):
@@ -474,7 +493,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", side_effect=[5, 4]),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
             patch.object(frame_selector, "_count_well_cropped_attachment_pairs", side_effect=[1, 1]),
@@ -529,19 +548,31 @@ class FrameSelectorTests(unittest.TestCase):
             patch.object(
                 frame_selector,
                 "get_visible_objects",
-                side_effect=[objects] * len(processed_names),
+                side_effect=[objects] * 5,
             ),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                side_effect=[
+                    make_quality_metrics(170.0, 23.0),
+                    make_quality_metrics(160.0, 22.0),
+                    make_quality_metrics(150.0, 21.0),
+                    make_quality_metrics(140.0, 20.0),
+                    make_quality_metrics(130.0, 19.0),
+                    make_quality_metrics(20.0, 8.0),
+                    make_quality_metrics(10.0, 7.0),
+                ],
+            ),
             patch.object(
                 frame_selector,
                 "_count_attachment_objects",
-                side_effect=[7, 6, 5, 4, 0, 0, 0],
+                side_effect=[7, 6, 5, 4, 0],
             ),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
             patch.object(
                 frame_selector,
                 "_count_well_cropped_attachment_pairs",
-                side_effect=[1, 1, 1, 1, 0, 0, 0],
+                side_effect=[1, 1, 1, 1, 0],
             ),
             patch.object(
                 frame_selector,
@@ -560,10 +591,10 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(
             [entry["image_name"] for entry in results],
-            processed_names[:6],
+            processed_names[:5],
         )
         self.assertEqual(sum(1 for entry in results if entry["attachment_viewpoint_exempt"]), 4)
-        self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 2)
+        self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 1)
 
     def test_select_frames_keeps_all_non_attachment_candidates_when_review_pool_uncapped(self) -> None:
         root = make_case_dir("frame_selector_attachment_review_pool_uncapped")
@@ -605,19 +636,31 @@ class FrameSelectorTests(unittest.TestCase):
             patch.object(
                 frame_selector,
                 "get_visible_objects",
-                side_effect=[objects] * len(processed_names),
+                side_effect=[objects] * 5,
             ),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                side_effect=[
+                    make_quality_metrics(170.0, 23.0),
+                    make_quality_metrics(160.0, 22.0),
+                    make_quality_metrics(150.0, 21.0),
+                    make_quality_metrics(140.0, 20.0),
+                    make_quality_metrics(130.0, 19.0),
+                    make_quality_metrics(20.0, 8.0),
+                    make_quality_metrics(10.0, 7.0),
+                ],
+            ),
             patch.object(
                 frame_selector,
                 "_count_attachment_objects",
-                side_effect=[7, 6, 5, 4, 0, 0, 0],
+                side_effect=[7, 6, 5, 4, 0],
             ),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
             patch.object(
                 frame_selector,
                 "_count_well_cropped_attachment_pairs",
-                side_effect=[1, 1, 1, 1, 0, 0, 0],
+                side_effect=[1, 1, 1, 1, 0],
             ),
             patch.object(
                 frame_selector,
@@ -635,10 +678,10 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(
             [entry["image_name"] for entry in results],
-            processed_names,
+            processed_names[:5],
         )
         self.assertEqual(sum(1 for entry in results if entry["attachment_viewpoint_exempt"]), 4)
-        self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 3)
+        self.assertEqual(sum(1 for entry in results if not entry["attachment_viewpoint_exempt"]), 1)
 
     def test_select_frames_prefers_non_attachment_frames_with_two_bbox_ge_70_objects(self) -> None:
         root = make_case_dir("frame_selector_non_attachment_bbox70")
@@ -662,7 +705,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", return_value=0),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[0, 1]),
             patch.object(
@@ -702,7 +745,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", return_value=0),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[0, 2]),
         ):
@@ -736,7 +779,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", return_value=2),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=0),
             patch.object(frame_selector, "_count_well_cropped_attachment_pairs", side_effect=[0, 1]),
@@ -776,7 +819,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", side_effect=[10, 0]),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[1, 2]),
         ):
@@ -810,7 +853,7 @@ class FrameSelectorTests(unittest.TestCase):
                 return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
             ),
             patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
             patch.object(frame_selector, "_count_attachment_objects", return_value=0),
             patch.object(frame_selector, "_count_well_cropped_visible_objects", side_effect=[1, 2]),
         ):
@@ -842,7 +885,11 @@ class FrameSelectorTests(unittest.TestCase):
                 "load_scannet_poses",
                 return_value={image_name: make_camera_pose(image_name)},
             ),
-            patch.object(frame_selector, "passes_image_quality", return_value=False),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                return_value=make_quality_metrics(79.0, 20.0),
+            ),
             patch.object(
                 frame_selector,
                 "get_visible_objects",
@@ -853,33 +900,180 @@ class FrameSelectorTests(unittest.TestCase):
 
         self.assertEqual(results, [])
 
-    def test_passes_image_quality_rejects_low_tenengrad_even_when_laplacian_passes(self) -> None:
-        root = make_case_dir("frame_selector_low_tenengrad")
+    def test_select_frames_drops_bottom_thirty_percent_by_combined_quality_rank(self) -> None:
+        root = make_case_dir("frame_selector_quality_stage1")
         self.addCleanup(shutil.rmtree, root, True)
-        image_path = root / "soft.png"
-        image = np.full((128, 128, 3), 127, dtype=np.uint8)
-        image[:, 64:] = 129
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(21)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        processed_names = [image_names[idx] for idx in range(0, len(image_names), frame_selector.FRAME_STRIDE)]
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 
         with (
-            patch.object(frame_selector.cv2, "imread", return_value=image),
-            patch.object(frame_selector, "_compute_laplacian_variance", return_value=101.0),
-            patch.object(frame_selector, "_compute_tenengrad", return_value=15.0),
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects] * 5),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                side_effect=[
+                    make_quality_metrics(200.0, 18.0),
+                    make_quality_metrics(190.0, 17.0),
+                    make_quality_metrics(180.0, 16.0),
+                    make_quality_metrics(170.0, 15.0),
+                    make_quality_metrics(160.0, 14.0),
+                    make_quality_metrics(120.0, 12.5),
+                    make_quality_metrics(80.0, 12.0),
+                ],
+            ),
+            patch.object(frame_selector, "_count_attachment_objects", return_value=0),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+            patch.object(frame_selector, "_count_visible_objects_with_min_bbox_in_frame_ratio", return_value=3),
+            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", return_value=0),
         ):
-            self.assertFalse(frame_selector.passes_image_quality(image_path))
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=7)
 
-    def test_passes_image_quality_accepts_when_both_low_threshold_focus_metrics_pass(self) -> None:
-        root = make_case_dir("frame_selector_quality_pass")
+        self.assertEqual([entry["image_name"] for entry in results], processed_names[:5])
+
+    def test_select_frames_stage2_rejects_survivors_without_backfill(self) -> None:
+        root = make_case_dir("frame_selector_quality_stage2")
         self.addCleanup(shutil.rmtree, root, True)
-        image_path = root / "sharp.png"
-        base = np.zeros((128, 128, 3), dtype=np.uint8)
-        cv2.rectangle(base, (24, 24), (104, 104), (255, 255, 255), thickness=-1)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(21)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        processed_names = [image_names[idx] for idx in range(0, len(image_names), frame_selector.FRAME_STRIDE)]
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
 
         with (
-            patch.object(frame_selector.cv2, "imread", return_value=base),
-            patch.object(frame_selector, "_compute_laplacian_variance", return_value=101.0),
-            patch.object(frame_selector, "_compute_tenengrad", return_value=17.0),
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects] * 4),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                side_effect=[
+                    make_quality_metrics(200.0, 18.0),
+                    make_quality_metrics(190.0, 17.0),
+                    make_quality_metrics(180.0, 16.0),
+                    make_quality_metrics(170.0, 15.0),
+                    make_quality_metrics(79.0, 20.0),
+                    make_quality_metrics(60.0, 13.0),
+                    make_quality_metrics(50.0, 12.0),
+                ],
+            ),
+            patch.object(frame_selector, "_count_attachment_objects", return_value=0),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+            patch.object(frame_selector, "_count_visible_objects_with_min_bbox_in_frame_ratio", return_value=3),
+            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", return_value=0),
         ):
-            self.assertTrue(frame_selector.passes_image_quality(image_path))
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=7)
+
+        self.assertEqual([entry["image_name"] for entry in results], processed_names[:4])
+
+    def test_select_frames_does_not_drop_small_readable_sets_in_stage1(self) -> None:
+        root = make_case_dir("frame_selector_quality_small_set")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(9)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        processed_names = [image_names[idx] for idx in range(0, len(image_names), frame_selector.FRAME_STRIDE)]
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects] * 3),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                side_effect=[
+                    make_quality_metrics(120.0, 20.0),
+                    make_quality_metrics(90.0, 14.0),
+                    make_quality_metrics(80.0, 12.0),
+                ],
+            ),
+            patch.object(frame_selector, "_count_attachment_objects", return_value=0),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+            patch.object(frame_selector, "_count_visible_objects_with_min_bbox_in_frame_ratio", return_value=3),
+            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", return_value=0),
+        ):
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=3)
+
+        self.assertEqual([entry["image_name"] for entry in results], processed_names)
+
+    def test_select_frames_skips_unreadable_images_before_visibility(self) -> None:
+        root = make_case_dir("frame_selector_quality_unreadable")
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = root / "scene0000_00"
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / "color").mkdir(parents=True)
+        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
+        image_names = [f"{idx:06d}.jpg" for idx in range(9)]
+        for image_name in image_names:
+            (scene_dir / "color" / image_name).write_bytes(b"jpg")
+
+        processed_names = [image_names[idx] for idx in range(0, len(image_names), frame_selector.FRAME_STRIDE)]
+        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
+
+        with (
+            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                frame_selector,
+                "load_scannet_poses",
+                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
+            ),
+            patch.object(frame_selector, "get_visible_objects", side_effect=[objects, objects]),
+            patch.object(
+                frame_selector,
+                "_read_image_quality_metrics",
+                side_effect=[
+                    make_quality_metrics(120.0, 20.0),
+                    make_quality_metrics(readable=False),
+                    make_quality_metrics(90.0, 14.0),
+                ],
+            ),
+            patch.object(frame_selector, "_count_attachment_objects", return_value=0),
+            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
+            patch.object(frame_selector, "_count_visible_objects_with_min_bbox_in_frame_ratio", return_value=3),
+            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", return_value=0),
+        ):
+            results = frame_selector.select_frames(scene_dir, objects, max_frames=3)
+
+        self.assertEqual(
+            [entry["image_name"] for entry in results],
+            [processed_names[0], processed_names[2]],
+        )
 
     def test_select_frames_uses_preloaded_metadata_and_mesh_inputs(self) -> None:
         root = make_case_dir("frame_selector_preloaded_inputs")
@@ -921,7 +1115,7 @@ class FrameSelectorTests(unittest.TestCase):
                 "get_visible_objects",
                 return_value=([dict(objects[0]), dict(objects[1]), dict(objects[2])], visibility_audits),
             ),
-            patch.object(frame_selector, "passes_image_quality", return_value=True),
+            patch.object(frame_selector, "_read_image_quality_metrics", return_value=make_quality_metrics()),
         ):
             results = frame_selector.select_frames(
                 scene_dir,
