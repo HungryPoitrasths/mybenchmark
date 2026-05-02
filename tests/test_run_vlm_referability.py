@@ -76,22 +76,12 @@ def make_visibility_meta(
     *,
     projected_area_px: float = 900.0,
     bbox_in_frame_ratio: float = 0.9,
-    zbuffer_mask_area_px: float | None = None,
-    has_zbuffer_mask_area: bool | None = None,
 ) -> dict:
-    zbuffer_area = 0.0 if zbuffer_mask_area_px is None else float(zbuffer_mask_area_px)
-    has_zbuffer = (
-        bool(zbuffer_mask_area_px is not None)
-        if has_zbuffer_mask_area is None
-        else bool(has_zbuffer_mask_area)
-    )
     return {
         "roi_bounds_px": [20, 60, 20, 60],
         "projected_area_px": projected_area_px,
         "bbox_in_frame_ratio": bbox_in_frame_ratio,
         "edge_margin_px": 10.0,
-        "zbuffer_mask_area_px": zbuffer_area,
-        "has_zbuffer_mask_area": has_zbuffer,
     }
 
 
@@ -778,10 +768,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertTrue(valid_crop["valid"])
         self.assertEqual(valid_crop["local_outcome"], "reviewed")
 
-    def test_build_object_review_crop_does_not_gate_on_zbuffer_mask_area(self) -> None:
+    def test_build_object_review_crop_uses_projection_only_gate(self) -> None:
         crop = referability_module._build_object_review_crop(
             np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=900.0, zbuffer_mask_area_px=1.0),
+            make_visibility_meta(projected_area_px=900.0),
         )
 
         self.assertTrue(crop["valid"])
@@ -1423,7 +1413,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         visibility = {
-            1: make_visibility_meta(projected_area_px=799.0, zbuffer_mask_area_px=1.0),
+            1: make_visibility_meta(projected_area_px=799.0),
         }
 
         with (
@@ -1933,10 +1923,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         captured: dict[str, object] = {}
-        visibility_meta = make_visibility_meta(
-            projected_area_px=900.0,
-            zbuffer_mask_area_px=900.0,
-        )
+        visibility_meta = make_visibility_meta(projected_area_px=900.0)
         sentinel_instance_mesh_data = object()
 
         def fake_compute_frame_object_visibility(*args, **kwargs):

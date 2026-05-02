@@ -17,7 +17,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from .scene_parser import InstanceMeshData, load_instance_mesh_data
+from .scene_parser import InstanceMeshData
 from .utils.colmap_loader import (
     CameraIntrinsics,
     CameraPose,
@@ -36,7 +36,20 @@ logger = logging.getLogger(__name__)
 
 # Coarse prefilter threshold for the geometric selector. Detailed image-quality
 # screening happens later in the VLM rerank stage.
-SHARPNESS_MIN = 50.0
+SHARPNESS_MIN = 100.0
+TENENGRAD_MIN = 16.0
+
+
+def _compute_laplacian_variance(gray_image: np.ndarray) -> float:
+    laplacian = cv2.Laplacian(gray_image, cv2.CV_64F)
+    return float(laplacian.var())
+
+
+def _compute_tenengrad(gray_image: np.ndarray) -> float:
+    grad_x = cv2.Sobel(gray_image, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray_image, cv2.CV_64F, 0, 1, ksize=3)
+    magnitude = np.sqrt((grad_x * grad_x) + (grad_y * grad_y))
+    return float(magnitude.mean())
 
 
 def passes_image_quality(image_path: Path) -> bool:
@@ -56,13 +69,22 @@ def passes_image_quality(image_path: Path) -> bool:
     small = cv2.resize(img, (0, 0), fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
 
-    # Sharpness: Gaussian blur first to suppress sensor noise, then Laplacian
+    # Use a conservative first-pass blur gate: combine two focus metrics so we
+    # trim obviously weak candidates before the later VLM review.
     denoised = cv2.GaussianBlur(gray, (3, 3), 0)
-    laplacian_var = cv2.Laplacian(denoised, cv2.CV_64F).var()
+    laplacian_var = _compute_laplacian_variance(denoised)
     if laplacian_var < SHARPNESS_MIN:
         logger.debug(
             "Image %s too blurry (Laplacian var=%.1f < %.1f)",
             image_path.name, laplacian_var, SHARPNESS_MIN,
+        )
+        return False
+
+    tenengrad = _compute_tenengrad(denoised)
+    if tenengrad < TENENGRAD_MIN:
+        logger.debug(
+            "Image %s too blurry (Tenengrad=%.1f < %.1f)",
+            image_path.name, tenengrad, TENENGRAD_MIN,
         )
         return False
 
@@ -78,340 +100,6 @@ STRICT_PROJECTED_AREA_MIN = 800.0
 STRICT_IN_FRAME_RATIO_MIN = 0.6
 STRICT_EDGE_MARGIN_MIN = 12.0
 STRICT_LOCAL_SHARPNESS_MIN = 45.0
-PROJECTED_MASK_NEAR_CLIP_M = 0.05
-
-def _instance_triangle_id_array(
-    instance_mesh_data: InstanceMeshData | None,
-    obj_id: int,
-) -> np.ndarray:
-    if instance_mesh_data is None:
-        return np.empty((0,), dtype=np.int64)
-
-    triangle_ids_by_instance = getattr(instance_mesh_data, "triangle_ids_by_instance", {}) or {}
-    boundary_triangle_ids_by_instance = getattr(
-        instance_mesh_data,
-        "boundary_triangle_ids_by_instance",
-        {},
-    ) or {}
-    tri_parts = [
-        np.asarray(arr, dtype=np.int64)
-        for arr in (
-            triangle_ids_by_instance.get(int(obj_id)),
-            boundary_triangle_ids_by_instance.get(int(obj_id)),
-        )
-        if arr is not None and len(arr) > 0
-    ]
-    if not tri_parts:
-        return np.empty((0,), dtype=np.int64)
-    return np.unique(np.concatenate(tri_parts).astype(np.int64))
-
-
-def _project_vertices_to_image(
-    vertices: np.ndarray,
-    pose: CameraPose,
-    intrinsics: CameraIntrinsics,
-) -> tuple[np.ndarray, np.ndarray]:
-    world_vertices = np.asarray(vertices, dtype=np.float64)
-    camera_vertices = (
-        world_vertices @ np.asarray(pose.rotation, dtype=np.float64).T
-        + np.asarray(pose.translation, dtype=np.float64)
-    )
-    depths = camera_vertices[:, 2]
-    uv = np.full((len(world_vertices), 2), np.nan, dtype=np.float64)
-    positive_depth = depths > 1e-6
-    if np.any(positive_depth):
-        uv[positive_depth, 0] = (
-            intrinsics.fx * camera_vertices[positive_depth, 0] / depths[positive_depth]
-        ) + intrinsics.cx
-        uv[positive_depth, 1] = (
-            intrinsics.fy * camera_vertices[positive_depth, 1] / depths[positive_depth]
-        ) + intrinsics.cy
-    return uv, depths
-
-
-def _rasterize_projected_triangles(
-    projected_uv: np.ndarray,
-    projected_depths: np.ndarray,
-    faces: np.ndarray,
-    *,
-    width: int,
-    height: int,
-    x_offset: int = 0,
-    y_offset: int = 0,
-) -> np.ndarray:
-    depth_buffer = np.full((int(height), int(width)), np.inf, dtype=np.float32)
-
-    for tri_indices in np.asarray(faces, dtype=np.int64):
-        tri_depths = projected_depths[tri_indices]
-        if np.any(tri_depths <= 1e-6):
-            continue
-
-        tri_uv = np.asarray(projected_uv[tri_indices], dtype=np.float64).copy()
-        if np.any(np.isnan(tri_uv)):
-            continue
-
-        tri_uv[:, 0] -= float(x_offset)
-        tri_uv[:, 1] -= float(y_offset)
-
-        xs = tri_uv[:, 0]
-        ys = tri_uv[:, 1]
-        if float(np.max(xs)) < 0 or float(np.max(ys)) < 0:
-            continue
-        if float(np.min(xs)) >= width or float(np.min(ys)) >= height:
-            continue
-
-        x_min = max(int(np.floor(float(np.min(xs)))), 0)
-        x_max = min(int(np.ceil(float(np.max(xs)))), width - 1)
-        y_min = max(int(np.floor(float(np.min(ys)))), 0)
-        y_max = min(int(np.ceil(float(np.max(ys)))), height - 1)
-        if x_max < x_min or y_max < y_min:
-            continue
-
-        x0, y0 = tri_uv[0]
-        x1, y1 = tri_uv[1]
-        x2, y2 = tri_uv[2]
-        denominator = ((y1 - y2) * (x0 - x2)) + ((x2 - x1) * (y0 - y2))
-        if abs(float(denominator)) < 1e-12:
-            continue
-
-        grid_x, grid_y = np.meshgrid(
-            np.arange(x_min, x_max + 1, dtype=np.float64) + 0.5,
-            np.arange(y_min, y_max + 1, dtype=np.float64) + 0.5,
-        )
-        w0 = (((y1 - y2) * (grid_x - x2)) + ((x2 - x1) * (grid_y - y2))) / denominator
-        w1 = (((y2 - y0) * (grid_x - x2)) + ((x0 - x2) * (grid_y - y2))) / denominator
-        w2 = 1.0 - w0 - w1
-        inside = (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6)
-        if not np.any(inside):
-            continue
-
-        tri_depth_map = (w0 * tri_depths[0]) + (w1 * tri_depths[1]) + (w2 * tri_depths[2])
-        target_slice = depth_buffer[y_min:y_max + 1, x_min:x_max + 1]
-        update_mask = inside & (tri_depth_map < target_slice)
-        if np.any(update_mask):
-            target_slice[update_mask] = tri_depth_map[update_mask].astype(np.float32)
-
-    return np.isfinite(depth_buffer)
-
-
-def _projected_triangle_roi_info(
-    tri_uv: np.ndarray,
-    *,
-    width: int,
-    height: int,
-    x_offset: int = 0,
-    y_offset: int = 0,
-) -> tuple[np.ndarray, int, int, int, int, float] | None:
-    tri_uv_local = np.asarray(tri_uv, dtype=np.float64).copy()
-    if np.any(np.isnan(tri_uv_local)):
-        return None
-
-    tri_uv_local[:, 0] -= float(x_offset)
-    tri_uv_local[:, 1] -= float(y_offset)
-
-    xs = tri_uv_local[:, 0]
-    ys = tri_uv_local[:, 1]
-    if float(np.max(xs)) < 0 or float(np.max(ys)) < 0:
-        return None
-    if float(np.min(xs)) >= width or float(np.min(ys)) >= height:
-        return None
-
-    x_min = max(int(np.floor(float(np.min(xs)))), 0)
-    x_max = min(int(np.ceil(float(np.max(xs)))), width - 1)
-    y_min = max(int(np.floor(float(np.min(ys)))), 0)
-    y_max = min(int(np.ceil(float(np.max(ys)))), height - 1)
-    if x_max < x_min or y_max < y_min:
-        return None
-
-    bbox_area = float((x_max - x_min + 1) * (y_max - y_min + 1))
-    return tri_uv_local, x_min, x_max, y_min, y_max, bbox_area
-
-
-def _rasterize_projected_triangle_inside_mask(
-    tri_uv_local: np.ndarray,
-    *,
-    x_min: int,
-    x_max: int,
-    y_min: int,
-    y_max: int,
-) -> np.ndarray | None:
-    x0, y0 = tri_uv_local[0]
-    x1, y1 = tri_uv_local[1]
-    x2, y2 = tri_uv_local[2]
-    denominator = ((y1 - y2) * (x0 - x2)) + ((x2 - x1) * (y0 - y2))
-    if abs(float(denominator)) < 1e-12:
-        return None
-
-    grid_x, grid_y = np.meshgrid(
-        np.arange(x_min, x_max + 1, dtype=np.float64) + 0.5,
-        np.arange(y_min, y_max + 1, dtype=np.float64) + 0.5,
-    )
-    w0 = (((y1 - y2) * (grid_x - x2)) + ((x2 - x1) * (grid_y - y2))) / denominator
-    w1 = (((y2 - y0) * (grid_x - x2)) + ((x0 - x2) * (grid_y - y2))) / denominator
-    w2 = 1.0 - w0 - w1
-    inside = (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6)
-    if not np.any(inside):
-        return None
-    return inside
-
-
-def _accumulate_projected_triangle_coverage_area(
-    projected_uv: np.ndarray,
-    projected_depths: np.ndarray,
-    faces: np.ndarray,
-    *,
-    width: int,
-    height: int,
-    x_offset: int = 0,
-    y_offset: int = 0,
-    stop_after_area_px: float | None = None,
-) -> float:
-    coverage_mask = np.zeros((int(height), int(width)), dtype=bool)
-    sortable_triangles: list[tuple[float, float, np.ndarray, int, int, int, int]] = []
-
-    for tri_indices in np.asarray(faces, dtype=np.int64):
-        tri_depths = projected_depths[tri_indices]
-        if np.any(tri_depths <= 1e-6):
-            continue
-
-        tri_info = _projected_triangle_roi_info(
-            projected_uv[tri_indices],
-            width=width,
-            height=height,
-            x_offset=x_offset,
-            y_offset=y_offset,
-        )
-        if tri_info is None:
-            continue
-
-        tri_uv_local, x_min, x_max, y_min, y_max, bbox_area = tri_info
-        sortable_triangles.append(
-            (
-                float(np.min(tri_depths)),
-                -bbox_area,
-                tri_uv_local,
-                x_min,
-                x_max,
-                y_min,
-                y_max,
-            )
-        )
-
-    sortable_triangles.sort(key=lambda item: (item[0], item[1]))
-    covered_area_px = 0
-
-    for _depth_key, _neg_bbox_area, tri_uv_local, x_min, x_max, y_min, y_max in sortable_triangles:
-        inside = _rasterize_projected_triangle_inside_mask(
-            tri_uv_local,
-            x_min=x_min,
-            x_max=x_max,
-            y_min=y_min,
-            y_max=y_max,
-        )
-        if inside is None:
-            continue
-
-        target_slice = coverage_mask[y_min:y_max + 1, x_min:x_max + 1]
-        new_pixels = inside & (~target_slice)
-        if not np.any(new_pixels):
-            continue
-
-        target_slice[new_pixels] = True
-        covered_area_px += int(new_pixels.sum())
-        if stop_after_area_px is not None and covered_area_px >= stop_after_area_px:
-            return float(covered_area_px)
-
-    return float(covered_area_px)
-
-
-def _project_object_mask_stats(
-    obj: dict[str, Any],
-    pose: CameraPose,
-    intrinsics: CameraIntrinsics,
-    instance_mesh_data: InstanceMeshData | None,
-    *,
-    projected_area_px: float | None = None,
-    roi_bounds: tuple[int, int, int, int] | None = None,
-    area_threshold_px: float | None = None,
-) -> dict[str, float]:
-    obj_id = int(obj.get("id", -1))
-    if (
-        area_threshold_px is not None
-        and projected_area_px is not None
-        and projected_area_px < area_threshold_px
-    ):
-        return {
-            "zbuffer_mask_in_frame_ratio": 0.0,
-            "zbuffer_mask_area_px": 0.0,
-            "zbuffer_full_mask_area_px": 0.0,
-        }
-
-    triangle_ids = _instance_triangle_id_array(instance_mesh_data, obj_id)
-    if len(triangle_ids) == 0:
-        return {
-            "zbuffer_mask_in_frame_ratio": 0.0,
-            "zbuffer_mask_area_px": 0.0,
-            "zbuffer_full_mask_area_px": 0.0,
-        }
-
-    vertices = np.asarray(instance_mesh_data.vertices, dtype=np.float64)
-    faces = np.asarray(instance_mesh_data.faces, dtype=np.int64)[triangle_ids]
-    unique_vertex_ids, inverse = np.unique(faces.reshape(-1), return_inverse=True)
-    local_faces = inverse.reshape((-1, 3)).astype(np.int64)
-    local_vertices = vertices[unique_vertex_ids]
-    projected_uv, projected_depths = _project_vertices_to_image(local_vertices, pose, intrinsics)
-
-    valid_face_mask = (
-        np.all(projected_depths[local_faces] > PROJECTED_MASK_NEAR_CLIP_M, axis=1)
-        & np.all(np.isfinite(projected_uv[local_faces]), axis=(1, 2))
-    )
-    if not np.any(valid_face_mask):
-        return {
-            "zbuffer_mask_in_frame_ratio": 0.0,
-            "zbuffer_mask_area_px": 0.0,
-            "zbuffer_full_mask_area_px": 0.0,
-        }
-
-    valid_faces = local_faces[valid_face_mask]
-    image_width = max(1, int(intrinsics.width))
-    image_height = max(1, int(intrinsics.height))
-    if roi_bounds is not None:
-        u_min, u_max, v_min, v_max = roi_bounds
-        roi_width = max(0, int(u_max) - int(u_min))
-        roi_height = max(0, int(v_max) - int(v_min))
-        if roi_width <= 0 or roi_height <= 0:
-            return {
-                "zbuffer_mask_in_frame_ratio": 0.0,
-                "zbuffer_mask_area_px": 0.0,
-                "zbuffer_full_mask_area_px": 0.0,
-            }
-        mask_width = roi_width
-        mask_height = roi_height
-        x_offset = int(u_min)
-        y_offset = int(v_min)
-    else:
-        mask_width = image_width
-        mask_height = image_height
-        x_offset = 0
-        y_offset = 0
-
-    in_frame_area_px = _accumulate_projected_triangle_coverage_area(
-        projected_uv,
-        projected_depths,
-        valid_faces,
-        width=mask_width,
-        height=mask_height,
-        x_offset=x_offset,
-        y_offset=y_offset,
-        stop_after_area_px=area_threshold_px,
-    )
-    return {
-        # Selector-time gating only needs the in-frame covered area. When
-        # ``area_threshold_px`` is set this may be an early-stop lower bound.
-        "zbuffer_mask_in_frame_ratio": 0.0,
-        "zbuffer_mask_area_px": float(in_frame_area_px),
-        "zbuffer_full_mask_area_px": 0.0,
-    }
 
 
 def _project_object_roi(
@@ -527,14 +215,6 @@ def compute_frame_object_visibility(
         )
 
         roi_info = _project_object_roi(obj, pose, color_intrinsics)
-        mask_info = _project_object_mask_stats(
-            obj,
-            pose,
-            color_intrinsics,
-            instance_mesh_data,
-            projected_area_px=float(roi_info["projected_area_px"]),
-            roi_bounds=roi_info["roi_bounds"],
-        )
         roi_sharpness = _compute_roi_sharpness(gray, roi_info["roi_bounds"])
 
         occlusion_status = "unknown"
@@ -566,10 +246,6 @@ def compute_frame_object_visibility(
             "valid_projection_count": int(roi_info["valid_projection_count"]),
             "projected_area_px": float(roi_info["projected_area_px"]),
             "bbox_in_frame_ratio": float(roi_info["bbox_in_frame_ratio"]),
-            "zbuffer_mask_in_frame_ratio": float(mask_info["zbuffer_mask_in_frame_ratio"]),
-            "zbuffer_mask_area_px": float(mask_info["zbuffer_mask_area_px"]),
-            "zbuffer_full_mask_area_px": float(mask_info["zbuffer_full_mask_area_px"]),
-            "has_zbuffer_mask_area": bool(instance_mesh_data is not None),
             "edge_margin_px": float(roi_info["edge_margin_px"]),
             "roi_bounds_px": (
                 [int(v) for v in roi_info["roi_bounds"]]
@@ -695,7 +371,6 @@ VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 # Denser sampling gives the later VLM rerank a broader candidate pool.
 FRAME_STRIDE = 3
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
-VISIBLE_ZBUFFER_MASK_AREA_MIN = 400.0
 VISIBLE_PROJECTED_AREA_MIN = 800.0
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.70
 NON_ATTACHMENT_VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.70
@@ -725,11 +400,7 @@ def build_selector_visibility_audit_from_meta(
     depth_in_range = bool(min_depth < depth_m <= max_depth)
     center_in_image_margin = is_in_image(uv, intrinsics, margin=margin)
     bbox_in_frame_ratio = float(meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
-    zbuffer_mask_in_frame_ratio = float(meta.get("zbuffer_mask_in_frame_ratio", 0.0) or 0.0)
-    zbuffer_mask_area_px = float(meta.get("zbuffer_mask_area_px", 0.0) or 0.0)
-    has_zbuffer_mask_area = bool(meta.get("has_zbuffer_mask_area", False))
     projected_area_px = float(meta.get("projected_area_px", 0.0) or 0.0)
-    roi_source = "zbuffer_mask_area" if has_zbuffer_mask_area else "bbox_projection"
 
     decision = "rejected"
     selector_passed = False
@@ -741,28 +412,16 @@ def build_selector_visibility_audit_from_meta(
         decision = "selected_center"
         selector_passed = True
     elif (
-        (
-            projected_area_px >= VISIBLE_PROJECTED_AREA_MIN
-            and zbuffer_mask_area_px >= VISIBLE_ZBUFFER_MASK_AREA_MIN
-        )
-        if roi_source == "zbuffer_mask_area"
-        else (
-            bbox_in_frame_ratio >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
-            and projected_area_px >= VISIBLE_PROJECTED_AREA_MIN
-        )
+        bbox_in_frame_ratio >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
+        and projected_area_px >= VISIBLE_PROJECTED_AREA_MIN
     ):
         decision = "selected_roi_fallback"
         selector_passed = True
     else:
         rejection_reasons.append("center_not_in_margin")
-        if roi_source == "zbuffer_mask_area":
-            if projected_area_px < VISIBLE_PROJECTED_AREA_MIN:
-                rejection_reasons.append("projected_area_below_threshold")
-            if zbuffer_mask_area_px < VISIBLE_ZBUFFER_MASK_AREA_MIN:
-                rejection_reasons.append("zbuffer_mask_area_below_threshold")
-        elif bbox_in_frame_ratio < VISIBLE_BBOX_IN_FRAME_RATIO_MIN:
+        if bbox_in_frame_ratio < VISIBLE_BBOX_IN_FRAME_RATIO_MIN:
             rejection_reasons.append("bbox_in_frame_ratio_below_threshold")
-        if roi_source != "zbuffer_mask_area" and projected_area_px < VISIBLE_PROJECTED_AREA_MIN:
+        if projected_area_px < VISIBLE_PROJECTED_AREA_MIN:
             rejection_reasons.append("projected_area_below_threshold")
 
     return {
@@ -770,9 +429,7 @@ def build_selector_visibility_audit_from_meta(
         "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
         "center_in_image_margin80": bool(center_in_image_margin),
         "bbox_in_frame_ratio": bbox_in_frame_ratio,
-        "zbuffer_mask_in_frame_ratio": zbuffer_mask_in_frame_ratio,
-        "zbuffer_mask_area_px": zbuffer_mask_area_px,
-        "selector_roi_ratio_source": roi_source,
+        "selector_roi_ratio_source": "bbox_projection",
         "projected_area_px": projected_area_px,
         "selector_passed": selector_passed,
         "selector_decision": decision,
@@ -798,9 +455,6 @@ def _build_selector_visibility_meta(
         "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
         "depth_m": float(depth),
         "bbox_in_frame_ratio": 0.0,
-        "zbuffer_mask_in_frame_ratio": 0.0,
-        "zbuffer_mask_area_px": 0.0,
-        "has_zbuffer_mask_area": False,
         "projected_area_px": 0.0,
     }
     depth_in_range = bool(min_depth < depth <= max_depth)
@@ -809,8 +463,6 @@ def _build_selector_visibility_meta(
         roi_info = _project_object_roi(obj, pose, intrinsics)
         meta["bbox_in_frame_ratio"] = float(roi_info["bbox_in_frame_ratio"])
         meta["projected_area_px"] = float(roi_info["projected_area_px"])
-        # Frame selection stays projection-based. Later referability filtering
-        # applies mesh-ray visibility checks to the surviving candidates.
     return meta
 
 
@@ -1067,20 +719,6 @@ def select_frames(
         axis_align = load_axis_alignment(scene_path)
     if loaded_poses is None:
         loaded_poses = load_scannet_poses(scene_path, axis_alignment=axis_align)
-    if instance_mesh_data is None:
-        try:
-            instance_mesh_data = load_instance_mesh_data(
-                scene_path,
-                instance_ids=[int(obj["id"]) for obj in objects if obj.get("id") is not None],
-                n_surface_samples=1,
-                preloaded_geometry=preloaded_geometry,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Instance mesh preload failed for %s; selector falls back to bbox ratio: %s",
-                scene_path.name,
-                exc,
-            )
 
     if not loaded_poses:
         logger.warning("No valid poses found for %s", scene_path.name)
@@ -1118,7 +756,6 @@ def select_frames(
             objects,
             pose,
             intrinsics,
-            instance_mesh_data=instance_mesh_data,
             return_audits=True,
         )
         if (

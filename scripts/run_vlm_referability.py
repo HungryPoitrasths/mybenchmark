@@ -6442,8 +6442,6 @@ def _build_object_review_crop(
     projected_area_px = float(meta.get("projected_area_px", 0.0) or 0.0)
     bbox_in_frame_ratio = float(meta.get("bbox_in_frame_ratio", 0.0) or 0.0)
     edge_margin_px = float(meta.get("edge_margin_px", 0.0) or 0.0)
-    zbuffer_mask_area_px = float(meta.get("zbuffer_mask_area_px", 0.0) or 0.0)
-    has_zbuffer_mask_area = bool(meta.get("has_zbuffer_mask_area", False))
     result = {
         "valid": False,
         "local_outcome": LOCAL_OUTCOME_OUT_OF_FRAME,
@@ -6453,8 +6451,6 @@ def _build_object_review_crop(
         "projected_area_px": projected_area_px,
         "bbox_in_frame_ratio": bbox_in_frame_ratio,
         "edge_margin_px": edge_margin_px,
-        "zbuffer_mask_area_px": zbuffer_mask_area_px,
-        "has_zbuffer_mask_area": has_zbuffer_mask_area,
         "image_b64": None,
         "mime": "image/jpeg",
     }
@@ -6530,8 +6526,6 @@ def _build_object_review_entry(
         "projected_area_px": crop_entry.get("projected_area_px"),
         "bbox_in_frame_ratio": crop_entry.get("bbox_in_frame_ratio"),
         "edge_margin_px": crop_entry.get("edge_margin_px"),
-        "zbuffer_mask_area_px": crop_entry.get("zbuffer_mask_area_px"),
-        "has_zbuffer_mask_area": bool(crop_entry.get("has_zbuffer_mask_area", False)),
         "topology_status": None,
         "topology_reason_codes": [],
         "mesh_mask_status": None,

@@ -561,9 +561,6 @@ def _build_meshray_visual_items(
                 ).strip().lower(),
                 "projected_area_px": float(visibility_meta.get("projected_area_px", 0.0) or 0.0),
                 "bbox_in_frame_ratio": float(visibility_meta.get("bbox_in_frame_ratio", 0.0) or 0.0),
-                "zbuffer_mask_in_frame_ratio": float(
-                    visibility_meta.get("zbuffer_mask_in_frame_ratio", 0.0) or 0.0
-                ),
                 "mesh_ray_visibility_review": review,
                 "mask_path": str(mask_path),
             }
