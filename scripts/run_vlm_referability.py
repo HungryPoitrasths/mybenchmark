@@ -8631,13 +8631,23 @@ def main():
     ) -> SceneWorkerResult:
         scene_id = scene_dir.name
         scene_index = scene_index_by_id.get(scene_id, scene_position + 1)
-        logger.info(
-            "=== Referability scene %s [split=%s] (%d/%d) ===",
-            scene_id,
-            scene_split,
-            scene_index,
-            len(scene_entries),
-        )
+        if scene_number_range is not None:
+            logger.info(
+                "=== Referability scene %s [split=%s] (%d/%d; split total=%d) ===",
+                scene_id,
+                scene_split,
+                scene_index,
+                len(selected_scene_entries),
+                len(scene_entries),
+            )
+        else:
+            logger.info(
+                "=== Referability scene %s [split=%s] (%d/%d) ===",
+                scene_id,
+                scene_split,
+                scene_index,
+                len(scene_entries),
+            )
         scene_client = worker_client_factory
 
         def _build_attachment_pair_record(

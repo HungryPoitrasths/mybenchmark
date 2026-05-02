@@ -6859,6 +6859,198 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ["scene0001_00", "scene0002_00"],
         )
 
+    def test_scene_number_logs_shard_progress_not_full_split_total(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_number_log_progress_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        for scene_id in (
+            "scene0001_00",
+            "scene0002_00",
+            "scene0003_00",
+            "scene0004_00",
+            "scene0005_00",
+        ):
+            make_scene_dir(scans_root, scene_id)
+        self.write_split_file(
+            "train",
+            [
+                "scene0001_00",
+                "scene0002_00",
+                "scene0003_00",
+                "scene0004_00",
+                "scene0005_00",
+            ],
+        )
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        scene = {"objects": [make_object(1, "table"), make_object(2, "book")]}
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_select_frames(scene_dir: Path, *args, **kwargs):
+            return [
+                {
+                    "image_name": "000001.jpg",
+                    "visible_object_ids": [1, 2],
+                    "score": 10,
+                    "attachment_viewpoint_exempt": True,
+                }
+            ]
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            self.assertLogs(referability_module.logger.name, level="INFO") as logs,
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(referability_module, "_select_attachment_group_representatives", return_value=[]),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--split",
+                "train",
+                "--output",
+                str(output_path),
+                "--scene_number",
+                "0-3",
+                "--scene_workers",
+                "1",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        log_text = "\n".join(logs.output)
+        self.assertIn("Fixed scene shard for split=train interval=0-3 resolved to 4 scene(s)", log_text)
+        self.assertIn(
+            "=== Referability scene scene0001_00 [split=train] (1/4; split total=5) ===",
+            log_text,
+        )
+        self.assertIn(
+            "=== Referability scene scene0004_00 [split=train] (4/4; split total=5) ===",
+            log_text,
+        )
+        self.assertNotIn("scene0001_00 [split=train] (1/5)", log_text)
+
+    def test_scene_number_skip_continues_only_within_current_shard(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"scene_number_skip_stays_in_shard_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        for scene_id in (
+            "scene0001_00",
+            "scene0002_00",
+            "scene0003_00",
+            "scene0004_00",
+            "scene0005_00",
+        ):
+            make_scene_dir(scans_root, scene_id)
+        self.write_split_file(
+            "train",
+            [
+                "scene0001_00",
+                "scene0002_00",
+                "scene0003_00",
+                "scene0004_00",
+                "scene0005_00",
+            ],
+        )
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        scene = {"objects": [make_object(1, "table"), make_object(2, "book")]}
+        select_calls: list[str] = []
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_select_frames(scene_dir: Path, *args, **kwargs):
+            select_calls.append(scene_dir.name)
+            if scene_dir.name == "scene0005_00":
+                raise AssertionError("scene outside the requested shard should not be processed")
+            return [
+                {
+                    "image_name": "000001.jpg",
+                    "visible_object_ids": [1, 2],
+                    "score": 10,
+                    "attachment_viewpoint_exempt": True,
+                }
+            ]
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", return_value=scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000001.jpg": make_camera_pose()},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=None),
+            patch.object(referability_module, "_select_attachment_group_representatives", return_value=[]),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--split",
+                "train",
+                "--output",
+                str(output_path),
+                "--scene_number",
+                "1-3",
+                "--scene_workers",
+                "1",
+                "--no-write_attachment_review",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertEqual(select_calls, ["scene0002_00", "scene0003_00", "scene0004_00"])
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
+        self.assertEqual(
+            cache_doc["scene_status"]["scene0002_00"]["pipeline_outcome"],
+            "no_final_referability_frames",
+        )
+        self.assertEqual(
+            cache_doc["scene_status"]["scene0003_00"]["pipeline_outcome"],
+            "no_final_referability_frames",
+        )
+        self.assertEqual(
+            cache_doc["scene_status"]["scene0004_00"]["pipeline_outcome"],
+            "no_final_referability_frames",
+        )
+        self.assertNotIn("scene0005_00", cache_doc["scene_status"])
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(
+            sorted(global_scene_status["completed_scenes"].keys()),
+            ["scene0002_00", "scene0003_00", "scene0004_00"],
+        )
+
     def test_old_reset_scene_status_flag_is_rejected(self) -> None:
         with patch.object(sys, "argv", [
             "run_vlm_referability.py",
