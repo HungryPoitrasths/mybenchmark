@@ -655,8 +655,12 @@ def _write_frame_sidecar_scene_cache(
     )
 
 
-def _edited_attachment_pair_salvage_html_output_path(output_path: Path) -> Path:
-    return output_path.parent / "edited.html"
+def _edited_attachment_pair_salvage_html_output_path(output_path: Path, scene_id: str) -> Path:
+    return output_path.parent / f"{output_path.stem}_{str(scene_id).strip()}_edited.html"
+
+
+def _edited_attachment_pair_salvage_html_output_glob(output_path: Path) -> str:
+    return str(output_path.parent / f"{output_path.stem}_*_edited.html")
 
 
 def _scene_object_label(obj: dict[str, Any]) -> str:
@@ -3895,13 +3899,22 @@ def _build_attachment_pair_salvage_review_document(
     scenes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     scene_count = len(scenes)
+    edited_html_outputs_by_scene = {
+        scene_id: str(_edited_attachment_pair_salvage_html_output_path(referability_cache_output, scene_id))
+        for scene_id in [
+            str(scene.get("scene_id", "")).strip()
+            for scene in scenes
+            if str(scene.get("scene_id", "")).strip()
+        ]
+    }
     return {
         "name": ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME,
         "version": ATTACHMENT_PAIR_SALVAGE_REVIEW_VERSION,
         "generated_by": "scripts/run_vlm_referability.py",
         "review_stage": ATTACHMENT_PAIR_SALVAGE_REVIEW_STAGE,
         "referability_cache_output": str(referability_cache_output),
-        "edited_html_output": str(_edited_attachment_pair_salvage_html_output_path(referability_cache_output)),
+        "edited_html_output_glob": _edited_attachment_pair_salvage_html_output_glob(referability_cache_output),
+        "edited_html_outputs_by_scene": edited_html_outputs_by_scene,
         "scene_count": scene_count,
         "group_count_total": sum(int(scene.get("group_count_total", 0) or 0) for scene in scenes),
         "group_count_with_clarity_pass_images": sum(
@@ -3945,6 +3958,60 @@ def _build_attachment_pair_salvage_review_document(
         ],
         "scenes": scenes,
     }
+
+
+def _build_attachment_pair_salvage_review_scene_document(
+    *,
+    review_doc: dict[str, Any],
+    scene_id: str,
+) -> dict[str, Any]:
+    scene_key = str(scene_id).strip()
+    selected_scene = None
+    for scene in review_doc.get("scenes", []):
+        if str(scene.get("scene_id", "")).strip() == scene_key:
+            selected_scene = scene
+            break
+    if selected_scene is None:
+        raise ValueError(f"Scene {scene_key!r} not found in attachment pair salvage review document")
+
+    scene_doc = dict(review_doc)
+    scene_doc["scene_count"] = 1
+    scene_doc["group_count_total"] = int(selected_scene.get("group_count_total", 0) or 0)
+    scene_doc["group_count_with_clarity_pass_images"] = int(
+        selected_scene.get("group_count_with_clarity_pass_images", 0) or 0
+    )
+    scene_doc["group_count_with_multi_image_cover"] = int(
+        selected_scene.get("group_count_with_multi_image_cover", 0) or 0
+    )
+    scene_doc["pair_count_total"] = int(selected_scene.get("pair_count_total", 0) or 0)
+    scene_doc["pair_count_kept"] = int(selected_scene.get("pair_count_kept", 0) or 0)
+    scene_doc["pair_count_auto_drop_hard_fail"] = int(
+        selected_scene.get("pair_count_auto_drop_hard_fail", 0) or 0
+    )
+    scene_doc["pair_count_needs_vlm_salvage_review"] = int(
+        selected_scene.get("pair_count_needs_vlm_salvage_review", 0) or 0
+    )
+    scene_doc["pair_count_uncertain"] = int(selected_scene.get("pair_count_uncertain", 0) or 0)
+    scene_doc["pair_count_vlm_salvageable"] = int(
+        selected_scene.get("pair_count_vlm_salvageable", 0) or 0
+    )
+    scene_doc["pair_count_vlm_not_salvageable"] = int(
+        selected_scene.get("pair_count_vlm_not_salvageable", 0) or 0
+    )
+    scene_doc["pair_count_vlm_uncertain"] = int(selected_scene.get("pair_count_vlm_uncertain", 0) or 0)
+    scene_doc["terminal_output_lines"] = list(selected_scene.get("terminal_output_lines", []))
+    scene_doc["scenes"] = [selected_scene]
+    edited_outputs = review_doc.get("edited_html_outputs_by_scene", {})
+    if isinstance(edited_outputs, dict):
+        scene_output = edited_outputs.get(scene_key)
+    else:
+        scene_output = None
+    scene_doc["edited_html_outputs_by_scene"] = (
+        {scene_key: str(scene_output)}
+        if scene_output is not None
+        else {}
+    )
+    return scene_doc
 
 
 _ATTACHMENT_PAIR_REASON_CODE_ZH = {
@@ -4256,114 +4323,48 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     included_scene_ids: list[str] = []
     seen_scene_ids: set[str] = set()
     referability_cache_output = str(review_doc.get("referability_cache_output", "")).strip()
-    edited_html_output = str(review_doc.get("edited_html_output", "")).strip()
-    edited_html_filename = Path(edited_html_output).name if edited_html_output else "edited.html"
-    scene_sections: list[str] = []
-    for scene in review_doc.get("scenes", []):
-        scene_id = str(scene.get("scene_id", "")).strip()
-        rendered_group_ids: set[str] = set()
-        pair_cards: list[str] = []
-        for group in scene.get("groups", []):
-            group_id = str(group.get("group_id", "")).strip()
-            for pair_row in group.get("dropped_pairs", []):
-                cover = _attachment_pair_renderable_cover(group, pair_row)
-                if cover is None:
-                    continue
-                pair_id = str(pair_row.get("pair_id", "")).strip()
-                if not pair_id:
-                    continue
-                rendered_group_ids.add(group_id)
-                rendered_pair_count += 1
-                reason_text = _attachment_pair_reason_codes_to_zh(pair_row.get("program_reason_codes", []))
-                pair_cards.append(
-                    '<div class="pair-card">'
-                    '<div class="pair-visual">'
-                    f'<img src="{html.escape(cover["data_url"])}" alt="{html.escape(cover["image_name"])}">'
-                    f'<div class="pair-image-name">{html.escape(cover["image_stem"] or cover["image_name"])}</div>'
-                    "</div>"
-                    '<div class="pair-copy">'
-                    f'<div class="pair-text"><strong>group</strong> {html.escape(group_id or "-")}</div>'
-                    f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(pair_row.get("parent_label", ""))}#{int(pair_row.get("parent_id", 0) or 0)} -> '
-                    f'{html.escape(pair_row.get("child_label", ""))}#{int(pair_row.get("child_id", 0) or 0)}</div>'
-                    f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
-                    f'<div class="pair-text"><strong>筛除理由</strong> {html.escape(reason_text)}</div>'
-                    "</div>"
-                    "</div>"
-                )
-        if not pair_cards:
-            continue
-        rendered_group_count += len(rendered_group_ids)
-        rendered_scene_count += 1
-        if scene_id and scene_id not in seen_scene_ids:
-            seen_scene_ids.add(scene_id)
-            included_scene_ids.append(scene_id)
-        scene_sections.append(
-            '<section class="scene-card">'
-            f'<h2>{html.escape(scene_id)} [{html.escape(scene.get("pipeline_outcome", ""))}]</h2>'
-            f'<div class="pair-list">{"".join(pair_cards)}</div>'
-            + "</section>"
-        )
-
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Attachment Pair Salvage Review</title>
-  <style>
-    body{{margin:0;background:linear-gradient(180deg,#efe7dc 0%,#f7f3ee 48%,#f4efe8 100%);color:#1f2937;font:14px/1.5 Georgia, 'Times New Roman', serif;}}
-    .page{{max-width:1200px;margin:0 auto;padding:28px 20px 60px;}}
-    h1,h2,h3{{margin:0 0 12px;color:#111827;}}
-    .summary,.scene-card,.pair-card{{background:#fff;border:1px solid #ddd6c8;border-radius:16px;box-shadow:0 10px 24px rgba(15,23,42,.06);}}
-    .summary{{padding:18px 20px;margin-bottom:22px;}}
-    .summary-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;}}
-    .summary-scenes{{margin-top:16px;padding-top:14px;border-top:1px solid #e7dfd1;}}
-    .scene-card{{padding:18px 20px;margin-bottom:24px;}}
-    .pair-list{{display:grid;gap:14px;margin-top:16px;}}
-    .pair-card{{padding:14px 16px;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start;}}
-    .pair-visual{{display:grid;gap:8px;}}
-    .pair-visual img{{width:100%;height:264px;object-fit:cover;display:block;border-radius:12px;background:#d1d5db;}}
-    .pair-image-name{{font-size:12px;color:#6b7280;letter-spacing:.02em;}}
-    .pair-copy{{display:grid;gap:10px;align-content:start;}}
-    .pair-text{{padding:10px 12px;border-radius:12px;background:#f8f6f1;border:1px solid #e7dfd1;}}
-    .empty-state{{padding:14px;border:1px dashed #c7bba7;border-radius:12px;background:#faf7f2;color:#6b7280;}}
-    @media (max-width: 720px){{
-      .pair-card{{grid-template-columns:1fr;}}
-      .pair-visual img{{height:auto;max-height:220px;}}
-    }}
-  </style>
-</head>
-<body>
-  <div class="page">
-    <section class="summary">
-      <h1>Attachment Pair Salvage Review</h1>
-      <div class="summary-grid">
-        <div><strong>scene count:</strong> {rendered_scene_count}</div>
-        <div><strong>group count:</strong> {rendered_group_count}</div>
-        <div><strong>pair count:</strong> {rendered_pair_count}</div>
-      </div>
-      <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
-    </section>
-    {''.join(scene_sections) or '<div class="empty-state">No attachment pair salvage scenes recorded.</div>'}
-  </div>
-</body>
-</html>"""
-
-
-def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
-    def _render_simple_list(values: list[str]) -> str:
-        if not values:
-            return "-"
-        return ", ".join(html.escape(str(value)) for value in values)
-
-    rendered_scene_count = 0
-    rendered_group_count = 0
-    rendered_pair_count = 0
-    included_scene_ids: list[str] = []
-    seen_scene_ids: set[str] = set()
-    referability_cache_output = str(review_doc.get("referability_cache_output", "")).strip()
-    edited_html_output = str(review_doc.get("edited_html_output", "")).strip()
-    edited_html_filename = Path(edited_html_output).name if edited_html_output else "edited.html"
+    edited_html_output_glob = str(review_doc.get("edited_html_output_glob", "")).strip()
+    raw_edited_outputs_by_scene = review_doc.get("edited_html_outputs_by_scene", {})
+    edited_html_outputs_by_scene = (
+        {
+            str(scene_id).strip(): str(path).strip()
+            for scene_id, path in raw_edited_outputs_by_scene.items()
+            if str(scene_id).strip() and str(path).strip()
+        }
+        if isinstance(raw_edited_outputs_by_scene, dict)
+        else {}
+    )
+    scene_ids_in_doc = [
+        str(scene.get("scene_id", "")).strip()
+        for scene in review_doc.get("scenes", [])
+        if str(scene.get("scene_id", "")).strip()
+    ]
+    editable_scene_ids = [
+        scene_id
+        for scene_id in edited_html_outputs_by_scene
+        if scene_id in set(scene_ids_in_doc)
+    ]
+    editable_scene_id = editable_scene_ids[0] if len(editable_scene_ids) == 1 else None
+    if editable_scene_id is None and len(scene_ids_in_doc) == 1:
+        editable_scene_id = scene_ids_in_doc[0]
+    edited_html_output = (
+        edited_html_outputs_by_scene.get(editable_scene_id, "")
+        if editable_scene_id is not None
+        else ""
+    )
+    if edited_html_output:
+        edited_html_target_display = edited_html_output
+        edited_html_filename = Path(edited_html_output).name
+    elif edited_html_output_glob:
+        edited_html_target_display = edited_html_output_glob
+        edited_html_filename = Path(referability_cache_output).stem + "_edited.html"
+    else:
+        edited_html_target_display = "edited.html"
+        edited_html_filename = "edited.html"
+    per_scene_output_lines = [
+        f"{scene_id} -> {Path(path).name}"
+        for scene_id, path in sorted(edited_html_outputs_by_scene.items())
+    ]
     scene_sections: list[str] = []
     for scene in review_doc.get("scenes", []):
         scene_id = str(scene.get("scene_id", "")).strip()
@@ -4404,7 +4405,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(parent_label)}#{parent_id} -> '
                     f'{html.escape(child_label)}#{child_id}</div>'
                     f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
-                    f'<div class="pair-text"><strong>缁ႈ盯娅庨悶鍡欐暠</strong> {html.escape(reason_text)}</div>'
+                    f'<div class="pair-text"><strong>筛除理由</strong> {html.escape(reason_text)}</div>'
                     '<div class="pair-editor">'
                     '<label class="pair-editor-field">'
                     '<span class="pair-editor-label">Parent Name</span>'
@@ -4483,16 +4484,18 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
         <div><strong>pair count:</strong> {rendered_pair_count}</div>
       </div>
       <div class="summary-scenes"><strong>referability cache:</strong> {html.escape(referability_cache_output or "-")}</div>
-      <div class="summary-scenes"><strong>edited html target:</strong> {html.escape(edited_html_output or edited_html_filename)}</div>
+      <div class="summary-scenes"><strong>scene review files:</strong> {html.escape(edited_html_target_display)}</div>
+      <div class="summary-scenes"><strong>per-scene targets:</strong> {_render_simple_list(per_scene_output_lines)}</div>
       <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
-      <div class="summary-actions">
-        <button type="button" id="export-edited-html" class="summary-action">Export Edited HTML</button>
-      </div>
+      {('<div class="summary-actions"><button type="button" id="export-edited-html" class="summary-action">Export Edited HTML</button></div>' if editable_scene_id is not None else '')}
     </section>
     {''.join(scene_sections) or '<div class="empty-state">No attachment pair salvage scenes recorded.</div>'}
   </div>
   <script>
     (() => {{
+      if (!document.getElementById('export-edited-html')) {{
+        return;
+      }}
       const editedHtmlTargetName = {json.dumps(edited_html_filename, ensure_ascii=False)};
 
       function persistCardState() {{
@@ -4557,18 +4560,6 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
   </script>
 </body>
 </html>"""
-
-
-_render_attachment_pair_salvage_review_html_impl = _render_attachment_pair_salvage_review_html
-
-
-def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> str:
-    html_text = _render_attachment_pair_salvage_review_html_impl(review_doc)
-    return re.sub(
-        r'(<div class="pair-text"><strong>)(?!group</strong>|attachment pair</strong>|pair id</strong>).*?(</strong>)',
-        lambda match: f"{match.group(1)}筛除理由{match.group(2)}",
-        html_text,
-    )
 
 
 def _select_non_attachment_group_representatives(
@@ -8420,7 +8411,7 @@ def main():
     scene_status_path = _scene_status_output_path(output_arg)
     if scene_number_range is not None:
         logger.warning(
-            "Fixed scene shards require distinct --output directories per tmux/process. Do not share scene_status.json, attachment review JSON, salvage review JSON, salvage review HTML, or edited.html across concurrent runs."
+            "Fixed scene shards require distinct --output directories per tmux/process. Do not share scene_status.json, attachment review JSON, salvage review JSON, salvage review HTML, or per-scene edited HTML files across concurrent runs."
         )
     scene_status_doc = _load_scene_status_doc(
         scene_status_path,
@@ -8478,7 +8469,6 @@ def main():
     )
     attachment_pair_salvage_review_output = _attachment_pair_salvage_review_output_path(output_path)
     attachment_pair_salvage_review_html_output = _attachment_pair_salvage_review_html_output_path(output_path)
-    edited_attachment_pair_salvage_html_output = _edited_attachment_pair_salvage_html_output_path(output_path)
     attachment_review_scenes: list[dict[str, Any]] = []
     attachment_review_terminal_lines: list[str] = []
     attachment_pair_salvage_review_scenes: list[dict[str, Any]] = []
@@ -8525,17 +8515,27 @@ def main():
         rendered_review_html = _render_attachment_pair_salvage_review_html(review_doc)
         attachment_pair_salvage_review_html_output.parent.mkdir(parents=True, exist_ok=True)
         attachment_pair_salvage_review_html_output.write_text(rendered_review_html, encoding="utf-8")
-        edited_attachment_pair_salvage_html_output.parent.mkdir(parents=True, exist_ok=True)
-        edited_attachment_pair_salvage_html_output.write_text(rendered_review_html, encoding="utf-8")
+        edited_outputs_by_scene = review_doc.get("edited_html_outputs_by_scene", {})
+        if isinstance(edited_outputs_by_scene, dict):
+            for scene_id in sorted(edited_outputs_by_scene):
+                scene_review_path = Path(str(edited_outputs_by_scene[scene_id]))
+                scene_review_doc = _build_attachment_pair_salvage_review_scene_document(
+                    review_doc=review_doc,
+                    scene_id=scene_id,
+                )
+                scene_review_html = _render_attachment_pair_salvage_review_html(scene_review_doc)
+                scene_review_path.parent.mkdir(parents=True, exist_ok=True)
+                scene_review_path.write_text(scene_review_html, encoding="utf-8")
         logger.info("Saved attachment pair salvage review JSON to %s", attachment_pair_salvage_review_output)
         logger.info("Saved attachment pair salvage review HTML to %s", attachment_pair_salvage_review_html_output)
-        logger.info(
-            "Saved editable attachment pair salvage HTML bootstrap to %s",
-            edited_attachment_pair_salvage_html_output,
-        )
         logger.warning("========== 人工审核 ==========")
-        logger.warning("请直接打开 %s 进行人工修改", edited_attachment_pair_salvage_html_output)
-        logger.warning("修改完成后，保留文件名 edited.html")
+        logger.warning(
+            "请按 scene 打开并修改对应 HTML；pipeline 会读取 %s",
+            review_doc.get("edited_html_output_glob", ""),
+        )
+        if isinstance(edited_outputs_by_scene, dict):
+            for scene_id in sorted(edited_outputs_by_scene):
+                logger.warning("[%s] %s", scene_id, edited_outputs_by_scene[scene_id])
         logger.warning("==============================")
 
     def _finalize_attachment_pair_salvage_review_scene(

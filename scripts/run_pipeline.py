@@ -921,6 +921,87 @@ def _referability_cache_edited_html_path(path: Path) -> Path:
     return path.parent / "edited.html"
 
 
+def _referability_cache_scene_edited_html_path(path: Path, scene_id: str) -> Path:
+    return path.parent / f"{path.stem}_{str(scene_id).strip()}_edited.html"
+
+
+def _referability_cache_scene_edited_html_glob(path: Path) -> str:
+    return str(path.parent / f"{path.stem}_*_edited.html")
+
+
+def _expected_referability_cache_scene_ids(cache: dict | None) -> list[str]:
+    if not isinstance(cache, dict):
+        return []
+    scene_ids: set[str] = set()
+    for field_name in ("scene_status", "scene_grouping"):
+        field_value = cache.get(field_name)
+        if not isinstance(field_value, dict):
+            continue
+        for scene_key, scene_value in field_value.items():
+            if isinstance(scene_key, str) and scene_key.strip():
+                scene_ids.add(scene_key.strip())
+            if isinstance(scene_value, dict):
+                nested_scene_id = str(scene_value.get("scene_id", "")).strip()
+                if nested_scene_id:
+                    scene_ids.add(nested_scene_id)
+
+    frames = cache.get("frames", cache)
+    if isinstance(frames, dict):
+        for scene_key, scene_value in frames.items():
+            if isinstance(scene_value, dict) and "frame_usable" not in scene_value:
+                scene_id = str(scene_key).strip()
+                if scene_id:
+                    scene_ids.add(scene_id)
+            elif isinstance(scene_key, str) and "/" in scene_key:
+                scene_id = scene_key.split("/", 1)[0].strip()
+                if scene_id:
+                    scene_ids.add(scene_id)
+    return sorted(scene_ids)
+
+
+def _resolve_referability_cache_review_html_paths(
+    *,
+    path: Path,
+    cache_doc: dict[str, object],
+) -> tuple[list[Path], str]:
+    scene_html_paths = sorted(path.parent.glob(f"{path.stem}_*_edited.html"))
+    if scene_html_paths:
+        expected_scene_ids = _expected_referability_cache_scene_ids(cache_doc)
+        missing_paths = [
+            (scene_id, _referability_cache_scene_edited_html_path(path, scene_id))
+            for scene_id in expected_scene_ids
+            if not _referability_cache_scene_edited_html_path(path, scene_id).exists()
+        ]
+        if missing_paths:
+            missing_lines = "\n".join(
+                f"- {scene_id}: {expected_path.resolve()}"
+                for scene_id, expected_path in missing_paths
+            )
+            raise ValueError(
+                "[缺少按 scene 划分的人工审核文件]\n"
+                f"referability_cache: {path}\n"
+                f"检测到新格式文件: {_referability_cache_scene_edited_html_glob(path)}\n"
+                f"期望 scene: {', '.join(expected_scene_ids) or '<none>'}\n"
+                "缺失文件:\n"
+                f"{missing_lines}\n"
+                "请先为该 batch 的每个 scene 导出对应的 <cache-stem>_<scene_id>_edited.html。"
+            )
+        return [
+            _referability_cache_scene_edited_html_path(path, scene_id)
+            for scene_id in expected_scene_ids
+        ], "scene-scoped"
+
+    edited_html_path = _referability_cache_edited_html_path(path)
+    if not edited_html_path.exists():
+        raise ValueError(
+            "[缺少人工审核文件 edited.html]\n"
+            f"referability_cache: {path}\n"
+            f"期望位置: {edited_html_path.resolve()}\n"
+            "请先完成人工审核，并把导出的文件命名为 edited.html 放到上面这个目录。"
+        )
+    return [edited_html_path], "legacy"
+
+
 def _load_single_referability_cache(
     path: Path,
     *,
@@ -932,19 +1013,17 @@ def _load_single_referability_cache(
         return None
     with open(path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
-    edited_html_path = _referability_cache_edited_html_path(path)
-    if not edited_html_path.exists():
-        raise ValueError(
-            "[缺少人工审核文件 edited.html]\n"
-            f"referability_cache: {path}\n"
-            f"期望位置: {edited_html_path.resolve()}\n"
-            "请先完成人工审核，并把导出的文件命名为 edited.html 放到上面这个目录。"
-        )
-    html_text = edited_html_path.read_text(encoding="utf-8")
-    data = _apply_attachment_pair_salvage_html_review(
-        html_text=html_text,
+    review_html_paths, review_html_mode = _resolve_referability_cache_review_html_paths(
+        path=path,
         cache_doc=raw_data,
     )
+    data = raw_data
+    for review_html_path in review_html_paths:
+        html_text = review_html_path.read_text(encoding="utf-8")
+        data = _apply_attachment_pair_salvage_html_review(
+            html_text=html_text,
+            cache_doc=data,
+        )
     version = str(data.get("version", ""))
     if version != EXPECTED_REFERABILITY_CACHE_VERSION:
         raise ValueError(
@@ -985,9 +1064,14 @@ def _load_single_referability_cache(
                 _write_json_file(path, persistable_data)
                 logger.info("Wrote repaired referability cache to %s", path)
     logger.info(
-        "Loaded referability cache from %s with automatic human salvage backfill enabled via %s",
+        "Loaded referability cache from %s with automatic human salvage backfill enabled via %s (%s)",
         path,
-        edited_html_path,
+        (
+            review_html_paths[0]
+            if len(review_html_paths) == 1
+            else _referability_cache_scene_edited_html_glob(path)
+        ),
+        review_html_mode,
     )
     return data
 

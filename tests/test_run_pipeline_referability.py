@@ -58,6 +58,22 @@ def write_neighbor_edited_html(cache_path: Path, html_text: str | None = None) -
     return edited_html_path
 
 
+def write_scene_edited_html(
+    cache_path: Path,
+    scene_id: str,
+    html_text: str | None = None,
+) -> Path:
+    edited_html_path = run_pipeline_module._referability_cache_scene_edited_html_path(
+        cache_path,
+        scene_id,
+    )
+    edited_html_path.write_text(
+        html_text or "<!doctype html><html lang=\"en\"><body></body></html>",
+        encoding="utf-8",
+    )
+    return edited_html_path
+
+
 def make_referability_batch_doc(
     *,
     scene_id: str,
@@ -1083,6 +1099,195 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertIn(str((case_dir / "edited.html").resolve()), message)
         self.assertIn("请先完成人工审核", message)
 
+    def test_load_referability_cache_prefers_scene_scoped_html_over_legacy_edited_html(self) -> None:
+        case_dir = make_case_dir("cache_scene_html_preferred")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "flash_batch.json"
+        scene_id = "scene0001_00"
+        image_name = "000001.jpg"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "20.0",
+                    "frames": {
+                        scene_id: {
+                            image_name: {
+                                "frame_usable": True,
+                                "frame_quality_clear": True,
+                                "frame_quality_score": 82,
+                                "frame_quality_reason": "clear enough",
+                                "frame_selection_score": 82001,
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_pair_count": 0,
+                                "attachment_referable_object_ids": [],
+                                "attachment_final_referability": {
+                                    "referable_object_ids": [],
+                                    "pairs": [],
+                                    "pair_count": 0,
+                                },
+                                "final_selection_rank": 0,
+                                "candidate_visible_object_ids": [1, 2],
+                                "candidate_visibility_source": "mesh_ray_refined",
+                                "candidate_labels": ["cup", "table"],
+                                "label_to_object_ids": {"cup": [1], "table": [2]},
+                                "selector_visible_object_ids": [1, 2],
+                                "selector_visible_label_counts": {"cup": 1, "table": 1},
+                                "visibility_audit_by_object_id": {},
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "cup",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                    "2": {
+                                        "obj_id": 2,
+                                        "label": "table",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                },
+                                "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                                "crop_label_counts": {"cup": 1, "table": 1},
+                                "crop_referable_object_ids": [1, 2],
+                                "full_frame_label_reviews": [],
+                                "full_frame_label_statuses": {},
+                                "full_frame_label_counts": {},
+                                "label_statuses": {"cup": "unique", "table": "unique"},
+                                "label_counts": {"cup": 1, "table": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
+                                "referable_object_ids": [1, 2],
+                                "vlm_unique_object_ids": [1, 2],
+                            }
+                        }
+                    },
+                    "scene_grouping": {
+                        scene_id: {
+                            "scene_id": scene_id,
+                            "pipeline_outcome": "processed",
+                        }
+                    },
+                    "scene_status": {
+                        scene_id: {
+                            "scene_id": scene_id,
+                            "processed": True,
+                            "pipeline_outcome": "processed",
+                            "split": "train",
+                            "has_cache_frames": True,
+                            "final_cacheable_frame_count": 1,
+                            "scene_skip_reason": None,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        write_neighbor_edited_html(cache_path)
+        write_scene_edited_html(
+            cache_path,
+            scene_id,
+            make_attachment_pair_review_html(
+                scene_id=scene_id,
+                image_name=image_name,
+                parent_id=2,
+                parent_label="table",
+                parent_surface_text="wooden table",
+                child_id=1,
+                child_label="cup",
+                child_surface_text="blue cup",
+            ),
+        )
+
+        cache = run_pipeline_module._load_referability_cache(cache_path)
+
+        loaded_entry = cache["frames"][scene_id][image_name]
+        self.assertEqual(loaded_entry["attachment_referable_pairs"], [[2, 1]])
+        self.assertEqual(loaded_entry["attachment_referable_object_ids"], [1, 2])
+
+    def test_load_referability_cache_rejects_incomplete_scene_scoped_html_set(self) -> None:
+        case_dir = make_case_dir("cache_scene_html_incomplete")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "flash_batch.json"
+        cache_doc = {
+            "version": "20.0",
+            "frames": {
+                "scene0000_00": {
+                    "000000.jpg": {
+                        "frame_usable": True,
+                    }
+                }
+            },
+            "scene_grouping": {
+                "scene0000_00": {"scene_id": "scene0000_00"},
+                "scene0001_00": {"scene_id": "scene0001_00"},
+            },
+            "scene_status": {
+                "scene0000_00": {"scene_id": "scene0000_00"},
+                "scene0001_00": {"scene_id": "scene0001_00"},
+            },
+        }
+        cache_path.write_text(json.dumps(cache_doc, ensure_ascii=False), encoding="utf-8")
+        write_scene_edited_html(cache_path, "scene0000_00")
+
+        with self.assertRaises(ValueError) as exc_info:
+            run_pipeline_module._load_referability_cache(cache_path)
+
+        message = str(exc_info.exception)
+        expected_missing = run_pipeline_module._referability_cache_scene_edited_html_path(
+            cache_path,
+            "scene0001_00",
+        )
+        self.assertIn("缺少按 scene 划分的人工审核文件", message)
+        self.assertIn("scene0001_00", message)
+        self.assertIn(str(expected_missing.resolve()), message)
+
+    def test_load_referability_cache_scene_scoped_html_requires_zero_frame_scenes_too(self) -> None:
+        case_dir = make_case_dir("cache_scene_html_zero_frames")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "flash_batch.json"
+        cache_doc = {
+            "version": "20.0",
+            "frames": {
+                "scene0000_00": {
+                    "000000.jpg": {
+                        "frame_usable": True,
+                    }
+                }
+            },
+            "scene_grouping": {
+                "scene0000_00": {"scene_id": "scene0000_00"},
+            },
+            "scene_status": {
+                "scene0000_00": {"scene_id": "scene0000_00"},
+                "scene0002_00": {
+                    "scene_id": "scene0002_00",
+                    "has_cache_frames": False,
+                    "final_cacheable_frame_count": 0,
+                },
+            },
+        }
+        cache_path.write_text(json.dumps(cache_doc, ensure_ascii=False), encoding="utf-8")
+        write_scene_edited_html(cache_path, "scene0000_00")
+
+        with self.assertRaises(ValueError) as exc_info:
+            run_pipeline_module._load_referability_cache(cache_path)
+
+        message = str(exc_info.exception)
+        self.assertIn("scene0002_00", message)
+        self.assertIn(
+            str(
+                run_pipeline_module._referability_cache_scene_edited_html_path(
+                    cache_path,
+                    "scene0002_00",
+                ).resolve()
+            ),
+            message,
+        )
+
     def test_load_referability_cache_rejects_inconsistent_entry_without_repair_flag(self) -> None:
         case_dir = make_case_dir("cache_inconsistent")
         self.addCleanup(shutil.rmtree, case_dir, True)
@@ -1520,6 +1725,93 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(sorted(merged["scene_status"].keys()), ["scene0000_00", "scene0001_00"])
         self.assertEqual(merged["model"], "fake-vlm")
         self.assertEqual(merged["alias_config_version"], "test-alias")
+
+    def test_load_referability_cache_glob_reads_each_batch_scene_html_without_cross_batch_pollution(self) -> None:
+        case_dir = make_case_dir("cache_glob_scene_html_isolated")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_a = case_dir / "flash_a.json"
+        batch_b = case_dir / "flash_b.json"
+        scene_a = "scene0000_00"
+        scene_b = "scene0001_00"
+        image_name = "000001.jpg"
+        batch_a.write_text(
+            json.dumps(
+                {
+                    **make_referability_batch_doc(scene_id=scene_a),
+                    "frames": {
+                        scene_a: {
+                            image_name: {
+                                "frame_usable": True,
+                                "frame_quality_clear": True,
+                                "frame_quality_score": 82,
+                                "frame_quality_reason": "clear enough",
+                                "frame_selection_score": 82001,
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_pair_count": 0,
+                                "attachment_referable_object_ids": [],
+                                "attachment_final_referability": {
+                                    "referable_object_ids": [],
+                                    "pairs": [],
+                                    "pair_count": 0,
+                                },
+                                "final_selection_rank": 0,
+                                "candidate_visible_object_ids": [1, 2],
+                                "candidate_visibility_source": "mesh_ray_refined",
+                                "candidate_labels": ["cup", "table"],
+                                "label_to_object_ids": {"cup": [1], "table": [2]},
+                                "selector_visible_object_ids": [1, 2],
+                                "selector_visible_label_counts": {"cup": 1, "table": 1},
+                                "visibility_audit_by_object_id": {},
+                                "object_reviews": {},
+                                "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                                "crop_label_counts": {"cup": 1, "table": 1},
+                                "crop_referable_object_ids": [1, 2],
+                                "full_frame_label_reviews": [],
+                                "full_frame_label_statuses": {},
+                                "full_frame_label_counts": {},
+                                "label_statuses": {"cup": "unique", "table": "unique"},
+                                "label_counts": {"cup": 1, "table": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
+                                "referable_object_ids": [1, 2],
+                                "vlm_unique_object_ids": [1, 2],
+                            }
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        batch_b.write_text(
+            json.dumps(make_referability_batch_doc(scene_id=scene_b), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_scene_edited_html(
+            batch_a,
+            scene_a,
+            make_attachment_pair_review_html(
+                scene_id=scene_a,
+                image_name=image_name,
+                parent_id=2,
+                parent_label="table",
+                parent_surface_text="wooden table",
+                child_id=1,
+                child_label="cup",
+                child_surface_text="blue cup",
+            ),
+        )
+        write_scene_edited_html(batch_b, scene_b)
+
+        merged = run_pipeline_module._load_referability_cache(str(case_dir / "flash*.json"))
+
+        self.assertEqual(
+            merged["frames"][scene_a][image_name]["attachment_referable_pairs"],
+            [[2, 1]],
+        )
+        self.assertNotIn("scene0000_00", merged["frames"].get(scene_b, {}))
 
     def test_load_referability_cache_glob_rejects_duplicate_scene(self) -> None:
         case_dir = make_case_dir("cache_glob_duplicate")

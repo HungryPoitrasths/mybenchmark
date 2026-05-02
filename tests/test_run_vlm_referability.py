@@ -4952,7 +4952,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("group</strong> scene0003_00:group_0", html_text)
         self.assertIn("group</strong> scene0003_00:group_1", html_text)
         self.assertIn('id="export-edited-html"', html_text)
-        self.assertIn("edited html target:</strong> edited.html", html_text)
+        self.assertIn("scene review files:</strong> edited.html", html_text)
         self.assertIn("suggestedName: editedHtmlTargetName", html_text)
         self.assertIn('name="parent_surface_text"', html_text)
         self.assertIn('name="child_surface_text"', html_text)
@@ -6167,7 +6167,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
         (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
         output_path = root / "output" / "referability_cache.json"
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        edited_html_path = output_path.parent / "edited.html"
 
         scene = {
             "objects": [
@@ -6311,16 +6310,37 @@ class RunVlmReferabilityTests(unittest.TestCase):
         batch_path, _cache_doc = load_single_batch_cache_for_output(output_path)
         review_path = referability_module._attachment_pair_salvage_review_output_path(batch_path)
         review_html_path = referability_module._attachment_pair_salvage_review_html_output_path(batch_path)
+        edited_html_path = referability_module._edited_attachment_pair_salvage_html_output_path(
+            batch_path,
+            "scene0001_00",
+        )
         self.assertTrue(review_path.exists())
         self.assertTrue(review_html_path.exists())
         self.assertTrue(edited_html_path.exists())
         review_doc = json.loads(review_path.read_text(encoding="utf-8"))
         html_text = review_html_path.read_text(encoding="utf-8")
         self.assertEqual(review_doc["name"], referability_module.ATTACHMENT_PAIR_SALVAGE_REVIEW_NAME)
-        self.assertEqual(review_doc["edited_html_output"], str(edited_html_path))
+        self.assertEqual(
+            review_doc["edited_html_output_glob"],
+            referability_module._edited_attachment_pair_salvage_html_output_glob(batch_path),
+        )
+        self.assertEqual(
+            review_doc["edited_html_outputs_by_scene"],
+            {
+                "scene0001_00": str(edited_html_path),
+            },
+        )
         self.assertEqual(review_doc["pair_count_needs_vlm_salvage_review"], 1)
         self.assertIn("Attachment Pair Salvage Review", html_text)
-        self.assertIn(f"edited html target:</strong> {edited_html_path}", html_text)
+        self.assertIn(
+            f"scene review files:</strong> {edited_html_path}",
+            html_text,
+        )
+        self.assertIn(
+            "per-scene targets:</strong> scene0001_00 -&gt; "
+            f"{edited_html_path.name}",
+            html_text,
+        )
         self.assertIn("included scenes:</strong> scene0001_00", html_text)
         self.assertIn("scene0001_00:group_0", html_text)
         self.assertIn("000001", html_text)
