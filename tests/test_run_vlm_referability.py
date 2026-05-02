@@ -837,19 +837,72 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(source, "mesh_ray_refined")
         self.assertEqual(caster._responses, [])
 
-    def test_refine_candidate_visible_object_ids_falls_back_to_projection_when_mesh_ray_fails(self) -> None:
-        candidate_ids, source = referability_module._refine_candidate_visible_object_ids(
-            [1],
-            [make_object(1, "chair")],
-            make_camera_pose(),
-            make_camera_intrinsics(),
-            np.ones((4, 4), dtype=np.float32),
-            make_camera_intrinsics(),
-            ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
-            instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
-        )
-        self.assertEqual(candidate_ids, [1])
-        self.assertEqual(source, "projection_fallback")
+    def test_refine_candidate_visible_object_ids_raises_when_ray_caster_fails(self) -> None:
+        with self.assertRaises(referability_module.MeshRayRequiredError):
+            referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: (_ for _ in ()).throw(RuntimeError("ray failed")),
+                instance_mesh_data_getter=lambda _base: make_instance_mesh_data(obj_id=1, sample_count=8),
+            )
+
+    def test_refine_candidate_visible_object_ids_raises_when_stage1_mesh_data_load_fails(self) -> None:
+        with self.assertRaises(referability_module.MeshRayRequiredError):
+            referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
+                instance_mesh_data_getter=lambda _base: (_ for _ in ()).throw(
+                    RuntimeError("stage1 mesh failed")
+                ),
+            )
+
+    def test_refine_candidate_visible_object_ids_raises_when_stage2_mesh_data_load_fails(self) -> None:
+        def instance_mesh_data_getter(base_sample_count: int):
+            if base_sample_count == referability_module.REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT:
+                return make_instance_mesh_data(obj_id=1, sample_count=8)
+            raise RuntimeError("stage2 mesh failed")
+
+        with self.assertRaises(referability_module.MeshRayRequiredError):
+            referability_module._refine_candidate_visible_object_ids(
+                [1],
+                [make_object(1, "chair")],
+                make_camera_pose(),
+                make_camera_intrinsics(),
+                np.ones((4, 4), dtype=np.float32),
+                make_camera_intrinsics(),
+                ray_caster_getter=lambda: _SequenceVisibilityCaster([(0, 4)]),
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+
+    def test_refine_candidate_visible_object_ids_raises_when_mesh_ray_evaluation_fails(self) -> None:
+        with patch.object(
+            referability_module,
+            "_evaluate_crop_unique_mesh_ray_stage",
+            side_effect=RuntimeError("evaluation failed"),
+        ):
+            with self.assertRaises(referability_module.MeshRayRequiredError):
+                referability_module._refine_candidate_visible_object_ids(
+                    [1],
+                    [make_object(1, "chair")],
+                    make_camera_pose(),
+                    make_camera_intrinsics(),
+                    np.ones((4, 4), dtype=np.float32),
+                    make_camera_intrinsics(),
+                    ray_caster_getter=lambda: _SequenceVisibilityCaster([(1, 4)]),
+                    instance_mesh_data_getter=lambda _base: make_instance_mesh_data(
+                        obj_id=1,
+                        sample_count=8,
+                    ),
+                )
 
     def test_aggregate_label_reviews_uses_strict_policy(self) -> None:
         label_to_ids = {
@@ -1816,6 +1869,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "_review_out_of_frame_label_candidates",
                 side_effect=AssertionError("injected out_of_frame_review should be reused"),
+            ),
+            patch.object(
+                referability_module,
+                "_refine_candidate_visible_object_ids",
+                return_value=([1], "mesh_ray_refined"),
             ),
             patch.object(
                 referability_module,
@@ -7215,6 +7273,195 @@ class RunVlmReferabilityTests(unittest.TestCase):
             list(global_scene_status["completed_scenes"].keys()),
             ["scene0001_00", "scene0002_00"],
         )
+
+    def test_mesh_ray_failure_marks_only_current_scene_and_resume_skips_it(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"mesh_ray_failed_scene_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scans_root = data_root / "scans"
+        for scene_id in ("scene0001_00", "scene0002_00"):
+            make_scene_dir(scans_root, scene_id)
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def fake_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            _ = preloaded_geometry
+            return {
+                "objects": [
+                    make_object(1, "table"),
+                    make_object(2, "book"),
+                    make_object(3, "lamp"),
+                ]
+            }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        def fake_select_frames(scene_dir: Path, *args, **kwargs):
+            _ = (args, kwargs)
+            return [
+                {
+                    "image_name": "000101.jpg",
+                    "visible_object_ids": [3],
+                    "score": 9,
+                    "attachment_viewpoint_exempt": False,
+                    "scene_id": scene_dir.name,
+                }
+            ]
+
+        def fake_select_and_rerank_frames(**kwargs):
+            frame = dict(kwargs["frame_candidates"][0])
+            reviewed_frame = kwargs["frame_review_getter"](frame)
+            debug_output = kwargs["debug_output"]
+            debug_output["reranked_accepted_frame_image_names"] = [frame["image_name"]]
+            debug_output["selected_before_attachment_slots_image_names"] = [frame["image_name"]]
+            debug_output["selected_before_attachment_slots_count"] = 1
+            debug_output["accepted_frame_count_after_group_scan"] = 1
+            debug_output["non_attachment_processed_group_count"] = 1
+            debug_output["groups"] = []
+            built_entry = kwargs["referability_entry_builder"](frame, reviewed_frame)
+            return [
+                {
+                    "image_name": frame["image_name"],
+                    "visible_object_ids": list(frame["visible_object_ids"]),
+                    "selector_score": int(frame["score"]),
+                    "frame_info": dict(reviewed_frame["frame_info"]),
+                    "frame_selection_score": int(reviewed_frame["frame_selection_score"]),
+                    "_referability_entry": dict(built_entry),
+                    "attachment_viewpoint_exempt": False,
+                }
+            ]
+
+        def fake_compute_entry(**kwargs):
+            scene_id = kwargs["image_path"].parent.parent.name
+            if scene_id == "scene0001_00":
+                raise referability_module.MeshRayRequiredError("forced mesh-ray failure")
+            entry = make_debug_cache_entry()
+            entry["image_name"] = kwargs["image_path"].name
+            entry["selector_visible_object_ids"] = [3]
+            entry["candidate_visible_object_ids"] = [3]
+            entry["candidate_visibility_source"] = "mesh_ray_refined"
+            entry["referable_object_ids"] = [3]
+            entry["attachment_referable_object_ids"] = []
+            return entry
+
+        self.addCleanup(shutil.rmtree, root, True)
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", side_effect=fake_parse_scene),
+            patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+            patch("src.support_graph.build_attachment_candidates", return_value=[]),
+            patch.object(referability_module, "_load_scene_geometry", return_value="preloaded-geometry"),
+            patch.object(referability_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(referability_module, "select_frames", side_effect=fake_select_frames),
+            patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(
+                referability_module,
+                "load_scannet_poses",
+                return_value={"000101.jpg": make_camera_pose(image_name="000101.jpg")},
+            ),
+            patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(referability_module.cv2, "imread", return_value=np.zeros((120, 120, 3), dtype=np.uint8)),
+            patch.object(
+                referability_module,
+                "load_depth_image",
+                return_value=np.ones((120, 120), dtype=np.uint16),
+            ),
+            patch.object(
+                referability_module,
+                "_frame_decision_batch",
+                side_effect=lambda client, model_name, batch: {
+                    str(item["image_name"]): {
+                        "clear": True,
+                        "clarity_score": 84,
+                        "frame_usable": True,
+                        "reason": "clear",
+                    }
+                    for item in batch
+                },
+            ),
+            patch.object(
+                referability_module,
+                "compute_frame_object_visibility",
+                return_value={3: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0}},
+            ),
+            patch.object(
+                referability_module,
+                "_compute_frame_referability_entry",
+                side_effect=fake_compute_entry,
+            ),
+            patch.object(
+                referability_module,
+                "_select_and_rerank_frames",
+                side_effect=fake_select_and_rerank_frames,
+            ),
+            patch.object(referability_module, "_select_attachment_group_representatives", return_value=[]),
+            patch.object(
+                referability_module,
+                "_enrich_final_scene_entries_out_of_frame",
+                side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "2",
+                "--scene_workers",
+                "1",
+                "--max_frames",
+                "1",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            referability_module.main()
+
+        _batch_path, cache_doc = load_single_batch_cache_for_output(output_path)
+        self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["pipeline_outcome"], "mesh_ray_failed")
+        self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["scene_skip_reason"], "mesh_ray_failed")
+        self.assertFalse(cache_doc["scene_status"]["scene0001_00"]["has_cache_frames"])
+        self.assertEqual(cache_doc["scene_status"]["scene0001_00"]["final_cacheable_frame_count"], 0)
+        self.assertNotIn("scene0001_00", cache_doc["frames"])
+        self.assertEqual(cache_doc["scene_status"]["scene0002_00"]["pipeline_outcome"], "processed")
+        self.assertEqual(list(cache_doc["frames"]["scene0002_00"].keys()), ["000101.jpg"])
+        global_scene_status = load_scene_status_doc_for_output(output_path)
+        self.assertEqual(
+            list(global_scene_status["completed_scenes"].keys()),
+            ["scene0001_00", "scene0002_00"],
+        )
+
+        with (
+            patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+            patch("src.scene_parser.parse_scene", side_effect=AssertionError("resume should skip completed scenes")),
+            patch.object(
+                referability_module,
+                "select_frames",
+                side_effect=AssertionError("resume should skip completed scenes"),
+            ),
+            patch.object(sys, "argv", [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "2",
+                "--resume",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]),
+        ):
+            referability_module.main()
+
+        self.assertEqual(len(list_batch_cache_paths(output_path)), 1)
 
     def test_scene_workers_respect_global_vlm_worker_cap(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"scene_workers_vlm_cap_{uuid.uuid4().hex}"

@@ -189,6 +189,10 @@ class SceneWorkerResult:
     frame_sidecar_cache: dict[str, dict[str, Any]] | None = None
 
 
+class MeshRayRequiredError(RuntimeError):
+    """Raised when referability candidate refinement cannot complete with mesh-ray."""
+
+
 class _ThreadLocalOpenAIClientFactory:
     def __init__(self, openai_cls: Callable[..., Any], *, api_key: str, base_url: str) -> None:
         self._openai_cls = openai_cls
@@ -5563,50 +5567,94 @@ def _refine_candidate_visible_object_ids(
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> tuple[list[int], str]:
     selector_ids = sorted({int(obj_id) for obj_id in visible_object_ids})
-    if (
-        selector_ids
-        and color_intrinsics is not None
-        and callable(ray_caster_getter)
-        and callable(instance_mesh_data_getter)
-    ):
+    _ = (objects, depth_image, depth_intrinsics)
+    if not selector_ids:
+        return [], "mesh_ray_refined"
+    if color_intrinsics is None:
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement requires color intrinsics"
+        )
+    if not callable(ray_caster_getter):
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement requires ray_caster_getter"
+        )
+    if not callable(instance_mesh_data_getter):
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement requires instance_mesh_data_getter"
+        )
+
+    try:
+        ray_caster = ray_caster_getter()
+    except Exception as exc:
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement failed while loading ray caster"
+        ) from exc
+    if ray_caster is None:
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement requires a non-null ray caster"
+        )
+
+    try:
+        stage1_instance_mesh_data = instance_mesh_data_getter(
+            REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+        )
+    except Exception as exc:
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement failed while loading stage1 mesh samples"
+        ) from exc
+    if stage1_instance_mesh_data is None:
+        raise MeshRayRequiredError(
+            "mesh-ray candidate refinement requires stage1 mesh samples"
+        )
+
+    stage2_instance_mesh_data: InstanceMeshData | None = None
+    mesh_ray_refined: list[int] = []
+    for obj_id in selector_ids:
         try:
-            ray_caster = ray_caster_getter()
-            if ray_caster is not None:
-                stage1_instance_mesh_data = instance_mesh_data_getter(
-                    REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
-                )
-                stage2_instance_mesh_data: InstanceMeshData | None = None
-                mesh_ray_refined: list[int] = []
-                for obj_id in selector_ids:
-                    stage1 = _evaluate_crop_unique_mesh_ray_stage(
-                        obj_id=int(obj_id),
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        ray_caster=ray_caster,
-                        instance_mesh_data=stage1_instance_mesh_data,
-                        base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
-                    )
-                    if _ray_visibility_stage_passes(stage1):
-                        mesh_ray_refined.append(int(obj_id))
-                        continue
-                    if stage2_instance_mesh_data is None:
-                        stage2_instance_mesh_data = instance_mesh_data_getter(
-                            REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
-                        )
-                    stage2 = _evaluate_crop_unique_mesh_ray_stage(
-                        obj_id=int(obj_id),
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        ray_caster=ray_caster,
-                        instance_mesh_data=stage2_instance_mesh_data,
-                        base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
-                    )
-                    if _ray_visibility_stage_passes(stage2):
-                        mesh_ray_refined.append(int(obj_id))
-                return sorted(set(int(obj_id) for obj_id in mesh_ray_refined)), "mesh_ray_refined"
+            stage1 = _evaluate_crop_unique_mesh_ray_stage(
+                obj_id=int(obj_id),
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=stage1_instance_mesh_data,
+                base_sample_count=REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
+            )
         except Exception as exc:
-            logger.warning("Mesh-ray refine failed: %s", exc)
-    return selector_ids, "projection_fallback"
+            raise MeshRayRequiredError(
+                f"mesh-ray stage1 evaluation failed for object {int(obj_id)}"
+            ) from exc
+        if _ray_visibility_stage_passes(stage1):
+            mesh_ray_refined.append(int(obj_id))
+            continue
+        if stage2_instance_mesh_data is None:
+            try:
+                stage2_instance_mesh_data = instance_mesh_data_getter(
+                    REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
+                )
+            except Exception as exc:
+                raise MeshRayRequiredError(
+                    "mesh-ray candidate refinement failed while loading stage2 mesh samples"
+                ) from exc
+            if stage2_instance_mesh_data is None:
+                raise MeshRayRequiredError(
+                    "mesh-ray candidate refinement requires stage2 mesh samples"
+                )
+        try:
+            stage2 = _evaluate_crop_unique_mesh_ray_stage(
+                obj_id=int(obj_id),
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=stage2_instance_mesh_data,
+                base_sample_count=REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
+            )
+        except Exception as exc:
+            raise MeshRayRequiredError(
+                f"mesh-ray stage2 evaluation failed for object {int(obj_id)}"
+            ) from exc
+        if _ray_visibility_stage_passes(stage2):
+            mesh_ray_refined.append(int(obj_id))
+    return sorted(set(int(obj_id) for obj_id in mesh_ray_refined)), "mesh_ray_refined"
 
 
 def _build_visibility_audit_by_object_id(
@@ -7193,7 +7241,6 @@ def _compute_frame_referability_entry(
             depth_image=depth_image,
             depth_intrinsics=depth_intrinsics,
             instance_mesh_data=visibility_instance_mesh_data,
-            strict_mode=False,
         )
     visibility_audit_by_object_id = _build_visibility_audit_by_object_id(
         scene_objects,
@@ -7687,7 +7734,6 @@ def _enrich_final_scene_entries_out_of_frame(
             depth_image=depth_image,
             depth_intrinsics=depth_intrinsics,
             instance_mesh_data=visibility_instance_mesh_data,
-            strict_mode=False,
         )
         updated_entry.update(
             _review_out_of_frame_label_candidates(
@@ -8800,6 +8846,7 @@ def main():
             axis_alignment=axis_align,
             preloaded_geometry=preloaded_geometry,
         )
+        scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         attachment_pair_salvage_scene_review: dict[str, Any] | None = None
         _cache_miss = object()
         scene_image_cache: dict[str, np.ndarray | None] = {}
@@ -8817,6 +8864,31 @@ def main():
         )
         sidecar_dirty = False
         cached_visibility_instance_mesh_data: Any = _cache_miss
+
+        def _build_mesh_ray_failure_result(exc: MeshRayRequiredError) -> SceneWorkerResult:
+            logger.warning("Mesh-ray required failure for %s: %s", scene_id, exc)
+            scene_grouping_summary["pipeline_outcome"] = "mesh_ray_failed"
+            scene_grouping_summary["scene_skip_reason"] = "mesh_ray_failed"
+            return _build_result(
+                pipeline_outcome="mesh_ray_failed",
+                scene_skip_reason="mesh_ray_failed",
+                scene_grouping_summary=scene_grouping_summary,
+                scene_cache=None,
+                attachment_review_record=_make_attachment_review_record(
+                    "mesh_ray_failed"
+                ),
+                attachment_pair_salvage_review_record=_build_attachment_pair_record(
+                    "mesh_ray_failed",
+                    attachment_pair_salvage_scene_review,
+                ),
+                frame_sidecar_cache=scene_frame_sidecar_cache if sidecar_dirty else None,
+            )
+
+        def _should_reuse_cached_referability_entry(entry: Any) -> bool:
+            return isinstance(entry, dict) and (
+                str(entry.get("candidate_visibility_source", "")).strip().lower()
+                != "projection_fallback"
+            )
 
         def _load_scene_image(image_name: str) -> np.ndarray | None:
             cached_image = scene_image_cache.get(image_name, _cache_miss)
@@ -8934,7 +9006,6 @@ def main():
                 depth_image=depth_image,
                 depth_intrinsics=depth_intrinsics,
                 instance_mesh_data=_get_scene_visibility_instance_mesh_data(),
-                strict_mode=False,
             )
             scene_visibility_cache[image_name] = cached_visibility
             return cached_visibility if isinstance(cached_visibility, dict) else None
@@ -8983,11 +9054,13 @@ def main():
             cached_entry = referability_entry_cache.get(image_name, _cache_miss)
             if cached_entry is _cache_miss:
                 sidecar_record = scene_frame_sidecar_cache.get(image_name)
-                if isinstance(sidecar_record, dict) and isinstance(
-                    sidecar_record.get("referability_entry"),
-                    dict,
-                ):
-                    cached_entry = dict(sidecar_record["referability_entry"])
+                sidecar_entry = (
+                    sidecar_record.get("referability_entry")
+                    if isinstance(sidecar_record, dict)
+                    else None
+                )
+                if _should_reuse_cached_referability_entry(sidecar_entry):
+                    cached_entry = dict(sidecar_entry)
                     referability_entry_cache[image_name] = cached_entry
                     scene_out_of_frame_review_cache.setdefault(
                         image_name,
@@ -9080,7 +9153,7 @@ def main():
                     cached_frame_info = dict(sidecar_frame_info)
                     frame_clarity_cache[image_name] = cached_frame_info
                 sidecar_entry = sidecar_record.get("referability_entry")
-                if isinstance(sidecar_entry, dict):
+                if _should_reuse_cached_referability_entry(sidecar_entry):
                     referability_entry_cache.setdefault(image_name, dict(sidecar_entry))
                     scene_out_of_frame_review_cache.setdefault(
                         image_name,
@@ -9225,25 +9298,27 @@ def main():
                 reviewed_frame=reviewed_frame,
             )
 
-        scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         scene_grouping_summary["non_attachment_candidate_frame_count"] = len(non_attachment_candidate_frames)
         scene_grouping_summary["non_attachment_visible_object_group_count"] = non_attachment_group_count
-        non_attachment_frames = _select_and_rerank_frames(
-            client=scene_client,
-            model_name=model_name,
-            scene_dir=scene_dir,
-            frame_candidates=non_attachment_candidate_frames,
-            max_frames=int(args.max_frames),
-            poses=poses,
-            vlm_workers=int(args.vlm_workers),
-            frame_review_getter=_get_reviewed_frame,
-            frame_review_batch_getter=_get_reviewed_frames,
-            referability_entry_builder=_get_referability_entry,
-            debug_output=scene_grouping_summary,
-            frame_clarity_batch_size=int(args.frame_clarity_batch_size),
-            non_attachment_referability_shortlist=int(args.non_attachment_referability_shortlist),
-            non_attachment_clarity_min_score=int(args.non_attachment_clarity_min_score),
-        ) if non_attachment_candidate_frames else []
+        try:
+            non_attachment_frames = _select_and_rerank_frames(
+                client=scene_client,
+                model_name=model_name,
+                scene_dir=scene_dir,
+                frame_candidates=non_attachment_candidate_frames,
+                max_frames=int(args.max_frames),
+                poses=poses,
+                vlm_workers=int(args.vlm_workers),
+                frame_review_getter=_get_reviewed_frame,
+                frame_review_batch_getter=_get_reviewed_frames,
+                referability_entry_builder=_get_referability_entry,
+                debug_output=scene_grouping_summary,
+                frame_clarity_batch_size=int(args.frame_clarity_batch_size),
+                non_attachment_referability_shortlist=int(args.non_attachment_referability_shortlist),
+                non_attachment_clarity_min_score=int(args.non_attachment_clarity_min_score),
+            ) if non_attachment_candidate_frames else []
+        except MeshRayRequiredError as exc:
+            return _build_mesh_ray_failure_result(exc)
 
         def _build_attachment_entry(
             frame: dict[str, Any],
@@ -9252,47 +9327,50 @@ def main():
             return _get_referability_entry(frame, reviewed_frame)
 
         attachment_failed_signatures_seen: set[tuple[int, ...]] = set()
-        attachment_selected_frames = _select_attachment_group_representatives(
-            client=scene_client,
-            model_name=model_name,
-            scene_dir=scene_dir,
-            frames=attachment_candidate_frames,
-            attachment_graph=attachment_graph,
-            poses=poses,
-            frame_review_getter=_get_reviewed_frame,
-            frame_review_batch_getter=_get_reviewed_frames,
-            attachment_entry_builder=_build_attachment_entry,
-            max_accepted_frame_count=int(args.max_frames),
-            vlm_workers=int(args.vlm_workers),
-            frame_clarity_batch_size=int(args.frame_clarity_batch_size),
-            attachment_clarity_min_score=int(args.attachment_clarity_min_score),
-            failed_signatures_seen=attachment_failed_signatures_seen,
-        ) if attachment_candidate_frames else []
-        if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
-            attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
+        try:
+            attachment_selected_frames = _select_attachment_group_representatives(
                 client=scene_client,
                 model_name=model_name,
-                scene_id=scene_id,
-                split=scene_split,
                 scene_dir=scene_dir,
-                objects=scene["objects"],
-                objects_by_id=objects_by_id,
-                attachment_graph=attachment_graph,
-                attachment_edges=final_attachment_edges,
                 frames=attachment_candidate_frames,
+                attachment_graph=attachment_graph,
                 poses=poses,
                 frame_review_getter=_get_reviewed_frame,
                 frame_review_batch_getter=_get_reviewed_frames,
-                scene_image_getter=_load_scene_image,
                 attachment_entry_builder=_build_attachment_entry,
-                bbox_hard_fail_min=float(args.attachment_pair_salvage_bbox_hard_fail_min),
-                projected_area_hard_fail_min=float(
-                    args.attachment_pair_salvage_projected_area_hard_fail_min
-                ),
+                max_accepted_frame_count=int(args.max_frames),
+                vlm_workers=int(args.vlm_workers),
                 frame_clarity_batch_size=int(args.frame_clarity_batch_size),
                 attachment_clarity_min_score=int(args.attachment_clarity_min_score),
                 failed_signatures_seen=attachment_failed_signatures_seen,
-            )
+            ) if attachment_candidate_frames else []
+            if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
+                attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
+                    client=scene_client,
+                    model_name=model_name,
+                    scene_id=scene_id,
+                    split=scene_split,
+                    scene_dir=scene_dir,
+                    objects=scene["objects"],
+                    objects_by_id=objects_by_id,
+                    attachment_graph=attachment_graph,
+                    attachment_edges=final_attachment_edges,
+                    frames=attachment_candidate_frames,
+                    poses=poses,
+                    frame_review_getter=_get_reviewed_frame,
+                    frame_review_batch_getter=_get_reviewed_frames,
+                    scene_image_getter=_load_scene_image,
+                    attachment_entry_builder=_build_attachment_entry,
+                    bbox_hard_fail_min=float(args.attachment_pair_salvage_bbox_hard_fail_min),
+                    projected_area_hard_fail_min=float(
+                        args.attachment_pair_salvage_projected_area_hard_fail_min
+                    ),
+                    frame_clarity_batch_size=int(args.frame_clarity_batch_size),
+                    attachment_clarity_min_score=int(args.attachment_clarity_min_score),
+                    failed_signatures_seen=attachment_failed_signatures_seen,
+                )
+        except MeshRayRequiredError as exc:
+            return _build_mesh_ray_failure_result(exc)
         selected_attachment_frames = attachment_selected_frames
         remaining_slots = max(0, int(args.max_frames) - len(selected_attachment_frames))
         selected_non_attachment_frames = non_attachment_frames[:remaining_slots]
@@ -9397,7 +9475,10 @@ def main():
                     reviewed_frame = _get_reviewed_frame(frame)
                 if reviewed_frame is None:
                     continue
-                entry = _get_referability_entry(frame, reviewed_frame)
+                try:
+                    entry = _get_referability_entry(frame, reviewed_frame)
+                except MeshRayRequiredError as exc:
+                    return _build_mesh_ray_failure_result(exc)
                 if not isinstance(entry, dict):
                     continue
             final_scene_entries[image_name] = _attach_selection_metadata(
@@ -9428,19 +9509,22 @@ def main():
                 frame_sidecar_cache=scene_frame_sidecar_cache if sidecar_dirty else None,
             )
 
-        final_scene_entries = _enrich_final_scene_entries_out_of_frame(
-            client=scene_client,
-            model_name=model_name,
-            scene_dir=scene_dir,
-            final_scene_entries=final_scene_entries,
-            scene_objects=scene["objects"],
-            objects_by_id=objects_by_id,
-            poses=poses,
-            color_intrinsics=color_intrinsics,
-            depth_intrinsics=depth_intrinsics,
-            referability_entry_getter=lambda image_name: _get_referability_entry_by_image_name(image_name),
-            instance_mesh_data_getter=instance_mesh_data_getter,
-        )
+        try:
+            final_scene_entries = _enrich_final_scene_entries_out_of_frame(
+                client=scene_client,
+                model_name=model_name,
+                scene_dir=scene_dir,
+                final_scene_entries=final_scene_entries,
+                scene_objects=scene["objects"],
+                objects_by_id=objects_by_id,
+                poses=poses,
+                color_intrinsics=color_intrinsics,
+                depth_intrinsics=depth_intrinsics,
+                referability_entry_getter=lambda image_name: _get_referability_entry_by_image_name(image_name),
+                instance_mesh_data_getter=instance_mesh_data_getter,
+            )
+        except MeshRayRequiredError as exc:
+            return _build_mesh_ray_failure_result(exc)
 
         scene_cache: dict[str, dict[str, Any]] = {}
         for image_name, entry in sorted(
