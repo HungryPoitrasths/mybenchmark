@@ -10,6 +10,15 @@ This script runs *before* QA generation. For each selected frame it asks a VLM:
 
 The output is a cache that can be consumed by scripts/run_pipeline.py via
 --referability_cache.
+
+When attachment pair salvage review is enabled, the script also writes:
+  - salvage/<prefix>_salvage_review.json and .html as batch-level summaries;
+  - <cache-stem>_<scene_id>_edited.html as the per-scene human-edited files
+    that scripts/run_pipeline.py consumes.
+
+The batch salvage_review.html is not a pipeline input. For backward
+compatibility, scripts/run_pipeline.py still falls back to a neighboring
+legacy edited.html only when no per-scene edited HTML files exist.
 """
 
 from __future__ import annotations
@@ -4486,6 +4495,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
       <div class="summary-scenes"><strong>referability cache:</strong> {html.escape(referability_cache_output or "-")}</div>
       <div class="summary-scenes"><strong>scene review files:</strong> {html.escape(edited_html_target_display)}</div>
       <div class="summary-scenes"><strong>per-scene targets:</strong> {_render_simple_list(per_scene_output_lines)}</div>
+      <div class="summary-scenes"><strong>pipeline input:</strong> run_pipeline reads the per-scene edited HTML files shown above, or a legacy neighboring edited.html only when no per-scene files exist. This salvage_review.html file is a batch summary only.</div>
       <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
       {('<div class="summary-actions"><button type="button" id="export-edited-html" class="summary-action">Export Edited HTML</button></div>' if editable_scene_id is not None else '')}
     </section>
@@ -8528,6 +8538,10 @@ def main():
                 scene_review_path.write_text(scene_review_html, encoding="utf-8")
         logger.info("Saved attachment pair salvage review JSON to %s", attachment_pair_salvage_review_output)
         logger.info("Saved attachment pair salvage review HTML to %s", attachment_pair_salvage_review_html_output)
+        logger.warning(
+            "run_pipeline does not read %s directly; it reads the per-scene edited HTML files listed below, or a legacy neighboring edited.html only when no per-scene files exist.",
+            attachment_pair_salvage_review_html_output,
+        )
         logger.warning("========== 人工审核 ==========")
         logger.warning(
             "请按 scene 打开并修改对应 HTML；pipeline 会读取 %s",
