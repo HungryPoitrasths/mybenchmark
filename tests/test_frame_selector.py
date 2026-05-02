@@ -212,6 +212,75 @@ class FrameSelectorTests(unittest.TestCase):
         self.assertNotIn("zbuffer_mask_area_px", meta)
         self.assertNotIn("has_zbuffer_mask_area", meta)
 
+    def test_compute_referability_object_visibility_returns_projection_fields_only(self) -> None:
+        obj = make_object(1, "cup")
+
+        with (
+            patch.object(
+                frame_selector,
+                "project_to_image",
+                return_value=(np.array([320.0, 240.0], dtype=np.float64), 2.0),
+            ),
+            patch.object(
+                frame_selector,
+                "_project_object_roi",
+                return_value={
+                    "valid_projection_count": 9,
+                    "bbox_in_frame_ratio": 0.9,
+                    "projected_area_px": 900.0,
+                    "edge_margin_px": 24.0,
+                    "roi_bounds": (0, 20, 0, 20),
+                },
+            ),
+            patch.object(
+                frame_selector.cv2,
+                "imread",
+                side_effect=AssertionError("referability projection visibility should not read RGB"),
+            ),
+        ):
+            visibility = frame_selector.compute_referability_object_visibility(
+                [obj],
+                make_camera_pose("000000.jpg"),
+                make_camera_intrinsics(),
+            )
+
+        self.assertEqual(
+            visibility[1],
+            {
+                "center_uv_px": [320.0, 240.0],
+                "depth_m": 2.0,
+                "bbox_in_frame_ratio": 0.9,
+                "projected_area_px": 900.0,
+                "edge_margin_px": 24.0,
+                "roi_bounds_px": [0, 20, 0, 20],
+            },
+        )
+        self.assertNotIn("occlusion_status", visibility[1])
+        self.assertNotIn("visible_ratio", visibility[1])
+        self.assertNotIn("roi_sharpness", visibility[1])
+
+    def test_compute_referability_object_visibility_does_not_require_depth_loading(self) -> None:
+        obj = make_object(1, "cup")
+
+        with patch.object(
+            frame_selector,
+            "_project_object_roi",
+            return_value={
+                "valid_projection_count": 9,
+                "bbox_in_frame_ratio": 0.9,
+                "projected_area_px": 900.0,
+                "edge_margin_px": 24.0,
+                "roi_bounds": (0, 20, 0, 20),
+            },
+        ):
+            visibility = frame_selector.compute_referability_object_visibility(
+                [obj],
+                make_camera_pose("000000.jpg"),
+                make_camera_intrinsics(),
+            )
+
+        self.assertEqual(visibility[1]["projected_area_px"], 900.0)
+
     def test_compute_frame_object_visibility_preserves_non_strict_metadata_fields(self) -> None:
         obj = make_object(1, "cup")
 

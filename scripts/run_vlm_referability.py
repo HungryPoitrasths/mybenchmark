@@ -40,7 +40,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.frame_selector import (
     build_selector_visibility_audit_from_meta,
-    compute_frame_object_visibility,
+    compute_referability_object_visibility,
     select_frames,
 )
 from src.alias_groups import ALIAS_CONFIG_VERSION
@@ -7226,21 +7226,12 @@ def _compute_frame_referability_entry(
         if frame_selection_score is not None
         else _frame_selection_score(selector_score_value, normalized_frame_info)
     )
-    visibility_instance_mesh_data = None
-    if callable(instance_mesh_data_getter):
-        visibility_instance_mesh_data = instance_mesh_data_getter(
-            REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
-        )
     computed_visibility_by_obj_id = visibility_by_obj_id
     if computed_visibility_by_obj_id is None:
-        computed_visibility_by_obj_id = compute_frame_object_visibility(
+        computed_visibility_by_obj_id = compute_referability_object_visibility(
             scene_objects,
             camera_pose,
             color_intrinsics,
-            image_path=image_path,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-            instance_mesh_data=visibility_instance_mesh_data,
         )
     visibility_audit_by_object_id = _build_visibility_audit_by_object_id(
         scene_objects,
@@ -7679,15 +7670,6 @@ def _enrich_final_scene_entries_out_of_frame(
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> dict[str, dict[str, Any]]:
     enriched_entries: dict[str, dict[str, Any]] = {}
-    visibility_instance_mesh_data = None
-    if callable(instance_mesh_data_getter):
-        try:
-            visibility_instance_mesh_data = instance_mesh_data_getter(
-                REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
-            )
-        except Exception:
-            visibility_instance_mesh_data = None
-
     for image_name, entry in final_scene_entries.items():
         updated_entry = dict(entry)
         if _frame_entry_has_out_of_frame_review_data(updated_entry):
@@ -7713,27 +7695,10 @@ def _enrich_final_scene_entries_out_of_frame(
             enriched_entries[image_name] = updated_entry
             continue
 
-        depth_image = None
-        depth_path = scene_dir / "depth" / f"{Path(image_name).stem}.png"
-        if depth_intrinsics is not None and depth_path.exists():
-            try:
-                depth_image = load_depth_image(depth_path)
-            except Exception as exc:
-                logger.warning(
-                    "Depth load failed for out-of-frame enrichment %s/%s: %s",
-                    scene_dir.name,
-                    image_name,
-                    exc,
-                )
-
-        visibility_by_obj_id = compute_frame_object_visibility(
+        visibility_by_obj_id = compute_referability_object_visibility(
             scene_objects,
             camera_pose,
             color_intrinsics,
-            image_path=image_path,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-            instance_mesh_data=visibility_instance_mesh_data,
         )
         updated_entry.update(
             _review_out_of_frame_label_candidates(
@@ -8863,7 +8828,6 @@ def main():
             referability_backend=REFERABILITY_BACKEND,
         )
         sidecar_dirty = False
-        cached_visibility_instance_mesh_data: Any = _cache_miss
 
         def _build_mesh_ray_failure_result(exc: MeshRayRequiredError) -> SceneWorkerResult:
             logger.warning("Mesh-ray required failure for %s: %s", scene_id, exc)
@@ -8924,23 +8888,6 @@ def main():
                 scene_image_b64_cache[image_name] = cached_image_b64
             return cached_image_b64 if isinstance(cached_image_b64, str) else None
 
-        def _get_scene_visibility_instance_mesh_data() -> InstanceMeshData | None:
-            nonlocal cached_visibility_instance_mesh_data
-            if cached_visibility_instance_mesh_data is _cache_miss:
-                cached_visibility_instance_mesh_data = None
-                if callable(instance_mesh_data_getter):
-                    try:
-                        cached_visibility_instance_mesh_data = instance_mesh_data_getter(
-                            REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT
-                        )
-                    except Exception:
-                        cached_visibility_instance_mesh_data = None
-            return (
-                cached_visibility_instance_mesh_data
-                if isinstance(cached_visibility_instance_mesh_data, InstanceMeshData)
-                else None
-            )
-
         def _update_scene_frame_sidecar_record(
             image_name: str,
             *,
@@ -8996,16 +8943,10 @@ def main():
             if camera_pose is None:
                 scene_visibility_cache[image_name] = None
                 return None
-            image_path = scene_dir / "color" / image_name
-            depth_image = _load_scene_depth_image(image_name)
-            cached_visibility = compute_frame_object_visibility(
+            cached_visibility = compute_referability_object_visibility(
                 scene["objects"],
                 camera_pose,
                 color_intrinsics,
-                image_path=image_path,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-                instance_mesh_data=_get_scene_visibility_instance_mesh_data(),
             )
             scene_visibility_cache[image_name] = cached_visibility
             return cached_visibility if isinstance(cached_visibility, dict) else None

@@ -1174,7 +1174,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1268,7 +1268,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1343,7 +1343,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1409,7 +1409,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1487,7 +1487,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1622,7 +1622,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1734,7 +1734,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value={
                     1: make_visibility_meta(projected_area_px=1200.0, bbox_in_frame_ratio=0.0),
                     2: make_visibility_meta(projected_area_px=900.0, bbox_in_frame_ratio=0.0),
@@ -1787,7 +1787,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 side_effect=AssertionError("existing out-of-frame review data should skip enrichment"),
             ),
         ):
@@ -1822,7 +1822,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 side_effect=AssertionError("referability getter should satisfy enrichment"),
             ),
         ):
@@ -1862,7 +1862,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 side_effect=AssertionError("injected visibility should be reused"),
             ),
             patch.object(
@@ -1944,7 +1944,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -1977,15 +1977,16 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_entry["out_of_frame_label_to_object_ids"], {})
         self.assertFalse(frame_entry["out_of_frame_vlm_early_stop"])
 
-    def test_compute_frame_referability_entry_passes_instance_mesh_data_to_visibility(self) -> None:
+    def test_compute_frame_referability_entry_uses_projection_visibility_without_depth_or_mesh_data(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
         captured: dict[str, object] = {}
         visibility_meta = make_visibility_meta(projected_area_px=900.0)
         sentinel_instance_mesh_data = object()
 
-        def fake_compute_frame_object_visibility(*args, **kwargs):
-            captured["instance_mesh_data"] = kwargs.get("instance_mesh_data")
+        def fake_compute_referability_object_visibility(*args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = dict(kwargs)
             return {1: visibility_meta}
 
         with (
@@ -2006,8 +2007,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
-                side_effect=fake_compute_frame_object_visibility,
+                "compute_referability_object_visibility",
+                side_effect=fake_compute_referability_object_visibility,
             ),
             patch.object(
                 referability_module,
@@ -2049,7 +2050,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 instance_mesh_data_getter=lambda _base: sentinel_instance_mesh_data,
             )
 
-        self.assertIs(captured["instance_mesh_data"], sentinel_instance_mesh_data)
+        self.assertEqual(len(captured["args"]), 3)
+        self.assertEqual(captured["kwargs"], {})
         self.assertEqual(frame_entry["referable_object_ids"], [1])
 
     def test_compute_frame_referability_entry_applies_70_percent_bbox_ratio_gate_to_final_referable_ids(self) -> None:
@@ -2077,7 +2079,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -2151,7 +2153,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value=visibility,
             ),
             patch.object(
@@ -7387,7 +7389,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value={3: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0}},
             ),
             patch.object(
@@ -7553,7 +7555,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             patch.object(referability_module.cv2, "imread", return_value=np.zeros((64, 64, 3), dtype=np.uint8)),
             patch.object(
                 referability_module,
-                "compute_frame_object_visibility",
+                "compute_referability_object_visibility",
                 return_value={
                     1: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},
                     2: {"bbox_in_frame_ratio": 0.9, "projected_area_px": 900.0},

@@ -172,6 +172,45 @@ def _compute_roi_sharpness(
     return float(cv2.Laplacian(roi, cv2.CV_64F).var())
 
 
+def _build_projection_visibility_meta(
+    obj: dict[str, Any],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    *,
+    roi_info: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    center = np.array(obj["center"], dtype=np.float64)
+    uv, depth = project_to_image(center, pose, intrinsics)
+    resolved_roi_info = roi_info or _project_object_roi(obj, pose, intrinsics)
+    return {
+        "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
+        "depth_m": float(depth),
+        "bbox_in_frame_ratio": float(resolved_roi_info["bbox_in_frame_ratio"]),
+        "projected_area_px": float(resolved_roi_info["projected_area_px"]),
+        "edge_margin_px": float(resolved_roi_info["edge_margin_px"]),
+        "roi_bounds_px": (
+            [int(value) for value in resolved_roi_info["roi_bounds"]]
+            if resolved_roi_info["roi_bounds"] is not None else None
+        ),
+    }
+
+
+def compute_referability_object_visibility(
+    objects: list[dict],
+    pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> dict[int, dict[str, Any]]:
+    """Compute projection-only visibility metadata for referability review."""
+    visibility: dict[int, dict[str, Any]] = {}
+    for obj in objects:
+        visibility[int(obj["id"])] = _build_projection_visibility_meta(
+            obj,
+            pose,
+            color_intrinsics,
+        )
+    return visibility
+
+
 def compute_frame_object_visibility(
     objects: list[dict],
     pose: CameraPose,
@@ -195,15 +234,32 @@ def compute_frame_object_visibility(
 
     visibility: dict[int, dict[str, Any]] = {}
     for obj in objects:
-        center = np.array(obj["center"], dtype=np.float64)
-        uv, depth = project_to_image(center, pose, color_intrinsics)
+        roi_info = _project_object_roi(obj, pose, color_intrinsics)
+        projection_meta = _build_projection_visibility_meta(
+            obj,
+            pose,
+            color_intrinsics,
+            roi_info=roi_info,
+        )
+        center_uv_px = projection_meta["center_uv_px"]
+        uv = (
+            np.array(center_uv_px, dtype=np.float64)
+            if isinstance(center_uv_px, list) and len(center_uv_px) == 2
+            else None
+        )
+        depth = float(projection_meta["depth_m"])
         center_in_frame = (
             min_depth < depth <= max_depth
             and is_in_image(uv, color_intrinsics, margin=margin)
         )
 
-        roi_info = _project_object_roi(obj, pose, color_intrinsics)
-        roi_sharpness = _compute_roi_sharpness(gray, roi_info["roi_bounds"])
+        roi_bounds_px = projection_meta["roi_bounds_px"]
+        roi_sharpness = _compute_roi_sharpness(
+            gray,
+            tuple(int(value) for value in roi_bounds_px)
+            if isinstance(roi_bounds_px, list) and len(roi_bounds_px) == 4
+            else None,
+        )
 
         occlusion_status = "unknown"
         visible_ratio = 0.0
@@ -224,21 +280,10 @@ def compute_frame_object_visibility(
                 occlusion_status != "not visible"
                 if occlusion_status != "unknown" else center_in_frame
             ),
-            "center_uv_px": (
-                [float(uv[0]), float(uv[1])]
-                if uv is not None else None
-            ),
-            "depth_m": float(depth),
+            **projection_meta,
             "occlusion_status": occlusion_status,
             "visible_ratio": float(visible_ratio),
             "valid_projection_count": int(roi_info["valid_projection_count"]),
-            "projected_area_px": float(roi_info["projected_area_px"]),
-            "bbox_in_frame_ratio": float(roi_info["bbox_in_frame_ratio"]),
-            "edge_margin_px": float(roi_info["edge_margin_px"]),
-            "roi_bounds_px": (
-                [int(v) for v in roi_info["roi_bounds"]]
-                if roi_info["roi_bounds"] is not None else None
-            ),
             "roi_sharpness": roi_sharpness,
             "label_unique_in_frame": True,
             "eligible_as_reference": center_in_frame,
