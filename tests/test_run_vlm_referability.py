@@ -4627,31 +4627,42 @@ class RunVlmReferabilityTests(unittest.TestCase):
             referability_module.ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW,
         )
 
-    def test_attachment_pair_salvage_group_vlm_review_normalizes_multiple_pair_reviews(self) -> None:
+    def test_attachment_pair_group_rename_advice_vlm_review_normalizes_candidates(self) -> None:
         parsed = {
             "group_id": "scene0001_00:group_0",
             "pair_reviews": [
                 {
                     "pair_id": "1->2",
-                    "decision": "salvageable",
-                    "parent_visibility": "visible",
-                    "child_visibility": "partial",
-                    "pair_unique_with_modifiers": "yes",
-                    "parent_modifier_candidates": ["round"],
-                    "child_modifier_candidates": ["wooden"],
-                    "pair_reference_phrase_candidates": ["the round item on the wooden table"],
-                    "reason": "distinct modifiers",
+                    "rename_advice_status": "ok",
+                    "rename_advice_reason": "",
+                    "rename_advice_candidates": [
+                        {
+                            "parent_surface_text": "round wooden table",
+                            "child_surface_text": "blue book",
+                            "relation_hint_text": "book on top of the table",
+                        },
+                        {
+                            "parent_surface_text": "",
+                            "child_surface_text": "book with blue cover",
+                            "relation_hint_text": "",
+                        },
+                        {
+                            "parent_surface_text": "table next to the window",
+                            "child_surface_text": "",
+                            "relation_hint_text": "next to the window",
+                        },
+                        {
+                            "parent_surface_text": "duplicate should be dropped",
+                            "child_surface_text": "",
+                            "relation_hint_text": "",
+                        },
+                    ],
                 },
                 {
                     "pair_id": "1->3",
-                    "decision": "not_salvageable",
-                    "parent_visibility": "visible",
-                    "child_visibility": "visible",
-                    "pair_unique_with_modifiers": "no",
-                    "parent_modifier_candidates": [],
-                    "child_modifier_candidates": [],
-                    "pair_reference_phrase_candidates": [],
-                    "reason": "still ambiguous",
+                    "rename_advice_status": "unavailable",
+                    "rename_advice_reason": "still_ambiguous",
+                    "rename_advice_candidates": [],
                 },
             ],
         }
@@ -4660,7 +4671,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "_call_vlm_json",
             return_value=(parsed, '{"ok":true}'),
         ):
-            review = referability_module._attachment_pair_salvage_group_vlm_review(
+            review = referability_module._attachment_pair_group_rename_advice_vlm_review(
                 client=object(),
                 model_name="fake-vlm",
                 group_id="scene0001_00:group_0",
@@ -4691,8 +4702,68 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.assertEqual(review["group_id"], "scene0001_00:group_0")
         self.assertEqual([item["pair_id"] for item in review["pair_reviews"]], ["1->2", "1->3"])
-        self.assertEqual(review["pair_reviews"][0]["decision"], "salvageable")
-        self.assertEqual(review["pair_reviews"][1]["decision"], "not_salvageable")
+        self.assertEqual(review["pair_reviews"][0]["rename_advice"]["status"], "ok")
+        self.assertEqual(len(review["pair_reviews"][0]["rename_advice"]["candidates"]), 3)
+        self.assertEqual(
+            review["pair_reviews"][0]["rename_advice"]["candidates"][0],
+            {
+                "parent_surface_text": "round wooden table",
+                "child_surface_text": "blue book",
+                "relation_hint_text": "book on top of the table",
+            },
+        )
+        self.assertEqual(
+            review["pair_reviews"][0]["rename_advice"]["candidates"][1],
+            {
+                "parent_surface_text": "",
+                "child_surface_text": "book with blue cover",
+                "relation_hint_text": "",
+            },
+        )
+        self.assertEqual(
+            review["pair_reviews"][0]["rename_advice"]["candidates"][2],
+            {
+                "parent_surface_text": "table next to the window",
+                "child_surface_text": "",
+                "relation_hint_text": "next to the window",
+            },
+        )
+        self.assertEqual(review["pair_reviews"][1]["rename_advice"]["status"], "unavailable")
+        self.assertEqual(review["pair_reviews"][1]["rename_advice"]["reason"], "still_ambiguous")
+
+    def test_attachment_pair_group_rename_advice_vlm_review_falls_back_to_unavailable(self) -> None:
+        with patch.object(
+            referability_module,
+            "_call_vlm_json",
+            return_value=({"group_id": "scene0001_00:group_0", "pair_reviews": []}, '{"ok":true}'),
+        ):
+            review = referability_module._attachment_pair_group_rename_advice_vlm_review(
+                client=object(),
+                model_name="fake-vlm",
+                group_id="scene0001_00:group_0",
+                cover_images=[{"image_name": "000001.jpg", "data_url": "data:image/jpeg;base64,ZmFrZQ=="}],
+                pair_rows=[
+                    {
+                        "pair_id": "1->2",
+                        "parent_id": 1,
+                        "parent_label": "table",
+                        "child_id": 2,
+                        "child_label": "book",
+                        "first_covered_image_name": "000001.jpg",
+                        "parent_crop_image_data_url": "data:image/jpeg;base64,ZmFrZQ==",
+                        "child_crop_image_data_url": "data:image/jpeg;base64,ZmFrZQ==",
+                    },
+                ],
+            )
+
+        self.assertEqual(
+            review["pair_reviews"][0]["rename_advice"],
+            {
+                "status": "unavailable",
+                "reason": "missing_pair_review_in_vlm_response",
+                "candidates": [],
+            },
+        )
 
     def test_render_attachment_pair_salvage_review_html_lists_included_scenes_in_deduped_order(self) -> None:
         review_doc = {
@@ -4719,6 +4790,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "bag",
                                     "first_covered_image_name": "000201.jpg",
                                     "program_reason_codes": ["coverage_uncertain"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         }
@@ -4746,6 +4818,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "book",
                                     "first_covered_image_name": "000101.jpg",
                                     "program_reason_codes": ["status_conflict"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         }
@@ -4767,6 +4840,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "monitor",
                                     "first_covered_image_name": "000299.jpg",
                                     "program_reason_codes": ["coverage_uncertain"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         }
@@ -4816,6 +4890,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                         "child_final_multiple",
                                         "mystery_reason_code",
                                     ],
+                                    "rename_advice": {
+                                        "status": "ok",
+                                        "reason": "",
+                                        "candidates": [
+                                            {
+                                                "parent_surface_text": "round wooden table",
+                                                "child_surface_text": "blue book",
+                                                "relation_hint_text": "book on top of the table",
+                                            },
+                                            {
+                                                "parent_surface_text": "",
+                                                "child_surface_text": "book with blue cover",
+                                                "relation_hint_text": "",
+                                            },
+                                        ],
+                                    },
                                     "parent_crop_image_data_url": "data:image/jpeg;base64,parent_crop_should_not_render",
                                     "child_crop_image_data_url": "data:image/jpeg;base64,child_crop_should_not_render",
                                 },
@@ -4827,6 +4917,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "lamp",
                                     "first_covered_image_name": "000099.jpg",
                                     "program_reason_codes": ["missing_referability_entry"],
+                                    "rename_advice": {"status": "unavailable", "reason": "missing_visual_evidence", "candidates": []},
                                 },
                             ],
                         },
@@ -4842,6 +4933,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "pillow",
                                     "first_covered_image_name": "000004.jpg",
                                     "program_reason_codes": ["coverage_uncertain"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         },
@@ -4863,6 +4955,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "cup",
                                     "first_covered_image_name": "000007.jpg",
                                     "program_reason_codes": ["status_conflict"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         }
@@ -4882,6 +4975,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertNotIn("child_crop_should_not_render", html_text)
         self.assertIn("pair id</strong> 1-&gt;2", html_text)
         self.assertNotIn("1-&gt;3", html_text)
+        self.assertIn("VLM Rename Advice", html_text)
+        self.assertIn("Option 1", html_text)
+        self.assertIn("parent -&gt;</strong> round wooden table", html_text)
+        self.assertIn("child -&gt;</strong> blue book", html_text)
+        self.assertIn("relation hint -&gt;</strong> book on top of the table", html_text)
         self.assertIn(
             "筛除理由</strong> 没有可覆盖该 attachment pair 的清晰图像，子物体最终判定中存在多个同类目标，mystery_reason_code",
             html_text,
@@ -4914,6 +5012,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "book",
                                     "first_covered_image_name": "000301.jpg",
                                     "program_reason_codes": ["coverage_uncertain"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         },
@@ -4935,6 +5034,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                                     "child_label": "book",
                                     "first_covered_image_name": "000302.jpg",
                                     "program_reason_codes": ["status_conflict"],
+                                    "rename_advice": {"status": "unavailable", "reason": "ambiguous", "candidates": []},
                                 }
                             ],
                         },
@@ -4961,6 +5061,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn('name="parent_surface_text"', html_text)
         self.assertIn('name="child_surface_text"', html_text)
         self.assertIn('class="pair-delete-toggle"', html_text)
+        self.assertIn(
+            "VLM could not provide reliable rename advice for this pair.",
+            html_text,
+        )
 
     def test_parse_attachment_pair_salvage_review_html_reads_edited_inputs_and_deleted_state(self) -> None:
         html_text = """<!doctype html>
@@ -6206,16 +6310,21 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "kept_image_names": [],
             "first_covered_image_name": "000001.jpg",
             "coverage_by_image_name": [{"image_name": "000001.jpg", "covered": True, "uncertain": False, "reason_codes": []}],
-            "vlm_review": {
-                "pair_id": "1->2",
-                "decision": "salvageable",
-                "parent_visibility": "visible",
-                "child_visibility": "visible",
-                "pair_unique_with_modifiers": "yes",
-                "parent_modifier_candidates": ["round"],
-                "child_modifier_candidates": ["blue"],
-                "pair_reference_phrase_candidates": ["the round table with the blue book"],
-                "reason": "clear modifiers",
+            "rename_advice": {
+                "status": "ok",
+                "reason": "",
+                "candidates": [
+                    {
+                        "parent_surface_text": "round table",
+                        "child_surface_text": "blue book",
+                        "relation_hint_text": "book on top of the table",
+                    },
+                    {
+                        "parent_surface_text": "",
+                        "child_surface_text": "book with blue cover",
+                        "relation_hint_text": "",
+                    },
+                ],
             },
             "human_decision": None,
             "human_notes": "",
@@ -6233,9 +6342,6 @@ class RunVlmReferabilityTests(unittest.TestCase):
             "pair_count_auto_drop_hard_fail": 0,
             "pair_count_needs_vlm_salvage_review": 1,
             "pair_count_uncertain": 0,
-            "pair_count_vlm_salvageable": 1,
-            "pair_count_vlm_not_salvageable": 0,
-            "pair_count_vlm_uncertain": 0,
             "terminal_output_lines": ["[attachment-pair-salvage] scene=scene0001_00 group=0 pairs=1"],
             "groups": [
                 {
@@ -6353,6 +6459,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("scene0001_00:group_0", html_text)
         self.assertIn("000001", html_text)
         self.assertIn("1-&gt;2", html_text)
+        self.assertIn("VLM Rename Advice", html_text)
+        self.assertIn("round table", html_text)
+        self.assertIn("blue book", html_text)
+        self.assertIn("book on top of the table", html_text)
         self.assertEqual(edited_html_path.read_text(encoding="utf-8"), html_text)
         self.assertTrue(batch_path.exists())
 

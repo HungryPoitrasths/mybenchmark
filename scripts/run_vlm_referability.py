@@ -142,15 +142,8 @@ ATTACHMENT_PAIR_PROGRAM_STATUS_HARD_FAIL = "hard_fail"
 ATTACHMENT_PAIR_PROGRAM_STATUS_SALVAGE_REVIEW = "salvage_review"
 ATTACHMENT_PAIR_PROGRAM_STATUS_UNCERTAIN = "uncertain"
 
-ATTACHMENT_PAIR_VLM_DECISION_SALVAGEABLE = "salvageable"
-ATTACHMENT_PAIR_VLM_DECISION_NOT_SALVAGEABLE = "not_salvageable"
-ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN = "uncertain"
-ATTACHMENT_PAIR_VLM_VISIBILITY_VISIBLE = "visible"
-ATTACHMENT_PAIR_VLM_VISIBILITY_PARTIAL = "partial"
-ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE = "not_visible"
-ATTACHMENT_PAIR_VLM_UNIQUENESS_YES = "yes"
-ATTACHMENT_PAIR_VLM_UNIQUENESS_NO = "no"
-ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN = "uncertain"
+ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_OK = "ok"
+ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE = "unavailable"
 
 OBJECT_STATUS_CLEAR = "clear"
 OBJECT_STATUS_ABSENT = "absent"
@@ -1126,37 +1119,58 @@ def _normalize_attachment_pair_string_list(values: object) -> list[str]:
     return normalized
 
 
-def _attachment_pair_vlm_decision(value: object) -> str:
+def _normalize_attachment_pair_rename_advice_status(value: object) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in {
-        ATTACHMENT_PAIR_VLM_DECISION_SALVAGEABLE,
-        ATTACHMENT_PAIR_VLM_DECISION_NOT_SALVAGEABLE,
-        ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN,
+        ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_OK,
+        ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE,
     }:
         return normalized
-    return ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN
+    return ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE
 
 
-def _attachment_pair_vlm_visibility(value: object) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized in {
-        ATTACHMENT_PAIR_VLM_VISIBILITY_VISIBLE,
-        ATTACHMENT_PAIR_VLM_VISIBILITY_PARTIAL,
-        ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
-    }:
-        return normalized
-    return ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE
+def _normalize_attachment_pair_rename_advice_candidate(raw_candidate: object) -> dict[str, str] | None:
+    if not isinstance(raw_candidate, dict):
+        return None
+    candidate = {
+        "parent_surface_text": str(raw_candidate.get("parent_surface_text", "")).strip(),
+        "child_surface_text": str(raw_candidate.get("child_surface_text", "")).strip(),
+        "relation_hint_text": str(raw_candidate.get("relation_hint_text", "")).strip(),
+    }
+    if not any(candidate.values()):
+        return None
+    return candidate
 
 
-def _attachment_pair_vlm_uniqueness(value: object) -> str:
-    normalized = str(value or "").strip().lower()
-    if normalized in {
-        ATTACHMENT_PAIR_VLM_UNIQUENESS_YES,
-        ATTACHMENT_PAIR_VLM_UNIQUENESS_NO,
-        ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN,
-    }:
-        return normalized
-    return ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN
+def _normalize_attachment_pair_rename_advice_candidates(values: object) -> list[dict[str, str]]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw_candidate in values:
+        candidate = _normalize_attachment_pair_rename_advice_candidate(raw_candidate)
+        if candidate is None:
+            continue
+        key = (
+            candidate["parent_surface_text"],
+            candidate["child_surface_text"],
+            candidate["relation_hint_text"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(candidate)
+        if len(normalized) >= 3:
+            break
+    return normalized
+
+
+def _default_attachment_pair_rename_advice(*, reason: str) -> dict[str, Any]:
+    return {
+        "status": ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE,
+        "reason": str(reason or "").strip() or "rename_advice_unavailable",
+        "candidates": [],
+    }
 
 
 def _image_name_stem(image_name: object) -> str:
@@ -1492,37 +1506,41 @@ def _select_attachment_pair_cover_images(
     return selected
 
 
-def _attachment_pair_salvage_prompt(group_id: str, pair_rows: list[dict[str, Any]]) -> str:
+def _attachment_pair_rename_advice_prompt(group_id: str, pair_rows: list[dict[str, Any]]) -> str:
     pair_lines: list[str] = []
     for pair_row in pair_rows:
         pair_lines.append(
             f'- pair_id={pair_row["pair_id"]}: '
             f'parent={pair_row["parent_label"]}#{pair_row["parent_id"]}, '
-            f'child={pair_row["child_label"]}#{pair_row["child_id"]}'
+            f'child={pair_row["child_label"]}#{pair_row["child_id"]}, '
+            f'program_reason_codes={json.dumps(pair_row.get("program_reason_codes", []), ensure_ascii=False)}'
         )
     return (
         "You are reviewing attachment pairs in a scene. "
         "You will see one or more full-frame images with consistent object-id annotations, "
         "followed by parent/child crops for specific dropped attachment pairs. "
-        "For each pair, judge only two things: "
-        "1) whether both objects are visible in the provided imagery, and "
-        "2) whether the pair can be uniquely referred to using visible modifiers such as color, material, text, or other local appearance cues. "
-        "Do not generate a final question. "
-        "Do not rely on hidden, off-screen, or otherwise invisible information. "
+        "For each pair, the current naming is not sufficient to uniquely refer to the two objects. "
+        "Your task is to propose up to 3 rename-advice candidates for human review. "
+        "Each candidate should contain object-level renaming fields and an optional short relation hint. "
+        "You may modify only the parent name, only the child name, or both. "
+        "Use only visible information from the images, such as color, material, text, shape, size, or relations to clearly visible nearby objects. "
+        "A relation hint may be something like 'next to the window', but do not write a full question sentence. "
+        "Try to offer multiple distinct plausible options when reliable. "
+        "If the imagery is insufficient or you cannot give reliable unique rename advice, return unavailable and do not invent details. "
         f"This group's id is {json.dumps(group_id)}. "
         "Return strict JSON only using this schema: "
         '{"group_id":"...",'
-        '"pair_reviews":[{"pair_id":"1->2","decision":"salvageable","parent_visibility":"visible",'
-        '"child_visibility":"visible","pair_unique_with_modifiers":"yes",'
-        '"parent_modifier_candidates":["red"],"child_modifier_candidates":["wooden"],'
-        '"pair_reference_phrase_candidates":["the red mug on the wooden table"],'
-        '"reason":"short reason"}]}. '
+        '"pair_reviews":[{"pair_id":"1->2","rename_advice_status":"ok",'
+        '"rename_advice_reason":"",'
+        '"rename_advice_candidates":[{"parent_surface_text":"round wooden table",'
+        '"child_surface_text":"blue book",'
+        '"relation_hint_text":"book on top of the table"}]}]}. '
         "Review every listed pair exactly once:\n"
         + "\n".join(pair_lines)
     )
 
 
-def _attachment_pair_salvage_group_vlm_review(
+def _attachment_pair_group_rename_advice_vlm_review(
     *,
     client,
     model_name: str,
@@ -1567,7 +1585,9 @@ def _attachment_pair_salvage_group_vlm_review(
                 "type": "text",
                 "text": (
                     f"Pair {pair_row['pair_id']}: parent={pair_row['parent_label']}#{pair_row['parent_id']}, "
-                    f"child={pair_row['child_label']}#{pair_row['child_id']}. "
+                    f"child={pair_row['child_label']}#{pair_row['child_id']}, "
+                    f"program_reason_codes={json.dumps(pair_row.get('program_reason_codes', []), ensure_ascii=False)}. "
+                    "The current naming is insufficient to uniquely refer to this dropped pair. "
                     f"The next two images are the parent crop then the child crop from image "
                     f"{pair_row.get('first_covered_image_name') or pair_row.get('cover_image_names', ['-'])[0]}."
                 ),
@@ -1576,20 +1596,29 @@ def _attachment_pair_salvage_group_vlm_review(
         content.append({"type": "image_url", "image_url": {"url": parent_crop}})
         content.append({"type": "image_url", "image_url": {"url": child_crop}})
 
-    if not cover_images or not eligible_pair_rows:
+    if not cover_images:
         return {
             "group_id": group_id,
             "pair_reviews": [
                 {
                     "pair_id": str(pair_row.get("pair_id", "")),
-                    "decision": ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN,
-                    "parent_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
-                    "child_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
-                    "pair_unique_with_modifiers": ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN,
-                    "parent_modifier_candidates": [],
-                    "child_modifier_candidates": [],
-                    "pair_reference_phrase_candidates": [],
-                    "reason": "missing_group_cover_or_pair_crops",
+                    "rename_advice": _default_attachment_pair_rename_advice(
+                        reason="missing_group_cover_images"
+                    ),
+                }
+                for pair_row in pair_rows
+            ],
+            "raw_response": None,
+        }
+    if not eligible_pair_rows:
+        return {
+            "group_id": group_id,
+            "pair_reviews": [
+                {
+                    "pair_id": str(pair_row.get("pair_id", "")),
+                    "rename_advice": _default_attachment_pair_rename_advice(
+                        reason="missing_pair_crops"
+                    ),
                 }
                 for pair_row in pair_rows
             ],
@@ -1599,7 +1628,7 @@ def _attachment_pair_salvage_group_vlm_review(
     content.append(
         {
             "type": "text",
-            "text": _attachment_pair_salvage_prompt(group_id, eligible_pair_rows),
+            "text": _attachment_pair_rename_advice_prompt(group_id, eligible_pair_rows),
         }
     )
     parsed, raw_text = _call_vlm_json(
@@ -1616,24 +1645,25 @@ def _attachment_pair_salvage_group_vlm_review(
         pair_id = str(raw_review.get("pair_id", "")).strip()
         if not pair_id:
             continue
+        status = _normalize_attachment_pair_rename_advice_status(
+            raw_review.get("rename_advice_status")
+        )
+        candidates = _normalize_attachment_pair_rename_advice_candidates(
+            raw_review.get("rename_advice_candidates")
+        )
+        reason = str(raw_review.get("rename_advice_reason", "")).strip()
+        if status == ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_OK and not candidates:
+            status = ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE
+            reason = reason or "missing_rename_advice_candidates"
+        if status == ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE:
+            candidates = []
         reviews_by_pair_id[pair_id] = {
             "pair_id": pair_id,
-            "decision": _attachment_pair_vlm_decision(raw_review.get("decision")),
-            "parent_visibility": _attachment_pair_vlm_visibility(raw_review.get("parent_visibility")),
-            "child_visibility": _attachment_pair_vlm_visibility(raw_review.get("child_visibility")),
-            "pair_unique_with_modifiers": _attachment_pair_vlm_uniqueness(
-                raw_review.get("pair_unique_with_modifiers")
-            ),
-            "parent_modifier_candidates": _normalize_attachment_pair_string_list(
-                raw_review.get("parent_modifier_candidates")
-            ),
-            "child_modifier_candidates": _normalize_attachment_pair_string_list(
-                raw_review.get("child_modifier_candidates")
-            ),
-            "pair_reference_phrase_candidates": _normalize_attachment_pair_string_list(
-                raw_review.get("pair_reference_phrase_candidates")
-            ),
-            "reason": str(raw_review.get("reason", "")).strip() or "missing_reason",
+            "rename_advice": {
+                "status": status,
+                "reason": reason if status == ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_UNAVAILABLE else (reason or ""),
+                "candidates": candidates,
+            },
         }
 
     normalized_reviews: list[dict[str, Any]] = []
@@ -1644,14 +1674,9 @@ def _attachment_pair_salvage_group_vlm_review(
                 pair_id,
                 {
                     "pair_id": pair_id,
-                    "decision": ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN,
-                    "parent_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
-                    "child_visibility": ATTACHMENT_PAIR_VLM_VISIBILITY_NOT_VISIBLE,
-                    "pair_unique_with_modifiers": ATTACHMENT_PAIR_VLM_UNIQUENESS_UNCERTAIN,
-                    "parent_modifier_candidates": [],
-                    "child_modifier_candidates": [],
-                    "pair_reference_phrase_candidates": [],
-                    "reason": "missing_pair_review_in_vlm_response",
+                    "rename_advice": _default_attachment_pair_rename_advice(
+                        reason="missing_pair_review_in_vlm_response"
+                    ),
                 },
             )
         )
@@ -3487,7 +3512,7 @@ def _build_attachment_pair_salvage_pair_row(
         "kept_image_names": kept_image_names,
         "first_covered_image_name": cover_image_names[0] if cover_image_names else None,
         "coverage_by_image_name": coverage_by_image_name,
-        "vlm_review": None,
+        "rename_advice": _default_attachment_pair_rename_advice(reason="not_requested"),
         "human_decision": None,
         "human_notes": "",
     }
@@ -3706,27 +3731,28 @@ def _build_attachment_pair_salvage_scene_review(
             if child_crop is not None:
                 pair_row["child_crop_image_data_url"] = _image_to_data_url(child_crop)
 
-        vlm_candidate_pairs = [
-            pair_row
-            for pair_row in dropped_pairs
-            if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_NEEDS_VLM_SALVAGE_REVIEW
-        ]
         group_vlm_review = None
-        if vlm_candidate_pairs:
-            group_vlm_review = _attachment_pair_salvage_group_vlm_review(
+        if dropped_pairs:
+            group_vlm_review = _attachment_pair_group_rename_advice_vlm_review(
                 client=client,
                 model_name=model_name,
                 group_id=f"{scene_id}:group_{group_index}",
                 cover_images=selected_cover_images,
-                pair_rows=vlm_candidate_pairs,
+                pair_rows=dropped_pairs,
             )
             pair_vlm_reviews = {
                 str(review.get("pair_id", "")): review
                 for review in group_vlm_review.get("pair_reviews", [])
                 if isinstance(review, dict)
             }
-            for pair_row in vlm_candidate_pairs:
-                pair_row["vlm_review"] = pair_vlm_reviews.get(pair_row["pair_id"])
+            for pair_row in dropped_pairs:
+                pair_review = pair_vlm_reviews.get(pair_row["pair_id"], {})
+                pair_row["rename_advice"] = dict(
+                    pair_review.get("rename_advice")
+                    or _default_attachment_pair_rename_advice(
+                        reason="missing_pair_review_in_vlm_response"
+                    )
+                )
 
         terminal_output_lines.append(
             (
@@ -3831,27 +3857,6 @@ def _build_attachment_pair_salvage_scene_review(
             for pair_row in group.get("pairs", [])
             if pair_row.get("program_decision") == ATTACHMENT_PAIR_PROGRAM_DECISION_UNCERTAIN
         ),
-        "pair_count_vlm_salvageable": sum(
-            1
-            for group in groups
-            for pair_row in group.get("pairs", [])
-            if isinstance(pair_row.get("vlm_review"), dict)
-            and pair_row["vlm_review"].get("decision") == ATTACHMENT_PAIR_VLM_DECISION_SALVAGEABLE
-        ),
-        "pair_count_vlm_not_salvageable": sum(
-            1
-            for group in groups
-            for pair_row in group.get("pairs", [])
-            if isinstance(pair_row.get("vlm_review"), dict)
-            and pair_row["vlm_review"].get("decision") == ATTACHMENT_PAIR_VLM_DECISION_NOT_SALVAGEABLE
-        ),
-        "pair_count_vlm_uncertain": sum(
-            1
-            for group in groups
-            for pair_row in group.get("pairs", [])
-            if isinstance(pair_row.get("vlm_review"), dict)
-            and pair_row["vlm_review"].get("decision") == ATTACHMENT_PAIR_VLM_DECISION_UNCERTAIN
-        ),
         "terminal_output_lines": terminal_output_lines,
         "groups": groups,
     }
@@ -3878,9 +3883,6 @@ def _build_attachment_pair_salvage_review_scene_record(
         "pair_count_auto_drop_hard_fail": 0,
         "pair_count_needs_vlm_salvage_review": 0,
         "pair_count_uncertain": 0,
-        "pair_count_vlm_salvageable": 0,
-        "pair_count_vlm_not_salvageable": 0,
-        "pair_count_vlm_uncertain": 0,
         "terminal_output_lines": [],
         "groups": [],
     }
@@ -3948,18 +3950,6 @@ def _build_attachment_pair_salvage_review_document(
             int(scene.get("pair_count_uncertain", 0) or 0)
             for scene in scenes
         ),
-        "pair_count_vlm_salvageable": sum(
-            int(scene.get("pair_count_vlm_salvageable", 0) or 0)
-            for scene in scenes
-        ),
-        "pair_count_vlm_not_salvageable": sum(
-            int(scene.get("pair_count_vlm_not_salvageable", 0) or 0)
-            for scene in scenes
-        ),
-        "pair_count_vlm_uncertain": sum(
-            int(scene.get("pair_count_vlm_uncertain", 0) or 0)
-            for scene in scenes
-        ),
         "terminal_output_lines": [
             line
             for scene in scenes
@@ -4001,13 +3991,6 @@ def _build_attachment_pair_salvage_review_scene_document(
         selected_scene.get("pair_count_needs_vlm_salvage_review", 0) or 0
     )
     scene_doc["pair_count_uncertain"] = int(selected_scene.get("pair_count_uncertain", 0) or 0)
-    scene_doc["pair_count_vlm_salvageable"] = int(
-        selected_scene.get("pair_count_vlm_salvageable", 0) or 0
-    )
-    scene_doc["pair_count_vlm_not_salvageable"] = int(
-        selected_scene.get("pair_count_vlm_not_salvageable", 0) or 0
-    )
-    scene_doc["pair_count_vlm_uncertain"] = int(selected_scene.get("pair_count_vlm_uncertain", 0) or 0)
     scene_doc["terminal_output_lines"] = list(selected_scene.get("terminal_output_lines", []))
     scene_doc["scenes"] = [selected_scene]
     edited_outputs = review_doc.get("edited_html_outputs_by_scene", {})
@@ -4326,6 +4309,50 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
             return "-"
         return ", ".join(html.escape(str(value)) for value in values)
 
+    def _render_rename_advice_block(pair_row: dict[str, Any]) -> str:
+        rename_advice = pair_row.get("rename_advice")
+        if not isinstance(rename_advice, dict):
+            rename_advice = _default_attachment_pair_rename_advice(reason="rename_advice_missing")
+        status = _normalize_attachment_pair_rename_advice_status(rename_advice.get("status"))
+        candidates = _normalize_attachment_pair_rename_advice_candidates(rename_advice.get("candidates"))
+        if status != ATTACHMENT_PAIR_RENAME_ADVICE_STATUS_OK or not candidates:
+            return (
+                '<div class="pair-text pair-rename-advice">'
+                "<strong>VLM Rename Advice</strong>"
+                '<div class="rename-advice-unavailable">'
+                "VLM could not provide reliable rename advice for this pair."
+                "</div>"
+                "</div>"
+            )
+        candidate_blocks: list[str] = []
+        for index, candidate in enumerate(candidates, start=1):
+            lines: list[str] = []
+            if candidate.get("parent_surface_text"):
+                lines.append(
+                    f'<div class="rename-advice-line"><strong>parent -&gt;</strong> '
+                    f'{html.escape(candidate["parent_surface_text"])}</div>'
+                )
+            if candidate.get("child_surface_text"):
+                lines.append(
+                    f'<div class="rename-advice-line"><strong>child -&gt;</strong> '
+                    f'{html.escape(candidate["child_surface_text"])}</div>'
+                )
+            if candidate.get("relation_hint_text"):
+                lines.append(
+                    f'<div class="rename-advice-line"><strong>relation hint -&gt;</strong> '
+                    f'{html.escape(candidate["relation_hint_text"])}</div>'
+                )
+            candidate_blocks.append(
+                f'<div class="rename-advice-candidate"><div class="rename-advice-index">Option {index}</div>'
+                f'{"".join(lines)}</div>'
+            )
+        return (
+            '<div class="pair-text pair-rename-advice">'
+            "<strong>VLM Rename Advice</strong>"
+            f'{"".join(candidate_blocks)}'
+            "</div>"
+        )
+
     rendered_scene_count = 0
     rendered_group_count = 0
     rendered_pair_count = 0
@@ -4395,6 +4422,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                 child_id = int(pair_row.get("child_id", 0) or 0)
                 parent_label = str(pair_row.get("parent_label", "")).strip()
                 child_label = str(pair_row.get("child_label", "")).strip()
+                rename_advice_html = _render_rename_advice_block(pair_row)
                 pair_cards.append(
                     f'<article class="pair-card" data-scene-id="{html.escape(scene_id)}" '
                     f'data-image-name="{html.escape(cover["image_name"])}" '
@@ -4415,6 +4443,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     f'{html.escape(child_label)}#{child_id}</div>'
                     f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
                     f'<div class="pair-text"><strong>筛除理由</strong> {html.escape(reason_text)}</div>'
+                    f"{rename_advice_html}"
                     '<div class="pair-editor">'
                     '<label class="pair-editor-field">'
                     '<span class="pair-editor-label">Parent Name</span>'
@@ -4470,6 +4499,11 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
     .pair-image-name{{font-size:12px;color:#6b7280;letter-spacing:.02em;}}
     .pair-copy{{display:grid;gap:10px;align-content:start;}}
     .pair-text{{padding:10px 12px;border-radius:12px;background:#f8f6f1;border:1px solid #e7dfd1;}}
+    .pair-rename-advice{{display:grid;gap:10px;}}
+    .rename-advice-candidate{{padding:10px 12px;border-radius:10px;background:#fffdf8;border:1px solid #eadfce;display:grid;gap:6px;}}
+    .rename-advice-index{{font-size:12px;font-weight:700;color:#7b5a2d;letter-spacing:.02em;text-transform:uppercase;}}
+    .rename-advice-line{{font-size:13px;}}
+    .rename-advice-unavailable{{font-size:13px;color:#6b7280;}}
     .pair-editor{{display:grid;gap:10px;padding:12px;border-radius:12px;background:#f4efe7;border:1px solid #ddcfbc;}}
     .pair-editor-field{{display:grid;gap:6px;}}
     .pair-editor-label{{font-size:12px;font-weight:700;color:#6b4f2a;letter-spacing:.02em;text-transform:uppercase;}}
