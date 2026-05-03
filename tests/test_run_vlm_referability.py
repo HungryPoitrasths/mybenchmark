@@ -5071,10 +5071,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
 <html lang="en">
 <body>
   <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000001.jpg" data-group-id="scene0001_00:group_0" data-pair-id="1-&gt;2" data-parent-id="1" data-parent-label="table" data-child-id="2" data-child-label="book" data-deleted="false">
+    <input type="text" name="scene_id" value="scene0001_edited">
     <input type="text" name="parent_surface_text" value="wooden table">
     <input type="text" name="child_surface_text" value="blue book">
   </article>
   <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000002.jpg" data-group-id="scene0001_00:group_1" data-pair-id="3-&gt;4" data-parent-id="3" data-parent-label="desk" data-child-id="4" data-child-label="lamp" data-deleted="true">
+    <input type="text" name="scene_id" value="scene0001_edited">
     <input type="text" name="parent_surface_text" value="desk">
     <input type="text" name="child_surface_text" value="lamp">
   </article>
@@ -5084,12 +5086,53 @@ class RunVlmReferabilityTests(unittest.TestCase):
         cards = referability_module._parse_attachment_pair_salvage_review_html(html_text)
 
         self.assertEqual(len(cards), 2)
-        self.assertEqual(cards[0]["scene_id"], "scene0001_00")
+        self.assertEqual(cards[0]["scene_id"], "scene0001_edited")
         self.assertEqual(cards[0]["image_name"], "000001.jpg")
         self.assertEqual(cards[0]["parent_surface_text"], "wooden table")
         self.assertEqual(cards[0]["child_surface_text"], "blue book")
         self.assertFalse(cards[0]["deleted"])
         self.assertTrue(cards[1]["deleted"])
+
+    def test_render_attachment_pair_salvage_review_html_includes_editable_scene_id_input(self) -> None:
+        review_doc = {
+            "scenes": [
+                {
+                    "scene_id": "scene0001_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0001_00:group_keep",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "000001.jpg",
+                                    "image_stem": "000001",
+                                    "data_url": "data:image/jpeg;base64,cover_kept",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "1->2",
+                                    "parent_id": 1,
+                                    "parent_label": "table",
+                                    "child_id": 2,
+                                    "child_label": "book",
+                                    "first_covered_image_name": "000001.jpg",
+                                    "program_reason_codes": ["no_coverable_clarity_pass_image"],
+                                    "rename_advice": {"status": "unavailable", "reason": "missing_visual_evidence", "candidates": []},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+
+        html_text = referability_module._render_attachment_pair_salvage_review_html(review_doc)
+
+        self.assertIn('name="scene_id"', html_text)
+        self.assertIn('class="pair-name-input pair-scene-id-input"', html_text)
+        self.assertIn('value="scene0001_00"', html_text)
+        self.assertIn("card.setAttribute('data-scene-id', sceneId);", html_text)
 
     def test_apply_attachment_pair_salvage_html_review_updates_cache_with_kept_cards_only(self) -> None:
         cache_doc = {

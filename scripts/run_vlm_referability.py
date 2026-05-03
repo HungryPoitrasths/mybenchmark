@@ -4166,7 +4166,9 @@ class _AttachmentPairSalvageHtmlParser(HTMLParser):
 
         name = str(attrs_map.get("name", "")).strip().lower()
         value = html.unescape(str(attrs_map.get("value", ""))).strip()
-        if name == "parent_surface_text":
+        if name == "scene_id":
+            self._current_card["scene_id"] = value
+        elif name == "parent_surface_text":
             self._current_card["parent_surface_text"] = value
         elif name == "child_surface_text":
             self._current_card["child_surface_text"] = value
@@ -4469,6 +4471,10 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     f"{rename_advice_html}"
                     '<div class="pair-editor">'
                     '<label class="pair-editor-field">'
+                    '<span class="pair-editor-label">Scene ID</span>'
+                    f'<input type="text" name="scene_id" class="pair-name-input pair-scene-id-input" value="{html.escape(scene_id)}">'
+                    "</label>"
+                    '<label class="pair-editor-field">'
                     '<span class="pair-editor-label">Parent Name</span>'
                     f'<input type="text" name="parent_surface_text" class="pair-name-input pair-name-input-parent" value="{html.escape(parent_label)}">'
                     "</label>"
@@ -4568,6 +4574,13 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
       function persistCardState() {{
         document.querySelectorAll('.pair-card').forEach((card) => {{
           card.setAttribute('data-deleted', card.dataset.deleted === 'true' ? 'true' : 'false');
+          const sceneIdInput = card.querySelector('input[name="scene_id"]');
+          if (sceneIdInput) {{
+            const sceneId = sceneIdInput.value.trim();
+            card.dataset.sceneId = sceneId;
+            card.setAttribute('data-scene-id', sceneId);
+            sceneIdInput.setAttribute('value', sceneIdInput.value);
+          }}
           card.querySelectorAll('input.pair-name-input').forEach((input) => {{
             input.setAttribute('value', input.value);
           }});
