@@ -73,6 +73,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("single_frame_trace")
+_GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = False
 
 
 def _json_clone(value: Any) -> Any:
@@ -89,6 +90,27 @@ def _sanitize_question(question: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [_sanitize_question(question) for question in questions]
+
+
+def _call_generate_all_questions_compat(**kwargs):
+    """Tolerate older generate_all_questions signatures during mixed deploys."""
+    global _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED
+
+    try:
+        return generate_all_questions(**kwargs)
+    except TypeError as exc:
+        if "attachment_object_surface_text_by_id" not in str(exc):
+            raise
+        if not _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED:
+            logger.warning(
+                "generate_all_questions compatibility mode: runtime does not support "
+                "attachment_object_surface_text_by_id; attachment naming overrides "
+                "will be skipped for this run"
+            )
+            _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
+        compat_kwargs = dict(kwargs)
+        compat_kwargs.pop("attachment_object_surface_text_by_id", None)
+        return generate_all_questions(**compat_kwargs)
 
 
 def _resolve_scene_dir(data_root: Path, scene_id: str) -> Path:
@@ -974,7 +996,7 @@ def run_single_frame_trace(
             }
             return trace_doc
 
-        raw_questions = generate_all_questions(
+        raw_questions = _call_generate_all_questions_compat(
             objects=scene["objects"],
             attachment_graph=attachment_graph,
             attached_by=attached_by,

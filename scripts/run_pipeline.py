@@ -111,6 +111,7 @@ REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX = 400.0
 REFERABLE_OCCLUSION_VETO_DENSE_MAX_SAMPLE_COUNT = 4096
 REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO = 0.35
 REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE = 64
+_GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = False
 
 
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
@@ -126,6 +127,27 @@ def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
         int(ys.min()),
         int(ys.max()) + 1,
     ]
+
+
+def _call_generate_all_questions_compat(**kwargs):
+    """Tolerate older generate_all_questions signatures during mixed deploys."""
+    global _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED
+
+    try:
+        return generate_all_questions(**kwargs)
+    except TypeError as exc:
+        if "attachment_object_surface_text_by_id" not in str(exc):
+            raise
+        if not _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED:
+            logger.warning(
+                "generate_all_questions compatibility mode: runtime does not support "
+                "attachment_object_surface_text_by_id; attachment naming overrides "
+                "will be skipped for this run"
+            )
+            _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
+        compat_kwargs = dict(kwargs)
+        compat_kwargs.pop("attachment_object_surface_text_by_id", None)
+        return generate_all_questions(**compat_kwargs)
 
 
 def _serialize_question_dinox_detection(detection: dict[str, object]) -> dict[str, object]:
@@ -3888,7 +3910,7 @@ def run_pipeline(
 
                     with _timed_frame_phase(frame_ctx, "generate_all_questions"):
                         try:
-                            questions = generate_all_questions(
+                            questions = _call_generate_all_questions_compat(
                                 objects=scene["objects"],
                                 attachment_graph=attachment_graph,
                                 attached_by=attached_by,
@@ -4247,7 +4269,7 @@ def run_pipeline(
                     )
                     continue
 
-            questions = generate_all_questions(
+            questions = _call_generate_all_questions_compat(
                 objects=scene["objects"],
                 attachment_graph=attachment_graph,
                 attached_by=attached_by,
