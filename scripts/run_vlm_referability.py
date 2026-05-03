@@ -4043,7 +4043,19 @@ _ATTACHMENT_PAIR_REASON_LOCAL_OUTCOME_ZH = {
 }
 
 
-def _attachment_pair_reason_code_to_zh(reason_code: Any) -> str:
+def _attachment_pair_reason_object_ref_zh(pair_row: dict[str, Any], role: str) -> str:
+    object_id = str(pair_row.get(f"{role}_id", "") or "").strip()
+    label = str(pair_row.get(f"{role}_label", "") or "").strip()
+    if object_id and label:
+        return f"物体{object_id}({label})"
+    if object_id:
+        return f"物体{object_id}"
+    if label:
+        return f"物体({label})"
+    return "该物体"
+
+
+def _attachment_pair_reason_code_to_zh(reason_code: Any, pair_row: dict[str, Any] | None = None) -> str:
     code = str(reason_code or "").strip()
     if not code:
         return "-"
@@ -4051,31 +4063,39 @@ def _attachment_pair_reason_code_to_zh(reason_code: Any) -> str:
     if mapped is not None:
         return mapped
 
-    for role_prefix, role_zh in (("parent_", "父物体"), ("child_", "子物体")):
+    for role_prefix, role_key in (("parent_", "parent"), ("child_", "child")):
         if not code.startswith(role_prefix):
             continue
         suffix = code[len(role_prefix):]
+        object_ref = (
+            _attachment_pair_reason_object_ref_zh(pair_row or {}, role_key)
+            if pair_row is not None
+            else role_key
+        )
         mapped_suffix = _ATTACHMENT_PAIR_REASON_SUFFIX_ZH.get(suffix)
         if mapped_suffix is not None:
-            return f"{role_zh}{mapped_suffix}"
+            return f"{object_ref}{mapped_suffix}"
         if suffix.startswith("local_outcome_"):
             outcome = suffix[len("local_outcome_"):]
-            return f"{role_zh}{_ATTACHMENT_PAIR_REASON_LOCAL_OUTCOME_ZH.get(outcome, suffix)}"
+            return f"{object_ref}{_ATTACHMENT_PAIR_REASON_LOCAL_OUTCOME_ZH.get(outcome, suffix)}"
         for scope, scope_zh in _ATTACHMENT_PAIR_REASON_SCOPE_ZH.items():
             if suffix == f"{scope}_multiple":
-                return f"{role_zh}{scope_zh}存在多个同类目标"
+                return f"{object_ref}{scope_zh}存在多个同类目标"
             if suffix == f"{scope}_unsure":
-                return f"{role_zh}{scope_zh}判定不确定"
+                return f"{object_ref}{scope_zh}判定不确定"
         return code
 
     return code
 
 
-def _attachment_pair_reason_codes_to_zh(reason_codes: list[Any]) -> str:
+def _attachment_pair_reason_codes_to_zh(
+    reason_codes: list[Any],
+    pair_row: dict[str, Any] | None = None,
+) -> str:
     rendered: list[str] = []
     seen: set[str] = set()
     for reason_code in reason_codes:
-        text = _attachment_pair_reason_code_to_zh(reason_code)
+        text = _attachment_pair_reason_code_to_zh(reason_code, pair_row=pair_row)
         if not text or text in seen:
             continue
         seen.add(text)
@@ -4417,7 +4437,10 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     continue
                 rendered_group_ids.add(group_id)
                 rendered_pair_count += 1
-                reason_text = _attachment_pair_reason_codes_to_zh(pair_row.get("program_reason_codes", []))
+                reason_text = _attachment_pair_reason_codes_to_zh(
+                    pair_row.get("program_reason_codes", []),
+                    pair_row=pair_row,
+                )
                 parent_id = int(pair_row.get("parent_id", 0) or 0)
                 child_id = int(pair_row.get("child_id", 0) or 0)
                 parent_label = str(pair_row.get("parent_label", "")).strip()

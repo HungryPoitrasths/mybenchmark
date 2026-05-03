@@ -4981,7 +4981,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("child -&gt;</strong> blue book", html_text)
         self.assertIn("relation hint -&gt;</strong> book on top of the table", html_text)
         self.assertIn(
-            "筛除理由</strong> 没有可覆盖该 attachment pair 的清晰图像，子物体最终判定中存在多个同类目标，mystery_reason_code",
+            "筛除理由</strong> 没有可覆盖该 attachment pair 的清晰图像，物体2(book)最终判定中存在多个同类目标，mystery_reason_code",
             html_text,
         )
 
