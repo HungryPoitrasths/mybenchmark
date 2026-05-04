@@ -49,8 +49,12 @@ def make_case_dir(prefix: str) -> Path:
     return path
 
 
-def write_neighbor_edited_html(cache_path: Path, html_text: str | None = None) -> Path:
-    edited_html_path = cache_path.parent / "edited.html"
+def write_neighbor_edited_html(
+    cache_path: Path,
+    html_text: str | None = None,
+    filename: str = "edited.html",
+) -> Path:
+    edited_html_path = cache_path.parent / filename
     edited_html_path.write_text(
         html_text or "<!doctype html><html lang=\"en\"><body></body></html>",
         encoding="utf-8",
@@ -1293,7 +1297,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected 20.0"):
             run_pipeline_module._load_referability_cache(cache_path)
 
-    def test_load_referability_cache_requires_neighbor_edited_html(self) -> None:
+    def test_load_referability_cache_requires_unique_legacy_edited_html(self) -> None:
         case_dir = make_case_dir("cache_missing_edited_html")
         self.addCleanup(shutil.rmtree, case_dir, True)
         cache_path = case_dir / "referability_cache.json"
@@ -1306,10 +1310,47 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             run_pipeline_module._load_referability_cache(cache_path)
 
         message = str(exc_info.exception)
-        self.assertIn("缺少人工审核文件 edited.html", message)
+        self.assertIn("edited*.html", message)
         self.assertIn(str(cache_path), message)
+        self.assertIn(
+            run_pipeline_module._referability_cache_legacy_edited_html_glob(cache_path),
+            message,
+        )
+        self.assertIn("legacy", message)
+
+    def test_load_referability_cache_accepts_unique_prefixed_legacy_edited_html(self) -> None:
+        case_dir = make_case_dir("cache_prefixed_edited_html")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        cache_path.write_text(
+            json.dumps({"version": "20.0", "frames": {}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_neighbor_edited_html(cache_path, filename="edited_review.html")
+
+        cache = run_pipeline_module._load_referability_cache(cache_path)
+
+        self.assertEqual(cache["version"], "20.0")
+
+    def test_load_referability_cache_rejects_multiple_legacy_edited_html_candidates(self) -> None:
+        case_dir = make_case_dir("cache_multiple_edited_html")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "referability_cache.json"
+        cache_path.write_text(
+            json.dumps({"version": "20.0", "frames": {}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_neighbor_edited_html(cache_path, filename="edited.html")
+        write_neighbor_edited_html(cache_path, filename="edited_review.html")
+
+        with self.assertRaises(ValueError) as exc_info:
+            run_pipeline_module._load_referability_cache(cache_path)
+
+        message = str(exc_info.exception)
+        self.assertIn("多个候选", message)
+        self.assertIn("edited*.html", message)
         self.assertIn(str((case_dir / "edited.html").resolve()), message)
-        self.assertIn("请先完成人工审核", message)
+        self.assertIn(str((case_dir / "edited_review.html").resolve()), message)
 
     def test_load_referability_cache_prefers_scene_scoped_html_over_legacy_edited_html(self) -> None:
         case_dir = make_case_dir("cache_scene_html_preferred")

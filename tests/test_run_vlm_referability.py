@@ -5054,7 +5054,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn('id="export-edited-html"', html_text)
         self.assertIn("scene review files:</strong> edited.html", html_text)
         self.assertIn(
-            "pipeline input:</strong> run_pipeline reads the per-scene edited HTML files shown above, or a legacy neighboring edited.html only when no per-scene files exist. This salvage_review.html file is a batch summary only.",
+            "pipeline input:</strong> run_pipeline reads the per-scene edited HTML files shown above, or a legacy neighboring edited*.html only when no per-scene files exist and exactly one legacy file matches. This salvage_review.html file is a batch summary only.",
             html_text,
         )
         self.assertIn("suggestedName: editedHtmlTargetName", html_text)
@@ -6571,7 +6571,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             html_text,
         )
         self.assertIn(
-            "pipeline input:</strong> run_pipeline reads the per-scene edited HTML files shown above, or a legacy neighboring edited.html only when no per-scene files exist. This salvage_review.html file is a batch summary only.",
+            "pipeline input:</strong> run_pipeline reads the per-scene edited HTML files shown above, or a legacy neighboring edited*.html only when no per-scene files exist and exactly one legacy file matches. This salvage_review.html file is a batch summary only.",
             html_text,
         )
         self.assertIn(

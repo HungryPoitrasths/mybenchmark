@@ -943,6 +943,14 @@ def _referability_cache_edited_html_path(path: Path) -> Path:
     return path.parent / "edited.html"
 
 
+def _referability_cache_legacy_edited_html_glob(path: Path) -> str:
+    return str(path.parent / "edited*.html")
+
+
+def _referability_cache_legacy_edited_html_paths(path: Path) -> list[Path]:
+    return sorted(path.parent.glob("edited*.html"))
+
+
 def _referability_cache_scene_edited_html_path(path: Path, scene_id: str) -> Path:
     return path.parent / f"{path.stem}_{str(scene_id).strip()}_edited.html"
 
@@ -1013,15 +1021,29 @@ def _resolve_referability_cache_review_html_paths(
             for scene_id in expected_scene_ids
         ], "scene-scoped"
 
-    edited_html_path = _referability_cache_edited_html_path(path)
-    if not edited_html_path.exists():
+    legacy_html_paths = _referability_cache_legacy_edited_html_paths(path)
+    if not legacy_html_paths:
         raise ValueError(
-            "[缺少人工审核文件 edited.html]\n"
+            "[缺少人工审核文件 edited*.html]\n"
             f"referability_cache: {path}\n"
-            f"期望位置: {edited_html_path.resolve()}\n"
-            "请先完成人工审核，并把导出的文件命名为 edited.html 放到上面这个目录。"
+            f"expected_glob: {_referability_cache_legacy_edited_html_glob(path)}\n"
+            "请先完成人工审核，并把导出的文件命名为 edited*.html 放到上面这个目录；"
+            "legacy 模式下必须恰好有一个匹配文件。"
         )
-    return [edited_html_path], "legacy"
+    if len(legacy_html_paths) > 1:
+        candidate_lines = "\n".join(
+            f"- {candidate.resolve()}"
+            for candidate in legacy_html_paths
+        )
+        raise ValueError(
+            "[legacy 人工审核文件 edited*.html 存在多个候选]\n"
+            f"referability_cache: {path}\n"
+            f"expected_glob: {_referability_cache_legacy_edited_html_glob(path)}\n"
+            "matched_paths:\n"
+            f"{candidate_lines}\n"
+            "请只保留一个唯一的 edited*.html，避免 pipeline 误读。"
+        )
+    return [legacy_html_paths[0]], "legacy"
 
 
 def _load_single_referability_cache(
