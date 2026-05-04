@@ -1212,6 +1212,36 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             2,
         )
 
+    def test_run_question_presence_review_skips_vlm_when_no_targets(self) -> None:
+        root = make_case_dir("question_presence_review_no_targets")
+        self.addCleanup(shutil.rmtree, root, True)
+        output_dir = root / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        with (
+            patch.object(
+                run_pipeline_module,
+                "_resolve_question_review_vlm",
+                side_effect=AssertionError("VLM resolver should not be called when there are no review targets"),
+            ),
+            patch("scripts.make_viewer.build_viewer_html", return_value="<html>empty</html>"),
+        ):
+            result = run_pipeline_module._run_question_presence_review(
+                questions=[],
+                data_root=Path("."),
+                output_dir=output_dir,
+                vlm_url="http://fake-vlm.local",
+                vlm_model=None,
+                workers=1,
+            )
+
+        self.assertEqual(result["reviewed_question_count"], 0)
+        self.assertEqual(result["manual_review_count"], 0)
+        self.assertEqual(result["questions"], [])
+        self.assertTrue((output_dir / "question_presence_review.json").exists())
+        self.assertTrue((output_dir / "question_presence_review_flagged.json").exists())
+        self.assertTrue((output_dir / "question_presence_review_flagged.html").exists())
+
     def test_build_question_referability_audit_drops_ambiguous_nonreferable_label(self) -> None:
         audit = run_pipeline_module._build_question_referability_audit(
             {

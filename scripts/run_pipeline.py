@@ -2513,6 +2513,40 @@ def _run_question_presence_review(
         if _should_run_attachment_pair_review(question)
     ]
     review_questions = [question for _, question in presence_review_targets + attachment_pair_review_targets]
+    review_json_path = output_dir / "question_presence_review.json"
+    flagged_json_path = output_dir / "question_presence_review_flagged.json"
+    flagged_html_path = output_dir / "question_presence_review_flagged.html"
+    if not review_questions:
+        review_payload = {
+            "name": "CausalSpatial-Bench question presence review",
+            "model": vlm_model,
+            "reviewed_question_count": 0,
+            "manual_review_count": 0,
+            "referability_issue_count": 0,
+            "attachment_pair_issue_count": 0,
+            "post_generation_issue_count": 0,
+            "questions": [],
+        }
+        flagged_payload = dict(review_payload)
+        flagged_payload["name"] = "CausalSpatial-Bench question presence review (flagged)"
+        with open(review_json_path, "w", encoding="utf-8") as f:
+            json.dump(review_payload, f, indent=2, ensure_ascii=False)
+        with open(flagged_json_path, "w", encoding="utf-8") as f:
+            json.dump(flagged_payload, f, indent=2, ensure_ascii=False)
+        flagged_html_path.write_text(
+            build_viewer_html(
+                [],
+                data_root,
+                title="question presence manual review",
+                include_referability_audit=False,
+                apply_filters=False,
+            ),
+            encoding="utf-8",
+        )
+        logger.info(
+            "Question presence review skipped: no L1 occlusion or non-self L2 attachment-pair questions found."
+        )
+        return review_payload
     client, model_name = _resolve_question_review_vlm(
         vlm_url,
         vlm_model,
@@ -2607,10 +2641,6 @@ def _run_question_presence_review(
         "post_generation_issue_count": post_generation_issue_count,
         "questions": flagged_questions,
     }
-
-    review_json_path = output_dir / "question_presence_review.json"
-    flagged_json_path = output_dir / "question_presence_review_flagged.json"
-    flagged_html_path = output_dir / "question_presence_review_flagged.html"
 
     with open(review_json_path, "w", encoding="utf-8") as f:
         json.dump(review_payload, f, indent=2, ensure_ascii=False)
