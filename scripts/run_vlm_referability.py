@@ -4166,8 +4166,12 @@ class _AttachmentPairSalvageHtmlParser(HTMLParser):
 
         name = str(attrs_map.get("name", "")).strip().lower()
         value = html.unescape(str(attrs_map.get("value", ""))).strip()
-        if name == "scene_id":
-            self._current_card["scene_id"] = value
+        if name == "image_id":
+            self._current_card["image_id"] = value
+            self._current_card["image_name"] = _salvage_review_image_name_with_original_suffix(
+                original_image_name=str(self._current_card.get("image_name", "")),
+                image_id=value,
+            )
         elif name == "parent_surface_text":
             self._current_card["parent_surface_text"] = value
         elif name == "child_surface_text":
@@ -4189,6 +4193,15 @@ def _parse_attachment_pair_salvage_review_html(html_text: str) -> list[dict[str,
     parser.feed(str(html_text))
     parser.close()
     return parser.cards
+
+
+def _salvage_review_image_name_with_original_suffix(*, original_image_name: str, image_id: str) -> str:
+    original_name = str(original_image_name).strip()
+    updated_stem = str(image_id).strip()
+    if not updated_stem:
+        return ""
+    original_suffix = Path(original_name).suffix if original_name else ""
+    return f"{updated_stem}{original_suffix}"
 
 
 def _apply_attachment_pair_salvage_html_review(
@@ -4464,6 +4477,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     "</div>"
                     '<div class="pair-copy">'
                     f'<div class="pair-text"><strong>group</strong> {html.escape(group_id or "-")}</div>'
+                    f'<div class="pair-text"><strong>scene id</strong> {html.escape(scene_id or "-")}</div>'
                     f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(parent_label)}#{parent_id} -> '
                     f'{html.escape(child_label)}#{child_id}</div>'
                     f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
@@ -4471,8 +4485,8 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     f"{rename_advice_html}"
                     '<div class="pair-editor">'
                     '<label class="pair-editor-field">'
-                    '<span class="pair-editor-label">Scene ID</span>'
-                    f'<input type="text" name="scene_id" class="pair-name-input pair-scene-id-input" value="{html.escape(scene_id)}">'
+                    '<span class="pair-editor-label">Image ID</span>'
+                    f'<input type="text" name="image_id" class="pair-name-input pair-image-id-input" value="{html.escape(cover["image_stem"] or Path(cover["image_name"]).stem)}">'
                     "</label>"
                     '<label class="pair-editor-field">'
                     '<span class="pair-editor-label">Parent Name</span>'
@@ -4574,12 +4588,15 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
       function persistCardState() {{
         document.querySelectorAll('.pair-card').forEach((card) => {{
           card.setAttribute('data-deleted', card.dataset.deleted === 'true' ? 'true' : 'false');
-          const sceneIdInput = card.querySelector('input[name="scene_id"]');
-          if (sceneIdInput) {{
-            const sceneId = sceneIdInput.value.trim();
-            card.dataset.sceneId = sceneId;
-            card.setAttribute('data-scene-id', sceneId);
-            sceneIdInput.setAttribute('value', sceneIdInput.value);
+          const imageIdInput = card.querySelector('input[name="image_id"]');
+          if (imageIdInput) {{
+            const imageId = imageIdInput.value.trim();
+            const originalImageName = card.getAttribute('data-image-name') || '';
+            const suffixMatch = originalImageName.match(/(\.[^./\\\\]+)$/);
+            const nextImageName = imageId ? `${{imageId}}${{suffixMatch ? suffixMatch[1] : ''}}` : '';
+            card.dataset.imageName = nextImageName;
+            card.setAttribute('data-image-name', nextImageName);
+            imageIdInput.setAttribute('value', imageIdInput.value);
           }}
           card.querySelectorAll('input.pair-name-input').forEach((input) => {{
             input.setAttribute('value', input.value);

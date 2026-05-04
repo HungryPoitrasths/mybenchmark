@@ -5071,12 +5071,12 @@ class RunVlmReferabilityTests(unittest.TestCase):
 <html lang="en">
 <body>
   <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000001.jpg" data-group-id="scene0001_00:group_0" data-pair-id="1-&gt;2" data-parent-id="1" data-parent-label="table" data-child-id="2" data-child-label="book" data-deleted="false">
-    <input type="text" name="scene_id" value="scene0001_edited">
+    <input type="text" name="image_id" value="1942">
     <input type="text" name="parent_surface_text" value="wooden table">
     <input type="text" name="child_surface_text" value="blue book">
   </article>
   <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000002.jpg" data-group-id="scene0001_00:group_1" data-pair-id="3-&gt;4" data-parent-id="3" data-parent-label="desk" data-child-id="4" data-child-label="lamp" data-deleted="true">
-    <input type="text" name="scene_id" value="scene0001_edited">
+    <input type="text" name="image_id" value="2048">
     <input type="text" name="parent_surface_text" value="desk">
     <input type="text" name="child_surface_text" value="lamp">
   </article>
@@ -5086,14 +5086,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
         cards = referability_module._parse_attachment_pair_salvage_review_html(html_text)
 
         self.assertEqual(len(cards), 2)
-        self.assertEqual(cards[0]["scene_id"], "scene0001_edited")
-        self.assertEqual(cards[0]["image_name"], "000001.jpg")
+        self.assertEqual(cards[0]["scene_id"], "scene0001_00")
+        self.assertEqual(cards[0]["image_id"], "1942")
+        self.assertEqual(cards[0]["image_name"], "1942.jpg")
         self.assertEqual(cards[0]["parent_surface_text"], "wooden table")
         self.assertEqual(cards[0]["child_surface_text"], "blue book")
         self.assertFalse(cards[0]["deleted"])
         self.assertTrue(cards[1]["deleted"])
 
-    def test_render_attachment_pair_salvage_review_html_includes_editable_scene_id_input(self) -> None:
+    def test_render_attachment_pair_salvage_review_html_includes_editable_image_id_input(self) -> None:
         review_doc = {
             "scenes": [
                 {
@@ -5129,10 +5130,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         html_text = referability_module._render_attachment_pair_salvage_review_html(review_doc)
 
-        self.assertIn('name="scene_id"', html_text)
-        self.assertIn('class="pair-name-input pair-scene-id-input"', html_text)
-        self.assertIn('value="scene0001_00"', html_text)
-        self.assertIn("card.setAttribute('data-scene-id', sceneId);", html_text)
+        self.assertIn('name="image_id"', html_text)
+        self.assertIn('class="pair-name-input pair-image-id-input"', html_text)
+        self.assertIn('value="000001"', html_text)
+        self.assertIn("card.setAttribute('data-image-name', nextImageName);", html_text)
+        self.assertIn("<strong>scene id</strong> scene0001_00", html_text)
 
     def test_apply_attachment_pair_salvage_html_review_updates_cache_with_kept_cards_only(self) -> None:
         cache_doc = {
@@ -5193,6 +5195,85 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(dropped_entry["attachment_referable_pairs"], [])
         self.assertEqual(dropped_entry["attachment_referable_object_ids"], [])
+
+    def test_attachment_pair_salvage_review_roundtrip_edited_image_id_updates_target_frame(self) -> None:
+        review_doc = {
+            "scenes": [
+                {
+                    "scene_id": "scene0001_00",
+                    "pipeline_outcome": "processed",
+                    "groups": [
+                        {
+                            "group_id": "scene0001_00:group_keep",
+                            "selected_cover_images": [
+                                {
+                                    "image_name": "1942.jpg",
+                                    "image_stem": "1942",
+                                    "data_url": "data:image/jpeg;base64,cover_kept",
+                                }
+                            ],
+                            "dropped_pairs": [
+                                {
+                                    "pair_id": "1->2",
+                                    "parent_id": 1,
+                                    "parent_label": "table",
+                                    "child_id": 2,
+                                    "child_label": "book",
+                                    "first_covered_image_name": "1942.jpg",
+                                    "program_reason_codes": ["no_coverable_clarity_pass_image"],
+                                    "rename_advice": {
+                                        "status": "unavailable",
+                                        "reason": "missing_visual_evidence",
+                                        "candidates": [],
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        cache_doc = {
+            "version": referability_module.REFERABILITY_CACHE_VERSION,
+            "frames": {
+                "scene0001_00": {
+                    "1942.jpg": {
+                        **make_debug_cache_entry(),
+                        "attachment_referable_pairs": [],
+                        "attachment_referable_object_ids": [],
+                    },
+                    "2001.jpg": {
+                        **make_debug_cache_entry(),
+                        "attachment_referable_pairs": [],
+                        "attachment_referable_object_ids": [],
+                    },
+                }
+            },
+        }
+
+        rendered_html = referability_module._render_attachment_pair_salvage_review_html(review_doc)
+        edited_html = rendered_html.replace('data-image-name="1942.jpg"', 'data-image-name="2001.jpg"', 1)
+        edited_html = edited_html.replace('name="image_id" class="pair-name-input pair-image-id-input" value="1942"', 'name="image_id" class="pair-name-input pair-image-id-input" value="2001"', 1)
+        edited_html = edited_html.replace('name="parent_surface_text" class="pair-name-input pair-name-input-parent" value="table"', 'name="parent_surface_text" class="pair-name-input pair-name-input-parent" value="wooden table"', 1)
+        edited_html = edited_html.replace('name="child_surface_text" class="pair-name-input pair-name-input-child" value="book"', 'name="child_surface_text" class="pair-name-input pair-name-input-child" value="blue book"', 1)
+
+        parsed_cards = referability_module._parse_attachment_pair_salvage_review_html(edited_html)
+        self.assertEqual(parsed_cards[0]["scene_id"], "scene0001_00")
+        self.assertEqual(parsed_cards[0]["image_id"], "2001")
+        self.assertEqual(parsed_cards[0]["image_name"], "2001.jpg")
+
+        updated = referability_module._apply_attachment_pair_salvage_html_review(
+            html_text=edited_html,
+            cache_doc=cache_doc,
+        )
+
+        original_entry = updated["frames"]["scene0001_00"]["1942.jpg"]
+        edited_entry = updated["frames"]["scene0001_00"]["2001.jpg"]
+        self.assertEqual(original_entry["attachment_referable_pairs"], [])
+        self.assertEqual(original_entry["attachment_referable_object_ids"], [])
+        self.assertEqual(edited_entry["attachment_referable_pairs"], [[1, 2]])
+        self.assertEqual(edited_entry["attachment_referable_object_ids"], [1, 2])
+        self.assertTrue(referability_module._frame_entry_has_consistent_final_fields(edited_entry))
 
     def test_main_reuses_attachment_frame_reviews_and_entries_between_selection_and_salvage(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_salvage_scene_cache_{uuid.uuid4().hex}"
