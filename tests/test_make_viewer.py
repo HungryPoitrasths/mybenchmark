@@ -465,6 +465,25 @@ class MakeViewerTests(unittest.TestCase):
 
         self.assertIn("flagged object ids: 42", notes)
         self.assertIn("cabinet#42 [reference, target]: unsure (invalid_crop)", notes)
+        self.assertNotIn("Answer Review", notes)
+
+    def test_question_review_notes_keeps_legacy_answer_review_compatibility(self) -> None:
+        notes = question_review_notes(
+            {
+                "question_answer_review": {
+                    "decision": "manual_review",
+                    "predicted_answer": "B",
+                    "gold_answer": "A",
+                    "predicted_option": "no",
+                    "gold_option": "yes",
+                    "reason": "model answered B but gold answer is A",
+                }
+            }
+        )
+
+        self.assertIn("Answer Review", notes)
+        self.assertIn("predicted answer: B", notes)
+        self.assertIn("gold option: yes", notes)
 
     def test_question_review_notes_renders_post_generation_audit(self) -> None:
         notes = question_review_notes(
