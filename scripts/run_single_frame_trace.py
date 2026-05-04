@@ -880,6 +880,7 @@ def run_single_frame_trace(
                 pipeline_visible_ids=visible_ids,
                 occlusion_eligible_object_ids=occlusion_eligible_ids,
                 pipeline_referable_object_ids=referable_ids,
+                pipeline_attachment_referable_object_ids=[],
                 referability_entry=referability_entry,
                 frame_attachment_rows=frame_attachment_rows,
             ),

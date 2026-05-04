@@ -608,6 +608,29 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(entry["occlusion_eligible_object_ids"], [1, 2])
 
+    def test_build_frame_debug_entry_records_attachment_referability_fields(self) -> None:
+        objects = [make_object(9, "desk"), make_object(31, "monitor")]
+        entry = run_pipeline_module._build_frame_debug_entry(
+            image_name="1942.jpg",
+            scene_objects=objects,
+            objects_by_id={int(obj["id"]): obj for obj in objects},
+            selector_visible_ids=[9, 31],
+            pipeline_visible_ids=[9, 31],
+            occlusion_eligible_object_ids=[9, 31],
+            pipeline_referable_object_ids=[9],
+            pipeline_attachment_referable_object_ids=[9, 31],
+            referability_entry={
+                "referable_object_ids": [9],
+                "attachment_referable_object_ids": [9, 31],
+                "attachment_referable_pairs": [[9, 31]],
+            },
+            frame_attachment_rows=[],
+        )
+
+        self.assertEqual(entry["pipeline_attachment_referable_object_ids_used_for_generation"], [9, 31])
+        self.assertEqual(entry["attachment_referable_object_ids"], [9, 31])
+        self.assertEqual(entry["attachment_referable_pairs"], [[9, 31]])
+
     def test_resolve_vlm_api_key_warns_when_env_is_missing(self) -> None:
         with (
             patch.dict(run_pipeline_module.os.environ, {}, clear=True),
@@ -644,6 +667,31 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertIn(
             "not provide enough evidence to tell that the object is the given label",
             prompt_lower,
+        )
+        self.assertIn(
+            "even if the blocking object is very small",
+            prompt_lower,
+        )
+        self.assertIn(
+            "different object or label",
+            prompt_lower,
+        )
+
+    def test_should_run_question_presence_review_only_for_l1_occlusion(self) -> None:
+        self.assertTrue(
+            run_pipeline_module._should_run_question_presence_review(
+                {"level": "L1", "type": "occlusion"}
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._should_run_question_presence_review(
+                {"level": "L2", "type": "occlusion"}
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._should_run_question_presence_review(
+                {"level": "L1", "type": "distance"}
+            )
         )
 
     def test_question_presence_reviewer_maps_crop_index_back_to_internal_obj_id(self) -> None:
@@ -743,7 +791,6 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(review["object_reviews"][1]["reason"], "clearly visible")
 
     def test_review_question_object_presence_keeps_missing_obj_id_target_out_of_vlm(self) -> None:
-        answer_review_fn = Mock()
         review_fn = Mock(
             return_value={
                 "object_reviews": [
@@ -764,7 +811,6 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         reviewed = run_pipeline_module._review_question_object_presence(
             review_fn,
-            answer_review_fn,
             question_index=0,
             question={
                 "scene_id": "scene0000_00",
@@ -797,7 +843,6 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         )
 
         review_fn.assert_called_once()
-        answer_review_fn.assert_not_called()
         sent_targets = review_fn.call_args.args[2]
         self.assertEqual(len(sent_targets), 1)
         self.assertEqual(sent_targets[0]["obj_id"], 2)
@@ -814,6 +859,173 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(missing_obj_review["status"], "unsure")
         self.assertEqual(missing_obj_review["reason"], "missing_obj_id")
         self.assertEqual(resolved_review["status"], "present")
+        self.assertNotIn("question_answer_review", reviewed)
+
+    def test_run_question_presence_review_writes_presence_only_payloads(self) -> None:
+        root = make_case_dir("question_presence_review_presence_only")
+        self.addCleanup(shutil.rmtree, root, True)
+        output_dir = root / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        reviewed_questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "question": "Is the chair left of the table?",
+                "level": "L1",
+                "type": "occlusion",
+                "manual_review_reason": "existing manual note",
+                "question_presence_review": {
+                    "review_mode": "instance",
+                    "decision": "pass",
+                    "flagged_labels": [],
+                    "flagged_object_ids": [],
+                    "object_reviews": [],
+                    "raw_response": "",
+                },
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000124.jpg",
+                "question": "Is the lamp near the sofa?",
+                "level": "L1",
+                "type": "occlusion",
+                "question_post_generation_review": {
+                    "decision": "manual_review",
+                    "reason_codes": ["mesh_low_iou:lamp#3"],
+                },
+                "question_presence_review": {
+                    "review_mode": "instance",
+                    "decision": "manual_review",
+                    "flagged_labels": ["lamp"],
+                    "flagged_object_ids": [3],
+                    "object_reviews": [],
+                    "raw_response": "",
+                },
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000125.jpg",
+                "question": "Is the desk behind the chair?",
+                "level": "L1",
+                "type": "occlusion",
+                "question_presence_review": {
+                    "review_mode": "instance",
+                    "decision": "pass",
+                    "flagged_labels": [],
+                    "flagged_object_ids": [],
+                    "object_reviews": [],
+                    "raw_response": "",
+                },
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000126.jpg",
+                "question": "How far is the desk from the chair?",
+                "level": "L1",
+                "type": "distance",
+                "question_presence_review": {
+                    "review_mode": "instance",
+                    "decision": "manual_review",
+                    "flagged_labels": ["desk"],
+                    "flagged_object_ids": [7],
+                    "object_reviews": [],
+                    "raw_response": "",
+                },
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000127.jpg",
+                "question": "Is the chair occluded after moving the table?",
+                "level": "L2",
+                "type": "occlusion",
+                "question_presence_review": {
+                    "review_mode": "instance",
+                    "decision": "manual_review",
+                    "flagged_labels": ["chair"],
+                    "flagged_object_ids": [8],
+                    "object_reviews": [],
+                    "raw_response": "",
+                },
+            },
+        ]
+
+        def fake_review(_review_fn, *, question_index: int, question: dict[str, object], **kwargs):
+            result = dict(reviewed_questions[question_index])
+            result["benchmark_index"] = question_index
+            self.assertEqual(question["question"], reviewed_questions[question_index]["question"])
+            return result
+
+        with (
+            patch.object(run_pipeline_module, "_resolve_question_review_vlm", return_value=(Mock(), "fake-vlm")),
+            patch.object(run_pipeline_module, "_make_question_presence_reviewer", return_value=("fake-vlm", Mock())),
+            patch.object(run_pipeline_module, "_prebuild_question_review_frame_contexts", return_value={}),
+            patch.object(run_pipeline_module, "_review_question_object_presence", side_effect=fake_review),
+            patch("scripts.make_viewer.build_viewer_html", return_value="<html>flagged</html>"),
+        ):
+            result = run_pipeline_module._run_question_presence_review(
+                questions=[
+                    {
+                        "question": item["question"],
+                        "scene_id": item["scene_id"],
+                        "image_name": item["image_name"],
+                        "level": item["level"],
+                        "type": item["type"],
+                    }
+                    for item in reviewed_questions
+                ],
+                data_root=Path("."),
+                output_dir=output_dir,
+                vlm_url="http://fake-vlm.local",
+                vlm_model="fake-vlm",
+                workers=1,
+            )
+
+        self.assertEqual(result["model"], "fake-vlm")
+        self.assertEqual(result["reviewed_question_count"], 3)
+        self.assertEqual(result["manual_review_count"], 2)
+        self.assertEqual(result["referability_issue_count"], 1)
+        self.assertEqual(result["post_generation_issue_count"], 1)
+        self.assertNotIn("answer_review_model", result)
+        self.assertNotIn("answer_review_question_count", result)
+        self.assertNotIn("answer_mismatch_count", result)
+        self.assertEqual(len(result["questions"]), 3)
+        self.assertTrue(result["review_json_path"].exists())
+        self.assertTrue(result["flagged_json_path"].exists())
+        self.assertTrue(result["flagged_html_path"].exists())
+
+        review_payload = json.loads(result["review_json_path"].read_text(encoding="utf-8"))
+        flagged_payload = json.loads(result["flagged_json_path"].read_text(encoding="utf-8"))
+
+        self.assertEqual(review_payload["model"], "fake-vlm")
+        self.assertEqual(review_payload["reviewed_question_count"], 3)
+        self.assertEqual(review_payload["manual_review_count"], 2)
+        self.assertEqual(review_payload["referability_issue_count"], 1)
+        self.assertEqual(review_payload["post_generation_issue_count"], 1)
+        self.assertNotIn("answer_review_model", review_payload)
+        self.assertNotIn("answer_review_question_count", review_payload)
+        self.assertNotIn("answer_mismatch_count", review_payload)
+        self.assertTrue(all("question_answer_review" not in q for q in review_payload["questions"]))
+        self.assertEqual(
+            [question["question"] for question in review_payload["questions"]],
+            [
+                "Is the chair left of the table?",
+                "Is the lamp near the sofa?",
+                "Is the desk behind the chair?",
+            ],
+        )
+
+        self.assertEqual(flagged_payload["reviewed_question_count"], 3)
+        self.assertEqual(flagged_payload["manual_review_count"], 2)
+        self.assertEqual(len(flagged_payload["questions"]), 2)
+        self.assertEqual(
+            [question["question"] for question in flagged_payload["questions"]],
+            [
+                "Is the chair left of the table?",
+                "Is the lamp near the sofa?",
+            ],
+        )
+        self.assertTrue(all("question_answer_review" not in q for q in flagged_payload["questions"]))
 
     def test_build_question_referability_audit_drops_ambiguous_nonreferable_label(self) -> None:
         audit = run_pipeline_module._build_question_referability_audit(

@@ -1,4 +1,5 @@
 import unittest
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -54,6 +55,195 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
+    def test_generate_all_questions_keeps_salvage_only_attachment_pairs_in_attachment_path(self) -> None:
+        objects = [
+            make_object(9, "desk"),
+            make_object(31, "cup"),
+            make_object(32, "bottle"),
+            make_object(34, "chair"),
+        ]
+        trace_events: list[dict] = []
+        captured: dict[str, object] = {}
+
+        def capture_move(
+            objects_arg,
+            attachment_graph_arg,
+            attached_by_arg,
+            camera_pose_arg,
+            templates_arg,
+            **kwargs,
+        ):
+            captured["objects"] = [int(obj["id"]) for obj in objects_arg]
+            captured["attachment_query_objects"] = [
+                int(obj["id"]) for obj in (kwargs.get("attachment_query_objects") or [])
+            ]
+            captured["movement_objects"] = [
+                int(obj["id"]) for obj in (kwargs.get("movement_objects") or [])
+            ]
+            captured["attachment_graph"] = {
+                int(parent_id): [int(child_id) for child_id in child_ids]
+                for parent_id, child_ids in attachment_graph_arg.items()
+            }
+            return [{
+                "level": "L2",
+                "type": "object_move_agent",
+                "question": "If the desk moves, where is the monitor relative to the chair?",
+                "options": ["A", "B", "C", "D"],
+                "answer": "A",
+                "correct_value": "left",
+                "moved_obj_id": 9,
+                "moved_obj_label": "desk",
+                "query_obj_id": 31,
+                "query_obj_label": "monitor",
+                "obj_b_id": 31,
+                "obj_b_label": "monitor",
+                "obj_c_id": 34,
+                "obj_c_label": "chair",
+                "attachment_remapped": True,
+                "mentioned_objects": [
+                    {"role": "moved_object", "obj_id": 9, "label": "desk"},
+                    {"role": "query_object", "obj_id": 31, "label": "monitor"},
+                    {"role": "reference_object", "obj_id": 34, "label": "chair"},
+                ],
+            }]
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move", side_effect=capture_move),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l3_attachment_chain", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={9: [31, 32, 34]},
+                attached_by={31: 9, 32: 9, 34: 9},
+                support_chain_graph={},
+                support_chain_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[9, 31, 32, 34],
+                referable_object_ids=[34],
+                attachment_referable_object_ids=[9, 31, 32, 34],
+                label_statuses={
+                    "desk": "unique",
+                    "cup": "unique",
+                    "bottle": "unique",
+                    "chair": "unique",
+                },
+                label_to_object_ids={
+                    "desk": [9],
+                    "cup": [31],
+                    "bottle": [32],
+                    "chair": [34],
+                },
+                attachment_edges=[
+                    {"parent_id": 9, "child_id": 31, "type": "attached_to"},
+                    {"parent_id": 9, "child_id": 32, "type": "attached_to"},
+                    {"parent_id": 9, "child_id": 34, "type": "attached_to"},
+                ],
+                trace_recorder=trace_events.append,
+                trace_detail="full",
+            )
+
+        self.assertEqual(captured["objects"], [34])
+        self.assertEqual(captured["attachment_query_objects"], [9, 31, 32, 34])
+        self.assertEqual(captured["movement_objects"], [9, 31, 32, 34])
+        self.assertEqual(captured["attachment_graph"], {9: [31, 32, 34]})
+        self.assertEqual(questions, [])
+        pool_snapshot = next(
+            event for event in trace_events
+            if event.get("event") == "object_pool_snapshot"
+        )
+        rows = {int(row["id"]): row for row in pool_snapshot["rows"]}
+        self.assertTrue(rows[31]["attachment_query_pool"])
+        self.assertFalse(rows[31]["question_pool"])
+        self.assertTrue(rows[31]["movement_pool"])
+        self.assertTrue(rows[31]["attachment_referable"])
+
+    def test_scene0025_salvage_cache_entry_survives_attachment_preprocessing(self) -> None:
+        cache_path = "output/flash0-9/0-9_20260502_174155.json"
+        with open(cache_path, "r", encoding="utf-8") as f:
+            cache_doc = json.load(f)
+        cache_frame_entry = cache_doc["frames"]["scene0025_00"]["1942.jpg"]
+
+        self.assertEqual(cache_frame_entry["referable_object_ids"], [34])
+        self.assertEqual(cache_frame_entry["attachment_referable_object_ids"], [9, 34])
+        frame_entry = dict(cache_frame_entry)
+        frame_entry["attachment_referable_pairs"] = [[9, 31], [9, 34]]
+        frame_entry["attachment_referable_object_ids"] = [9, 31, 34]
+
+        objects = [
+            make_object(9, "desk"),
+            make_object(31, "cup"),
+            make_object(34, "chair"),
+        ]
+        captured: dict[str, object] = {}
+
+        def capture_move(
+            objects_arg,
+            attachment_graph_arg,
+            attached_by_arg,
+            camera_pose_arg,
+            templates_arg,
+            **kwargs,
+        ):
+            captured["attachment_query_objects"] = [
+                int(obj["id"]) for obj in (kwargs.get("attachment_query_objects") or [])
+            ]
+            captured["movement_objects"] = [
+                int(obj["id"]) for obj in (kwargs.get("movement_objects") or [])
+            ]
+            captured["attachment_graph"] = {
+                int(parent_id): [int(child_id) for child_id in child_ids]
+                for parent_id, child_ids in attachment_graph_arg.items()
+            }
+            return []
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move", side_effect=capture_move),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l3_attachment_chain", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+        ):
+            generate_all_questions(
+                objects=objects,
+                attachment_graph={9: [31, 34]},
+                attached_by={31: 9, 34: 9},
+                support_chain_graph={},
+                support_chain_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[9, 31, 34],
+                referable_object_ids=frame_entry["referable_object_ids"],
+                attachment_referable_object_ids=frame_entry["attachment_referable_object_ids"],
+                attachment_edges=[
+                    {"parent_id": 9, "child_id": 31, "type": "attached_to"},
+                    {"parent_id": 9, "child_id": 34, "type": "attached_to"},
+                ],
+            )
+
+        self.assertEqual(captured["attachment_graph"], {9: [31, 34]})
+        self.assertEqual(captured["attachment_query_objects"], [9, 31, 34])
+        self.assertEqual(captured["movement_objects"], [9, 31, 34])
+
     def test_enrich_objects_with_distance_geometry_skips_repeat_work_for_same_mesh(self) -> None:
         objects = [make_object(1, "chair")]
         instance_mesh_data = SimpleNamespace(
@@ -76,6 +266,151 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(samples_mock.call_count, 1)
         self.assertEqual(metadata_mock.call_count, 1)
+
+    def test_generate_all_questions_applies_attachment_surface_text_overrides_only_to_attachment_questions(self) -> None:
+        objects = [
+            make_object(1, "cup"),
+            make_object(2, "table"),
+            make_object(3, "lamp"),
+            make_object(4, "bed"),
+            make_object(5, "pillow"),
+            make_object(6, "book"),
+            make_object(7, "chair"),
+        ]
+        attachment_move_question = {
+            "level": "L2",
+            "type": "object_move_agent",
+            "question": "If the table moves, where is the cup relative to the lamp?",
+            "options": ["left", "right", "front", "back"],
+            "answer": "A",
+            "correct_value": "left",
+            "moved_obj_id": 2,
+            "moved_obj_label": "table",
+            "query_obj_id": 1,
+            "query_obj_label": "cup",
+            "obj_c_id": 3,
+            "obj_c_label": "lamp",
+            "attachment_remapped": True,
+            "mentioned_objects": [
+                {"role": "moved_object", "obj_id": 2, "label": "table"},
+                {"role": "query_object", "obj_id": 1, "label": "cup"},
+                {"role": "reference_object", "obj_id": 3, "label": "lamp"},
+            ],
+        }
+        attachment_chain_question = {
+            "level": "L3",
+            "type": "attachment_chain",
+            "question": "If the bed moves, which objects move with it?",
+            "options": ["the pillow", "the book", "Both the pillow and the book", "the chair"],
+            "answer": "C",
+            "correct_value": "Both the pillow and the book",
+            "grandparent_id": 4,
+            "grandparent_label": "bed",
+            "parent_id": 5,
+            "parent_label": "pillow",
+            "grandchild_id": 6,
+            "grandchild_label": "book",
+            "neighbor_id": 7,
+            "neighbor_label": "chair",
+            "mentioned_objects": [
+                {"role": "grandparent", "obj_id": 4, "label": "bed"},
+                {"role": "parent", "obj_id": 5, "label": "pillow"},
+                {"role": "grandchild", "obj_id": 6, "label": "book"},
+                {"role": "neighbor", "obj_id": 7, "label": "chair"},
+            ],
+        }
+        non_attachment_question = {
+            "level": "L1",
+            "type": "distance",
+            "question": "How far is the cup from the lamp?",
+            "options": ["near", "far"],
+            "answer": "A",
+            "correct_value": "near",
+            "obj_a_id": 1,
+            "obj_a_label": "cup",
+            "obj_b_id": 3,
+            "obj_b_label": "lamp",
+            "mentioned_objects": [
+                {"role": "obj_a", "obj_id": 1, "label": "cup"},
+                {"role": "obj_b", "obj_id": 3, "label": "lamp"},
+            ],
+        }
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction", return_value=None),
+            patch("src.qa_generator.generate_l1_distance", return_value=None),
+            patch(
+                "src.qa_generator.generate_l2_object_move",
+                return_value=[attachment_move_question],
+            ),
+            patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
+            patch(
+                "src.qa_generator.generate_l3_attachment_chain",
+                return_value=[attachment_chain_question],
+            ),
+            patch(
+                "src.qa_generator.generate_l3_coordinate_rotation",
+                return_value=[non_attachment_question],
+            ),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l3_coordinate_rotation_allocentric", return_value=[]),
+            patch("src.qa_generator._enforce_in_frame_mentions", side_effect=lambda questions, *args, **kwargs: questions),
+            patch("src.qa_generator._enforce_referable_mentions", side_effect=lambda questions, *args, **kwargs: questions),
+            patch("src.qa_generator._enforce_stable_facing_references", side_effect=lambda questions, *args, **kwargs: questions),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={2: [1], 4: [5], 5: [6]},
+                attached_by={1: 2, 5: 4, 6: 5},
+                support_chain_graph={2: [1], 4: [5], 5: [6]},
+                support_chain_by={1: 2, 5: 4, 6: 5},
+                camera_pose=make_camera_pose(),
+                referable_object_ids=[1, 2, 3, 4, 5, 6, 7],
+                attachment_referable_object_ids=[1, 2, 3, 4, 5, 6, 7],
+                attachment_object_surface_text_by_id={
+                    1: "blue cup",
+                    2: "wooden table",
+                    3: "floor lamp",
+                    4: "king bed",
+                    5: "blue pillow",
+                    6: "red book",
+                },
+                visible_object_ids=[1, 2, 3, 4, 5, 6, 7],
+            )
+
+        move_question = next(q for q in questions if q["type"] == "object_move_agent")
+        chain_question = next(q for q in questions if q["type"] == "attachment_chain")
+        distance_question = next(q for q in questions if q["type"] == "distance")
+
+        self.assertIn("wooden table", move_question["question"])
+        self.assertIn("blue cup", move_question["question"])
+        self.assertIn("floor lamp", move_question["question"])
+        self.assertEqual(move_question["moved_obj_label"], "wooden table")
+        self.assertEqual(move_question["query_obj_label"], "blue cup")
+        self.assertEqual(move_question["obj_c_label"], "floor lamp")
+        self.assertEqual(
+            [item["label"] for item in move_question["mentioned_objects"]],
+            ["wooden table", "blue cup", "floor lamp"],
+        )
+
+        self.assertIn("king bed", chain_question["question"])
+        self.assertEqual(chain_question["grandparent_label"], "king bed")
+        self.assertEqual(chain_question["parent_label"], "blue pillow")
+        self.assertEqual(chain_question["grandchild_label"], "red book")
+        self.assertIn("Both the blue pillow and the red book", chain_question["correct_value"])
+        self.assertIn("the blue pillow", chain_question["options"])
+        self.assertIn("the red book", chain_question["options"])
+
+        self.assertEqual(distance_question["question"], "How far is the cup from the lamp?")
+        self.assertEqual(distance_question["obj_a_label"], "cup")
+        self.assertEqual(distance_question["obj_b_label"], "lamp")
 
     def test_generate_all_questions_skips_trace_snapshots_without_trace_recorder(self) -> None:
         objects = [

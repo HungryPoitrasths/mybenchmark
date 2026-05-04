@@ -13,6 +13,7 @@ import json
 import math
 import random
 import logging
+import re
 import time
 import zlib
 from pathlib import Path
@@ -44,6 +45,7 @@ from .support_graph import (
     compute_bottom_footprint_overlap_metrics,
 )
 from .referability_checks import (
+    QUESTION_MENTION_FIELDS,
     build_question_referability_audit,
     collect_question_mentions,
     normalize_label_to_object_ids,
@@ -754,6 +756,120 @@ def _the(label: str) -> str:
 def _mention(role: str, label: str, obj_id: int | None = None) -> dict[str, Any]:
     """Create a normalised mentioned-object record for a question."""
     return {"role": role, "obj_id": obj_id, "label": label}
+
+
+def _normalize_attachment_surface_text_by_object_id(
+    value: dict[int, str] | dict[str, str] | None,
+    field_name: str,
+) -> dict[int, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError(f"{field_name} must be a mapping from object id to surface text")
+    normalized: dict[int, str] = {}
+    for key, surface_text in value.items():
+        try:
+            obj_id = int(key)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{field_name} contains a non-integer object id: {key!r}") from exc
+        text = str(surface_text or "").strip()
+        if text:
+            normalized[obj_id] = text
+    return dict(sorted(normalized.items()))
+
+
+def _replace_attachment_surface_text(text: str, old_label: str, new_label: str) -> str:
+    old_text = str(old_label or "").strip()
+    new_text = str(new_label or "").strip()
+    rendered = str(text or "")
+    if not old_text or not new_text or old_text == new_text:
+        return rendered
+
+    return re.sub(
+        rf"(?<!\w){re.escape(old_text)}(?!\w)",
+        new_text,
+        rendered,
+    )
+
+
+def _apply_attachment_surface_text_overrides(
+    question: dict[str, Any],
+    surface_text_by_obj_id: dict[int, str],
+) -> dict[str, Any]:
+    if not surface_text_by_obj_id or not _question_uses_attachment_referability(question):
+        return question
+
+    updated = dict(question)
+    replacements: list[tuple[str, str]] = []
+    for id_key, label_key, _role in QUESTION_MENTION_FIELDS:
+        obj_id = question.get(id_key)
+        if obj_id in (None, ""):
+            continue
+        try:
+            normalized_obj_id = int(obj_id)
+        except (TypeError, ValueError):
+            continue
+        new_label = surface_text_by_obj_id.get(normalized_obj_id)
+        if not new_label:
+            continue
+        old_label = str(updated.get(label_key, "")).strip()
+        if old_label and old_label != new_label:
+            replacements.append((old_label, new_label))
+        updated[label_key] = new_label
+
+    mentions = []
+    for mention in question.get("mentioned_objects", []):
+        if not isinstance(mention, dict):
+            mentions.append(mention)
+            continue
+        updated_mention = dict(mention)
+        obj_id = mention.get("obj_id")
+        try:
+            normalized_obj_id = int(obj_id) if obj_id not in (None, "") else None
+        except (TypeError, ValueError):
+            normalized_obj_id = None
+        if normalized_obj_id is not None:
+            new_label = surface_text_by_obj_id.get(normalized_obj_id)
+            old_label = str(updated_mention.get("label", "")).strip()
+            if new_label:
+                if old_label and old_label != new_label:
+                    replacements.append((old_label, new_label))
+                updated_mention["label"] = new_label
+        mentions.append(updated_mention)
+    updated["mentioned_objects"] = mentions
+
+    deduped_replacements: list[tuple[str, str]] = []
+    seen_replacements: set[tuple[str, str]] = set()
+    for old_label, new_label in replacements:
+        key = (str(old_label), str(new_label))
+        if key in seen_replacements:
+            continue
+        seen_replacements.add(key)
+        deduped_replacements.append(key)
+
+    for key in ("question", "correct_value"):
+        value = updated.get(key)
+        if not isinstance(value, str):
+            continue
+        rendered_value = value
+        for old_label, new_label in deduped_replacements:
+            rendered_value = _replace_attachment_surface_text(rendered_value, old_label, new_label)
+        updated[key] = rendered_value
+
+    options = updated.get("options")
+    if isinstance(options, list):
+        rendered_options: list[Any] = []
+        for option in options:
+            if not isinstance(option, str):
+                rendered_options.append(option)
+                continue
+            rendered_option = option
+            for old_label, new_label in deduped_replacements:
+                rendered_option = _replace_attachment_surface_text(rendered_option, old_label, new_label)
+            rendered_options.append(rendered_option)
+        updated["options"] = rendered_options
+
+    return updated
 
 
 def _has_stable_object_centric_facing(
@@ -4936,6 +5052,9 @@ def generate_l2_object_move(
     ray_caster=None,
     instance_mesh_data: InstanceMeshData | None = None,
     attachment_referable_object_ids: list[int] | None = None,
+    attachment_query_objects: list[dict] | None = None,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -4948,6 +5067,7 @@ def generate_l2_object_move(
         if attachment_referable_object_ids is not None
         else set(referable_object_ids)
     )
+    attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
@@ -5038,7 +5158,7 @@ def generate_l2_object_move(
         ] = {}
         alternative_states: list[_SelectedObjectMoveState] | None = None
         query_objects = [
-            candidate_obj for candidate_obj in objects
+            candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
         ]
 
@@ -5101,6 +5221,22 @@ def generate_l2_object_move(
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l2_object_move",
+                candidate_kind="attachment_query_object",
+                candidate_key=_candidate_key(move_source_id, query_obj_id),
+                object_ids=[move_source_id, query_obj_id],
+                status="considered",
+                reason_code="attachment_query_object_candidate",
+                reason_detail="attachment-aware query object is included in the moved attachment chain candidate set",
+                evidence={
+                    "moved_ids": sorted(int(obj_id) for obj_id in moved_ids),
+                    "attachment_query_pool_size": int(len(attachment_query_pool)),
+                    "attachment_query_object_id": query_obj_id,
+                },
+            )
             query_obj_questions: list[dict] = []
 
             for key, old_relation in base_relation_map.items():
@@ -5634,6 +5770,7 @@ def generate_l2_object_remove(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
     templates: dict,
+    attachment_query_objects: list[dict] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
     generator_progress_log_seconds: float = 15.0,
@@ -5641,6 +5778,7 @@ def generate_l2_object_remove(
 ) -> list[dict]:
     """Generate L2.3 object-removal questions from counterfactual visibility after removal."""
     questions: list[dict] = []
+    candidate_objects = attachment_query_objects if attachment_query_objects is not None else objects
     if color_intrinsics is None:
         _emit_generator_summary(
             trace_recorder,
@@ -5659,7 +5797,7 @@ def generate_l2_object_remove(
     )
     original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
     original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
-    for obj in objects:
+    for obj in candidate_objects:
         metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
             obj=obj,
             camera_pose=camera_pose,
@@ -5674,8 +5812,8 @@ def generate_l2_object_remove(
         status, reason_code, _reason_detail = _resolve_counterfactual_l1_visibility_status(metrics)
         original_visibility[int(obj["id"])] = (status, source_used, reason_code, metrics)
 
-    original_ids = {int(obj["id"]) for obj in objects}
-    candidate_count = len(objects) * (len(objects) - 1) if len(objects) >= 3 else 0
+    original_ids = {int(obj["id"]) for obj in candidate_objects}
+    candidate_count = len(candidate_objects) * (len(candidate_objects) - 1) if len(candidate_objects) >= 3 else 0
     generated_candidate_count = 0
     processed_candidate_count = 0
     reason_counts: Counter[str] = Counter()
@@ -5683,8 +5821,23 @@ def generate_l2_object_remove(
     generator_started_at = time.perf_counter()
     last_progress_logged_at = generator_started_at
     slow_warning_emitted = False
-    for obj in objects:
-        remaining = apply_removal(objects, obj["id"])
+    for obj in candidate_objects:
+        _emit_generator_candidate(
+            trace_recorder,
+            trace_detail=trace_detail,
+            generator="generate_l2_object_remove",
+            candidate_kind="attachment_query_object",
+            candidate_key=_candidate_key(obj["id"]),
+            object_ids=[int(obj["id"])],
+            status="considered",
+            reason_code="attachment_query_object_candidate",
+            reason_detail="attachment-aware remove candidate is included in the attachment query pool",
+            evidence={
+                "attachment_query_pool_size": int(len(candidate_objects)),
+                "attachment_query_object_id": int(obj["id"]),
+            },
+        )
+        remaining = apply_removal(candidate_objects, obj["id"])
         removal_progress_context = {
             "removed_object_id": int(obj["id"]),
         }
@@ -6031,6 +6184,9 @@ def generate_l2_object_rotate_object_centric(
     movement_objects: list[dict] | None = None,
     object_map: dict[int, dict] | None = None,
     attachment_referable_object_ids: list[int] | None = None,
+    attachment_query_objects: list[dict] | None = None,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """L2 object-rotation questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -6043,6 +6199,7 @@ def generate_l2_object_rotate_object_centric(
         if attachment_referable_object_ids is not None
         else set(referable_object_ids)
     )
+    attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
@@ -6067,12 +6224,28 @@ def generate_l2_object_rotate_object_centric(
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
         query_objects = [
-            candidate_obj for candidate_obj in objects
+            candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
         ]
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l2_object_rotate_object_centric",
+                candidate_kind="attachment_query_object",
+                candidate_key=_candidate_key(move_source_id, query_obj_id),
+                object_ids=[move_source_id, query_obj_id],
+                status="considered",
+                reason_code="attachment_query_object_candidate",
+                reason_detail="attachment-aware query object is included in the object-centric moved attachment chain candidate set",
+                evidence={
+                    "moved_ids": sorted(int(obj_id) for obj_id in moved_ids),
+                    "attachment_query_pool_size": int(len(attachment_query_pool)),
+                    "attachment_query_object_id": query_obj_id,
+                },
+            )
             query_center = np.array(query_obj["center"], dtype=float)
             query_questions: list[dict] = []
 
@@ -6240,6 +6413,7 @@ def generate_l2_object_move_object_centric(
     movement_objects: list[dict] | None = None,
     object_map: dict[int, dict] | None = None,
     attachment_referable_object_ids: list[int] | None = None,
+    attachment_query_objects: list[dict] | None = None,
 ) -> list[dict]:
     """Backward-compatible alias for the renamed rotation-based L2 generator."""
     return generate_l2_object_rotate_object_centric(
@@ -6254,6 +6428,7 @@ def generate_l2_object_move_object_centric(
         movement_objects=movement_objects,
         object_map=object_map,
         attachment_referable_object_ids=attachment_referable_object_ids,
+        attachment_query_objects=attachment_query_objects,
     )
 
 
@@ -6269,6 +6444,9 @@ def generate_l2_object_move_allocentric(
     movement_objects: list[dict] | None = None,
     object_map: dict[int, dict] | None = None,
     attachment_referable_object_ids: list[int] | None = None,
+    attachment_query_objects: list[dict] | None = None,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -6281,6 +6459,7 @@ def generate_l2_object_move_allocentric(
         if attachment_referable_object_ids is not None
         else set(referable_object_ids)
     )
+    attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
     movement_scene_objects = movement_objects if movement_objects is not None else objects
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
@@ -6321,12 +6500,28 @@ def generate_l2_object_move_allocentric(
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
         moved_map = {int(obj["id"]): obj for obj in selected_state.moved_objects}
         query_objects = [
-            candidate_obj for candidate_obj in objects
+            candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
         ]
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l2_object_move_allocentric",
+                candidate_kind="attachment_query_object",
+                candidate_key=_candidate_key(move_source_id, query_obj_id),
+                object_ids=[move_source_id, query_obj_id],
+                status="considered",
+                reason_code="attachment_query_object_candidate",
+                reason_detail="attachment-aware query object is included in the allocentric moved attachment chain candidate set",
+                evidence={
+                    "moved_ids": sorted(int(obj_id) for obj_id in moved_ids),
+                    "attachment_query_pool_size": int(len(attachment_query_pool)),
+                    "attachment_query_object_id": query_obj_id,
+                },
+            )
             moved_query = moved_map.get(query_obj_id)
             if moved_query is None:
                 continue
@@ -7496,6 +7691,7 @@ def generate_all_questions(
     visible_object_ids: list[int] | None = None,
     referable_object_ids: list[int] | None = None,
     attachment_referable_object_ids: list[int] | None = None,
+    attachment_object_surface_text_by_id: dict[int, str] | dict[str, str] | None = None,
     occlusion_eligible_object_ids: list[int] | None = None,
     mention_in_frame_ratio_by_obj_id: dict[int, float] | None = None,
     label_statuses: dict[str, Any] | None = None,
@@ -7524,6 +7720,8 @@ def generate_all_questions(
     attachment_referable_object_ids: optional relaxed referable subset used
     only by attachment-centric questions. When omitted, attachment questions
     fall back to the ordinary referable object pool.
+    attachment_object_surface_text_by_id: optional frame-level human-reviewed
+    attachment naming overrides used only by attachment-centric questions.
     occlusion_eligible_object_ids: compatibility field retained for trace/debug
     output. Downstream mention filtering now only requires mentions to be in
     the visible object pool.
@@ -7553,6 +7751,10 @@ def generate_all_questions(
         support_chain_graph = attachment_graph
     if support_chain_by is None:
         support_chain_by = attached_by
+    attachment_object_surface_text_by_id = _normalize_attachment_surface_text_by_object_id(
+        attachment_object_surface_text_by_id,
+        "attachment_object_surface_text_by_id",
+    )
     attachment_edge_input = len(attachment_edges)
     trace_counter = 0
     original_objects = list(objects)
@@ -7664,6 +7866,7 @@ def generate_all_questions(
         graph_object_ids = {int(obj["id"]) for obj in all_objects_for_graph}
         question_object_ids = {int(obj["id"]) for obj in objects_uniq}
         movement_object_ids = {int(obj["id"]) for obj in movement_objects}
+        attachment_query_object_ids = {int(obj["id"]) for obj in attachment_query_objects_uniq}
         pool_rows: list[dict[str, Any]] = []
         for obj in original_objects:
             obj_id = int(obj["id"])
@@ -7676,6 +7879,8 @@ def generate_all_questions(
                 row_reasons.append("not_referable")
             if obj_id in attachment_context_ids and obj_id not in referable_set:
                 row_reasons.append("attachment_context_only")
+            if obj_id in attachment_referable_set and obj_id not in attachment_query_object_ids:
+                row_reasons.append("filtered_from_attachment_query_pool")
             if obj_id in referable_set and obj_id not in question_object_ids:
                 row_reasons.append("filtered_from_question_pool")
             pool_rows.append(
@@ -7685,10 +7890,12 @@ def generate_all_questions(
                     "visible_in_forced_frame": obj_id in visible_set,
                     "excluded_label": obj_id in excluded_ids,
                     "referable": obj_id in referable_set,
+                    "attachment_referable": obj_id in attachment_referable_set,
                     "attachment_context": obj_id in attachment_context_ids,
                     "graph_pool": obj_id in graph_object_ids,
                     "question_pool": obj_id in question_object_ids,
                     "movement_pool": obj_id in movement_object_ids,
+                    "attachment_query_pool": obj_id in attachment_query_object_ids,
                     "l1_occlusion_pool": obj_id in l1_occlusion_subject_ids,
                     "reasons": row_reasons,
                 }
@@ -7703,10 +7910,12 @@ def generate_all_questions(
                     "visible_object_count": len(visible_set),
                     "excluded_object_count": len(excluded_ids),
                     "referable_object_count": len(referable_set),
+                    "attachment_referable_object_count": len(attachment_referable_set),
                     "attachment_context_count": len(attachment_context_ids),
                     "graph_pool_count": len(graph_object_ids),
                     "question_pool_count": len(question_object_ids),
                     "movement_pool_count": len(movement_object_ids),
+                    "attachment_query_pool_count": len(attachment_query_object_ids),
                     "l1_occlusion_pool_count": len(l1_occlusion_subject_ids),
                 },
                 "rows": pool_rows,
@@ -7749,11 +7958,12 @@ def generate_all_questions(
 
     # Apply the shared hard blacklist once for both graph construction and
     # question generation.
-    all_objects_for_graph = [
+    graph_seed_objects = [
         o for o in objects
         if o.get("label", "").lower() not in EXCLUDED_LABELS
     ]
-    objects_for_questions = list(all_objects_for_graph)
+    all_objects_for_graph = list(graph_seed_objects)
+    objects_for_questions = list(graph_seed_objects)
     # L1 occlusion can rely on per-label VLM counts, so keep a pre-referable
     # pool of question-eligible visible objects for that path only.
     l1_occlusion_objects = list(objects_for_questions)
@@ -7770,7 +7980,7 @@ def generate_all_questions(
         label_to_object_ids_for_audit = normalize_label_to_object_ids(
             fallback_label_to_object_ids,
         )
-    graph_ids = {int(o["id"]) for o in all_objects_for_graph}
+    graph_ids = {int(o["id"]) for o in graph_seed_objects}
     attachment_edges = [
         e for e in attachment_edges
         if int(e["parent_id"]) in graph_ids and int(e["child_id"]) in graph_ids
@@ -7798,38 +8008,58 @@ def generate_all_questions(
     attachment_parent_ids = {
         int(e["parent_id"])
         for e in attachment_edges
-        if int(e["child_id"]) in referable_set
+        if int(e["child_id"]) in attachment_referable_set
     }
-    attachment_context_ids = attachment_parent_ids
+    attachment_context_ids = set(attachment_parent_ids)
+    attachment_graph_allowed_ids = set(attachment_referable_set) | set(attachment_context_ids)
+    attachment_closure_seed = list(attachment_referable_set)
+    visited_attachment_nodes: set[int] = set()
+    while attachment_closure_seed:
+        current_id = int(attachment_closure_seed.pop())
+        if current_id in visited_attachment_nodes:
+            continue
+        visited_attachment_nodes.add(current_id)
+        attachment_graph_allowed_ids.add(current_id)
+        parent_id = attached_by.get(current_id)
+        if parent_id is not None:
+            parent_id = int(parent_id)
+            if parent_id not in attachment_graph_allowed_ids:
+                attachment_graph_allowed_ids.add(parent_id)
+            if parent_id not in visited_attachment_nodes:
+                attachment_closure_seed.append(parent_id)
+        for child_id in attachment_graph.get(current_id, []) or []:
+            child_id = int(child_id)
+            if child_id not in attachment_graph_allowed_ids:
+                attachment_graph_allowed_ids.add(child_id)
+            if child_id not in visited_attachment_nodes:
+                attachment_closure_seed.append(child_id)
     graph_allowed_ids = referable_set | attachment_context_ids
-    all_objects_for_graph = [
-        o for o in all_objects_for_graph
-        if int(o["id"]) in graph_allowed_ids
-    ]
     objects_for_questions = [
         o for o in objects_for_questions
         if int(o["id"]) in referable_set
     ]
-    attachment_graph = {
+    ordinary_attachment_graph = {
         k: [c for c in v if c in graph_allowed_ids]
         for k, v in attachment_graph.items()
         if k in graph_allowed_ids
     }
-    attached_by = {
+    ordinary_attached_by = {
         k: v for k, v in attached_by.items()
         if k in graph_allowed_ids and v in graph_allowed_ids
     }
-    attachment_edges = [
+    ordinary_attachment_edges = [
         e for e in attachment_edges
         if int(e["parent_id"]) in graph_allowed_ids and int(e["child_id"]) in graph_allowed_ids
     ]
     objects_uniq = list(objects_for_questions)
     referable_question_ids = {int(o["id"]) for o in objects_uniq}
-    attachment_objects_uniq = [
+    attachment_query_objects_uniq = [
         o for o in attachment_candidate_objects
         if int(o["id"]) in attachment_referable_set
     ]
-    attachment_referable_question_ids = {int(o["id"]) for o in attachment_objects_uniq}
+    attachment_query_object_ids = {int(o["id"]) for o in attachment_query_objects_uniq}
+    attachment_objects_uniq = list(attachment_query_objects_uniq)
+    attachment_referable_question_ids = set(attachment_query_object_ids)
     support_chain_graph = {
         k: filtered_children
         for k, v in support_chain_graph_visible.items()
@@ -7853,7 +8083,11 @@ def generate_all_questions(
         if k in attachment_referable_question_ids and v in attachment_referable_question_ids
     }
 
-    graph_eligible_ids = referable_set | attachment_context_ids
+    graph_eligible_ids = attachment_graph_allowed_ids
+    all_objects_for_graph = [
+        o for o in graph_seed_objects
+        if int(o["id"]) in graph_eligible_ids
+    ]
     attachment_graph = {
         k: [c for c in v if c in graph_eligible_ids]
         for k, v in attachment_graph.items()
@@ -7867,10 +8101,7 @@ def generate_all_questions(
         e for e in attachment_edges
         if int(e["parent_id"]) in graph_eligible_ids and int(e["child_id"]) in graph_eligible_ids
     ]
-    movement_objects = [
-        o for o in all_objects_for_graph
-        if int(o["id"]) in graph_eligible_ids
-    ]
+    movement_objects = list(all_objects_for_graph)
     movement_object_map = {int(o["id"]): o for o in movement_objects}
     attachment_edge_lookup = _build_attachment_edge_lookup(attachment_edges)
     has_l1_occlusion_label_guidance = bool(
@@ -8299,6 +8530,7 @@ def generate_all_questions(
         "generate_l2_object_move",
         {
             "question_object_count": len(objects_uniq),
+            "attachment_query_object_count": len(attachment_query_objects_uniq),
             "movement_object_count": len(movement_objects),
             "attachment_graph_node_count": len(attachment_graph_uniq),
             "occlusion_backend": occlusion_backend,
@@ -8324,6 +8556,9 @@ def generate_all_questions(
                     ray_caster=ray_caster,
                     instance_mesh_data=instance_mesh_data,
                     attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
                 ),
             ),
         )
@@ -8375,6 +8610,7 @@ def generate_all_questions(
         "generate_l2_object_remove",
         {
             "question_object_count": len(objects_uniq),
+            "attachment_query_object_count": len(attachment_query_objects_uniq),
             "attachment_graph_node_count": len(attachment_graph_uniq),
             "occlusion_backend": occlusion_backend,
             "occlusion_mode": "l1_style",
@@ -8396,6 +8632,7 @@ def generate_all_questions(
                     ray_caster,
                     instance_mesh_data,
                     templates,
+                    attachment_query_objects=attachment_query_objects_uniq,
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
                     generator_progress_log_seconds=generator_progress_log_seconds,
@@ -8410,6 +8647,7 @@ def generate_all_questions(
         "generate_l2_object_rotate_object_centric",
         {
             "question_object_count": len(objects_uniq),
+            "attachment_query_object_count": len(attachment_query_objects_uniq),
             "movement_object_count": len(movement_objects),
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
@@ -8430,6 +8668,9 @@ def generate_all_questions(
                     movement_objects=movement_objects,
                     object_map=movement_object_map,
                     attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
                 ),
             ),
         )
@@ -8448,6 +8689,7 @@ def generate_all_questions(
         "generate_l2_object_move_allocentric",
         {
             "question_object_count": len(objects_uniq),
+            "attachment_query_object_count": len(attachment_query_objects_uniq),
             "movement_object_count": len(movement_objects),
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
@@ -8468,6 +8710,9 @@ def generate_all_questions(
                     movement_objects=movement_objects,
                     object_map=movement_object_map,
                     attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
                 ),
             ),
         )
@@ -8604,8 +8849,12 @@ def generate_all_questions(
 
     id_to_object = {int(o["id"]): o for o in original_objects}
     for idx, question in enumerate(all_questions):
-        all_questions[idx] = _ensure_question_mentions(
+        normalized_question = _ensure_question_mentions(
             question, id_to_object,
+        )
+        all_questions[idx] = _apply_attachment_surface_text_overrides(
+            normalized_question,
+            attachment_object_surface_text_by_id,
         )
 
     all_questions = _run_question_step(
