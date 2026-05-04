@@ -1850,6 +1850,23 @@ def _should_run_question_presence_review(question: dict[str, object]) -> bool:
     )
 
 
+def _should_run_attachment_pair_review(question: dict[str, object]) -> bool:
+    if str(question.get("level", "")).strip().upper() != "L2":
+        return False
+    qtype = str(question.get("type", "")).strip()
+    if qtype not in {
+        "object_move_agent",
+        "object_move_distance",
+        "object_move_occlusion",
+        "object_rotate_object_centric",
+        "object_move_allocentric",
+    }:
+        return False
+    moved_obj_id = _coerce_object_id(question.get("moved_obj_id"))
+    query_obj_id = _coerce_object_id(question.get("query_obj_id"))
+    return moved_obj_id is not None and query_obj_id is not None and moved_obj_id != query_obj_id
+
+
 def _build_presence_review_entry(
     target: dict[str, object],
     *,
@@ -2041,6 +2058,105 @@ def _make_question_presence_reviewer(client, model_name: str):
     return model_name, _review
 
 
+def _attachment_pair_prompt(question_text: str, moved_label: str, query_label: str) -> str:
+    return (
+        "You are reviewing whether an L2 attachment question is a valid attachment-pair judgment.\n"
+        "Judge whether the moved object and query object are two distinct objects and whether the question is "
+        "about their attachment relation rather than the same object.\n"
+        "Return strict JSON only with this schema:\n"
+        '{"decision":"pass","reason":""}\n'
+        f"Question: {question_text}\n"
+        f"Moved object: {moved_label}\n"
+        f"Query object: {query_label}"
+    )
+
+
+def _normalize_attachment_pair_review_decision(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"pass", "manual_review"}:
+        return text
+    return "manual_review"
+
+
+def _build_attachment_pair_review_entry(
+    question: dict[str, object],
+    *,
+    decision: str,
+    reason: str,
+    raw_response: str,
+) -> dict[str, object]:
+    return {
+        "decision": decision,
+        "reason": reason,
+        "moved_obj_id": _coerce_object_id(question.get("moved_obj_id")),
+        "query_obj_id": _coerce_object_id(question.get("query_obj_id")),
+        "moved_obj_label": str(question.get("moved_obj_label", "")).strip(),
+        "query_obj_label": str(question.get("query_obj_label", "")).strip(),
+        "raw_response": raw_response,
+    }
+
+
+def _make_attachment_pair_reviewer(client, model_name: str):
+    logger.info("Using attachment pair review VLM model: %s", model_name)
+
+    def _review(
+        frame_context: dict[str, object],
+        question: dict[str, object],
+        targets: list[dict[str, object]],
+    ) -> dict[str, object]:
+        image_b64 = str(frame_context.get("image_b64", "") or "")
+        mime = str(frame_context.get("mime", "") or "image/jpeg")
+        content: list[dict[str, object]] = [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}}
+        ]
+        for target in targets:
+            crop_b64 = str(target.get("crop_image_b64", "") or "")
+            crop_mime = str(target.get("crop_mime", "") or "image/jpeg")
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{crop_mime};base64,{crop_b64}"},
+                }
+            )
+        content.append(
+            {
+                "type": "text",
+                "text": _attachment_pair_prompt(
+                    str(question.get("question", "")),
+                    str(question.get("moved_obj_label", "")).strip(),
+                    str(question.get("query_obj_label", "")).strip(),
+                ),
+            }
+        )
+        resp = _call_question_review_vlm(
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=[{
+                    "role": "user",
+                    "content": content,
+                }],
+                max_tokens=256,
+                temperature=0,
+            ),
+            context=f"attachment pair review for {frame_context.get('image_name', '<unknown>')}",
+        )
+        raw_text = (resp.choices[0].message.content or "").strip()
+        parsed = _extract_json_object(raw_text) or {}
+        decision = _normalize_attachment_pair_review_decision(parsed.get("decision"))
+        reason = str(parsed.get("reason", "")).strip()
+        return {
+            "pair_review": _build_attachment_pair_review_entry(
+                question,
+                decision=decision,
+                reason=reason,
+                raw_response=raw_text,
+            ),
+            "raw_response": raw_text,
+        }
+
+    return model_name, _review
+
+
 def _manual_review_reason_from_presence_review(review: dict[str, object]) -> str:
     object_reviews = review.get("object_reviews", [])
     if not isinstance(object_reviews, list):
@@ -2072,6 +2188,19 @@ def _manual_review_reason_from_post_generation_review(review: dict[str, object])
     if reason_codes:
         return "Post-generation audit flagged: " + ", ".join(reason_codes)
     return "Post-generation audit marked this question for manual review."
+
+
+def _manual_review_reason_from_attachment_pair_review(review: dict[str, object]) -> str:
+    reason = str(review.get("reason", "")).strip()
+    if reason:
+        return "Attachment-pair review flagged: " + reason
+    moved_label = str(review.get("moved_obj_label", "")).strip() or "moved object"
+    query_label = str(review.get("query_obj_label", "")).strip() or "query object"
+    moved_obj_id = _coerce_object_id(review.get("moved_obj_id"))
+    query_obj_id = _coerce_object_id(review.get("query_obj_id"))
+    moved_text = f"{moved_label}#{moved_obj_id}" if moved_obj_id is not None else moved_label
+    query_text = f"{query_label}#{query_obj_id}" if query_obj_id is not None else query_label
+    return f"Attachment-pair review flagged: {moved_text} vs {query_text}"
 
 
 def _combine_manual_review_reasons(reasons: list[str]) -> str:
@@ -2231,6 +2360,136 @@ def _review_question_object_presence(
     return reviewed_question
 
 
+def _review_question_attachment_pair(
+    review_fn,
+    *,
+    question_index: int,
+    question: dict[str, object],
+    frame_context_by_key: dict[tuple[str, str], dict[str, object]],
+) -> dict[str, object]:
+    reviewed_question = dict(question)
+    reviewed_question["benchmark_index"] = int(question_index)
+    review_reasons: list[str] = []
+    existing_post_review = reviewed_question.get("question_post_generation_review")
+    if isinstance(existing_post_review, dict) and existing_post_review.get("decision") == "manual_review":
+        review_reasons.append(_manual_review_reason_from_post_generation_review(existing_post_review))
+    existing_manual_reason = str(reviewed_question.get("manual_review_reason", "")).strip()
+    if existing_manual_reason:
+        review_reasons.append(existing_manual_reason)
+    scene_id = str(question.get("scene_id", "")).strip()
+    image_name = str(question.get("image_name", "")).strip()
+    frame_context = frame_context_by_key.get((scene_id, image_name))
+    fallback_reason = ""
+
+    moved_obj_id = _coerce_object_id(question.get("moved_obj_id"))
+    query_obj_id = _coerce_object_id(question.get("query_obj_id"))
+    if moved_obj_id is None or query_obj_id is None:
+        fallback_reason = "missing moved/query object id"
+    elif moved_obj_id == query_obj_id:
+        fallback_reason = "self attachment pair should not be reviewed"
+    elif not isinstance(frame_context, dict):
+        fallback_reason = "missing frame context"
+    elif not bool(frame_context.get("image_exists", False)):
+        fallback_reason = "frame image missing"
+
+    if fallback_reason:
+        review = _build_attachment_pair_review_entry(
+            question,
+            decision="manual_review",
+            reason=fallback_reason,
+            raw_response="",
+        )
+        reviewed_question["question_attachment_pair_review"] = review
+        review_reasons.append(_manual_review_reason_from_attachment_pair_review(review))
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+        return reviewed_question
+
+    objects_by_id = dict(frame_context.get("objects_by_id", {}))
+    moved_obj = objects_by_id.get(int(moved_obj_id))
+    query_obj = objects_by_id.get(int(query_obj_id))
+    if not isinstance(moved_obj, dict) or not isinstance(query_obj, dict):
+        review = _build_attachment_pair_review_entry(
+            question,
+            decision="manual_review",
+            reason="missing moved/query object metadata",
+            raw_response="",
+        )
+        reviewed_question["question_attachment_pair_review"] = review
+        review_reasons.append(_manual_review_reason_from_attachment_pair_review(review))
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+        return reviewed_question
+
+    moved_crop = frame_context.get("crop_by_obj_id", {}).get(int(moved_obj_id))
+    query_crop = frame_context.get("crop_by_obj_id", {}).get(int(query_obj_id))
+    if not isinstance(moved_crop, dict) or not isinstance(query_crop, dict):
+        review = _build_attachment_pair_review_entry(
+            question,
+            decision="manual_review",
+            reason="missing moved/query object crop",
+            raw_response="",
+        )
+        reviewed_question["question_attachment_pair_review"] = review
+        review_reasons.append(_manual_review_reason_from_attachment_pair_review(review))
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+        return reviewed_question
+    if not bool(moved_crop.get("valid", False)) or not bool(query_crop.get("valid", False)):
+        review = _build_attachment_pair_review_entry(
+            question,
+            decision="manual_review",
+            reason="invalid moved/query object crop",
+            raw_response="",
+        )
+        reviewed_question["question_attachment_pair_review"] = review
+        review_reasons.append(_manual_review_reason_from_attachment_pair_review(review))
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+        return reviewed_question
+
+    pair_targets = [
+        {
+            "obj_id": int(moved_obj_id),
+            "label": str(moved_obj.get("label", "")).strip(),
+            "crop_image_b64": moved_crop.get("image_b64"),
+            "crop_mime": moved_crop.get("mime", "image/jpeg"),
+        },
+        {
+            "obj_id": int(query_obj_id),
+            "label": str(query_obj.get("label", "")).strip(),
+            "crop_image_b64": query_crop.get("image_b64"),
+            "crop_mime": query_crop.get("mime", "image/jpeg"),
+        },
+    ]
+
+    try:
+        vlm_review = review_fn(frame_context, question, pair_targets)
+    except Exception as e:
+        review = _build_attachment_pair_review_entry(
+            question,
+            decision="manual_review",
+            reason=f"VLM review failed: {e}",
+            raw_response="",
+        )
+        reviewed_question["question_attachment_pair_review"] = review
+        review_reasons.append(_manual_review_reason_from_attachment_pair_review(review))
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+        return reviewed_question
+
+    pair_review = dict(vlm_review.get("pair_review", {}))
+    review = _build_attachment_pair_review_entry(
+        question,
+        decision=_normalize_attachment_pair_review_decision(pair_review.get("decision")),
+        reason=str(pair_review.get("reason", "")).strip(),
+        raw_response=str(vlm_review.get("raw_response", "") or ""),
+    )
+    reviewed_question["question_attachment_pair_review"] = review
+    if review.get("decision") == "manual_review":
+        review_reasons.append(_manual_review_reason_from_attachment_pair_review(review))
+    if review_reasons:
+        reviewed_question["manual_review_reason"] = _combine_manual_review_reasons(review_reasons)
+    else:
+        reviewed_question.pop("manual_review_reason", None)
+    return reviewed_question
+
+
 def _run_question_presence_review(
     *,
     questions: list[dict[str, object]],
@@ -2243,16 +2502,24 @@ def _run_question_presence_review(
 ) -> dict[str, object]:
     from scripts.make_viewer import build_viewer_html
 
-    review_questions = [
-        question for question in questions
+    presence_review_targets = [
+        (idx, question)
+        for idx, question in enumerate(questions)
         if _should_run_question_presence_review(question)
     ]
+    attachment_pair_review_targets = [
+        (idx, question)
+        for idx, question in enumerate(questions)
+        if _should_run_attachment_pair_review(question)
+    ]
+    review_questions = [question for _, question in presence_review_targets + attachment_pair_review_targets]
     client, model_name = _resolve_question_review_vlm(
         vlm_url,
         vlm_model,
         purpose="question post-review",
     )
-    _, review_fn = _make_question_presence_reviewer(client, model_name)
+    _, presence_review_fn = _make_question_presence_reviewer(client, model_name)
+    _, attachment_pair_review_fn = _make_attachment_pair_reviewer(client, model_name)
     reviewed_questions: list[dict[str, object]] = []
     if frame_context_by_key is None:
         frame_context_by_key = _prebuild_question_review_frame_contexts(
@@ -2261,19 +2528,29 @@ def _run_question_presence_review(
             output_dir=output_dir,
         )
 
-    if review_questions:
+    if presence_review_targets or attachment_pair_review_targets:
         with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
             futures = [
                 pool.submit(
                     _review_question_object_presence,
-                    review_fn,
+                    presence_review_fn,
                     question_index=idx,
                     question=question,
                     data_root=data_root,
                     frame_context_by_key=frame_context_by_key,
                 )
-                for idx, question in enumerate(review_questions)
+                for idx, question in presence_review_targets
             ]
+            futures.extend(
+                pool.submit(
+                    _review_question_attachment_pair,
+                    attachment_pair_review_fn,
+                    question_index=idx,
+                    question=question,
+                    frame_context_by_key=frame_context_by_key,
+                )
+                for idx, question in attachment_pair_review_targets
+            )
             for future in as_completed(futures):
                 reviewed_questions.append(future.result())
     reviewed_questions.sort(key=lambda item: int(item.get("benchmark_index", -1)))
@@ -2283,6 +2560,12 @@ def _run_question_presence_review(
         for question in reviewed_questions
         if isinstance(question.get("question_presence_review"), dict)
         and question["question_presence_review"].get("decision") == "manual_review"
+    )
+    attachment_pair_issue_count = sum(
+        1
+        for question in reviewed_questions
+        if isinstance(question.get("question_attachment_pair_review"), dict)
+        and question["question_attachment_pair_review"].get("decision") == "manual_review"
     )
     post_generation_issue_count = sum(
         1
@@ -2298,6 +2581,9 @@ def _run_question_presence_review(
         ) or (
             isinstance(question.get("question_presence_review"), dict)
             and question["question_presence_review"].get("decision") == "manual_review"
+        ) or (
+            isinstance(question.get("question_attachment_pair_review"), dict)
+            and question["question_attachment_pair_review"].get("decision") == "manual_review"
         ) or bool(str(question.get("manual_review_reason", "")).strip())
     ]
 
@@ -2307,6 +2593,7 @@ def _run_question_presence_review(
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
         "referability_issue_count": referability_issue_count,
+        "attachment_pair_issue_count": attachment_pair_issue_count,
         "post_generation_issue_count": post_generation_issue_count,
         "questions": reviewed_questions,
     }
@@ -2316,6 +2603,7 @@ def _run_question_presence_review(
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
         "referability_issue_count": referability_issue_count,
+        "attachment_pair_issue_count": attachment_pair_issue_count,
         "post_generation_issue_count": post_generation_issue_count,
         "questions": flagged_questions,
     }
@@ -2339,7 +2627,7 @@ def _run_question_presence_review(
     flagged_html_path.write_text(flagged_html, encoding="utf-8")
 
     logger.info(
-        "Question presence review complete for L1 occlusion questions: %d reviewed, %d flagged. JSON: %s HTML: %s",
+        "Question presence review complete for L1 occlusion and L2 attachment-pair questions: %d reviewed, %d flagged. JSON: %s HTML: %s",
         len(reviewed_questions),
         len(flagged_questions),
         flagged_json_path,
@@ -2350,13 +2638,13 @@ def _run_question_presence_review(
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
         "referability_issue_count": referability_issue_count,
+        "attachment_pair_issue_count": attachment_pair_issue_count,
         "post_generation_issue_count": post_generation_issue_count,
         "review_json_path": review_json_path,
         "flagged_json_path": flagged_json_path,
         "flagged_html_path": flagged_html_path,
         "questions": reviewed_questions,
     }
-
 
 def _get_referability_scene_frames(cache: dict | None, scene_id: str) -> dict[str, dict]:
     if not cache:
@@ -4285,7 +4573,7 @@ def main():
         "--question_presence_review",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="After benchmark generation, review only L1 occlusion questions to check whether mentioned objects are clearly visible and export flagged samples for manual review",
+        help="After benchmark generation, review L1 occlusion visibility plus non-self L2 attachment pairs and export flagged samples for manual review",
     )
     parser.add_argument(
         "--question_presence_review_workers",

@@ -2047,6 +2047,12 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 object_map={1: parent, 2: child},
             )
 
+        self.assertTrue(
+            any(
+                q.get("moved_obj_id") == 1 and q.get("query_obj_id") == 1
+                for q in questions
+            )
+        )
         question = next(q for q in questions if q.get("query_obj_id") == 2)
         self.assertEqual(question["moved_obj_id"], 1)
         self.assertTrue(question["attachment_remapped"])

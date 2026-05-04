@@ -698,6 +698,48 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
         )
 
+    def test_should_run_attachment_pair_review_skips_self_pairs_and_non_l2_cases(self) -> None:
+        self.assertTrue(
+            run_pipeline_module._should_run_attachment_pair_review(
+                {
+                    "level": "L2",
+                    "type": "object_move_agent",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 2,
+                }
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._should_run_attachment_pair_review(
+                {
+                    "level": "L2",
+                    "type": "object_move_agent",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 1,
+                }
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._should_run_attachment_pair_review(
+                {
+                    "level": "L1",
+                    "type": "object_move_agent",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 2,
+                }
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._should_run_attachment_pair_review(
+                {
+                    "level": "L2",
+                    "type": "viewpoint_move",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 2,
+                }
+            )
+        )
+
     def test_question_presence_reviewer_maps_crop_index_back_to_internal_obj_id(self) -> None:
         raw_text = json.dumps(
             {
@@ -865,13 +907,13 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(resolved_review["status"], "present")
         self.assertNotIn("question_answer_review", reviewed)
 
-    def test_run_question_presence_review_writes_presence_only_payloads(self) -> None:
-        root = make_case_dir("question_presence_review_presence_only")
+    def test_run_question_presence_review_writes_combined_payloads(self) -> None:
+        root = make_case_dir("question_presence_review_combined")
         self.addCleanup(shutil.rmtree, root, True)
         output_dir = root / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        reviewed_questions = [
+        reviewed_presence_questions = [
             {
                 "scene_id": "scene0000_00",
                 "image_name": "000123.jpg",
@@ -924,18 +966,50 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             },
             {
                 "scene_id": "scene0000_00",
+                "image_name": "000128.jpg",
+                "question": "If the bed moves, where is the pillow relative to the chair?",
+                "level": "L2",
+                "type": "object_move_agent",
+                "manual_review_reason": "Attachment-pair review flagged: not a distinct pair",
+                "question_attachment_pair_review": {
+                    "decision": "manual_review",
+                    "reason": "not a distinct pair",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 2,
+                    "moved_obj_label": "bed",
+                    "query_obj_label": "pillow",
+                    "raw_response": '{"decision":"manual_review","reason":"not a distinct pair"}',
+                },
+            },
+        ]
+        questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "question": "Is the chair left of the table?",
+                "level": "L1",
+                "type": "occlusion",
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000124.jpg",
+                "question": "Is the lamp near the sofa?",
+                "level": "L1",
+                "type": "occlusion",
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000125.jpg",
+                "question": "Is the desk behind the chair?",
+                "level": "L1",
+                "type": "occlusion",
+            },
+            {
+                "scene_id": "scene0000_00",
                 "image_name": "000126.jpg",
                 "question": "How far is the desk from the chair?",
                 "level": "L1",
                 "type": "distance",
-                "question_presence_review": {
-                    "review_mode": "instance",
-                    "decision": "manual_review",
-                    "flagged_labels": ["desk"],
-                    "flagged_object_ids": [7],
-                    "object_reviews": [],
-                    "raw_response": "",
-                },
             },
             {
                 "scene_id": "scene0000_00",
@@ -943,41 +1017,51 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 "question": "Is the chair occluded after moving the table?",
                 "level": "L2",
                 "type": "occlusion",
-                "question_presence_review": {
-                    "review_mode": "instance",
-                    "decision": "manual_review",
-                    "flagged_labels": ["chair"],
-                    "flagged_object_ids": [8],
-                    "object_reviews": [],
-                    "raw_response": "",
-                },
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000128.jpg",
+                "question": "If the bed moves, where is the pillow relative to the chair?",
+                "level": "L2",
+                "type": "object_move_agent",
+                "moved_obj_id": 1,
+                "query_obj_id": 2,
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000129.jpg",
+                "question": "If the bed moves, where is the bed relative to itself?",
+                "level": "L2",
+                "type": "object_move_agent",
+                "moved_obj_id": 1,
+                "query_obj_id": 1,
             },
         ]
 
-        def fake_review(_review_fn, *, question_index: int, question: dict[str, object], **kwargs):
-            result = dict(reviewed_questions[question_index])
+        def fake_presence_review(_review_fn, *, question_index: int, question: dict[str, object], **kwargs):
+            result = dict(reviewed_presence_questions[question_index])
             result["benchmark_index"] = question_index
-            self.assertEqual(question["question"], reviewed_questions[question_index]["question"])
+            self.assertEqual(question["question"], reviewed_presence_questions[question_index]["question"])
+            return result
+
+        def fake_attachment_pair_review(_review_fn, *, question_index: int, question: dict[str, object], **kwargs):
+            self.assertEqual(question_index, 5)
+            self.assertEqual(question["question"], reviewed_presence_questions[3]["question"])
+            result = dict(reviewed_presence_questions[3])
+            result["benchmark_index"] = question_index
             return result
 
         with (
             patch.object(run_pipeline_module, "_resolve_question_review_vlm", return_value=(Mock(), "fake-vlm")),
             patch.object(run_pipeline_module, "_make_question_presence_reviewer", return_value=("fake-vlm", Mock())),
+            patch.object(run_pipeline_module, "_make_attachment_pair_reviewer", return_value=("fake-vlm", Mock())),
             patch.object(run_pipeline_module, "_prebuild_question_review_frame_contexts", return_value={}),
-            patch.object(run_pipeline_module, "_review_question_object_presence", side_effect=fake_review),
+            patch.object(run_pipeline_module, "_review_question_object_presence", side_effect=fake_presence_review),
+            patch.object(run_pipeline_module, "_review_question_attachment_pair", side_effect=fake_attachment_pair_review),
             patch("scripts.make_viewer.build_viewer_html", return_value="<html>flagged</html>"),
         ):
             result = run_pipeline_module._run_question_presence_review(
-                questions=[
-                    {
-                        "question": item["question"],
-                        "scene_id": item["scene_id"],
-                        "image_name": item["image_name"],
-                        "level": item["level"],
-                        "type": item["type"],
-                    }
-                    for item in reviewed_questions
-                ],
+                questions=questions,
                 data_root=Path("."),
                 output_dir=output_dir,
                 vlm_url="http://fake-vlm.local",
@@ -986,25 +1070,28 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(result["model"], "fake-vlm")
-        self.assertEqual(result["reviewed_question_count"], 3)
-        self.assertEqual(result["manual_review_count"], 2)
+        self.assertEqual(result["reviewed_question_count"], 4)
+        self.assertEqual(result["manual_review_count"], 3)
         self.assertEqual(result["referability_issue_count"], 1)
+        self.assertEqual(result["attachment_pair_issue_count"], 1)
         self.assertEqual(result["post_generation_issue_count"], 1)
         self.assertNotIn("answer_review_model", result)
         self.assertNotIn("answer_review_question_count", result)
         self.assertNotIn("answer_mismatch_count", result)
-        self.assertEqual(len(result["questions"]), 3)
+        self.assertEqual(len(result["questions"]), 4)
         self.assertTrue(result["review_json_path"].exists())
         self.assertTrue(result["flagged_json_path"].exists())
         self.assertTrue(result["flagged_html_path"].exists())
+        self.assertFalse((output_dir / "attachment_pair_review.json").exists())
 
         review_payload = json.loads(result["review_json_path"].read_text(encoding="utf-8"))
         flagged_payload = json.loads(result["flagged_json_path"].read_text(encoding="utf-8"))
 
         self.assertEqual(review_payload["model"], "fake-vlm")
-        self.assertEqual(review_payload["reviewed_question_count"], 3)
-        self.assertEqual(review_payload["manual_review_count"], 2)
+        self.assertEqual(review_payload["reviewed_question_count"], 4)
+        self.assertEqual(review_payload["manual_review_count"], 3)
         self.assertEqual(review_payload["referability_issue_count"], 1)
+        self.assertEqual(review_payload["attachment_pair_issue_count"], 1)
         self.assertEqual(review_payload["post_generation_issue_count"], 1)
         self.assertNotIn("answer_review_model", review_payload)
         self.assertNotIn("answer_review_question_count", review_payload)
@@ -1016,20 +1103,114 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 "Is the chair left of the table?",
                 "Is the lamp near the sofa?",
                 "Is the desk behind the chair?",
+                "If the bed moves, where is the pillow relative to the chair?",
             ],
         )
 
-        self.assertEqual(flagged_payload["reviewed_question_count"], 3)
-        self.assertEqual(flagged_payload["manual_review_count"], 2)
-        self.assertEqual(len(flagged_payload["questions"]), 2)
+        self.assertEqual(flagged_payload["reviewed_question_count"], 4)
+        self.assertEqual(flagged_payload["manual_review_count"], 3)
+        self.assertEqual(flagged_payload["attachment_pair_issue_count"], 1)
+        self.assertEqual(len(flagged_payload["questions"]), 3)
         self.assertEqual(
             [question["question"] for question in flagged_payload["questions"]],
             [
                 "Is the chair left of the table?",
                 "Is the lamp near the sofa?",
+                "If the bed moves, where is the pillow relative to the chair?",
             ],
         )
         self.assertTrue(all("question_answer_review" not in q for q in flagged_payload["questions"]))
+
+    def test_run_question_presence_review_only_reviews_non_self_l2_attachment_pairs(self) -> None:
+        root = make_case_dir("question_presence_review_non_self_attachment_only")
+        self.addCleanup(shutil.rmtree, root, True)
+        output_dir = root / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        questions = [
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "level": "L2",
+                "type": "object_move_agent",
+                "question": "If the bed moves, where is the pillow relative to the chair?",
+                "moved_obj_id": 1,
+                "moved_obj_label": "bed",
+                "query_obj_id": 2,
+                "query_obj_label": "pillow",
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "level": "L2",
+                "type": "object_move_agent",
+                "question": "If the bed moves, where is the chair relative to itself?",
+                "moved_obj_id": 1,
+                "moved_obj_label": "bed",
+                "query_obj_id": 1,
+                "query_obj_label": "bed",
+            },
+            {
+                "scene_id": "scene0000_00",
+                "image_name": "000123.jpg",
+                "level": "L2",
+                "type": "occlusion",
+                "question": "Is the chair occluded after moving the bed?",
+                "moved_obj_id": 1,
+                "query_obj_id": 2,
+            },
+        ]
+
+        reviewed_non_self = {
+            **questions[0],
+            "benchmark_index": 0,
+            "question_attachment_pair_review": {
+                "decision": "pass",
+                "reason": "distinct pair",
+                "moved_obj_id": 1,
+                "query_obj_id": 2,
+                "moved_obj_label": "bed",
+                "query_obj_label": "pillow",
+                "raw_response": '{"decision":"pass","reason":"distinct pair"}',
+            },
+        }
+
+        def fake_review(_review_fn, *, question_index: int, question: dict[str, object], **kwargs):
+            self.assertEqual(question_index, 0)
+            self.assertEqual(question["question"], questions[0]["question"])
+            return reviewed_non_self
+
+        with (
+            patch.object(run_pipeline_module, "_resolve_question_review_vlm", return_value=(Mock(), "fake-vlm")),
+            patch.object(run_pipeline_module, "_make_question_presence_reviewer", return_value=("fake-vlm", Mock())),
+            patch.object(run_pipeline_module, "_make_attachment_pair_reviewer", return_value=("fake-vlm", Mock())),
+            patch.object(run_pipeline_module, "_prebuild_question_review_frame_contexts", return_value={}),
+            patch.object(run_pipeline_module, "_review_question_attachment_pair", side_effect=fake_review),
+            patch("scripts.make_viewer.build_viewer_html", return_value="<html>flagged</html>"),
+        ):
+            result = run_pipeline_module._run_question_presence_review(
+                questions=questions,
+                data_root=Path("."),
+                output_dir=output_dir,
+                vlm_url="http://fake-vlm.local",
+                vlm_model="fake-vlm",
+                workers=1,
+            )
+
+        self.assertEqual(result["model"], "fake-vlm")
+        self.assertEqual(result["reviewed_question_count"], 1)
+        self.assertEqual(result["manual_review_count"], 0)
+        self.assertTrue(result["review_json_path"].exists())
+
+        payload = json.loads(result["review_json_path"].read_text(encoding="utf-8"))
+        self.assertEqual(payload["reviewed_question_count"], 1)
+        self.assertEqual(payload["manual_review_count"], 0)
+        self.assertEqual(len(payload["questions"]), 1)
+        self.assertEqual(payload["questions"][0]["question"], questions[0]["question"])
+        self.assertEqual(
+            payload["questions"][0]["question_attachment_pair_review"]["query_obj_id"],
+            2,
+        )
 
     def test_build_question_referability_audit_drops_ambiguous_nonreferable_label(self) -> None:
         audit = run_pipeline_module._build_question_referability_audit(
@@ -2812,11 +2993,166 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
 
         self.assertNotIn("manual_review_reason", questions[0])
+        self.assertNotIn("question_presence_review", questions[0])
+        self.assertNotIn("question_attachment_pair_review", questions[0])
         benchmark_path = output_dir / "benchmark.json"
         with open(benchmark_path, "r", encoding="utf-8") as f:
             benchmark = json.load(f)
         self.assertNotIn("manual_review_reason", benchmark["questions"][0])
         self.assertNotIn("question_presence_review", benchmark["questions"][0])
+        self.assertNotIn("question_attachment_pair_review", benchmark["questions"][0])
+
+    def test_run_pipeline_question_presence_review_also_runs_attachment_pair_review_without_mutating_benchmark(self) -> None:
+        root = make_case_dir("pipeline_combined_question_review")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        referability_cache = {
+            "version": "20.0",
+            "frames": {
+                scene_id: {
+                    image_name: {
+                        "frame_usable": True,
+                        "candidate_visible_object_ids": [3, 2, 1],
+                        "crop_label_statuses": {"bed": "unique", "pillow": "unique", "chair": "unique"},
+                        "crop_label_counts": {"bed": 1, "pillow": 1, "chair": 1},
+                        "crop_referable_object_ids": [1, 2, 3],
+                        "full_frame_label_reviews": [],
+                        "full_frame_label_statuses": {},
+                        "full_frame_label_counts": {},
+                        "referable_object_ids": [1, 2, 3],
+                        "attachment_referable_object_ids": [1, 2, 3],
+                        "label_statuses": {"bed": "unique", "pillow": "unique", "chair": "unique"},
+                        "label_counts": {"bed": 1, "pillow": 1, "chair": 1},
+                        "out_of_frame_label_reviews": [],
+                        "out_of_frame_not_visible_labels": [],
+                        "out_of_frame_label_to_object_ids": {},
+                        "out_of_frame_vlm_early_stop": False,
+                        "candidate_labels": ["bed", "pillow", "chair"],
+                        "label_to_object_ids": {"bed": [1], "pillow": [2], "chair": [3]},
+                    }
+                }
+            },
+        }
+
+        scene = {
+            "scene_id": scene_id,
+            "objects": [
+                make_object(1, "bed"),
+                make_object(2, "pillow"),
+                make_object(3, "chair"),
+            ],
+            "attachment_edges": [
+                {"parent_id": 1, "child_id": 2, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+
+        generated_questions = [
+            {
+                "question": "If the bed moves, where is the pillow relative to the chair?",
+                "answer": "A",
+                "options": ["left", "right", "front", "back"],
+                "type": "object_move_agent",
+                "level": "L2",
+                "moved_obj_id": 1,
+                "moved_obj_label": "bed",
+                "query_obj_id": 2,
+                "query_obj_label": "pillow",
+                "attachment_remapped": True,
+                "mentioned_objects": [
+                    {"role": "moved_object", "label": "bed", "obj_id": 1},
+                    {"role": "query_object", "label": "pillow", "obj_id": 2},
+                    {"role": "reference_object", "label": "chair", "obj_id": 3},
+                ],
+            },
+        ]
+
+        question_review_calls: list[dict[str, object]] = []
+
+        def fake_run_question_presence_review(**kwargs):
+            question_review_calls.append(kwargs)
+            return {
+                "questions": [
+                    {
+                        **generated_questions[0],
+                        "question_attachment_pair_review": {
+                            "decision": "pass",
+                            "reason": "distinct pair",
+                            "moved_obj_id": 1,
+                            "query_obj_id": 2,
+                            "moved_obj_label": "bed",
+                            "query_obj_label": "pillow",
+                            "raw_response": "",
+                        },
+                    }
+                ]
+            }
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.85},
+                    3: {"bbox_in_frame_ratio": 0.80},
+                },
+            ),
+            patch.object(run_pipeline_module, "generate_all_questions", return_value=generated_questions),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module, "_prebuild_question_review_frame_contexts", return_value={("scene0000_00", "000123.jpg"): {}}) as prebuild_mock,
+            patch.object(run_pipeline_module, "_run_question_presence_review", side_effect=fake_run_question_presence_review),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=True,
+                write_frame_debug=False,
+            )
+
+        self.assertEqual(len(question_review_calls), 1)
+        self.assertEqual(
+            [q["question"] for q in question_review_calls[0]["questions"]],
+            [q["question"] for q in generated_questions],
+        )
+        self.assertEqual(question_review_calls[0]["frame_context_by_key"], {("scene0000_00", "000123.jpg"): {}})
+        prebuild_mock.assert_called_once()
+        self.assertEqual(len(questions), 1)
+        self.assertTrue(all("question_attachment_pair_review" not in q for q in questions))
+        self.assertTrue(all("question_presence_review" not in q for q in questions))
+
+        benchmark_path = output_dir / "benchmark.json"
+        with open(benchmark_path, "r", encoding="utf-8") as f:
+            benchmark = json.load(f)
+        self.assertEqual(len(benchmark["questions"]), 1)
+        self.assertTrue(all("question_attachment_pair_review" not in q for q in benchmark["questions"]))
+        self.assertTrue(all("question_presence_review" not in q for q in benchmark["questions"]))
 
     def test_run_pipeline_applies_referable_occlusion_veto_before_generation(self) -> None:
         root = make_case_dir("pipeline_occlusion_veto")
