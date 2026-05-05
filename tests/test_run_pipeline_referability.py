@@ -1558,12 +1558,12 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             run_pipeline_module._load_referability_cache(cache_path)
 
         message = str(exc_info.exception)
-        self.assertIn("多个候选", message)
+        self.assertIn("multiple candidates", message.lower())
         self.assertIn("edited*.html", message)
         self.assertIn(str((case_dir / "edited.html").resolve()), message)
         self.assertIn(str((case_dir / "edited_review.html").resolve()), message)
 
-    def test_load_referability_cache_prefers_scene_scoped_html_over_legacy_edited_html(self) -> None:
+    def test_load_referability_cache_prefers_legacy_edited_html_over_scene_scoped_html(self) -> None:
         case_dir = make_case_dir("cache_scene_html_preferred")
         self.addCleanup(shutil.rmtree, case_dir, True)
         cache_path = case_dir / "flash_batch.json"
@@ -1651,6 +1651,117 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             encoding="utf-8",
         )
         write_neighbor_edited_html(cache_path)
+        write_scene_edited_html(
+            cache_path,
+            scene_id,
+            make_attachment_pair_review_html(
+                scene_id=scene_id,
+                image_name=image_name,
+                parent_id=2,
+                parent_label="table",
+                parent_surface_text="wooden table",
+                child_id=1,
+                child_label="cup",
+                child_surface_text="blue cup",
+            ),
+        )
+
+        cache = run_pipeline_module._load_referability_cache(
+            cache_path,
+            repair_inconsistent_entries=True,
+        )
+
+        loaded_entry = cache["frames"][scene_id][image_name]
+        self.assertEqual(loaded_entry["attachment_referable_pairs"], [])
+        self.assertEqual(loaded_entry["attachment_referable_pair_count"], 0)
+
+    def test_load_referability_cache_uses_scene_scoped_html_when_legacy_is_absent(self) -> None:
+        case_dir = make_case_dir("cache_scene_html_only")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        cache_path = case_dir / "flash_batch.json"
+        scene_id = "scene0001_00"
+        image_name = "000001.jpg"
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "version": "20.0",
+                    "frames": {
+                        scene_id: {
+                            image_name: {
+                                "frame_usable": True,
+                                "frame_quality_clear": True,
+                                "frame_quality_score": 82,
+                                "frame_quality_reason": "clear enough",
+                                "frame_selection_score": 82001,
+                                "attachment_referable_pairs": [],
+                                "attachment_referable_pair_count": 0,
+                                "attachment_referable_object_ids": [],
+                                "attachment_final_referability": {
+                                    "referable_object_ids": [],
+                                    "pairs": [],
+                                    "pair_count": 0,
+                                },
+                                "final_selection_rank": 0,
+                                "candidate_visible_object_ids": [1, 2],
+                                "candidate_visibility_source": "mesh_ray_refined",
+                                "candidate_labels": ["cup", "table"],
+                                "label_to_object_ids": {"cup": [1], "table": [2]},
+                                "selector_visible_object_ids": [1, 2],
+                                "selector_visible_label_counts": {"cup": 1, "table": 1},
+                                "visibility_audit_by_object_id": {},
+                                "object_reviews": {
+                                    "1": {
+                                        "obj_id": 1,
+                                        "label": "cup",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                    "2": {
+                                        "obj_id": 2,
+                                        "label": "table",
+                                        "local_outcome": "reviewed",
+                                        "vlm_status": "clear",
+                                    },
+                                },
+                                "crop_label_statuses": {"cup": "unique", "table": "unique"},
+                                "crop_label_counts": {"cup": 1, "table": 1},
+                                "crop_referable_object_ids": [1, 2],
+                                "full_frame_label_reviews": [],
+                                "full_frame_label_statuses": {},
+                                "full_frame_label_counts": {},
+                                "label_statuses": {"cup": "unique", "table": "unique"},
+                                "label_counts": {"cup": 1, "table": 1},
+                                "out_of_frame_label_reviews": [],
+                                "out_of_frame_not_visible_labels": [],
+                                "out_of_frame_label_to_object_ids": {},
+                                "out_of_frame_vlm_early_stop": False,
+                                "referable_object_ids": [1, 2],
+                                "vlm_unique_object_ids": [1, 2],
+                            }
+                        }
+                    },
+                    "scene_grouping": {
+                        scene_id: {
+                            "scene_id": scene_id,
+                            "pipeline_outcome": "processed",
+                        }
+                    },
+                    "scene_status": {
+                        scene_id: {
+                            "scene_id": scene_id,
+                            "processed": True,
+                            "pipeline_outcome": "processed",
+                            "split": "train",
+                            "has_cache_frames": True,
+                            "final_cacheable_frame_count": 1,
+                            "scene_skip_reason": None,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         write_scene_edited_html(
             cache_path,
             scene_id,

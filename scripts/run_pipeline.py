@@ -994,6 +994,23 @@ def _resolve_referability_cache_review_html_paths(
     path: Path,
     cache_doc: dict[str, object],
 ) -> tuple[list[Path], str]:
+    legacy_html_paths = _referability_cache_legacy_edited_html_paths(path)
+    if len(legacy_html_paths) > 1:
+        candidate_lines = "\n".join(
+            f"- {candidate.resolve()}"
+            for candidate in legacy_html_paths
+        )
+        raise ValueError(
+            "[legacy edited*.html review files have multiple candidates / å¤šä¸ªå€™é€‰]\n"
+            f"referability_cache: {path}\n"
+            f"expected_glob: {_referability_cache_legacy_edited_html_glob(path)}\n"
+            "matched_paths:\n"
+            f"{candidate_lines}\n"
+            "Keep exactly one legacy edited*.html file to avoid pipeline misreads."
+        )
+    if legacy_html_paths:
+        return [legacy_html_paths[0]], "legacy"
+
     scene_html_paths = sorted(path.parent.glob(f"{path.stem}_*_edited.html"))
     if scene_html_paths:
         expected_scene_ids = _expected_referability_cache_scene_ids(cache_doc)
