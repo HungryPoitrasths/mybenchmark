@@ -4166,7 +4166,7 @@ class _AttachmentPairSalvageHtmlParser(HTMLParser):
 
         name = str(attrs_map.get("name", "")).strip().lower()
         value = html.unescape(str(attrs_map.get("value", ""))).strip()
-        if name == "image_id":
+        if name in {"image_id", "scene_id"}:
             self._current_card["image_id"] = value
             self._current_card["image_name"] = _salvage_review_image_name_with_original_suffix(
                 original_image_name=str(self._current_card.get("image_name", "")),
@@ -4477,7 +4477,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
                     "</div>"
                     '<div class="pair-copy">'
                     f'<div class="pair-text"><strong>group</strong> {html.escape(group_id or "-")}</div>'
-                    f'<div class="pair-text"><strong>scene id</strong> {html.escape(scene_id or "-")}</div>'
+                    f'<div class="pair-text"><strong>image id</strong> {html.escape(cover["image_stem"] or Path(cover["image_name"]).stem or "-")}</div>'
                     f'<div class="pair-text"><strong>attachment pair</strong> {html.escape(parent_label)}#{parent_id} -> '
                     f'{html.escape(child_label)}#{child_id}</div>'
                     f'<div class="pair-text"><strong>pair id</strong> {html.escape(pair_id)}</div>'
@@ -4580,11 +4580,6 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
   </div>
   <script>
     (() => {{
-      if (!document.getElementById('export-edited-html')) {{
-        return;
-      }}
-      const editedHtmlTargetName = {json.dumps(edited_html_filename, ensure_ascii=False)};
-
       function persistCardState() {{
         document.querySelectorAll('.pair-card').forEach((card) => {{
           card.setAttribute('data-deleted', card.dataset.deleted === 'true' ? 'true' : 'false');
@@ -4618,6 +4613,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
 
       const exportButton = document.getElementById('export-edited-html');
       if (exportButton) {{
+        const editedHtmlTargetName = {json.dumps(edited_html_filename, ensure_ascii=False)};
         exportButton.addEventListener('click', async () => {{
           persistCardState();
           const htmlText = '<!doctype html>\\n' + document.documentElement.outerHTML;
