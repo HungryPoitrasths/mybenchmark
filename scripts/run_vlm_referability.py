@@ -4209,6 +4209,7 @@ def _apply_attachment_pair_salvage_html_review(
     *,
     html_text: str,
     cache_doc: dict[str, Any],
+    cache_path: Path | None = None,
 ) -> dict[str, Any]:
     if not isinstance(cache_doc, dict):
         raise ValueError("referability cache must be a JSON object")
@@ -4266,13 +4267,117 @@ def _apply_attachment_pair_salvage_html_review(
 
     updated_cache = json.loads(json.dumps(cache_doc, ensure_ascii=False))
     updated_frames = updated_cache.get("frames", {})
+    updated_scene_grouping = updated_cache.get("scene_grouping")
+    updated_scene_status = updated_cache.get("scene_status", {})
+
+    def _resolve_frame_sidecar_path(scene_id: str) -> Path | None:
+        if cache_path is None:
+            return None
+        return cache_path.parent / FRAME_CACHE_SIDECAR_DIR_NAME / f"{scene_id}.json"
+
+    def _load_salvage_sidecar_frame_entry(scene_id: str, image_name: str) -> dict[str, Any]:
+        sidecar_path = _resolve_frame_sidecar_path(scene_id)
+        if sidecar_path is None:
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and no cache_path was provided "
+                "to resolve a frame sidecar for salvage recovery."
+            )
+        if not sidecar_path.exists():
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache. "
+                f"Expected frame sidecar at {sidecar_path}, but it does not exist."
+            )
+        try:
+            sidecar_doc = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and frame sidecar "
+                f"{sidecar_path} could not be read: {exc}"
+            ) from exc
+        if not isinstance(sidecar_doc, dict):
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and frame sidecar "
+                f"{sidecar_path} is malformed: expected JSON object."
+            )
+
+        expected_meta = {
+            "version": str(updated_cache.get("version", "")),
+            "alias_config_version": updated_cache.get("alias_config_version"),
+            "referability_backend": updated_cache.get("referability_backend"),
+            "vlm_model": updated_cache.get("model"),
+        }
+        for key, expected_value in expected_meta.items():
+            actual_value = sidecar_doc.get(key)
+            if actual_value != expected_value:
+                raise ValueError(
+                    f"Frame {scene_id}/{image_name} not found in referability cache. "
+                    f"Frame sidecar {sidecar_path} metadata mismatch for {key}: "
+                    f"cache has {expected_value!r}, sidecar has {actual_value!r}."
+                )
+
+        raw_frames = sidecar_doc.get("frames")
+        if not isinstance(raw_frames, dict):
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and frame sidecar "
+                f"{sidecar_path} is malformed: missing frames mapping."
+            )
+        raw_record = raw_frames.get(image_name)
+        if not isinstance(raw_record, dict):
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache. "
+                f"Checked frame sidecar {sidecar_path}, but that sidecar also does not contain the frame."
+            )
+        normalized_record = _normalize_frame_sidecar_record(raw_record)
+        if normalized_record is None:
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and frame sidecar "
+                f"{sidecar_path} contains an invalid frame record."
+            )
+        referability_entry = normalized_record.get("referability_entry")
+        if not isinstance(referability_entry, dict):
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and frame sidecar "
+                f"{sidecar_path} does not contain a valid referability_entry for that frame."
+            )
+        if not _frame_entry_has_consistent_final_fields(referability_entry):
+            raise ValueError(
+                f"Frame {scene_id}/{image_name} not found in referability cache, and frame sidecar "
+                f"{sidecar_path} referability_entry is inconsistent with cache version "
+                f"{REFERABILITY_CACHE_VERSION}."
+            )
+        return dict(referability_entry)
+
+    def _sync_scene_summary_after_frame_restore(scene_id: str, image_name: str) -> None:
+        scene_frames = updated_frames.get(scene_id)
+        if not isinstance(scene_frames, dict):
+            return
+        ordered_image_names = sorted(
+            scene_frames.keys(),
+            key=lambda candidate: int(scene_frames[candidate].get("final_selection_rank", FRAME_SELECTION_FALLBACK_RANK))
+            if isinstance(scene_frames.get(candidate), dict)
+            else FRAME_SELECTION_FALLBACK_RANK,
+        )
+        frame_count = len(ordered_image_names)
+        if isinstance(updated_scene_grouping, dict):
+            scene_grouping_entry = updated_scene_grouping.get(scene_id)
+            if isinstance(scene_grouping_entry, dict):
+                scene_grouping_entry["final_cacheable_frame_image_names"] = list(ordered_image_names)
+                scene_grouping_entry["final_cacheable_frame_count"] = frame_count
+        if isinstance(updated_scene_status, dict):
+            scene_status_entry = updated_scene_status.get(scene_id)
+            if isinstance(scene_status_entry, dict):
+                scene_status_entry["has_cache_frames"] = frame_count > 0
+                scene_status_entry["final_cacheable_frame_count"] = frame_count
+
     for (scene_id, image_name), review_cards in kept_by_frame.items():
         scene_frames = updated_frames.get(scene_id)
         if not isinstance(scene_frames, dict):
             raise ValueError(f"Scene {scene_id} not found in referability cache")
         entry = scene_frames.get(image_name)
         if not isinstance(entry, dict):
-            raise ValueError(f"Frame {scene_id}/{image_name} not found in referability cache")
+            entry = _load_salvage_sidecar_frame_entry(scene_id, image_name)
+            scene_frames[image_name] = entry
+            _sync_scene_summary_after_frame_restore(scene_id, image_name)
 
         normalized_cards = _normalize_attachment_human_review_cards(review_cards)
         surface_text_by_obj_id: dict[int, str] = {}

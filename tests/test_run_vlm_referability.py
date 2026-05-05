@@ -5260,6 +5260,207 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(dropped_entry["attachment_referable_pairs"], [])
         self.assertEqual(dropped_entry["attachment_referable_object_ids"], [])
 
+    def test_apply_attachment_pair_salvage_html_review_restores_missing_frame_from_sidecar(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_salvage_restore_{uuid.uuid4().hex}"
+        cache_path = root / "output" / "referability_cache.json"
+        scene_id = "scene0001_00"
+        image_name = "000002.jpg"
+        self.addCleanup(shutil.rmtree, root, True)
+
+        cache_doc = {
+            "version": referability_module.REFERABILITY_CACHE_VERSION,
+            "model": "fake-vlm",
+            "alias_config_version": referability_module.ALIAS_CONFIG_VERSION,
+            "referability_backend": referability_module.REFERABILITY_BACKEND,
+            "frames": {
+                scene_id: {
+                    "000001.jpg": {
+                        **make_debug_cache_entry(),
+                        "final_selection_rank": 0,
+                    }
+                }
+            },
+            "scene_grouping": {
+                scene_id: {
+                    "scene_id": scene_id,
+                    "split": "train",
+                    "pipeline_outcome": "processed",
+                    "scene_skip_reason": None,
+                    "final_cacheable_frame_image_names": ["000001.jpg"],
+                    "final_cacheable_frame_count": 1,
+                }
+            },
+            "scene_status": {
+                scene_id: {
+                    "scene_id": scene_id,
+                    "processed": True,
+                    "pipeline_outcome": "processed",
+                    "split": "train",
+                    "has_cache_frames": True,
+                    "final_cacheable_frame_count": 1,
+                    "scene_skip_reason": None,
+                }
+            },
+        }
+        sidecar_doc = referability_module._build_frame_sidecar_scene_doc(
+            scene_id=scene_id,
+            model_name="fake-vlm",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+            frame_records={
+                image_name: {
+                    "frame_info": {
+                        "clear": True,
+                        "clarity_score": 84,
+                        "frame_usable": True,
+                        "reason": "clear",
+                    },
+                    "frame_selection_score": 100084,
+                    "referability_entry": {
+                        **make_debug_cache_entry(),
+                        "final_selection_rank": 1,
+                    },
+                }
+            },
+        )
+        sidecar_path = referability_module._frame_cache_sidecar_path(cache_path, scene_id)
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_path.write_text(json.dumps(sidecar_doc, ensure_ascii=False), encoding="utf-8")
+
+        html_text = """<!doctype html>
+<html lang="en">
+<body>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000002.jpg" data-group-id="scene0001_00:group_0" data-pair-id="7-&gt;9" data-parent-id="7" data-parent-label="table" data-child-id="9" data-child-label="cup" data-deleted="false">
+    <input type="text" name="parent_surface_text" value="round table">
+    <input type="text" name="child_surface_text" value="white cup">
+  </article>
+</body>
+</html>"""
+
+        updated = referability_module._apply_attachment_pair_salvage_html_review(
+            html_text=html_text,
+            cache_doc=cache_doc,
+            cache_path=cache_path,
+        )
+
+        restored_entry = updated["frames"][scene_id][image_name]
+        self.assertEqual(restored_entry["attachment_referable_pairs"], [[7, 9]])
+        self.assertEqual(restored_entry["attachment_referable_object_ids"], [7, 9])
+        self.assertEqual(
+            updated["scene_grouping"][scene_id]["final_cacheable_frame_image_names"],
+            ["000001.jpg", "000002.jpg"],
+        )
+        self.assertEqual(updated["scene_grouping"][scene_id]["final_cacheable_frame_count"], 2)
+        self.assertTrue(updated["scene_status"][scene_id]["has_cache_frames"])
+        self.assertEqual(updated["scene_status"][scene_id]["final_cacheable_frame_count"], 2)
+
+    def test_apply_attachment_pair_salvage_html_review_raises_when_sidecar_missing_frame(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_salvage_missing_{uuid.uuid4().hex}"
+        cache_path = root / "output" / "referability_cache.json"
+        scene_id = "scene0001_00"
+        self.addCleanup(shutil.rmtree, root, True)
+
+        cache_doc = {
+            "version": referability_module.REFERABILITY_CACHE_VERSION,
+            "model": "fake-vlm",
+            "alias_config_version": referability_module.ALIAS_CONFIG_VERSION,
+            "referability_backend": referability_module.REFERABILITY_BACKEND,
+            "frames": {scene_id: {}},
+        }
+        sidecar_doc = referability_module._build_frame_sidecar_scene_doc(
+            scene_id=scene_id,
+            model_name="fake-vlm",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+            frame_records={
+                "000001.jpg": {
+                    "frame_info": {
+                        "clear": True,
+                        "clarity_score": 84,
+                        "frame_usable": True,
+                        "reason": "clear",
+                    },
+                    "frame_selection_score": 100084,
+                    "referability_entry": make_debug_cache_entry(),
+                }
+            },
+        )
+        sidecar_path = referability_module._frame_cache_sidecar_path(cache_path, scene_id)
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_path.write_text(json.dumps(sidecar_doc, ensure_ascii=False), encoding="utf-8")
+
+        html_text = """<!doctype html>
+<html lang="en">
+<body>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000999.jpg" data-group-id="scene0001_00:group_0" data-pair-id="7-&gt;9" data-parent-id="7" data-parent-label="table" data-child-id="9" data-child-label="cup" data-deleted="false">
+    <input type="text" name="parent_surface_text" value="round table">
+    <input type="text" name="child_surface_text" value="white cup">
+  </article>
+</body>
+</html>"""
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Frame scene0001_00/000999\.jpg not found in referability cache\..*sidecar also does not contain the frame",
+        ):
+            referability_module._apply_attachment_pair_salvage_html_review(
+                html_text=html_text,
+                cache_doc=cache_doc,
+                cache_path=cache_path,
+            )
+
+    def test_apply_attachment_pair_salvage_html_review_raises_on_sidecar_metadata_mismatch(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"attachment_salvage_meta_{uuid.uuid4().hex}"
+        cache_path = root / "output" / "referability_cache.json"
+        scene_id = "scene0001_00"
+        self.addCleanup(shutil.rmtree, root, True)
+
+        cache_doc = {
+            "version": referability_module.REFERABILITY_CACHE_VERSION,
+            "model": "fake-vlm",
+            "alias_config_version": referability_module.ALIAS_CONFIG_VERSION,
+            "referability_backend": referability_module.REFERABILITY_BACKEND,
+            "frames": {scene_id: {}},
+        }
+        sidecar_doc = referability_module._build_frame_sidecar_scene_doc(
+            scene_id=scene_id,
+            model_name="other-model",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+            frame_records={
+                "000002.jpg": {
+                    "frame_info": {
+                        "clear": True,
+                        "clarity_score": 84,
+                        "frame_usable": True,
+                        "reason": "clear",
+                    },
+                    "frame_selection_score": 100084,
+                    "referability_entry": make_debug_cache_entry(),
+                }
+            },
+        )
+        sidecar_path = referability_module._frame_cache_sidecar_path(cache_path, scene_id)
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_path.write_text(json.dumps(sidecar_doc, ensure_ascii=False), encoding="utf-8")
+
+        html_text = """<!doctype html>
+<html lang="en">
+<body>
+  <article class="pair-card" data-scene-id="scene0001_00" data-image-name="000002.jpg" data-group-id="scene0001_00:group_0" data-pair-id="7-&gt;9" data-parent-id="7" data-parent-label="table" data-child-id="9" data-child-label="cup" data-deleted="false">
+    <input type="text" name="parent_surface_text" value="round table">
+    <input type="text" name="child_surface_text" value="white cup">
+  </article>
+</body>
+</html>"""
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"metadata mismatch for vlm_model: cache has 'fake-vlm', sidecar has 'other-model'",
+        ):
+            referability_module._apply_attachment_pair_salvage_html_review(
+                html_text=html_text,
+                cache_doc=cache_doc,
+                cache_path=cache_path,
+            )
+
     def test_attachment_pair_salvage_review_roundtrip_edited_image_id_updates_target_frame(self) -> None:
         review_doc = {
             "scenes": [

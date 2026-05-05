@@ -1084,6 +1084,7 @@ def _load_single_referability_cache(
         data = _apply_attachment_pair_salvage_html_review(
             html_text=html_text,
             cache_doc=data,
+            cache_path=path,
         )
     version = str(data.get("version", ""))
     if version != EXPECTED_REFERABILITY_CACHE_VERSION:
