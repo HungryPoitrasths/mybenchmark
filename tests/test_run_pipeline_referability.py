@@ -3,6 +3,7 @@ import shutil
 import unittest
 import uuid
 from pathlib import Path
+import contextlib
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -48,6 +49,57 @@ def make_case_dir(prefix: str) -> Path:
     path = TEST_TMP_ROOT / f"{prefix}_{uuid.uuid4().hex}"
     path.mkdir(parents=True, exist_ok=False)
     return path
+
+
+def make_simple_scene(
+    scene_id: str,
+    *,
+    child_label: str = "chair",
+    parent_label: str = "table",
+) -> dict:
+    return {
+        "scene_id": scene_id,
+        "objects": [
+            make_object(1, child_label),
+            make_object(2, parent_label),
+        ],
+        "attachment_edges": [
+            {"parent_id": 2, "child_id": 1, "type": "attachment"},
+        ],
+        "room_bounds": None,
+        "wall_objects": [],
+    }
+
+
+def make_simple_referability_cache(scene_frames: dict[str, list[str]]) -> dict:
+    cache_frames: dict[str, dict[str, dict]] = {}
+    for scene_id, image_names in scene_frames.items():
+        cache_frames[scene_id] = {}
+        for image_name in image_names:
+            cache_frames[scene_id][image_name] = {
+                "frame_usable": True,
+                "candidate_visible_object_ids": [1, 2],
+                "crop_label_statuses": {"chair": "unique", "table": "unique"},
+                "crop_label_counts": {"chair": 1, "table": 1},
+                "crop_referable_object_ids": [1, 2],
+                "full_frame_label_reviews": [],
+                "full_frame_label_statuses": {},
+                "full_frame_label_counts": {},
+                "attachment_referable_object_ids": [1, 2],
+                "referable_object_ids": [1, 2],
+                "label_statuses": {"chair": "unique", "table": "unique"},
+                "label_counts": {"chair": 1, "table": 1},
+                "out_of_frame_label_reviews": [],
+                "out_of_frame_not_visible_labels": [],
+                "out_of_frame_label_to_object_ids": {},
+                "out_of_frame_vlm_early_stop": False,
+                "candidate_labels": ["chair", "table"],
+                "label_to_object_ids": {"chair": [1], "table": [2]},
+            }
+    return {
+        "version": "20.0",
+        "frames": cache_frames,
+    }
 
 
 def write_neighbor_edited_html(
@@ -4017,6 +4069,497 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(frame_record["final_question_count"], 1)
         self.assertEqual(debug_record["summary"]["generated_question_count"], 1)
         self.assertEqual(debug_record["summary"]["final_question_count"], 1)
+
+    def test_run_pipeline_resume_processes_only_pending_scenes(self) -> None:
+        root = make_case_dir("pipeline_resume_pending_only")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_frames = {
+            "scene0000_00": ["000001.jpg"],
+            "scene0001_00": ["000002.jpg"],
+        }
+        referability_cache = make_simple_referability_cache(scene_frames)
+        scenes = {scene_id: make_simple_scene(scene_id) for scene_id in scene_frames}
+
+        for scene_id in scene_frames:
+            scene_dir = data_root / scene_id
+            (scene_dir / "pose").mkdir(parents=True)
+            (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        def fake_load_scannet_poses(scene_dir: Path, axis_alignment=None):
+            return {
+                image_name: make_camera_pose(image_name)
+                for image_name in scene_frames[scene_dir.name]
+            }
+
+        def interrupted_generate_all_questions(**kwargs):
+            image_name = kwargs["camera_pose"].image_name
+            if image_name == "000002.jpg":
+                raise KeyboardInterrupt("stop after first cached scene")
+            return [
+                {
+                    "question": f"Question for {image_name}",
+                    "answer": "A",
+                    "options": ["yes", "no"],
+                    "type": "attachment",
+                    "level": "L1",
+                }
+            ]
+
+        common_patches = (
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", side_effect=fake_load_scannet_poses),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.90},
+                },
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        )
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "parse_scene",
+                    side_effect=lambda scene_dir, preloaded_geometry=None: scenes[scene_dir.name],
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    side_effect=interrupted_generate_all_questions,
+                )
+            )
+            for ctx in common_patches:
+                stack.enter_context(ctx)
+            with self.assertRaisesRegex(KeyboardInterrupt, "stop after first cached scene"):
+                run_pipeline_module.run_pipeline(
+                    data_root=data_root,
+                    output_dir=output_dir,
+                    max_scenes=10,
+                    max_frames=10,
+                    use_occlusion=False,
+                    referability_cache=referability_cache,
+                    run_question_presence_review=False,
+                    write_frame_debug=False,
+                )
+
+        scene_status_path = output_dir / "scene_status.json"
+        with open(scene_status_path, "r", encoding="utf-8") as f:
+            scene_status = json.load(f)
+        self.assertEqual(sorted(scene_status["completed_scenes"].keys()), ["scene0000_00"])
+        raw_cache_dir = run_pipeline_module._raw_scene_questions_cache_dir(output_dir)
+        self.assertTrue((raw_cache_dir / "scene0000_00.json").exists())
+        self.assertFalse((raw_cache_dir / "scene0001_00.json").exists())
+
+        parse_calls: list[str] = []
+
+        def resume_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            parse_calls.append(scene_dir.name)
+            if scene_dir.name == "scene0000_00":
+                raise AssertionError("resume should skip completed scene0000_00")
+            return scenes[scene_dir.name]
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(run_pipeline_module, "parse_scene", side_effect=resume_parse_scene)
+            )
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    side_effect=lambda **kwargs: [
+                        {
+                            "question": f"Question for {kwargs['camera_pose'].image_name}",
+                            "answer": "A",
+                            "options": ["yes", "no"],
+                            "type": "attachment",
+                            "level": "L1",
+                        }
+                    ],
+                )
+            )
+            for ctx in common_patches:
+                stack.enter_context(ctx)
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                resume=True,
+            )
+
+        self.assertEqual(parse_calls, ["scene0001_00"])
+        self.assertEqual(sorted(question["scene_id"] for question in questions), ["scene0000_00", "scene0001_00"])
+        benchmark = json.loads((output_dir / "benchmark.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(benchmark["questions"]), 2)
+
+    def test_run_pipeline_resume_rebuilds_final_output_without_reprocessing_completed_scenes(self) -> None:
+        root = make_case_dir("pipeline_resume_rebuild_only")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+        referability_cache = make_simple_referability_cache({scene_id: [image_name]})
+        scene = make_simple_scene(scene_id)
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.90},
+                },
+            ),
+            patch.object(
+                run_pipeline_module,
+                "generate_all_questions",
+                return_value=[
+                    {
+                        "question": "Initial cached question",
+                        "answer": "A",
+                        "options": ["yes", "no"],
+                        "type": "attachment",
+                        "level": "L1",
+                    }
+                ],
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        ):
+            first_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        first_benchmark = json.loads((output_dir / "benchmark.json").read_text(encoding="utf-8"))
+
+        with (
+            patch.object(
+                run_pipeline_module,
+                "parse_scene",
+                side_effect=AssertionError("resume should rebuild from cached raw scene questions only"),
+            ),
+            patch.object(
+                run_pipeline_module,
+                "generate_all_questions",
+                side_effect=AssertionError("resume should not regenerate completed scenes"),
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+        ):
+            resumed_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                resume=True,
+            )
+
+        resumed_benchmark = json.loads((output_dir / "benchmark.json").read_text(encoding="utf-8"))
+        self.assertEqual(resumed_questions, first_questions)
+        self.assertEqual(resumed_benchmark, first_benchmark)
+
+    def test_run_pipeline_resume_regenerates_scene_when_status_exists_but_raw_cache_missing(self) -> None:
+        root = make_case_dir("pipeline_resume_missing_raw")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        image_name = "000123.jpg"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+        referability_cache = make_simple_referability_cache({scene_id: [image_name]})
+        scene = make_simple_scene(scene_id)
+
+        first_generate = [
+            {
+                "question": "Original question",
+                "answer": "A",
+                "options": ["yes", "no"],
+                "type": "attachment",
+                "level": "L1",
+            }
+        ]
+        second_generate = [
+            {
+                "question": "Regenerated question",
+                "answer": "A",
+                "options": ["yes", "no"],
+                "type": "attachment",
+                "level": "L1",
+            }
+        ]
+
+        common_patches = (
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.90},
+                },
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        )
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(run_pipeline_module, "parse_scene", return_value=scene)
+            )
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    return_value=first_generate,
+                )
+            )
+            for ctx in common_patches:
+                stack.enter_context(ctx)
+            run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        raw_cache_dir = run_pipeline_module._raw_scene_questions_cache_dir(output_dir)
+        (raw_cache_dir / f"{scene_id}.json").unlink()
+        parse_calls: list[str] = []
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "parse_scene",
+                    side_effect=lambda scene_dir, preloaded_geometry=None: parse_calls.append(scene_dir.name) or scene,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    return_value=second_generate,
+                )
+            )
+            for ctx in common_patches:
+                stack.enter_context(ctx)
+            resumed_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                resume=True,
+            )
+
+        self.assertEqual(parse_calls, [scene_id])
+        self.assertEqual([question["question"] for question in resumed_questions], ["Regenerated question"])
+        self.assertTrue((raw_cache_dir / f"{scene_id}.json").exists())
+
+    def test_run_pipeline_reset_reprocesses_only_most_recent_completed_scene(self) -> None:
+        root = make_case_dir("pipeline_resume_reset")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_frames = {
+            "scene0000_00": ["000001.jpg"],
+            "scene0001_00": ["000002.jpg"],
+        }
+        referability_cache = make_simple_referability_cache(scene_frames)
+        scenes = {scene_id: make_simple_scene(scene_id) for scene_id in scene_frames}
+
+        for scene_id in scene_frames:
+            scene_dir = data_root / scene_id
+            (scene_dir / "pose").mkdir(parents=True)
+            (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        def fake_load_scannet_poses(scene_dir: Path, axis_alignment=None):
+            return {
+                image_name: make_camera_pose(image_name)
+                for image_name in scene_frames[scene_dir.name]
+            }
+
+        common_patches = (
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda scene_dict: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={2: [1]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={1: [2]}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+            patch.object(run_pipeline_module, "load_scannet_poses", side_effect=fake_load_scannet_poses),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "compute_frame_object_visibility",
+                return_value={
+                    1: {"bbox_in_frame_ratio": 0.95},
+                    2: {"bbox_in_frame_ratio": 0.90},
+                },
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+        )
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "parse_scene",
+                    side_effect=lambda scene_dir, preloaded_geometry=None: scenes[scene_dir.name],
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    side_effect=lambda **kwargs: [
+                        {
+                            "question": f"Initial {kwargs['camera_pose'].image_name}",
+                            "answer": "A",
+                            "options": ["yes", "no"],
+                            "type": "attachment",
+                            "level": "L1",
+                        }
+                    ],
+                )
+            )
+            for ctx in common_patches:
+                stack.enter_context(ctx)
+            run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        parse_calls: list[str] = []
+
+        def reset_parse_scene(scene_dir: Path, preloaded_geometry=None):
+            parse_calls.append(scene_dir.name)
+            if scene_dir.name == "scene0000_00":
+                raise AssertionError("reset=1 resume should keep the older completed scene cached")
+            return scenes[scene_dir.name]
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                patch.object(run_pipeline_module, "parse_scene", side_effect=reset_parse_scene)
+            )
+            stack.enter_context(
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    side_effect=lambda **kwargs: [
+                        {
+                            "question": f"Reset {kwargs['camera_pose'].image_name}",
+                            "answer": "A",
+                            "options": ["yes", "no"],
+                            "type": "attachment",
+                            "level": "L1",
+                        }
+                    ],
+                )
+            )
+            for ctx in common_patches:
+                stack.enter_context(ctx)
+            resumed_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=10,
+                max_frames=10,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                resume=True,
+                reset=1,
+            )
+
+        self.assertEqual(parse_calls, ["scene0001_00"])
+        questions_by_scene = {
+            question["scene_id"]: question["question"]
+            for question in resumed_questions
+        }
+        self.assertEqual(questions_by_scene["scene0000_00"], "Initial 000001.jpg")
+        self.assertEqual(questions_by_scene["scene0001_00"], "Reset 000002.jpg")
 
 if __name__ == "__main__":
     unittest.main()
