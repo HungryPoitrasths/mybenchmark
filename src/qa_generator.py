@@ -6237,7 +6237,10 @@ def generate_l2_object_rotate_object_centric(
         else set(referable_object_ids)
     )
     attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
-    movement_scene_objects = movement_objects if movement_objects is not None else objects
+    movement_scene_objects = _merge_scene_objects_by_id(
+        movement_objects if movement_objects is not None else objects,
+        collision_objects if collision_objects is not None else [],
+    )
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
     }
@@ -6497,7 +6500,10 @@ def generate_l2_object_move_allocentric(
         else set(referable_object_ids)
     )
     attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
-    movement_scene_objects = movement_objects if movement_objects is not None else objects
+    movement_scene_objects = _merge_scene_objects_by_id(
+        movement_objects if movement_objects is not None else objects,
+        collision_objects if collision_objects is not None else [],
+    )
     obj_map = object_map if object_map is not None else {
         int(o["id"]): o for o in movement_scene_objects
     }
@@ -8220,9 +8226,9 @@ def generate_all_questions(
     all_questions: list[dict] = []
 
     # Per-frame caps — keep the benchmark tractable when scenes have many objects
-    MAX_L1_DIRECTION = 20
-    MAX_L1_DIRECTION_OC = 15   # object-centric
-    MAX_L1_DIRECTION_ALLO = 15 # allocentric
+    MAX_L1_DIRECTION = 30
+    MAX_L1_DIRECTION_OC = 25   # object-centric
+    MAX_L1_DIRECTION_ALLO = 25 # allocentric
     MAX_L1_DISTANCE = 20
 
     # Ordinary L1 relations ignore depth in normal generation.
@@ -8248,7 +8254,7 @@ def generate_all_questions(
     )
 
     # L1 — collect separately so we can sample before adding
-    MAX_L1_OCCLUSION = 15
+    MAX_L1_OCCLUSION = 3
     l1_dir_qs:  list[dict] = []
     l1_dist_qs: list[dict] = []
     l1_occ_qs:  list[dict] = []
