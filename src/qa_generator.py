@@ -4751,7 +4751,7 @@ def _find_stable_distance_move_for_relation(
         )
         if approx_idx is None:
             continue
-        if abs(approx_idx - old_idx) != 1 and not bool(approx_details.get("near_boundary", False)):
+        if approx_idx == old_idx and not bool(approx_details.get("near_boundary", False)):
             continue
 
         exact_details = compute_distance_details(
@@ -4766,7 +4766,7 @@ def _find_stable_distance_move_for_relation(
             new_label,
             bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
         )
-        if new_idx is None or abs(new_idx - old_idx) != 1:
+        if new_idx is None or new_idx == old_idx:
             continue
         if new_near_boundary:
             continue
@@ -4792,7 +4792,7 @@ def _find_stable_distance_move_for_relation(
             new_label,
             bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
         )
-        if new_idx is None or abs(new_idx - old_idx) != 1:
+        if new_idx is None or new_idx == old_idx:
             continue
         if bool(exact_details.get("near_boundary", False)):
             continue
@@ -5094,7 +5094,10 @@ def generate_l2_object_move(
         else set(referable_object_ids)
     )
     attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
-    movement_scene_objects = movement_objects if movement_objects is not None else objects
+    movement_scene_objects = _merge_scene_objects_by_id(
+        movement_objects if movement_objects is not None else objects,
+        collision_objects if collision_objects is not None else [],
+    )
     relation_scene_objects = _merge_scene_objects_by_id(objects, movement_scene_objects)
     obj_map = {int(o["id"]): o for o in relation_scene_objects}
     if object_map is not None:
