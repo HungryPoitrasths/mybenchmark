@@ -8534,11 +8534,12 @@ def generate_all_questions(
     l1_dir_qs = _apply_question_cap("generate_l1_direction", l1_dir_qs, MAX_L1_DIRECTION)
     l1_dist_qs = _apply_question_cap("generate_l1_distance", l1_dist_qs, MAX_L1_DISTANCE)
     l1_occ_qs = _apply_question_cap("generate_l1_occlusion_questions", l1_occ_qs, MAX_L1_OCCLUSION)
-    all_questions.extend(l1_dir_qs)
-    all_questions.extend(l1_dist_qs)
-    all_questions.extend(l1_occ_qs)
-    all_questions.extend(l1_dir_oc_qs)
-    all_questions.extend(l1_dir_allo_qs)
+    if not l2_agent_distance_only:
+        all_questions.extend(l1_dir_qs)
+        all_questions.extend(l1_dist_qs)
+        all_questions.extend(l1_occ_qs)
+        all_questions.extend(l1_dir_oc_qs)
+        all_questions.extend(l1_dir_allo_qs)
     # Rebuild the movement graph for question-eligible objects plus any
     # attachment-context ancestors needed as static/moving context.
     attachment_graph_uniq = {
@@ -8777,12 +8778,13 @@ def generate_all_questions(
             "support_chain_node_count": len(attachment_support_chain_graph),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_attachment_chain",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_attachment_chain",
-                generate_l3_attachment_chain(
+                lambda: _register_generated_questions(
+                    "generate_l3_attachment_chain",
+                    generate_l3_attachment_chain(
                     attachment_objects_uniq,
                     attachment_support_chain_graph,
                     attachment_support_chain_by,
@@ -8810,12 +8812,13 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_coordinate_rotation",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_coordinate_rotation",
-                generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
+                lambda: _register_generated_questions(
+                    "generate_l3_coordinate_rotation",
+                    generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
             ),
         )
     )
@@ -8836,12 +8839,13 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_coordinate_rotation_object_centric",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_coordinate_rotation_object_centric",
-                generate_l3_coordinate_rotation_object_centric(
+                lambda: _register_generated_questions(
+                    "generate_l3_coordinate_rotation_object_centric",
+                    generate_l3_coordinate_rotation_object_centric(
                     objects_uniq,
                     camera_pose,
                     templates,
@@ -8866,12 +8870,13 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_coordinate_rotation_allocentric",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_coordinate_rotation_allocentric",
-                generate_l3_coordinate_rotation_allocentric(
+                lambda: _register_generated_questions(
+                    "generate_l3_coordinate_rotation_allocentric",
+                    generate_l3_coordinate_rotation_allocentric(
                     objects_uniq,
                     camera_pose,
                     templates,
