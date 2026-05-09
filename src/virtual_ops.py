@@ -293,9 +293,17 @@ def has_terminal_bbox_collision(
     moved_map = {obj["id"]: obj for obj in moved_objects if obj["id"] in moved_ids}
     collision_source = original_objects if collision_objects is None else collision_objects
     static_objects = [obj for obj in collision_source if obj["id"] not in moved_ids]
+    original_map = {obj["id"]: obj for obj in original_objects}
 
     for moved_obj in moved_map.values():
+        original_obj = original_map.get(moved_obj["id"])
         for static_obj in static_objects:
+            # Skip static objects that already overlapped with this moved object
+            # in the original scene (ScanNet AABBs often overlap for adjacent furniture).
+            if original_obj is not None and _bboxes_intersect_strict(
+                original_obj, static_obj
+            ):
+                continue
             if _bboxes_intersect_strict(moved_obj, static_obj):
                 return True
     return False
