@@ -7793,7 +7793,6 @@ def generate_all_questions(
     trace_detail: str = "light",
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
-    l2_agent_distance_only: bool = False,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -8583,12 +8582,11 @@ def generate_all_questions(
     l1_dir_qs = _apply_question_cap("generate_l1_direction", l1_dir_qs, MAX_L1_DIRECTION)
     l1_dist_qs = _apply_question_cap("generate_l1_distance", l1_dist_qs, MAX_L1_DISTANCE)
     l1_occ_qs = _apply_question_cap("generate_l1_occlusion_questions", l1_occ_qs, MAX_L1_OCCLUSION)
-    if not l2_agent_distance_only:
-        all_questions.extend(l1_dir_qs)
-        all_questions.extend(l1_dist_qs)
-        all_questions.extend(l1_occ_qs)
-        all_questions.extend(l1_dir_oc_qs)
-        all_questions.extend(l1_dir_allo_qs)
+    all_questions.extend(l1_dir_qs)
+    all_questions.extend(l1_dist_qs)
+    all_questions.extend(l1_occ_qs)
+    all_questions.extend(l1_dir_oc_qs)
+    all_questions.extend(l1_dir_allo_qs)
     # Rebuild the movement graph for question-eligible objects plus any
     # attachment-context ancestors needed as static/moving context.
     attachment_graph_uniq = {
@@ -8670,29 +8668,28 @@ def generate_all_questions(
             "occlusion_mode": "l1_style",
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l2_viewpoint_move",
+            lambda: _register_generated_questions(
                 "generate_l2_viewpoint_move",
-                lambda: _register_generated_questions(
-                    "generate_l2_viewpoint_move",
-                    generate_l2_viewpoint_move(
-                    objects_uniq,
-                    camera_pose,
-                    color_intrinsics,
-                    depth_image,
-                    depth_intrinsics,
-                    occlusion_backend,
-                    ray_caster,
-                    instance_mesh_data,
-                    templates,
-                    trace_recorder=trace_recorder,
-                    trace_detail=trace_detail,
-                    generator_progress_log_seconds=generator_progress_log_seconds,
-                    slow_generator_warn_seconds=slow_generator_warn_seconds,
-                ),
+                generate_l2_viewpoint_move(
+                objects_uniq,
+                camera_pose,
+                color_intrinsics,
+                depth_image,
+                depth_intrinsics,
+                occlusion_backend,
+                ray_caster,
+                instance_mesh_data,
+                templates,
+                trace_recorder=trace_recorder,
+                trace_detail=trace_detail,
+                generator_progress_log_seconds=generator_progress_log_seconds,
+                slow_generator_warn_seconds=slow_generator_warn_seconds,
             ),
-        )
+        ),
+    )
     )
     _emit_generator_context(
         trace_recorder,
@@ -8705,31 +8702,30 @@ def generate_all_questions(
             "occlusion_mode": "l1_style",
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l2_object_remove",
+            lambda: _register_generated_questions(
                 "generate_l2_object_remove",
-                lambda: _register_generated_questions(
-                    "generate_l2_object_remove",
-                    generate_l2_object_remove(
-                    objects_uniq,
-                    attachment_graph_uniq,
-                    camera_pose,
-                    color_intrinsics,
-                    depth_image,
-                    depth_intrinsics,
-                    occlusion_backend,
-                    ray_caster,
-                    instance_mesh_data,
-                    templates,
-                    attachment_query_objects=attachment_query_objects_uniq,
-                    trace_recorder=trace_recorder,
-                    trace_detail=trace_detail,
-                    generator_progress_log_seconds=generator_progress_log_seconds,
-                    slow_generator_warn_seconds=slow_generator_warn_seconds,
-                ),
+                generate_l2_object_remove(
+                objects_uniq,
+                attachment_graph_uniq,
+                camera_pose,
+                color_intrinsics,
+                depth_image,
+                depth_intrinsics,
+                occlusion_backend,
+                ray_caster,
+                instance_mesh_data,
+                templates,
+                attachment_query_objects=attachment_query_objects_uniq,
+                trace_recorder=trace_recorder,
+                trace_detail=trace_detail,
+                generator_progress_log_seconds=generator_progress_log_seconds,
+                slow_generator_warn_seconds=slow_generator_warn_seconds,
             ),
-        )
+        ),
+    )
     )
     # L2 - new reference frames
     _emit_generator_context(
@@ -8742,29 +8738,28 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l2_object_rotate_object_centric",
+            lambda: _register_generated_questions(
                 "generate_l2_object_rotate_object_centric",
-                lambda: _register_generated_questions(
-                    "generate_l2_object_rotate_object_centric",
-                    generate_l2_object_rotate_object_centric(
-                    objects_uniq,
-                    attachment_graph_uniq,
-                    attached_by_uniq,
-                    camera_pose,
-                    templates,
-                    room_bounds=room_bounds,
-                    collision_objects=l2_collision_objects,
-                    movement_objects=movement_objects,
-                    object_map=movement_object_map,
-                    attachment_referable_object_ids=sorted(attachment_referable_set),
-                    attachment_query_objects=attachment_query_objects_uniq,
-                    trace_recorder=trace_recorder,
-                    trace_detail=trace_detail,
-                ),
+                generate_l2_object_rotate_object_centric(
+                objects_uniq,
+                attachment_graph_uniq,
+                attached_by_uniq,
+                camera_pose,
+                templates,
+                room_bounds=room_bounds,
+                collision_objects=l2_collision_objects,
+                movement_objects=movement_objects,
+                object_map=movement_object_map,
+                attachment_referable_object_ids=sorted(attachment_referable_set),
+                attachment_query_objects=attachment_query_objects_uniq,
+                trace_recorder=trace_recorder,
+                trace_detail=trace_detail,
             ),
-        )
+        ),
+    )
     )
     _emit_generator_summary(
         trace_recorder,
@@ -8785,29 +8780,28 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l2_object_move_allocentric",
+            lambda: _register_generated_questions(
                 "generate_l2_object_move_allocentric",
-                lambda: _register_generated_questions(
-                    "generate_l2_object_move_allocentric",
-                    generate_l2_object_move_allocentric(
-                    objects_uniq,
-                    attachment_graph_uniq,
-                    attached_by_uniq,
-                    camera_pose,
-                    templates,
-                    room_bounds=room_bounds,
-                    collision_objects=l2_collision_objects,
-                    movement_objects=movement_objects,
-                    object_map=movement_object_map,
-                    attachment_referable_object_ids=sorted(attachment_referable_set),
-                    attachment_query_objects=attachment_query_objects_uniq,
-                    trace_recorder=trace_recorder,
-                    trace_detail=trace_detail,
-                ),
+                generate_l2_object_move_allocentric(
+                objects_uniq,
+                attachment_graph_uniq,
+                attached_by_uniq,
+                camera_pose,
+                templates,
+                room_bounds=room_bounds,
+                collision_objects=l2_collision_objects,
+                movement_objects=movement_objects,
+                object_map=movement_object_map,
+                attachment_referable_object_ids=sorted(attachment_referable_set),
+                attachment_query_objects=attachment_query_objects_uniq,
+                trace_recorder=trace_recorder,
+                trace_detail=trace_detail,
             ),
-        )
+        ),
+    )
     )
     _emit_generator_summary(
         trace_recorder,
@@ -8827,21 +8821,20 @@ def generate_all_questions(
             "support_chain_node_count": len(attachment_support_chain_graph),
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l3_attachment_chain",
+            lambda: _register_generated_questions(
                 "generate_l3_attachment_chain",
-                lambda: _register_generated_questions(
-                    "generate_l3_attachment_chain",
-                    generate_l3_attachment_chain(
-                    attachment_objects_uniq,
-                    attachment_support_chain_graph,
-                    attachment_support_chain_by,
-                    camera_pose,
-                    templates,
-                ),
+                generate_l3_attachment_chain(
+                attachment_objects_uniq,
+                attachment_support_chain_graph,
+                attachment_support_chain_by,
+                camera_pose,
+                templates,
             ),
-        )
+        ),
+    )
     )
     _emit_generator_summary(
         trace_recorder,
@@ -8861,15 +8854,14 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l3_coordinate_rotation",
+            lambda: _register_generated_questions(
                 "generate_l3_coordinate_rotation",
-                lambda: _register_generated_questions(
-                    "generate_l3_coordinate_rotation",
-                    generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
-            ),
-        )
+                generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
+        ),
+    )
     )
     _emit_generator_summary(
         trace_recorder,
@@ -8888,19 +8880,18 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l3_coordinate_rotation_object_centric",
+            lambda: _register_generated_questions(
                 "generate_l3_coordinate_rotation_object_centric",
-                lambda: _register_generated_questions(
-                    "generate_l3_coordinate_rotation_object_centric",
-                    generate_l3_coordinate_rotation_object_centric(
-                    objects_uniq,
-                    camera_pose,
-                    templates,
-                ),
+                generate_l3_coordinate_rotation_object_centric(
+                objects_uniq,
+                camera_pose,
+                templates,
             ),
-        )
+        ),
+    )
     )
     _emit_generator_summary(
         trace_recorder,
@@ -8919,19 +8910,18 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    if not l2_agent_distance_only:
-        all_questions.extend(
-            _run_question_step(
+    all_questions.extend(
+        _run_question_step(
+            "generate_l3_coordinate_rotation_allocentric",
+            lambda: _register_generated_questions(
                 "generate_l3_coordinate_rotation_allocentric",
-                lambda: _register_generated_questions(
-                    "generate_l3_coordinate_rotation_allocentric",
-                    generate_l3_coordinate_rotation_allocentric(
-                    objects_uniq,
-                    camera_pose,
-                    templates,
-                ),
+                generate_l3_coordinate_rotation_allocentric(
+                objects_uniq,
+                camera_pose,
+                templates,
             ),
-        )
+        ),
+    )
     )
     _emit_generator_summary(
         trace_recorder,
