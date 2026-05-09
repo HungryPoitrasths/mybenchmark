@@ -6768,11 +6768,35 @@ def generate_l3_attachment_chain(
     return questions
 
 
+def _diverse_sample(candidates, max_total, key_fn, max_per_key=2):
+    if len(candidates) <= max_total:
+        return candidates
+
+    groups = {}
+    for c in candidates:
+        k = key_fn(c)
+        groups.setdefault(k, []).append(c)
+
+    sampled = []
+    keys = list(groups.keys())
+    taken = {k: 0 for k in keys}
+    idx = 0
+    while len(sampled) < max_total:
+        k = keys[idx % len(keys)]
+        if taken[k] < max_per_key and taken[k] < len(groups[k]):
+            sampled.append(groups[k][taken[k]])
+            taken[k] += 1
+        idx += 1
+        if all(taken[k] >= min(max_per_key, len(groups[k])) for k in keys):
+            break
+    return sampled
+
+
 def generate_l3_coordinate_rotation(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 5,
+    max_per_angle: int = 8,
 ) -> list[dict]:
     """Generate L3.2 coordinate-rotation counterfactual questions.
 
@@ -6811,7 +6835,7 @@ def generate_l3_coordinate_rotation(
         # Collect only direction-changed pairs, then sample to cap
         changed_dir = [ch for ch in changed if "direction_b_rel_a" in ch["changes"]]
         if len(changed_dir) > max_per_angle:
-            changed_dir = random.sample(changed_dir, max_per_angle)
+            changed_dir = _diverse_sample(changed_dir, max_per_angle, key_fn=lambda ch: ch["obj_a_id"], max_per_key=2)
 
         for ch in changed_dir:
             vals = ch["changes"]["direction_b_rel_a"]
@@ -6866,8 +6890,8 @@ def generate_l3_coordinate_rotation_object_centric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 5,
-    max_questions: int = 3,
+    max_per_angle: int = 8,
+    max_questions: int = 10,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in object-centric frame.
 
@@ -6975,11 +6999,11 @@ def generate_l3_coordinate_rotation_object_centric(
                     })
 
         if len(candidates) > max_per_angle:
-            candidates = random.sample(candidates, max_per_angle)
+            candidates = _diverse_sample(candidates, max_per_angle, key_fn=lambda c: c["obj_ref_id"], max_per_key=2)
         questions.extend(candidates)
 
     if len(questions) > max_questions:
-        questions = random.sample(questions, max_questions)
+        questions = _diverse_sample(questions, max_questions, key_fn=lambda q: q["obj_ref_id"], max_per_key=2)
 
     return questions
 
@@ -6988,7 +7012,7 @@ def generate_l3_coordinate_rotation_allocentric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 5,
+    max_per_angle: int = 8,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in allocentric (cardinal) frame.
 
@@ -7082,7 +7106,7 @@ def generate_l3_coordinate_rotation_allocentric(
                 })
 
         if len(candidates) > max_per_angle:
-            candidates = random.sample(candidates, max_per_angle)
+            candidates = _diverse_sample(candidates, max_per_angle, key_fn=lambda c: c["obj_a_id"], max_per_key=2)
         questions.extend(candidates)
 
     return questions
