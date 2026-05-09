@@ -7744,6 +7744,7 @@ def generate_all_questions(
     trace_detail: str = "light",
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
+    l2_agent_distance_only: bool = False,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -8619,12 +8620,13 @@ def generate_all_questions(
             "occlusion_mode": "l1_style",
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_viewpoint_move",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_viewpoint_move",
-                generate_l2_viewpoint_move(
+                lambda: _register_generated_questions(
+                    "generate_l2_viewpoint_move",
+                    generate_l2_viewpoint_move(
                     objects_uniq,
                     camera_pose,
                     color_intrinsics,
@@ -8653,12 +8655,13 @@ def generate_all_questions(
             "occlusion_mode": "l1_style",
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_remove",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_remove",
-                generate_l2_object_remove(
+                lambda: _register_generated_questions(
+                    "generate_l2_object_remove",
+                    generate_l2_object_remove(
                     objects_uniq,
                     attachment_graph_uniq,
                     camera_pose,
@@ -8689,12 +8692,13 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_rotate_object_centric",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_rotate_object_centric",
-                generate_l2_object_rotate_object_centric(
+                lambda: _register_generated_questions(
+                    "generate_l2_object_rotate_object_centric",
+                    generate_l2_object_rotate_object_centric(
                     objects_uniq,
                     attachment_graph_uniq,
                     attached_by_uniq,
@@ -8731,12 +8735,13 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_move_allocentric",
-            lambda: _register_generated_questions(
+    if not l2_agent_distance_only:
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_move_allocentric",
-                generate_l2_object_move_allocentric(
+                lambda: _register_generated_questions(
+                    "generate_l2_object_move_allocentric",
+                    generate_l2_object_move_allocentric(
                     objects_uniq,
                     attachment_graph_uniq,
                     attached_by_uniq,

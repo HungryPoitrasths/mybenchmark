@@ -4481,6 +4481,7 @@ def run_pipeline(
                             attachment_edges=scene.get("attachment_edges", []),
                             generator_progress_log_seconds=generator_progress_log_seconds,
                             slow_generator_warn_seconds=slow_generator_warn_seconds,
+                            l2_agent_distance_only=args.l2_agent_distance,
                         )
                     except Exception:
                         logger.exception(
@@ -4778,6 +4779,7 @@ def run_pipeline(
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),
+                l2_agent_distance_only=args.l2_agent_distance,
             )
 
             for q in questions:
@@ -5009,6 +5011,11 @@ def main():
         type=int,
         default=None,
         help="Before resuming, remove the most recently completed N scene cache/status entries so they will be regenerated",
+    )
+    parser.add_argument(
+        "--l2_agent_distance",
+        action="store_true",
+        help="Only generate L2 object_move_agent and object_move_distance questions (skip other L2 types)",
     )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
