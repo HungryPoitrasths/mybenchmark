@@ -4321,6 +4321,20 @@ def _iter_additional_object_move_states(
         )
 
 
+def _merge_scene_objects_by_id(*object_lists: list[dict] | None) -> list[dict]:
+    objects_by_id: dict[int, dict] = {}
+    for object_list in object_lists:
+        if object_list is None:
+            continue
+        for obj in object_list:
+            try:
+                obj_id = int(obj["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            objects_by_id[obj_id] = obj
+    return list(objects_by_id.values())
+
+
 def _select_object_move_state(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -4679,6 +4693,7 @@ def _find_stable_distance_move_for_relation(
     *,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    movement_objects: list[dict] | None = None,
     allow_unchanged_fallback: bool = False,
 ) -> tuple[np.ndarray | None, str | None, str | None, bool]:
     """Find a valid move for distance questions.
@@ -4703,7 +4718,8 @@ def _find_stable_distance_move_for_relation(
     if affects_a == affects_b:
         return None, None, None, False
 
-    room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
+    movement_check_objects = movement_objects if movement_objects is not None else objects
+    room_min, room_max = compute_room_bounds(movement_check_objects, room_bounds=room_bounds)
     obj_map = {int(obj["id"]): obj for obj in objects}
     if obj_a_id not in obj_map or obj_b_id not in obj_map:
         return None, None, None, False
@@ -4711,17 +4727,18 @@ def _find_stable_distance_move_for_relation(
         return None, old_label, None, False
 
     for delta in _iter_distance_move_deltas():
-        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
-        if not is_within_room(new_objects, room_min, room_max):
+        moved_check_objects = apply_movement(movement_check_objects, attachment_graph, target_id, delta)
+        if not is_within_room(moved_check_objects, room_min, room_max):
             continue
         if has_terminal_bbox_collision(
-            objects,
-            new_objects,
+            movement_check_objects,
+            moved_check_objects,
             moved_ids,
             collision_objects=collision_objects,
         ):
             continue
 
+        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
         new_map = {int(obj["id"]): obj for obj in new_objects}
         approx_details = compute_distance_details(
             new_map[obj_a_id],
@@ -4756,12 +4773,13 @@ def _find_stable_distance_move_for_relation(
         return np.asarray(delta, dtype=np.float64), old_label, new_label, False
 
     for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
-        objects,
+        movement_check_objects,
         attachment_graph,
         target_id,
         room_bounds=room_bounds,
         collision_objects=collision_objects,
     ):
+        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
         new_map = {int(obj["id"]): obj for obj in new_objects}
         exact_details = compute_distance_details(
             new_map[obj_a_id],
@@ -4782,12 +4800,13 @@ def _find_stable_distance_move_for_relation(
 
     if allow_unchanged_fallback:
         for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
-            objects,
+            movement_check_objects,
             attachment_graph,
             target_id,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
         ):
+            new_objects = apply_movement(objects, attachment_graph, target_id, delta)
             new_map = {int(obj["id"]): obj for obj in new_objects}
             exact_details = compute_distance_details(
                 new_map[obj_a_id],
@@ -4811,6 +4830,7 @@ def _generate_l2_distance_questions_for_object(
     attachment_remapped: bool,
     relations: list[dict[str, Any]],
     movement_scene_objects: list[dict],
+    relation_scene_objects: list[dict] | None = None,
     attachment_graph: dict[int, list[int]],
     camera_pose: CameraPose,
     templates: dict[str, Any],
@@ -4825,6 +4845,11 @@ def _generate_l2_distance_questions_for_object(
     )
     moved_ids = get_moved_object_ids(move_source_id, attachment_graph)
     has_attachment_chain = len(moved_ids) > 1
+    distance_scene_objects = (
+        relation_scene_objects
+        if relation_scene_objects is not None
+        else movement_scene_objects
+    )
     questions: list[dict[str, Any]] = []
 
     for relation in relations:
@@ -4843,18 +4868,19 @@ def _generate_l2_distance_questions_for_object(
         )
 
         delta, old_value, answer_value, relation_unchanged = _find_stable_distance_move_for_relation(
-            movement_scene_objects,
+            distance_scene_objects,
             attachment_graph,
             move_source_id,
             relation,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
+            movement_objects=movement_scene_objects,
             allow_unchanged_fallback=attachment_relation_propagated,
         )
         if delta is None or answer_value is None or old_value is None:
             continue
 
-        moved_state = apply_movement(movement_scene_objects, attachment_graph, move_source_id, delta)
+        moved_state = apply_movement(distance_scene_objects, attachment_graph, move_source_id, delta)
         moved_map = {int(obj["id"]): obj for obj in moved_state}
         new_distance = compute_distance_details(
             moved_map[int(relation["obj_a_id"])],
@@ -5069,10 +5095,11 @@ def generate_l2_object_move(
     )
     attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
     movement_scene_objects = movement_objects if movement_objects is not None else objects
-    obj_map = object_map if object_map is not None else {
-        int(o["id"]): o for o in movement_scene_objects
-    }
-    base_relations = compute_all_relations(movement_scene_objects, camera_pose, None, None)
+    relation_scene_objects = _merge_scene_objects_by_id(objects, movement_scene_objects)
+    obj_map = {int(o["id"]): o for o in relation_scene_objects}
+    if object_map is not None:
+        obj_map.update({int(obj_id): obj for obj_id, obj in object_map.items()})
+    base_relations = compute_all_relations(relation_scene_objects, camera_pose, None, None)
     base_relation_map = _relation_map_by_pair(base_relations)
     occlusion_enabled = (
         color_intrinsics is not None
@@ -5166,8 +5193,14 @@ def generate_l2_object_move(
             delta_key = _delta_key(state.delta)
             relation_map = state_relation_cache.get(delta_key)
             if relation_map is None:
+                moved_relation_objects = apply_movement(
+                    relation_scene_objects,
+                    attachment_graph,
+                    move_source_id,
+                    state.delta,
+                )
                 relation_map = _relation_map_by_pair(
-                    compute_all_relations(state.moved_objects, camera_pose, None, None)
+                    compute_all_relations(moved_relation_objects, camera_pose, None, None)
                 )
                 state_relation_cache[delta_key] = relation_map
             return relation_map
@@ -5456,6 +5489,7 @@ def generate_l2_object_move(
                     attachment_remapped=attachment_remapped,
                     relations=base_relations,
                     movement_scene_objects=movement_scene_objects,
+                    relation_scene_objects=relation_scene_objects,
                     attachment_graph=attachment_graph,
                     camera_pose=camera_pose,
                     templates=templates,
