@@ -4167,7 +4167,7 @@ class _AttachmentPairSalvageHtmlParser(HTMLParser):
 
         name = str(attrs_map.get("name", "")).strip().lower()
         value = html.unescape(str(attrs_map.get("value", ""))).strip()
-        if name in {"image_id", "scene_id"}:
+        if name == "image_id":
             self._current_card["image_id"] = value
             self._current_card["image_name"] = _salvage_review_image_name_with_original_suffix(
                 original_image_name=str(self._current_card.get("image_name", "")),
