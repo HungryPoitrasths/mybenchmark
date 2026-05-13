@@ -424,7 +424,7 @@ class DistanceMovementSearchTests(unittest.TestCase):
             return_value=(None, []),
         ):
             questions = generate_l2_object_move(
-                objects=[mover],
+                objects=[mover, ref],
                 attachment_graph={},
                 attached_by={},
                 camera_pose=make_camera_pose(),
@@ -437,7 +437,10 @@ class DistanceMovementSearchTests(unittest.TestCase):
                 },
             )
 
-        distance_questions = [q for q in questions if q.get("type") == "object_move_distance"]
+        distance_questions = [
+            q for q in questions
+            if q.get("type") == "object_move_distance" and q.get("moved_obj_id") == 1
+        ]
         self.assertEqual(len(distance_questions), 1)
         self.assertEqual(distance_questions[0]["correct_value"], "moderate (2.0-3.3m)")
         self.assertEqual(distance_questions[0]["delta"], [-1.5, 0.0, 0.0])
@@ -485,6 +488,47 @@ class DistanceMovementSearchTests(unittest.TestCase):
         self.assertTrue(any(not q["relation_unchanged"] for q in agent_questions))
         self.assertEqual(agent_questions[0]["obj_c_label"], "chair")
         self.assertEqual(distance_questions[0]["obj_c_label"], "chair")
+
+    def test_generate_l2_object_move_requires_referable_reference_for_agent_and_distance(self) -> None:
+        parent = make_object(25, "counter", (0.0, 0.0, 0.0))
+        child = make_object(26, "sink", (0.5, 0.0, 0.0))
+        ref = make_object(3, "chair", (2.0, 0.0, 0.0))
+
+        questions = generate_l2_object_move(
+            objects=[parent, child],
+            attachment_graph={25: [26]},
+            attached_by={26: 25},
+            camera_pose=make_camera_pose(),
+            templates={
+                "L2_object_move_agent": [
+                    "move {obj_a} {direction_with_camera_hint} by {distance}: where is {obj_b} relative to {obj_c}?"
+                ],
+                "L2_object_move_distance": [
+                    "move {obj_a} {direction_with_camera_hint} by {distance}: distance of {obj_b} and {obj_c}?"
+                ],
+            },
+            movement_objects=[parent, child, ref],
+            object_map={25: parent, 26: child, 3: ref},
+            attachment_referable_object_ids=[25],
+            attachment_query_objects=[parent, child],
+            room_bounds={
+                "bbox_min": [-5.0, -5.0, -1.0],
+                "bbox_max": [5.0, 5.0, 1.0],
+            },
+            max_per_object=None,
+        )
+
+        agent_questions = [
+            q for q in questions
+            if q.get("type") == "object_move_agent" and q.get("obj_c_id") == 3
+        ]
+        distance_questions = [
+            q for q in questions
+            if q.get("type") == "object_move_distance" and q.get("obj_c_id") == 3
+        ]
+
+        self.assertEqual(agent_questions, [])
+        self.assertEqual(distance_questions, [])
 
     def test_generate_l2_distance_questions_skip_initial_pairs_below_threshold(self) -> None:
         mover = make_object(1, "box", (0.0, 0.0, 0.0))

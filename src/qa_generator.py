@@ -4838,6 +4838,7 @@ def _generate_l2_distance_questions_for_object(
     camera_pose: CameraPose,
     templates: dict[str, Any],
     obj_map: dict[int, dict[str, Any]],
+    referable_object_ids: set[int] | None = None,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
 ) -> list[dict[str, Any]]:
@@ -4865,6 +4866,11 @@ def _generate_l2_distance_questions_for_object(
         else:
             relation_obj_b_id = relation["obj_a_id"]
             relation_obj_c_id = relation["obj_b_id"]
+        if (
+            referable_object_ids is not None
+            and int(relation_obj_c_id) not in referable_object_ids
+        ):
+            continue
         attachment_relation_propagated = any(
             participant_id in moved_ids and participant_id != move_source_id
             for participant_id in (int(relation_obj_b_id), int(relation_obj_c_id))
@@ -5323,6 +5329,8 @@ def generate_l2_object_move(
                 relation_obj_c_id = _other_obj_id_for_query(query_obj_id, old_relation)
                 if relation_obj_c_id is None:
                     continue
+                if int(relation_obj_c_id) not in referable_object_ids:
+                    continue
                 attachment_relation_propagated = any(
                     participant_id in moved_ids and participant_id != move_source_id
                     for participant_id in (relation_obj_b_id, relation_obj_c_id)
@@ -5549,6 +5557,7 @@ def generate_l2_object_move(
                     camera_pose=camera_pose,
                     templates=templates,
                     obj_map=obj_map,
+                    referable_object_ids=referable_object_ids,
                     room_bounds=room_bounds,
                     collision_objects=collision_objects,
                 )
