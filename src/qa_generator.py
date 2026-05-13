@@ -5107,6 +5107,28 @@ def generate_l2_object_move(
         obj_map.update({int(obj_id): obj for obj_id, obj in object_map.items()})
     base_relations = compute_all_relations(relation_scene_objects, camera_pose, None, None)
     base_relation_map = _relation_map_by_pair(base_relations)
+
+    # DEBUG: log object pool sizes to JSON file
+    import sys as _sys, json as _json, os as _os, threading as _threading
+    _has_att = any(len(v) > 0 for v in attachment_graph.values()) if attachment_graph else False
+    if _has_att:
+        _debug_log: dict[str, object] = {
+            "scene_id": None,  # filled below
+            "objects_count": len(objects),
+            "movement_scene_count": len(movement_scene_objects),
+            "relation_scene_count": len(relation_scene_objects),
+            "base_relations_count": len(base_relations),
+            "object_ids": sorted(int(o["id"]) for o in objects),
+            "movement_scene_ids": sorted(int(o["id"]) for o in movement_scene_objects),
+            "attachment_referable_ids": sorted(attachment_referable_ids),
+            "attachment_query_pool_size": len(attachment_query_pool),
+            "attachment_graph": {str(k): [int(vv) for vv in v] for k, v in attachment_graph.items()} if attachment_graph else {},
+            "move_sources": [],
+        }
+        _debug_lock = _threading.Lock()
+    else:
+        _debug_log = None
+        _debug_lock = None
     occlusion_enabled = (
         color_intrinsics is not None
         and ray_caster is not None
@@ -5175,6 +5197,19 @@ def generate_l2_object_move(
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
         )
+        if has_attachment_chain:
+            _move_src_entry = {
+                "move_source_id": move_source_id,
+                "move_source_label": move_source["label"],
+                "moved_ids": sorted(int(x) for x in moved_ids),
+                "selected_state_delta": selected_state.delta.tolist() if selected_state is not None else None,
+                "selected_state_found": selected_state is not None,
+                "occlusion_enabled": occlusion_enabled,
+                "query_objects": [],
+            }
+            _debug_log["move_sources"].append(_move_src_entry)
+        else:
+            _move_src_entry = None
         state_relation_cache: dict[tuple[float, ...], dict[tuple[int, int], dict[str, Any]]] = {}
         state_visibility_cache: dict[
             tuple[int, tuple[float, ...]],
@@ -5278,6 +5313,8 @@ def generate_l2_object_move(
             )
             query_obj_questions: list[dict] = []
 
+            _debug_agent_checked = 0
+            _debug_agent_generated = 0
             for key, old_relation in base_relation_map.items():
                 if query_obj_id not in key:
                     continue
@@ -5292,6 +5329,7 @@ def generate_l2_object_move(
                 )
                 obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
                 obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
+                _debug_agent_checked += 1
 
                 agent_state: _SelectedObjectMoveState | None = None
                 old_value: str | None = None
@@ -5390,6 +5428,16 @@ def generate_l2_object_move(
                         "relation_unchanged": relation_unchanged,
                         "has_attachment_chain": has_attachment_chain,
                     })
+                    _debug_agent_generated += 1
+
+            if has_attachment_chain:
+                _move_src_entry["query_objects"].append({
+                    "query_id": query_obj_id,
+                    "query_label": query_obj["label"],
+                    "relations_checked": _debug_agent_checked,
+                    "agent_generated": _debug_agent_generated,
+                    "distance_generated": 0,  # filled below
+                })
 
             occlusion_state: _SelectedObjectMoveState | None = None
             occlusion_visibility: tuple[
@@ -5487,6 +5535,7 @@ def generate_l2_object_move(
                     "has_attachment_chain": has_attachment_chain,
                 })
 
+            _dist_before = len(query_obj_questions)
             query_obj_questions.extend(
                 _generate_l2_distance_questions_for_object(
                     query_obj=query_obj,
@@ -5504,12 +5553,30 @@ def generate_l2_object_move(
                     collision_objects=collision_objects,
                 )
             )
+            _dist_count = len(query_obj_questions) - _dist_before
+            if has_attachment_chain and _move_src_entry is not None:
+                _move_src_entry["query_objects"][-1]["distance_generated"] = _dist_count
 
             if query_obj_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
 
     # Cap per query-object instance so repeated labels can still contribute.
-    return _cap_question_groups(questions_by_object, max_per_object)
+    result = _cap_question_groups(questions_by_object, max_per_object)
+    if _has_att:
+        from collections import Counter as _Counter
+        _types = _Counter(q['type'] for q in result)
+        _debug_log["final_count"] = len(result)
+        _debug_log["final_types"] = dict(_types)
+        _debug_log["frame"] = str(camera_pose.image_name) if hasattr(camera_pose, 'image_name') else "unknown"
+        # scene_id from first object if available
+        _scene_id = objects[0].get("scene_id", "") if objects else ""
+        _debug_log["scene_id"] = _scene_id or "unknown"
+        # Write to debug log file
+        _log_path = _os.environ.get("L2_DEBUG_LOG", "output/pilot/50-79/l2_debug.jsonl")
+        with _debug_lock:
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps(_debug_log, default=str) + "\n")
+    return result
 
 
 def generate_l2_viewpoint_move(
