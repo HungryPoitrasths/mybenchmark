@@ -262,7 +262,7 @@ class L1DirectionOptionTests(unittest.TestCase):
             make_object(3, "table", (-1.1, 0.9, 0.0), (-0.9, 1.1, 1.0)),
         ]
 
-        questions = generate_l1_direction_object_centric(objects, templates={}, max_questions=20)
+        questions = generate_l1_direction_object_centric(objects, templates={})
         question = next(
             q for q in questions
             if q["obj_ref_id"] == 1 and q["obj_face_id"] == 2 and q["obj_target_id"] == 3
@@ -282,7 +282,6 @@ class L1DirectionOptionTests(unittest.TestCase):
         questions = generate_l1_direction_object_centric(
             objects,
             templates={},
-            max_questions=20,
             attachment_edge_lookup={},
         )
 
@@ -302,7 +301,6 @@ class L1DirectionOptionTests(unittest.TestCase):
             [north_obj, south_obj],
             camera_pose,
             templates={},
-            max_questions=20,
         )
 
         self.assertEqual(len(questions), 1)
@@ -320,7 +318,6 @@ class L1DirectionOptionTests(unittest.TestCase):
             [desk, lamp],
             camera_pose,
             templates={},
-            max_questions=20,
             attachment_edge_lookup={
                 frozenset({1, 2}): {"parent_id": 1, "child_id": 2, "type": "supported_by"},
             },

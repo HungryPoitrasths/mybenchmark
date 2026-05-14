@@ -1163,7 +1163,7 @@ def _default_templates() -> dict:
 
         # --- Object-centric ---
         "L3_coordinate_rotation_object_centric": [
-            f"Suppose this room had originally been oriented {{angle}} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {{obj_ref}} at its rotated position and faced toward {{obj_face}}'s rotated position, in which direction would {{obj_target}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"Suppose this room had originally been oriented {{angle}} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {{obj_ref}} at its rotated position and kept facing the same horizontal direction that originally pointed from {{obj_ref}} toward {{obj_face}}, in which direction would {{obj_target}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
@@ -3156,7 +3156,6 @@ def generate_l1_occlusion_questions(
 def generate_l1_direction_object_centric(
     objects: list[dict],
     templates: dict,
-    max_questions: int = 20,
     attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
@@ -3176,7 +3175,7 @@ def generate_l1_direction_object_centric(
             generated_candidate_count=0,
             skipped_candidate_count=0,
             reason_counts={"insufficient_objects": 1},
-            details={"object_count": n, "max_questions": int(max_questions)},
+            details={"object_count": n},
         )
         return []
 
@@ -3380,9 +3379,6 @@ def generate_l1_direction_object_centric(
                     question_preview=_question_preview_payload(candidates[-1]),
                 )
 
-    if len(candidates) > max_questions:
-        candidates = random.sample(candidates, max_questions)
-        reason_counts["sampled_out_by_max_questions"] += max(0, generated_candidate_count - len(candidates))
     total_candidate_count = n * (n - 1) * (n - 2)
     _emit_generator_summary(
         trace_recorder,
@@ -3392,7 +3388,7 @@ def generate_l1_direction_object_centric(
         generated_candidate_count=generated_candidate_count,
         skipped_candidate_count=max(total_candidate_count - generated_candidate_count, 0),
         reason_counts=dict(reason_counts),
-        details={"object_count": n, "max_questions": int(max_questions)},
+        details={"object_count": n},
     )
     return candidates
 
@@ -3401,7 +3397,6 @@ def generate_l1_direction_allocentric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_questions: int = 20,
     attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
@@ -3568,9 +3563,6 @@ def generate_l1_direction_allocentric(
                 question_preview=_question_preview_payload(candidates[-1]),
             )
 
-    if len(candidates) > max_questions:
-        candidates = random.sample(candidates, max_questions)
-        reason_counts["sampled_out_by_max_questions"] += max(0, generated_candidate_count - len(candidates))
     total_candidate_count = int((n * max(n - 1, 0)) / 2)
     _emit_generator_summary(
         trace_recorder,
@@ -3580,7 +3572,7 @@ def generate_l1_direction_allocentric(
         generated_candidate_count=generated_candidate_count,
         skipped_candidate_count=max(total_candidate_count - generated_candidate_count, 0),
         reason_counts=dict(reason_counts),
-        details={"object_count": n, "max_questions": int(max_questions)},
+        details={"object_count": n},
     )
     return candidates
 
@@ -4923,7 +4915,7 @@ def _generate_l2_distance_questions_for_object(
             obj_c=_the(obj_c_label),
         )
         options, answer = generate_options(answer_value, ALL_DISTANCES)
-        questions.append({
+        question_dict: dict[str, Any] = {
             "level": "L2",
             "type": "object_move_distance",
             "question": question_text,
@@ -4957,130 +4949,17 @@ def _generate_l2_distance_questions_for_object(
             "delta": delta.tolist(),
             "relation_unchanged": relation_unchanged,
             "has_attachment_chain": has_attachment_chain,
-        })
+        }
+        if attachment_remapped:
+            direct_children = attachment_graph.get(move_source_id, [])
+            if direct_children:
+                question_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                question_dict["attachment_parent_id"] = move_source_id
+                question_dict["attachment_child_id"] = direct_children[0]
+        questions.append(question_dict)
 
     return questions
 
-
-def _cap_question_groups(
-    questions_by_key: dict[Any, list[dict]],
-    max_per_group: int | None,
-) -> list[dict]:
-    """Downsample question pools while prioritizing changed attachment questions.
-
-    Attachment-mediated questions are harder to obtain, but unchanged
-    attachment questions should not crowd out changed attachment questions from
-    the same group.
-    """
-    groups = list(questions_by_key.values())
-    if max_per_group is None or max_per_group <= 0:
-        flattened = [q for group in groups for q in group]
-        return [_annotate_attachment_trace_reason(question) for question in flattened]
-
-    capped: list[dict] = []
-    for group in groups:
-        if len(group) <= max_per_group:
-            capped.extend(group)
-            continue
-
-        attachment_changed = [
-            question for question in group
-            if bool(question.get("attachment_remapped", False))
-            and not bool(question.get("relation_unchanged", False))
-        ]
-        if len(attachment_changed) >= max_per_group:
-            sampled_ids = {
-                id(question)
-                for question in random.sample(attachment_changed, max_per_group)
-            }
-            capped.extend([
-                question for question in attachment_changed
-                if id(question) in sampled_ids
-            ])
-            continue
-
-        attachment_unchanged = [
-            question for question in group
-            if bool(question.get("attachment_remapped", False))
-            and bool(question.get("relation_unchanged", False))
-        ]
-        capped.extend(attachment_changed)
-        remaining_slots = max(0, max_per_group - len(attachment_changed))
-        if remaining_slots == 0:
-            continue
-
-        if len(attachment_unchanged) <= remaining_slots:
-            kept_attachment_unchanged = attachment_unchanged
-        else:
-            sampled_ids = {
-                id(question)
-                for question in random.sample(attachment_unchanged, remaining_slots)
-            }
-            kept_attachment_unchanged = [
-                question for question in attachment_unchanged
-                if id(question) in sampled_ids
-            ]
-        capped.extend(kept_attachment_unchanged)
-        remaining_slots = max(0, max_per_group - len(attachment_changed) - len(kept_attachment_unchanged))
-        if remaining_slots == 0:
-            continue
-
-        unprotected = [
-            question for question in group
-            if not bool(question.get("attachment_remapped", False))
-        ]
-        if len(unprotected) <= remaining_slots:
-            kept_unprotected = unprotected
-        else:
-            sampled_ids = {id(question) for question in random.sample(unprotected, remaining_slots)}
-            kept_unprotected = [
-                question for question in unprotected
-                if id(question) in sampled_ids
-            ]
-        capped.extend(kept_unprotected)
-    return [_annotate_attachment_trace_reason(question) for question in capped]
-
-
-def _balance_l2_object_move_attachment_counts(
-    questions: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Cap per-type unattached L2 object-move questions at 2x attached count."""
-    keep_mask = [True] * len(questions)
-    grouped_indices: dict[str, list[int]] = {}
-    for idx, question in enumerate(questions):
-        if str(question.get("level", "")).strip() != "L2":
-            continue
-        qtype = str(question.get("type", "")).strip()
-        if not qtype.startswith("object_move_"):
-            continue
-        grouped_indices.setdefault(qtype, []).append(idx)
-
-    for qtype, indices in grouped_indices.items():
-        attached = [
-            idx for idx in indices
-            if bool(questions[idx].get("attachment_remapped", False))
-        ]
-        unattached = [
-            idx for idx in indices
-            if not bool(questions[idx].get("attachment_remapped", False))
-        ]
-        allowed_unattached = (2 * len(attached)) if attached else 3
-        if len(unattached) <= allowed_unattached:
-            continue
-        for idx in unattached[allowed_unattached:]:
-            keep_mask[idx] = False
-        logger.info(
-            "Balanced %s questions for one frame: kept %d attached and %d/%d unattached",
-            qtype,
-            len(attached),
-            allowed_unattached,
-            len(unattached),
-        )
-
-    return [
-        question for idx, question in enumerate(questions)
-        if keep_mask[idx]
-    ]
 
 def generate_l2_object_move(
     objects: list[dict],
@@ -5088,7 +4967,6 @@ def generate_l2_object_move(
     attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_object: int = 5,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
@@ -5427,7 +5305,7 @@ def generate_l2_object_move(
                         obj_c=_the(obj_c_label),
                     )
                     options, answer = generate_options(new_value, ALL_DIRECTIONS)
-                    query_obj_questions.append({
+                    agent_dict: dict[str, Any] = {
                         "level": "L2",
                         "type": "object_move_agent",
                         "question": question_text,
@@ -5454,7 +5332,14 @@ def generate_l2_object_move(
                         "delta": delta.tolist(),
                         "relation_unchanged": relation_unchanged,
                         "has_attachment_chain": has_attachment_chain,
-                    })
+                    }
+                    if attachment_remapped:
+                        direct_children = attachment_graph.get(move_source_id, [])
+                        if direct_children:
+                            agent_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                            agent_dict["attachment_parent_id"] = move_source_id
+                            agent_dict["attachment_child_id"] = direct_children[0]
+                    query_obj_questions.append(agent_dict)
                     _debug_agent_generated += 1
 
             if has_attachment_chain:
@@ -5527,7 +5412,7 @@ def generate_l2_object_move(
                     L1_OCCLUSION_STATES,
                     n_options=3,
                 )
-                query_obj_questions.append({
+                occlusion_dict: dict[str, Any] = {
                     "level": "L2",
                     "type": "object_move_occlusion",
                     "question": question_text,
@@ -5560,7 +5445,14 @@ def generate_l2_object_move(
                     "delta": delta.tolist(),
                     "relation_unchanged": False,
                     "has_attachment_chain": has_attachment_chain,
-                })
+                }
+                if attachment_remapped:
+                    direct_children = attachment_graph.get(move_source_id, [])
+                    if direct_children:
+                        occlusion_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                        occlusion_dict["attachment_parent_id"] = move_source_id
+                        occlusion_dict["attachment_child_id"] = direct_children[0]
+                query_obj_questions.append(occlusion_dict)
 
             _dist_before = len(query_obj_questions)
             query_obj_questions.extend(
@@ -5589,7 +5481,8 @@ def generate_l2_object_move(
                 questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
 
     # Cap per query-object instance so repeated labels can still contribute.
-    result = _cap_question_groups(questions_by_object, max_per_object)
+    result = [q for group in questions_by_object.values() for q in group]
+    result = [_annotate_attachment_trace_reason(q) for q in result]
     if _has_att:
         from collections import Counter as _Counter
         _types = _Counter(q['type'] for q in result)
@@ -6313,7 +6206,6 @@ def generate_l2_object_rotate_object_centric(
     attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_object: int = 3,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
@@ -6478,11 +6370,12 @@ def generate_l2_object_rotate_object_centric(
                     obj_move_source=_the(move_source["label"]),
                     obj_query=_the(query_obj["label"]),
                     obj_ref=_the(ref["label"]),
+                    obj_face="the camera",
                     direction=direction_desc,
                     distance=distance_desc,
                 )
                 options, answer = generate_options(new_dir, horizontal_answer_pool)
-                query_questions.append({
+                rotate_dict: dict[str, Any] = {
                     "level": "L2",
                     "type": "object_rotate_object_centric",
                     "reference_frame": "object_centric",
@@ -6510,12 +6403,20 @@ def generate_l2_object_rotate_object_centric(
                     "delta": delta.tolist(),
                     "relation_unchanged": relation_unchanged,
                     "has_attachment_chain": has_attachment_chain,
-                })
+                }
+                if attachment_remapped:
+                    direct_children = attachment_graph.get(move_source_id, [])
+                    if direct_children:
+                        rotate_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                        rotate_dict["attachment_parent_id"] = move_source_id
+                        rotate_dict["attachment_child_id"] = direct_children[0]
+                query_questions.append(rotate_dict)
 
             if query_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_questions)
 
-    return _cap_question_groups(questions_by_object, max_per_object)
+    result = [q for group in questions_by_object.values() for q in group]
+    return [_annotate_attachment_trace_reason(q) for q in result]
 
 
 def generate_l2_object_move_object_centric(
@@ -6524,7 +6425,6 @@ def generate_l2_object_move_object_centric(
     attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_object: int = 3,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
@@ -6539,7 +6439,6 @@ def generate_l2_object_move_object_centric(
         attached_by,
         camera_pose,
         templates,
-        max_per_object=max_per_object,
         room_bounds=room_bounds,
         collision_objects=collision_objects,
         movement_objects=movement_objects,
@@ -6555,7 +6454,6 @@ def generate_l2_object_move_allocentric(
     attached_by: dict[int, int],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_object: int = 3,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
@@ -6701,7 +6599,7 @@ def generate_l2_object_move_allocentric(
                     obj_ref=_the(ref["label"]),
                 )
                 options, answer = generate_options(new_dir, ALL_DIRECTIONS_ALLOCENTRIC)
-                query_questions.append({
+                allocentric_dict: dict[str, Any] = {
                     "level": "L2",
                     "type": "object_move_allocentric",
                     "reference_frame": "allocentric",
@@ -6726,12 +6624,20 @@ def generate_l2_object_move_allocentric(
                     ],
                     "delta": delta.tolist(),
                     "relation_unchanged": relation_unchanged,
-                })
+                }
+                if attachment_remapped:
+                    direct_children = attachment_graph.get(move_source_id, [])
+                    if direct_children:
+                        allocentric_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                        allocentric_dict["attachment_parent_id"] = move_source_id
+                        allocentric_dict["attachment_child_id"] = direct_children[0]
+                query_questions.append(allocentric_dict)
 
             if query_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_questions)
 
-    return _cap_question_groups(questions_by_object, max_per_object)
+    result = [q for group in questions_by_object.values() for q in group]
+    return [_annotate_attachment_trace_reason(q) for q in result]
 
 
 # ---------------------------------------------------------------------------
@@ -6851,35 +6757,10 @@ def generate_l3_attachment_chain(
     return questions
 
 
-def _diverse_sample(candidates, max_total, key_fn, max_per_key=2):
-    if len(candidates) <= max_total:
-        return candidates
-
-    groups = {}
-    for c in candidates:
-        k = key_fn(c)
-        groups.setdefault(k, []).append(c)
-
-    sampled = []
-    keys = list(groups.keys())
-    taken = {k: 0 for k in keys}
-    idx = 0
-    while len(sampled) < max_total:
-        k = keys[idx % len(keys)]
-        if taken[k] < max_per_key and taken[k] < len(groups[k]):
-            sampled.append(groups[k][taken[k]])
-            taken[k] += 1
-        idx += 1
-        if all(taken[k] >= min(max_per_key, len(groups[k])) for k in keys):
-            break
-    return sampled
-
-
 def generate_l3_coordinate_rotation(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 8,
 ) -> list[dict]:
     """Generate L3.2 coordinate-rotation counterfactual questions.
 
@@ -6889,9 +6770,6 @@ def generate_l3_coordinate_rotation(
 
     Using the actual direction as the answer prevents the trivial shortcut of
     always answering "No" (which would be correct for most 90°/180° cases).
-
-    max_per_angle caps questions per rotation angle to avoid flooding when
-    the scene has many objects (O(n²) pairs).
     """
     questions: list[dict] = []
     tpl_list = templates.get(
@@ -6913,23 +6791,30 @@ def generate_l3_coordinate_rotation(
         rotated_obj_map = {int(o["id"]): o for o in rotated}
         # camera_pose intentionally unchanged — objects rotate, camera does not
         new_relations = compute_all_relations(rotated, camera_pose, None, None)
-        changed = find_changed_relations(original_relations, new_relations)
+        new_rel_map = {(r["obj_a_id"], r["obj_b_id"]): r for r in new_relations}
 
-        # Collect only direction-changed pairs, then sample to cap
-        changed_dir = [ch for ch in changed if "direction_b_rel_a" in ch["changes"]]
-        if len(changed_dir) > max_per_angle:
-            changed_dir = _diverse_sample(changed_dir, max_per_angle, key_fn=lambda ch: ch["obj_a_id"], max_per_key=2)
+        for rel in original_relations:
+            obj_a_id = rel["obj_a_id"]
+            obj_b_id = rel["obj_b_id"]
+            new_rel = new_rel_map.get((obj_a_id, obj_b_id))
+            if new_rel is None:
+                continue
 
-        for ch in changed_dir:
-            vals = ch["changes"]["direction_b_rel_a"]
-            obj_a = original_obj_map.get(int(ch["obj_a_id"]))
-            obj_b = original_obj_map.get(int(ch["obj_b_id"]))
-            obj_a_rot = rotated_obj_map.get(int(ch["obj_a_id"]))
-            obj_b_rot = rotated_obj_map.get(int(ch["obj_b_id"]))
+            old_dir = _invert_direction(rel["direction_b_rel_a"])
+            new_dir = _invert_direction(new_rel["direction_b_rel_a"])
+            relation_unchanged = old_dir == new_dir
+
+            obj_a = original_obj_map.get(int(obj_a_id))
+            obj_b = original_obj_map.get(int(obj_b_id))
+            obj_a_rot = rotated_obj_map.get(int(obj_a_id))
+            obj_b_rot = rotated_obj_map.get(int(obj_b_id))
             if obj_a is None or obj_b is None or obj_a_rot is None or obj_b_rot is None:
                 continue
             obj_a_label = obj_a.get("label", "object")
             obj_b_label = obj_b.get("label", "object")
+
+            if _direction_suppression_reason(obj_a_rot, obj_b_rot, new_dir, None) is not None:
+                continue
 
             tpl = random.choice(tpl_list)
             question_text = tpl.format(
@@ -6937,12 +6822,6 @@ def generate_l3_coordinate_rotation(
                 obj_a=_the(obj_a_label),
                 obj_b=_the(obj_b_label),
             )
-            # The relation engine stores "B relative to A", while this template
-            # asks for "A relative to B", so invert the direction before use.
-            old_dir = _invert_direction(vals["old"])
-            new_dir = _invert_direction(vals["new"])
-            if _direction_suppression_reason(obj_a_rot, obj_b_rot, new_dir, None) is not None:
-                continue
             options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
 
             questions.append({
@@ -6953,17 +6832,17 @@ def generate_l3_coordinate_rotation(
                 "answer": answer_letter,
                 "correct_value": new_dir,
                 "rotation_angle": angle,
-                "obj_a_id": ch["obj_a_id"],
+                "obj_a_id": obj_a_id,
                 "obj_a_label": obj_a_label,
-                "obj_b_id": ch["obj_b_id"],
+                "obj_b_id": obj_b_id,
                 "obj_b_label": obj_b_label,
                 "mentioned_objects": [
-                    _mention("obj_a", obj_a_label, ch["obj_a_id"]),
-                    _mention("obj_b", obj_b_label, ch["obj_b_id"]),
+                    _mention("obj_a", obj_a_label, obj_a_id),
+                    _mention("obj_b", obj_b_label, obj_b_id),
                 ],
                 "old_direction": old_dir,
                 "new_direction": new_dir,
-                "relation_unchanged": False,
+                "relation_unchanged": relation_unchanged,
             })
 
     return questions
@@ -6973,13 +6852,12 @@ def generate_l3_coordinate_rotation_object_centric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 8,
-    max_questions: int = 10,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in object-centric frame.
 
-    After rotating all objects, asks: standing at obj_ref's NEW position and
-    facing obj_face's NEW position, where is obj_target?
+    After rotating all objects, asks: standing at obj_ref's NEW position while
+    preserving the original horizontal heading from obj_ref toward obj_face,
+    where is obj_target?
     """
     questions: list[dict] = []
     tpl_list = templates.get(
@@ -7006,21 +6884,44 @@ def generate_l3_coordinate_rotation_object_centric(
                     if len({ref["label"], face["label"], target["label"]}) < 3:
                         continue
 
-                    # Use the rotated positions for the reference frame
-                    ref_rot = rot_map.get(ref["id"])
-                    face_rot = rot_map.get(face["id"])
-                    target_rot = rot_map.get(target["id"])
-                    if ref_rot is None or face_rot is None or target_rot is None:
+                    ref_c = np.array(ref["center"], dtype=float)
+                    face_c = np.array(face["center"], dtype=float)
+                    target_c = np.array(target["center"], dtype=float)
+                    original_heading = face_c - ref_c
+                    original_heading[2] = 0.0
+                    if float(np.linalg.norm(original_heading[:2])) < 1e-6:
                         continue
-                    ref_rot_c = np.array(ref_rot["center"])
-                    face_rot_c = np.array(face_rot["center"])
-                    target_rot_c = np.array(target_rot["center"])
-                    if not _has_stable_object_centric_facing(ref_rot_c, face_rot_c):
+
+                    if not _has_stable_object_centric_facing(ref_c, face_c):
+                        continue
+
+                    old_dir, _ = primary_direction_object_centric(
+                        ref_c,
+                        face_c,
+                        target_c,
+                        anchor_hull_xy=_object_bottom_hull_xy(ref),
+                        target_hull_xy=_object_bottom_hull_xy(target),
+                        anchor_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(target["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(target["bbox_max"], dtype=float),
+                    )
+
+                    # Use the rotated ref position, but keep the original
+                    # object-defined heading fixed in the room/world frame.
+                    ref_rot = rot_map.get(ref["id"])
+                    target_rot = rot_map.get(target["id"])
+                    if ref_rot is None or target_rot is None:
+                        continue
+                    ref_rot_c = np.array(ref_rot["center"], dtype=float)
+                    fixed_facing_c = ref_rot_c + original_heading
+                    target_rot_c = np.array(target_rot["center"], dtype=float)
+                    if not _has_stable_object_centric_facing(ref_rot_c, fixed_facing_c):
                         continue
 
                     new_dir, amb = primary_direction_object_centric(
                         ref_rot_c,
-                        face_rot_c,
+                        fixed_facing_c,
                         target_rot_c,
                         anchor_hull_xy=_object_bottom_hull_xy(ref_rot),
                         target_hull_xy=_object_bottom_hull_xy(target_rot),
@@ -7033,18 +6934,8 @@ def generate_l3_coordinate_rotation_object_centric(
                         continue
                     if _direction_suppression_reason(ref_rot, target_rot, new_dir, None) is not None:
                         continue
-
-                    old_dir, _ = primary_direction_object_centric(
-                        np.array(ref["center"]),
-                        np.array(face["center"]),
-                        np.array(target["center"]),
-                        anchor_hull_xy=_object_bottom_hull_xy(ref),
-                        target_hull_xy=_object_bottom_hull_xy(target),
-                        anchor_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                        anchor_bbox_max=np.array(ref["bbox_max"], dtype=float),
-                        target_bbox_min=np.array(target["bbox_min"], dtype=float),
-                        target_bbox_max=np.array(target["bbox_max"], dtype=float),
-                    )
+                    if old_dir == new_dir:
+                        continue
 
                     tpl = random.choice(tpl_list)
                     question_text = tpl.format(
@@ -7068,7 +6959,8 @@ def generate_l3_coordinate_rotation_object_centric(
                         "obj_face_id": face["id"],
                         "obj_face_label": face["label"],
                         "facing_anchor_center": ref_rot_c.tolist(),
-                        "facing_target_center": face_rot_c.tolist(),
+                        "facing_target_center": fixed_facing_c.tolist(),
+                        "facing_mode": "preserve_original_heading",
                         "obj_target_id": target["id"],
                         "obj_target_label": target["label"],
                         "mentioned_objects": [
@@ -7078,15 +6970,10 @@ def generate_l3_coordinate_rotation_object_centric(
                         ],
                         "old_direction": old_dir,
                         "new_direction": new_dir,
-                        "relation_unchanged": old_dir == new_dir,
+                        "relation_unchanged": False,
                     })
 
-        if len(candidates) > max_per_angle:
-            candidates = _diverse_sample(candidates, max_per_angle, key_fn=lambda c: c["obj_ref_id"], max_per_key=2)
         questions.extend(candidates)
-
-    if len(questions) > max_questions:
-        questions = _diverse_sample(questions, max_questions, key_fn=lambda q: q["obj_ref_id"], max_per_key=2)
 
     return questions
 
@@ -7095,7 +6982,6 @@ def generate_l3_coordinate_rotation_allocentric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 8,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in allocentric (cardinal) frame.
 
@@ -7154,8 +7040,7 @@ def generate_l3_coordinate_rotation_allocentric(
                     obj_b_bbox_min=np.array(b["bbox_min"], dtype=float),
                     obj_b_bbox_max=np.array(b["bbox_max"], dtype=float),
                 )
-                if old_dir == new_dir:
-                    continue
+                relation_unchanged = old_dir == new_dir
 
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(
@@ -7185,11 +7070,9 @@ def generate_l3_coordinate_rotation_allocentric(
                     ],
                     "old_direction": old_dir,
                     "new_direction": new_dir,
-                    "relation_unchanged": False,
+                    "relation_unchanged": relation_unchanged,
                 })
 
-        if len(candidates) > max_per_angle:
-            candidates = _diverse_sample(candidates, max_per_angle, key_fn=lambda c: c["obj_a_id"], max_per_key=2)
         questions.extend(candidates)
 
     return questions
@@ -7745,6 +7628,98 @@ def _enforce_in_frame_mentions(
     return kept
 
 
+_L3_OBJECT_ID_FIELDS: list[str] = [
+    "obj_a_id", "obj_b_id", "obj_ref_id", "obj_face_id", "obj_target_id",
+    "grandparent_id", "parent_id", "grandchild_id", "neighbor_id",
+]
+"""Object ID fields used by L3 questions for deduplication key computation."""
+
+
+def _cap_l3_unchanged_ratio(questions: list[dict]) -> list[dict]:
+    """Cap L3 unchanged questions at floor(changed_count / 4) per type group.
+
+    Only applies to L3 questions whose *type* is NOT attachment_chain.
+    Within each (type,) group, questions with relation_unchanged=True
+    are kept in generation order up to floor(changed_count / 4).
+    """
+    import math
+
+    others: list[dict] = []
+    l3_non_chain: list[dict] = []
+    for q in questions:
+        if str(q.get("level", "")) == "L3" and str(q.get("type", "")) != "attachment_chain":
+            l3_non_chain.append(q)
+        else:
+            others.append(q)
+
+    if not l3_non_chain:
+        return questions
+
+    from collections import defaultdict
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for q in l3_non_chain:
+        groups[str(q.get("type", ""))].append(q)
+
+    kept_l3: list[dict] = []
+    removed = 0
+    for _qtype, group in groups.items():
+        changed = [q for q in group if not bool(q.get("relation_unchanged", False))]
+        unchanged = [q for q in group if bool(q.get("relation_unchanged", False))]
+        max_unchanged = math.floor(len(changed) / 4)
+        kept_l3.extend(changed)
+        kept_l3.extend(unchanged[:max_unchanged])
+        removed += max(0, len(unchanged) - max_unchanged)
+
+    if removed:
+        logger.info("L3 unchanged-ratio cap removed %d question(s)", removed)
+
+    return others + kept_l3
+
+
+def _deduplicate_l3_questions(questions: list[dict]) -> list[dict]:
+    """L3 per-scene deduplication: same question text + object ID combo -> max 2.
+
+    The dedup key is (question_text, sorted_object_ids) where the object
+    ids are drawn from _L3_OBJECT_ID_FIELDS.  Questions are kept in
+    generation order.
+    """
+    others: list[dict] = []
+    l3_questions: list[dict] = []
+    for q in questions:
+        if str(q.get("level", "")) == "L3":
+            l3_questions.append(q)
+        else:
+            others.append(q)
+
+    if not l3_questions:
+        return questions
+
+    from collections import defaultdict
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for q in l3_questions:
+        obj_ids: list[int] = []
+        for field in _L3_OBJECT_ID_FIELDS:
+            val = q.get(field)
+            if val is not None:
+                try:
+                    obj_ids.append(int(val))
+                except (TypeError, ValueError):
+                    pass
+        key = (q.get("question", ""), tuple(sorted(obj_ids)))
+        groups[key].append(q)
+
+    kept_l3: list[dict] = []
+    removed = 0
+    for group in groups.values():
+        kept_l3.extend(group[:2])
+        removed += max(0, len(group) - 2)
+
+    if removed:
+        logger.info("L3 scene-level dedup removed %d question(s)", removed)
+
+    return others + kept_l3
+
+
 def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:
     """Convert a 3D world-frame delta to a camera-relative direction string.
 
@@ -8058,37 +8033,6 @@ def generate_all_questions(
             },
         )
         return questions
-
-    def _apply_question_cap(
-        generator_name: str,
-        questions: list[dict[str, Any]],
-        cap: int,
-    ) -> list[dict[str, Any]]:
-        if len(questions) <= cap:
-            return questions
-
-        kept_questions = random.sample(questions, cap)
-        if trace_recorder is None:
-            return kept_questions
-        kept_ids = {str(question.get("trace_question_id")) for question in kept_questions}
-        removed_ids = [
-            str(question.get("trace_question_id"))
-            for question in questions
-            if str(question.get("trace_question_id")) not in kept_ids
-        ]
-        _emit_generation_trace(
-            trace_recorder,
-            {
-                "event": "generator_cap_applied",
-                "stage": "qa_generation",
-                "generator": generator_name,
-                "cap": int(cap),
-                "input_count": len(questions),
-                "output_count": len(kept_questions),
-                "removed_question_ids": removed_ids,
-            },
-        )
-        return kept_questions
 
     def _emit_object_pool_snapshot(
         *,
@@ -8412,12 +8356,6 @@ def generate_all_questions(
 
     all_questions: list[dict] = []
 
-    # Per-frame caps — keep the benchmark tractable when scenes have many objects
-    MAX_L1_DIRECTION = 30
-    MAX_L1_DIRECTION_OC = 25   # object-centric
-    MAX_L1_DIRECTION_ALLO = 25 # allocentric
-    MAX_L1_DISTANCE = 20
-
     # Ordinary L1 relations ignore depth in normal generation.
     relations = _run_question_step(
         "compute_all_relations",
@@ -8440,8 +8378,7 @@ def generate_all_questions(
         },
     )
 
-    # L1 — collect separately so we can sample before adding
-    MAX_L1_OCCLUSION = 3
+    # L1 — collect per-type for trace summaries
     l1_dir_qs:  list[dict] = []
     l1_dist_qs: list[dict] = []
     l1_occ_qs:  list[dict] = []
@@ -8714,7 +8651,6 @@ def generate_all_questions(
         {
             "question_object_count": len(objects_uniq),
             "potential_triplet_count": len(objects_uniq) * max(len(objects_uniq) - 1, 0) * max(len(objects_uniq) - 2, 0),
-            "max_questions": MAX_L1_DIRECTION_OC,
         },
     )
     l1_dir_oc_qs = _run_question_step(
@@ -8722,7 +8658,6 @@ def generate_all_questions(
         lambda: generate_l1_direction_object_centric(
             objects_uniq,
             templates,
-            max_questions=MAX_L1_DIRECTION_OC,
             attachment_edge_lookup=attachment_edge_lookup,
             trace_recorder=trace_recorder,
             trace_detail=trace_detail,
@@ -8734,7 +8669,6 @@ def generate_all_questions(
         {
             "question_object_count": len(objects_uniq),
             "potential_pair_count": int((len(objects_uniq) * max(len(objects_uniq) - 1, 0)) / 2),
-            "max_questions": MAX_L1_DIRECTION_ALLO,
         },
     )
     l1_dir_allo_qs = _run_question_step(
@@ -8743,7 +8677,6 @@ def generate_all_questions(
             objects_uniq,
             camera_pose,
             templates,
-            max_questions=MAX_L1_DIRECTION_ALLO,
             attachment_edge_lookup=attachment_edge_lookup,
             trace_recorder=trace_recorder,
             trace_detail=trace_detail,
@@ -8752,9 +8685,6 @@ def generate_all_questions(
     l1_dir_oc_qs = _register_generated_questions("generate_l1_direction_object_centric", l1_dir_oc_qs)
     l1_dir_allo_qs = _register_generated_questions("generate_l1_direction_allocentric", l1_dir_allo_qs)
 
-    l1_dir_qs = _apply_question_cap("generate_l1_direction", l1_dir_qs, MAX_L1_DIRECTION)
-    l1_dist_qs = _apply_question_cap("generate_l1_distance", l1_dist_qs, MAX_L1_DISTANCE)
-    l1_occ_qs = _apply_question_cap("generate_l1_occlusion_questions", l1_occ_qs, MAX_L1_OCCLUSION)
     all_questions.extend(l1_dir_qs)
     all_questions.extend(l1_dist_qs)
     all_questions.extend(l1_occ_qs)

@@ -3794,6 +3794,37 @@ def _finalize_scene_debug_file(
     _write_json_file(debug_path, record)
 
 
+def _deduplicate_scene_questions(scene_questions: list[dict], max_per_key: int = 2) -> list[dict]:
+    """Keep at most max_per_key questions with same (question text, object ID combo) per scene."""
+    kept: list[dict] = []
+    seen: dict[tuple, int] = {}
+    for q in scene_questions:
+        key = _make_dedup_key(q)
+        count = seen.get(key, 0)
+        if count >= max_per_key:
+            continue
+        kept.append(q)
+        seen[key] = count + 1
+    return kept
+
+
+def _make_dedup_key(q: dict) -> tuple:
+    """Build a dedup key from question text + sorted object IDs."""
+    obj_id_fields = [
+        "obj_a_id", "obj_b_id", "obj_ref_id", "obj_face_id", "obj_target_id",
+        "query_obj_id", "moved_obj_id", "removed_obj_id",
+        "parent_id", "child_id", "grandparent_id", "grandchild_id",
+        "neighbor_id", "obj_c_id", "target_obj_id",
+    ]
+    ids = []
+    for field in obj_id_fields:
+        val = q.get(field)
+        if val is not None:
+            ids.append(str(val))
+    ids_sorted = tuple(sorted(ids))
+    return (q.get("scene_id"), q.get("question"), ids_sorted)
+
+
 def _load_cached_scene_questions(
     raw_questions_dir: Path,
     *,
@@ -3815,6 +3846,7 @@ def _load_cached_scene_questions(
             )
             continue
         raw_question_count += len(scene_questions)
+        scene_questions = _deduplicate_scene_questions(scene_questions)
         all_questions.extend(scene_questions)
     return all_questions, raw_question_count
 
@@ -4117,6 +4149,7 @@ def run_pipeline(
         pipeline_outcome: str,
     ) -> None:
         raw_question_path = raw_questions_dir / f"{scene_id}.json"
+        scene_questions = _deduplicate_scene_questions(scene_questions)
         _write_json_file(raw_question_path, scene_questions)
         _mark_pipeline_scene_completed(
             scene_status_doc,

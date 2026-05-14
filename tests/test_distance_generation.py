@@ -538,7 +538,6 @@ class DistanceMovementSearchTests(unittest.TestCase):
                 "bbox_min": [-5.0, -5.0, -1.0],
                 "bbox_max": [5.0, 5.0, 1.0],
             },
-            max_per_object=None,
         )
 
         agent_questions = [
@@ -582,7 +581,6 @@ class DistanceMovementSearchTests(unittest.TestCase):
                 "bbox_min": [-5.0, -5.0, -1.0],
                 "bbox_max": [5.0, 5.0, 1.0],
             },
-            max_per_object=None,
         )
 
         agent_questions = [
