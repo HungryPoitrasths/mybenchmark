@@ -6852,6 +6852,8 @@ def generate_l3_coordinate_rotation_object_centric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
+    max_per_angle: int = 8,
+    max_questions: int = 10,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in object-centric frame.
 
@@ -6973,10 +6975,14 @@ def generate_l3_coordinate_rotation_object_centric(
                         "relation_unchanged": False,
                     })
 
+        if len(candidates) > max_per_angle:
+            candidates = _diverse_sample(candidates, max_per_angle, key_fn=lambda c: c["obj_ref_id"], max_per_key=2)
         questions.extend(candidates)
 
-    return questions
+    if len(questions) > max_questions:
+        questions = _diverse_sample(questions, max_questions, key_fn=lambda q: q["obj_ref_id"], max_per_key=2)
 
+    return questions
 
 def generate_l3_coordinate_rotation_allocentric(
     objects: list[dict],

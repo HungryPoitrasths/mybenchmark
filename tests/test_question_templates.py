@@ -268,6 +268,15 @@ class QuestionTemplateTests(unittest.TestCase):
             [EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE],
         )
 
+    def test_default_coordinate_rotation_object_centric_preserves_original_heading_wording(self) -> None:
+        template = _default_templates()["L3_coordinate_rotation_object_centric"][0]
+
+        self.assertIn(
+            "kept facing the same horizontal direction that originally pointed from {obj_ref} toward {obj_face}",
+            template,
+        )
+        self.assertNotIn("faced toward {obj_face}'s rotated position", template)
+
     def test_normalize_template_aliases_backfills_missing_sibling_key(self) -> None:
         with self.subTest("canonical_present_alias_missing"):
             normalized = _normalize_template_aliases(

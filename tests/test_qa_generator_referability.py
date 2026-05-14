@@ -2849,5 +2849,87 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(len(result), 3)
 
 
+    def test_coordinate_rotation_object_centric_skips_unchanged_candidates(self) -> None:
+        """coordinate_rotation_object_centric keeps only changed answers."""
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "chair"),
+            make_object(3, "lamp"),
+        ]
+        with patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),              patch("src.qa_generator._direction_suppression_reason", return_value=None),              patch("src.qa_generator.primary_direction_object_centric", return_value=("north", 0.0)),              patch("src.qa_generator.generate_options", return_value=(["left", "right", "front", "back"], "A")):
+            questions = generate_l3_coordinate_rotation_object_centric(
+                objects,
+                make_camera_pose(),
+                templates={
+                    "L3_coordinate_rotation_object_centric": [
+                        "Standing at {obj_ref} facing {obj_face}, where is {obj_target}?",
+                    ],
+                },
+                max_per_angle=100,
+                max_questions=100,
+            )
+        self.assertEqual(questions, [])
+
+    def test_coordinate_rotation_object_centric_preserves_original_heading(self) -> None:
+        objects = [
+            {
+                "id": 1,
+                "label": "chair",
+                "center": [0.0, 0.0, 1.0],
+                "bbox_min": [-0.1, -0.1, 0.5],
+                "bbox_max": [0.1, 0.1, 1.5],
+            },
+            {
+                "id": 2,
+                "label": "table",
+                "center": [0.0, 2.0, 1.0],
+                "bbox_min": [-0.1, 1.9, 0.5],
+                "bbox_max": [0.1, 2.1, 1.5],
+            },
+            {
+                "id": 3,
+                "label": "lamp",
+                "center": [1.0, 1.0, 1.0],
+                "bbox_min": [0.9, 0.9, 0.5],
+                "bbox_max": [1.1, 1.1, 1.5],
+            },
+        ]
+
+        with patch("src.qa_generator._direction_suppression_reason", return_value=None),              patch("src.qa_generator.generate_options", side_effect=lambda correct, _pool: ([correct, "front", "back", "left"], "A")):
+            questions = generate_l3_coordinate_rotation_object_centric(
+                objects,
+                make_camera_pose(),
+                templates={
+                    "L3_coordinate_rotation_object_centric": [
+                        "If you were {obj_ref} at its rotated position and kept facing the same horizontal direction that originally pointed from {obj_ref} toward {obj_face}, where is {obj_target}?",
+                    ],
+                },
+                max_per_angle=100,
+                max_questions=100,
+            )
+
+        question = next(
+            q for q in questions
+            if q["rotation_angle"] == 90
+            and q["obj_ref_label"] == "chair"
+            and q["obj_face_label"] == "table"
+            and q["obj_target_label"] == "lamp"
+        )
+
+        self.assertEqual(question["old_direction"], "front-right")
+        self.assertEqual(question["new_direction"], "back-right")
+        self.assertFalse(question["relation_unchanged"])
+        self.assertEqual(question["facing_mode"], "preserve_original_heading")
+        self.assertIn("kept facing the same horizontal direction", question["question"])
+        self.assertNotIn("rotated position and faced toward", question["question"])
+
+        anchor = np.asarray(question["facing_anchor_center"], dtype=float)
+        facing = np.asarray(question["facing_target_center"], dtype=float)
+        np.testing.assert_allclose(facing - anchor, [0.0, 2.0, 0.0], atol=1e-8)
+        self.assertFalse(np.allclose(facing - anchor, [2.0, 0.0, 0.0], atol=1e-8))
+
+        for q in questions:
+            self.assertFalse(q["relation_unchanged"])
+
 if __name__ == "__main__":
     unittest.main()
