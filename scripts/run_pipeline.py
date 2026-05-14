@@ -3918,6 +3918,7 @@ def run_pipeline(
     slow_generator_warn_seconds: float = 60.0,
     resume: bool = False,
     reset: int | None = None,
+    only_question_types: list[str] | None = None,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -4481,6 +4482,7 @@ def run_pipeline(
                             attachment_edges=scene.get("attachment_edges", []),
                             generator_progress_log_seconds=generator_progress_log_seconds,
                             slow_generator_warn_seconds=slow_generator_warn_seconds,
+                            only_question_types=only_question_types,
                         )
                     except Exception:
                         logger.exception(
@@ -4778,6 +4780,7 @@ def run_pipeline(
                 room_bounds=scene.get("room_bounds"),
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),
+                only_question_types=only_question_types,
             )
 
             for q in questions:
@@ -5010,6 +5013,12 @@ def main():
         default=None,
         help="Before resuming, remove the most recently completed N scene cache/status entries so they will be regenerated",
     )
+    parser.add_argument(
+        "--only_question_types",
+        nargs="*",
+        default=None,
+        help="If provided, only generate the listed question types (e.g. L1_direction_agent L2_object_move_agent L3_coordinate_rotation_agent). When omitted, all types are generated.",
+    )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
         parser.error("--reset must be >= 1")
@@ -5047,6 +5056,7 @@ def main():
         slow_generator_warn_seconds=args.slow_generator_warn_seconds,
         resume=args.resume,
         reset=args.reset,
+        only_question_types=args.only_question_types,
     )
 
 
