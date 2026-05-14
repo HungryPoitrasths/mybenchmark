@@ -6215,13 +6215,7 @@ def generate_l2_object_rotate_object_centric(
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
 ) -> list[dict]:
-    """L2 object-move questions answered in a query-centric object-centric frame.
-
-    The query object is horizontally translated by a meaningful delta.
-    The query always "faces the camera" (forward = toward camera in the XY
-    plane).  Both the move description and the answer use this object-centric
-    reference frame.
-    """
+    """L2 object-rotation questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
     referable_object_ids = {int(o["id"]) for o in objects}
     attachment_referable_ids = (
@@ -6245,7 +6239,6 @@ def generate_l2_object_rotate_object_centric(
         _default_templates()["L2_object_rotate_object_centric"],
     )
     horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
-    cam_pos = np.asarray(camera_pose.position, dtype=np.float64)
 
     for source_obj in movement_scene_objects:
         if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
@@ -6260,21 +6253,6 @@ def generate_l2_object_rotate_object_centric(
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
-
-        selected_state = _select_object_move_state(
-            movement_scene_objects,
-            attachment_graph,
-            move_source_id,
-            camera_pose,
-            room_bounds=room_bounds,
-            collision_objects=collision_objects,
-            allow_unchanged_attachment=attachment_remapped,
-        )
-        if selected_state is None:
-            continue
-
-        delta = selected_state.delta
-        moved_map = {int(obj["id"]): obj for obj in selected_state.moved_objects}
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
@@ -6299,118 +6277,161 @@ def generate_l2_object_rotate_object_centric(
                 },
             )
             query_center = np.array(query_obj["center"], dtype=float)
-
-            # query must have stable facing toward the camera before move
-            if not _has_stable_object_centric_facing(query_center, cam_pos):
-                continue
-
-            moved_query = moved_map.get(query_obj_id)
-            if moved_query is None:
-                continue
-            moved_query_center = np.array(moved_query["center"], dtype=float)
-
-            # query must have stable facing toward the camera after move
-            if not _has_stable_object_centric_facing(moved_query_center, cam_pos):
-                continue
-
-            direction_desc = _delta_to_object_centric_direction(delta, query_center, camera_pose)
-            distance_desc = f"{np.linalg.norm(delta):.1f}m"
             query_questions: list[dict] = []
 
-            for ref in objects:
-                if ref["id"] == query_obj_id:
+            for face in objects:
+                if face["id"] in moved_ids:
                     continue
-                if int(ref["id"]) in moved_ids:
-                    continue  # ref must be stationary
-                if _has_duplicate_labels_for_distinct_objects(query_obj, ref, move_source):
+                face_c = np.array(face["center"], dtype=float)
+                if not _has_stable_object_centric_facing(query_center, face_c):
                     continue
 
-                ref_c = np.array(ref["center"], dtype=float)
-
-                old_dir, old_amb = primary_direction_object_centric(
-                    query_center,
-                    cam_pos,
-                    ref_c,
-                    anchor_hull_xy=_object_bottom_hull_xy(query_obj),
-                    target_hull_xy=_object_bottom_hull_xy(ref),
-                    anchor_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
-                    anchor_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
-                    target_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                    target_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                valid_rotations = find_meaningful_orbit_rotation(
+                    movement_scene_objects,
+                    attachment_graph,
+                    move_source_id,
+                    face["id"],
+                    room_bounds=room_bounds,
+                    collision_objects=collision_objects,
                 )
-                if old_dir not in horizontal_answer_pool or old_amb > 0.7:
+                if not valid_rotations:
                     continue
 
-                new_dir, new_amb = primary_direction_object_centric(
-                    moved_query_center,
-                    cam_pos,
-                    ref_c,
-                    anchor_hull_xy=_object_bottom_hull_xy(moved_query),
-                    target_hull_xy=_object_bottom_hull_xy(ref),
-                    anchor_bbox_min=np.array(moved_query["bbox_min"], dtype=float),
-                    anchor_bbox_max=np.array(moved_query["bbox_max"], dtype=float),
-                    target_bbox_min=np.array(ref["bbox_min"], dtype=float),
-                    target_bbox_max=np.array(ref["bbox_max"], dtype=float),
-                )
-                if new_dir not in horizontal_answer_pool:
-                    continue
-                if max(old_amb, new_amb) > 0.7:
-                    continue
-
-                attachment_relation_propagated = any(
-                    participant_id in moved_ids and participant_id != move_source_id
-                    for participant_id in (query_obj_id, int(ref["id"]))
-                )
-                relation_unchanged = old_dir == new_dir
-                if relation_unchanged and not attachment_relation_propagated:
+                candidate_rotation_states: list[
+                    tuple[dict[str, Any], dict[int, dict[str, Any]], dict[str, Any], np.ndarray]
+                ] = []
+                for rotation in valid_rotations:
+                    rotated_map = {int(o["id"]): o for o in rotation["objects"]}
+                    rotated_query = rotated_map.get(query_obj_id)
+                    if rotated_query is None:
+                        continue
+                    new_query_center = np.array(rotated_query["center"], dtype=float)
+                    if not _has_stable_object_centric_facing(new_query_center, face_c):
+                        continue
+                    candidate_rotation_states.append(
+                        (rotation, rotated_map, rotated_query, new_query_center)
+                    )
+                if not candidate_rotation_states:
                     continue
 
-                tpl = random.choice(tpl_list)
-                question_text = tpl.format(
-                    obj_move_source=_the(move_source["label"]),
-                    obj_query=_the(query_obj["label"]),
-                    obj_ref=_the(ref["label"]),
-                    obj_face="the camera",
-                    direction=direction_desc,
-                    distance=distance_desc,
-                )
-                options, answer = generate_options(new_dir, horizontal_answer_pool)
-                rotate_dict: dict[str, Any] = {
-                    "level": "L2",
-                    "type": "object_rotate_object_centric",
-                    "reference_frame": "object_centric",
-                    "question": question_text,
-                    "options": options,
-                    "answer": answer,
-                    "correct_value": new_dir,
-                    "old_correct_value": old_dir,
-                    "new_correct_value": new_dir,
-                    "moved_obj_id": move_source_id,
-                    "moved_obj_label": move_source["label"],
-                    "query_obj_id": query_obj_id,
-                    "query_obj_label": query_obj["label"],
-                    "attachment_remapped": attachment_remapped,
-                    "obj_ref_id": ref["id"],
-                    "obj_ref_label": ref["label"],
-                    "camera_facing": True,
-                    "facing_anchor_center": moved_query_center.tolist(),
-                    "facing_target_center": cam_pos.tolist(),
-                    "mentioned_objects": [
-                        _mention("moved_object", move_source["label"], move_source_id),
-                        _mention("query_object", query_obj["label"], query_obj_id),
-                        _mention("reference_object", ref["label"], ref["id"]),
-                    ],
-                    "delta": delta.tolist(),
-                    "relation_unchanged": relation_unchanged,
-                    "has_attachment_chain": has_attachment_chain,
-                }
-                if attachment_remapped:
-                    direct_children = attachment_graph.get(move_source_id, [])
-                    if direct_children:
-                        rotate_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
-                        rotate_dict["attachment_parent_id"] = move_source_id
-                        rotate_dict["attachment_child_id"] = direct_children[0]
-                query_questions.append(rotate_dict)
+                for ref in objects:
+                    if ref["id"] == query_obj_id or ref["id"] == face["id"]:
+                        continue
+                    if _has_duplicate_labels_for_distinct_objects(
+                        query_obj,
+                        ref,
+                        face,
+                        move_source,
+                    ):
+                        continue
+
+                    ref_c = np.array(ref["center"], dtype=float)
+                    old_dir, old_amb = primary_direction_object_centric(
+                        query_center,
+                        face_c,
+                        ref_c,
+                        anchor_hull_xy=_object_bottom_hull_xy(query_obj),
+                        target_hull_xy=_object_bottom_hull_xy(ref),
+                        anchor_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
+                        anchor_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
+                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                    )
+                    if old_dir not in horizontal_answer_pool or old_amb > 0.7:
+                        continue
+
+                    attachment_relation_propagated = any(
+                        participant_id in moved_ids and participant_id != move_source_id
+                        for participant_id in (query_obj_id, int(ref["id"]))
+                    )
+                    selected_question: dict[str, Any] | None = None
+                    fallback_question: dict[str, Any] | None = None
+
+                    for rotation, rotated_map, rotated_query, new_query_center in candidate_rotation_states:
+                        rotated_ref = rotated_map.get(int(ref["id"]), ref)
+                        rotated_ref_c = np.array(rotated_ref["center"], dtype=float)
+                        new_dir, new_amb = primary_direction_object_centric(
+                            new_query_center,
+                            face_c,
+                            rotated_ref_c,
+                            anchor_hull_xy=_object_bottom_hull_xy(rotated_query),
+                            target_hull_xy=_object_bottom_hull_xy(rotated_ref),
+                            anchor_bbox_min=np.array(rotated_query["bbox_min"], dtype=float),
+                            anchor_bbox_max=np.array(rotated_query["bbox_max"], dtype=float),
+                            target_bbox_min=np.array(rotated_ref["bbox_min"], dtype=float),
+                            target_bbox_max=np.array(rotated_ref["bbox_max"], dtype=float),
+                        )
+                        if new_dir not in horizontal_answer_pool:
+                            continue
+                        if max(old_amb, new_amb) > 0.7:
+                            continue
+                        relation_unchanged = old_dir == new_dir
+                        if relation_unchanged and not attachment_relation_propagated:
+                            continue
+
+                        query_delta = new_query_center - query_center
+                        tpl = random.choice(tpl_list)
+                        question_text = tpl.format(
+                            obj_move_source=_the(move_source["label"]),
+                            obj_query=_the(query_obj["label"]),
+                            obj_ref=_the(ref["label"]),
+                            obj_face=_the(face["label"]),
+                            angle=rotation["angle"],
+                            rotation_direction=rotation["rotation_direction"],
+                            direction=_delta_to_description(query_delta, camera_pose),
+                            distance=f"{np.linalg.norm(query_delta):.1f}m",
+                        )
+                        options, answer = generate_options(new_dir, horizontal_answer_pool)
+                        question_payload: dict[str, Any] = {
+                            "level": "L2",
+                            "type": "object_rotate_object_centric",
+                            "reference_frame": "object_centric",
+                            "question": question_text,
+                            "options": options,
+                            "answer": answer,
+                            "correct_value": new_dir,
+                            "old_correct_value": old_dir,
+                            "new_correct_value": new_dir,
+                            "moved_obj_id": move_source_id,
+                            "moved_obj_label": move_source["label"],
+                            "query_obj_id": query_obj_id,
+                            "query_obj_label": query_obj["label"],
+                            "attachment_remapped": attachment_remapped,
+                            "obj_ref_id": ref["id"],
+                            "obj_ref_label": ref["label"],
+                            "obj_face_id": face["id"],
+                            "obj_face_label": face["label"],
+                            "facing_anchor_center": new_query_center.tolist(),
+                            "facing_target_center": face_c.tolist(),
+                            "rotation_angle": rotation["angle"],
+                            "rotation_direction": rotation["rotation_direction"],
+                            "mentioned_objects": [
+                                _mention("moved_object", move_source["label"], move_source_id),
+                                _mention("query_object", query_obj["label"], query_obj_id),
+                                _mention("reference_object", ref["label"], ref["id"]),
+                                _mention("reference_facing", face["label"], face["id"]),
+                            ],
+                            "delta": query_delta.tolist(),
+                            "relation_unchanged": relation_unchanged,
+                            "has_attachment_chain": has_attachment_chain,
+                        }
+                        if attachment_remapped:
+                            direct_children = attachment_graph.get(move_source_id, [])
+                            if direct_children:
+                                question_payload["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                                question_payload["attachment_parent_id"] = move_source_id
+                                question_payload["attachment_child_id"] = direct_children[0]
+                        if relation_unchanged:
+                            if fallback_question is None:
+                                fallback_question = question_payload
+                            continue
+                        selected_question = question_payload
+                        break
+
+                    if selected_question is not None:
+                        query_questions.append(selected_question)
+                    elif fallback_question is not None:
+                        query_questions.append(fallback_question)
 
             if query_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_questions)
@@ -6852,8 +6873,6 @@ def generate_l3_coordinate_rotation_object_centric(
     objects: list[dict],
     camera_pose: CameraPose,
     templates: dict,
-    max_per_angle: int = 8,
-    max_questions: int = 10,
 ) -> list[dict]:
     """L3 coordinate-rotation questions in object-centric frame.
 
@@ -6936,8 +6955,7 @@ def generate_l3_coordinate_rotation_object_centric(
                         continue
                     if _direction_suppression_reason(ref_rot, target_rot, new_dir, None) is not None:
                         continue
-                    if old_dir == new_dir:
-                        continue
+                    relation_unchanged = old_dir == new_dir
 
                     tpl = random.choice(tpl_list)
                     question_text = tpl.format(
@@ -6972,17 +6990,13 @@ def generate_l3_coordinate_rotation_object_centric(
                         ],
                         "old_direction": old_dir,
                         "new_direction": new_dir,
-                        "relation_unchanged": False,
+                        "relation_unchanged": relation_unchanged,
                     })
 
-        if len(candidates) > max_per_angle:
-            candidates = _diverse_sample(candidates, max_per_angle, key_fn=lambda c: c["obj_ref_id"], max_per_key=2)
         questions.extend(candidates)
 
-    if len(questions) > max_questions:
-        questions = _diverse_sample(questions, max_questions, key_fn=lambda q: q["obj_ref_id"], max_per_key=2)
-
     return questions
+
 
 def generate_l3_coordinate_rotation_allocentric(
     objects: list[dict],
@@ -7642,67 +7656,62 @@ _L3_OBJECT_ID_FIELDS: list[str] = [
 
 
 def _cap_l3_unchanged_ratio(questions: list[dict]) -> list[dict]:
-    """Cap L3 unchanged questions at floor(changed_count / 4) per type group.
+    """Cap L3 unchanged questions at floor(changed_count / 4) per scene/type.
 
     Only applies to L3 questions whose *type* is NOT attachment_chain.
-    Within each (type,) group, questions with relation_unchanged=True
-    are kept in generation order up to floor(changed_count / 4).
+    ``changed_count`` counts questions where ``relation_unchanged is False``.
+    Unchanged questions are retained in their original generation order.
     """
-    import math
+    from collections import defaultdict
 
-    others: list[dict] = []
-    l3_non_chain: list[dict] = []
-    for q in questions:
+    groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for idx, q in enumerate(questions):
         if str(q.get("level", "")) == "L3" and str(q.get("type", "")) != "attachment_chain":
-            l3_non_chain.append(q)
-        else:
-            others.append(q)
+            groups[(str(q.get("scene_id", "")), str(q.get("type", "")))].append(idx)
 
-    if not l3_non_chain:
+    if not groups:
         return questions
 
-    from collections import defaultdict
-    groups: dict[str, list[dict]] = defaultdict(list)
-    for q in l3_non_chain:
-        groups[str(q.get("type", ""))].append(q)
-
-    kept_l3: list[dict] = []
+    keep = [True] * len(questions)
     removed = 0
-    for _qtype, group in groups.items():
-        changed = [q for q in group if not bool(q.get("relation_unchanged", False))]
-        unchanged = [q for q in group if bool(q.get("relation_unchanged", False))]
-        max_unchanged = math.floor(len(changed) / 4)
-        kept_l3.extend(changed)
-        kept_l3.extend(unchanged[:max_unchanged])
-        removed += max(0, len(unchanged) - max_unchanged)
+    for indices in groups.values():
+        changed_count = sum(
+            1 for idx in indices
+            if questions[idx].get("relation_unchanged") is False
+        )
+        max_unchanged = changed_count // 4
+        kept_unchanged = 0
+        for idx in indices:
+            if questions[idx].get("relation_unchanged") is not True:
+                continue
+            if kept_unchanged < max_unchanged:
+                kept_unchanged += 1
+            else:
+                keep[idx] = False
+                removed += 1
 
     if removed:
         logger.info("L3 unchanged-ratio cap removed %d question(s)", removed)
 
-    return others + kept_l3
+    return [q for idx, q in enumerate(questions) if keep[idx]]
 
 
 def _deduplicate_l3_questions(questions: list[dict]) -> list[dict]:
     """L3 per-scene deduplication: same question text + object ID combo -> max 2.
 
-    The dedup key is (question_text, sorted_object_ids) where the object
-    ids are drawn from _L3_OBJECT_ID_FIELDS.  Questions are kept in
+    The dedup key is (scene_id, question_text, sorted_object_ids) where the
+    object ids are drawn from _L3_OBJECT_ID_FIELDS.  Questions are kept in
     generation order.
     """
-    others: list[dict] = []
-    l3_questions: list[dict] = []
+    counts: dict[tuple, int] = {}
+    deduped: list[dict] = []
+    removed = 0
+
     for q in questions:
-        if str(q.get("level", "")) == "L3":
-            l3_questions.append(q)
-        else:
-            others.append(q)
+        if str(q.get("level", "")) != "L3":
+            deduped.append(q)
+            continue
 
-    if not l3_questions:
-        return questions
-
-    from collections import defaultdict
-    groups: dict[tuple, list[dict]] = defaultdict(list)
-    for q in l3_questions:
         obj_ids: list[int] = []
         for field in _L3_OBJECT_ID_FIELDS:
             val = q.get(field)
@@ -7711,19 +7720,18 @@ def _deduplicate_l3_questions(questions: list[dict]) -> list[dict]:
                     obj_ids.append(int(val))
                 except (TypeError, ValueError):
                     pass
-        key = (q.get("question", ""), tuple(sorted(obj_ids)))
-        groups[key].append(q)
-
-    kept_l3: list[dict] = []
-    removed = 0
-    for group in groups.values():
-        kept_l3.extend(group[:2])
-        removed += max(0, len(group) - 2)
+        key = (q.get("scene_id"), q.get("question", ""), tuple(sorted(obj_ids)))
+        count = counts.get(key, 0)
+        if count >= 2:
+            removed += 1
+            continue
+        counts[key] = count + 1
+        deduped.append(q)
 
     if removed:
         logger.info("L3 scene-level dedup removed %d question(s)", removed)
 
-    return others + kept_l3
+    return deduped
 
 
 def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:

@@ -12,6 +12,8 @@ import random
 from collections import Counter
 from typing import Any, Callable
 
+from .qa_generator import _cap_l3_unchanged_ratio, _deduplicate_l3_questions
+
 logger = logging.getLogger(__name__)
 
 MAX_ANSWER_RATIO = 0.35  # no single option should exceed 35% of correct answers
@@ -48,6 +50,11 @@ ATTACHMENT_ID_FIELDS = (
     "grandchild_id",
     "neighbor_id",
 )
+L3_COORDINATE_ROTATION_TYPES = {
+    "coordinate_rotation_agent",
+    "coordinate_rotation_object_centric",
+    "coordinate_rotation_allocentric",
+}
 
 
 def _label_key(value: Any) -> str:
@@ -63,6 +70,14 @@ def _id_key(value: Any) -> int | str:
         return str(value)
 
 
+def _object_id_signature(q: dict[str, Any]) -> tuple:
+    return tuple(
+        (field, value)
+        for field in ATTACHMENT_ID_FIELDS
+        if (value := _id_key(q.get(field))) != ""
+    )
+
+
 def _near_duplicate_key(q: dict[str, Any]) -> tuple:
     qtype = QUESTION_TYPE_ALIASES.get(q.get("type"), q.get("type"))
     base = (
@@ -70,8 +85,9 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
         q.get("image_name"),
         qtype,
     )
-    if qtype in ATTACHMENT_NEAR_DUP_TYPES:
-        return base + tuple(_id_key(q.get(field)) for field in ATTACHMENT_ID_FIELDS)
+    object_signature = _object_id_signature(q)
+    if object_signature:
+        return base + ("ids", object_signature)
 
     primary_label = _label_key(
         q.get("obj_a_label")
@@ -85,6 +101,12 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
         _label_key(q.get("obj_ref_label")),
     )
     return base + (primary_label, *secondary_labels)
+
+
+def _quality_filter_dedup_applies(q: dict[str, Any]) -> bool:
+    if str(q.get("level", "")) != "L3":
+        return True
+    return str(q.get("type", "")).strip() in L3_COORDINATE_ROTATION_TYPES
 
 
 def _question_preview(question_text: Any, limit: int = 160) -> str:
@@ -101,12 +123,11 @@ def _near_duplicate_signature(q: dict[str, Any]) -> dict[str, Any]:
         "image_name": q.get("image_name"),
         "type": qtype,
     }
-    if qtype in ATTACHMENT_NEAR_DUP_TYPES:
-        signature["mode"] = "attachment_ids"
+    object_signature = _object_id_signature(q)
+    if object_signature:
+        signature["mode"] = "object_ids"
         signature["object_ids"] = {
-            field: value
-            for field in ATTACHMENT_ID_FIELDS
-            if (value := _id_key(q.get(field))) != ""
+            field: value for field, value in object_signature
         }
         return signature
 
@@ -132,13 +153,13 @@ def _near_duplicate_detail(
     signature = _near_duplicate_signature(question)
     duplicate_of_id = kept_question.get("trace_question_id")
     duplicate_of_question = _question_preview(kept_question.get("question"))
-    if signature.get("mode") == "attachment_ids":
+    if signature.get("mode") == "object_ids":
         object_ids = signature.get("object_ids", {})
         signature_text = ", ".join(f"{field}={value}" for field, value in object_ids.items())
         if not signature_text:
-            signature_text = "no distinguishing attachment ids"
+            signature_text = "no distinguishing object ids"
         detail = (
-            f"same scene/frame/type and attachment-id signature as "
+            f"same scene/frame/type and object-id signature as "
             f"{duplicate_of_id or 'earlier kept question'} ({signature_text})"
         )
     else:
@@ -175,7 +196,7 @@ def quality_filter(
 
     Filters:
         1. Direction ambiguity > 0.7 (too close to boundary)
-        2. Near-duplicate questions (same frame + type + attachment ids or label tuple, keep one)
+        2. Near-duplicate questions (same frame + type + object ids or label tuple, keep one)
     """
     filtered: list[dict] = []
     removed_counts: Counter = Counter()
@@ -209,6 +230,9 @@ def quality_filter(
     seen_keys: dict[tuple, dict] = {}
     deduped: list[dict] = []
     for q in filtered:
+        if not _quality_filter_dedup_applies(q):
+            deduped.append(q)
+            continue
         key = _near_duplicate_key(q)
         kept_question = seen_keys.get(key)
         if kept_question is not None:
@@ -242,7 +266,10 @@ def quality_filter(
     seen_text: dict[tuple, dict] = {}
     final: list[dict] = []
     for q in deduped:
-        text_key = (q.get("scene_id"), q.get("question"))
+        if not _quality_filter_dedup_applies(q):
+            final.append(q)
+            continue
+        text_key = (q.get("scene_id"), q.get("question"), _object_id_signature(q))
         kept_question = seen_text.get(text_key)
         if kept_question is not None:
             removed_counts["cross_frame_duplicate"] += 1
@@ -254,10 +281,11 @@ def quality_filter(
                     "filter": "cross_frame_duplicate",
                     "reason": "cross_frame_duplicate",
                     "detail": (
-                        f'same scene + identical question text as '
+                        f'same scene + identical question text + object-id signature as '
                         f'{kept_question.get("trace_question_id") or "earlier kept question"}'
                     ),
                     "details": {
+                        "object_id_signature": _object_id_signature(q),
                         "duplicate_of_trace_question_id": kept_question.get("trace_question_id"),
                         "duplicate_of_question": kept_question.get("question"),
                         "duplicate_of_image_name": kept_question.get("image_name"),
@@ -327,7 +355,10 @@ def cap_l1_occlusion_not_visible_ratio(
         return questions
 
     rng = random.Random(seed)
-    kept_not_visible_indices = set(rng.sample(not_visible_indices, max_not_visible)) if max_not_visible > 0 else set()
+    kept_not_visible_indices = (
+        set(rng.sample(not_visible_indices, max_not_visible))
+        if max_not_visible > 0 else set()
+    )
     removed_count = not_visible_count - len(kept_not_visible_indices)
     capped_questions = [
         q
@@ -348,76 +379,102 @@ def cap_l1_occlusion_not_visible_ratio(
     return capped_questions
 
 
-def enforce_l2_attachment_dominance(
-    questions: list[dict],
-) -> list[dict]:
-    """Globally enforce unattached <= 2 * attached, with a small zero-attachment fallback."""
-    def _dominance_bucket(qtype: str) -> str:
+def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
+    """Balance L2 object-move attachment counts per (scene_id, qtype).
+
+    For each (scene_id, qtype) group where qtype starts with ``object_move_`` or
+    equals ``object_rotate_object_centric``:
+
+    1. **Changed attachment** (attachment_remapped=True, relation_unchanged=False):
+       Keep at most one question per unique ``attachment_pair_id`` (first in
+       generation order).
+
+    2. **Unattached** (attachment_remapped=False/absent):
+       Keep at most ``floor(len(changed_kept) / 4)``, truncating from the end.
+
+    3. **Attached unchanged** (attachment_remapped=True, relation_unchanged=True):
+       Keep at most ``floor(len(changed_kept) / 4)``, truncating from the end.
+
+    Generation order is preserved within each group.  Questions of other types
+    pass through unchanged.
+    """
+    import math
+
+    def _bucket(qtype: str) -> str:
         canonical = str(QUESTION_TYPE_ALIASES.get(qtype, qtype)).strip()
         if canonical.startswith("object_move_") or canonical == "object_rotate_object_centric":
             return canonical
         return ""
 
-    target_types = sorted({
-        _dominance_bucket(str(q.get("type", "")).strip())
-        for q in questions
-        if q.get("level") == "L2" and _dominance_bucket(str(q.get("type", "")).strip())
-    })
-    if not target_types:
-        return questions
+    grouped: dict[tuple[str, str], list[int]] = {}
+    pass_through: list[int] = []
+    for idx, q in enumerate(questions):
+        qtype = str(q.get("type", "")).strip()
+        bucket = _bucket(qtype)
+        scene_id = str(q.get("scene_id", ""))
+        if bucket and str(q.get("level", "")) == "L2":
+            grouped.setdefault((scene_id, bucket), []).append(idx)
+        else:
+            pass_through.append(idx)
 
-    keep_mask = [True] * len(questions)
-    removed_counts: Counter = Counter()
+    keep = [False] * len(questions)
+    for pt_idx in pass_through:
+        keep[pt_idx] = True
 
-    for qtype in target_types:
-        attached_indices = [
-            idx for idx, q in enumerate(questions)
-            if q.get("level") == "L2"
-            and _dominance_bucket(str(q.get("type", "")).strip()) == qtype
-            and bool(q.get("attachment_remapped", False))
-        ]
-        unattached_indices = [
-            idx for idx, q in enumerate(questions)
-            if q.get("level") == "L2"
-            and _dominance_bucket(str(q.get("type", "")).strip()) == qtype
-            and not bool(q.get("attachment_remapped", False))
-        ]
-        # Mirror the per-frame generator safeguard: if a type has no attachment
-        # examples at all, keep a small unattached sample instead of wiping the
-        # type out globally.
-        allowed_unattached = (2 * len(attached_indices)) if attached_indices else 3
-        if len(unattached_indices) <= allowed_unattached:
-            continue
+    for (scene_id, qtype), indices in grouped.items():
+        changed: list[int] = []
+        unattached: list[int] = []
+        unchanged: list[int] = []
 
-        kept_unattached = set(
-            random.sample(unattached_indices, allowed_unattached)
-        ) if allowed_unattached > 0 else set()
-        for idx in unattached_indices:
-            if idx not in kept_unattached:
-                keep_mask[idx] = False
-                removed_counts[qtype] += 1
+        for idx in indices:
+            q = questions[idx]
+            if q.get("attachment_remapped", False):
+                if q.get("relation_unchanged", False):
+                    unchanged.append(idx)
+                else:
+                    changed.append(idx)
+            else:
+                unattached.append(idx)
 
-        logger.info(
-            "Attachment dominance (%s): kept %d attached and %d/%d unattached",
-            qtype,
-            len(attached_indices),
-            allowed_unattached,
-            len(unattached_indices),
-        )
+        seen_pair_ids: set[str] = set()
+        changed_kept: list[int] = []
+        for idx in changed:
+            pair_id = questions[idx].get("attachment_pair_id", "")
+            if pair_id and pair_id in seen_pair_ids:
+                continue
+            if pair_id:
+                seen_pair_ids.add(pair_id)
+            changed_kept.append(idx)
 
-    if not removed_counts:
-        return questions
+        cap = max(0, len(changed_kept) // 4)
 
-    final_questions = [
-        q for idx, q in enumerate(questions)
-        if keep_mask[idx]
-    ]
-    logger.info(
-        "Attachment dominance removed %d questions: %s",
-        sum(removed_counts.values()),
-        dict(removed_counts),
-    )
-    return final_questions
+        unattached_kept = unattached[:cap]
+        unchanged_kept = unchanged[:cap]
+
+        kept_count = len(changed_kept) + len(unattached_kept) + len(unchanged_kept)
+        removed_count = len(indices) - kept_count
+        if removed_count:
+            logger.info(
+                "Attachment balance (%s, %s): changed=%d/%d, unattached=%d/%d, unchanged=%d/%d, cap=%d",
+                scene_id,
+                qtype,
+                len(changed_kept),
+                len(changed),
+                len(unattached_kept),
+                len(unattached),
+                len(unchanged_kept),
+                len(unchanged),
+                cap,
+            )
+
+        for idx in changed_kept:
+            keep[idx] = True
+        for idx in unattached_kept:
+            keep[idx] = True
+        for idx in unchanged_kept:
+            keep[idx] = True
+
+    return [q for idx, q in enumerate(questions) if keep[idx]]
 
 
 def balance_answer_values(
@@ -654,17 +711,18 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
 
     Steps:
         1. Automatic quality filter
-        2. Cap global L1 occlusion not-visible ratio
-        3. Answer distribution balancing
-        4. Log statistics
-
-    Attachment-heavy L2 object-move filtering is intentionally deferred to the
-    viewer build step, where it can be applied per (scene, frame, qtype)
-    instead of globally across the whole benchmark.
+        2. Per-scene-per-qtype L2 attachment balance
+        3. Per-scene-per-qtype L3 unchanged ratio cap
+        4. L3 scene-level duplicate cap
+        5. Cap global L1 occlusion not-visible ratio
+        6. Answer-letter distribution balancing
+        7. Log statistics
     """
     questions = quality_filter(questions)
+    questions = balance_l2_attachment_per_scene(questions)
+    questions = _cap_l3_unchanged_ratio(questions)
+    questions = _deduplicate_l3_questions(questions)
     questions = cap_l1_occlusion_not_visible_ratio(questions)
-    questions = balance_answer_values(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)
     logger.info("Final statistics: %s", stats)

@@ -2299,6 +2299,75 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(counts.get("object_rotate_object_centric", (0, 0)), (0, 0))
         self.assertEqual(sum(1 for q in filtered if q.get("type") == "viewpoint_move"), 1)
 
+    def test_full_quality_pipeline_applies_l3_caps(self) -> None:
+        from src.quality_control import full_quality_pipeline
+
+        questions = []
+        for idx in range(4):
+            questions.append({
+                "scene_id": "s1",
+                "level": "L3",
+                "type": "coordinate_rotation_agent",
+                "question": f"changed {idx}",
+                "options": ["north", "south", "east", "west"],
+                "answer": "A",
+                "correct_value": "north",
+                "obj_a_id": idx + 10,
+                "obj_b_id": idx + 20,
+                "relation_unchanged": False,
+            })
+        questions.extend([
+            {
+                "scene_id": "s1",
+                "level": "L3",
+                "type": "coordinate_rotation_agent",
+                "question": "unchanged first",
+                "options": ["north", "south", "east", "west"],
+                "answer": "A",
+                "correct_value": "north",
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+                "relation_unchanged": True,
+            },
+            {
+                "scene_id": "s1",
+                "level": "L3",
+                "type": "coordinate_rotation_agent",
+                "question": "unchanged second",
+                "options": ["north", "south", "east", "west"],
+                "answer": "A",
+                "correct_value": "north",
+                "obj_a_id": 3,
+                "obj_b_id": 4,
+                "relation_unchanged": True,
+            },
+        ])
+        for answer in ("A", "B", "C"):
+            questions.append({
+                "scene_id": "s1",
+                "level": "L3",
+                "type": "attachment_chain",
+                "question": "same chain",
+                "options": ["north", "south", "east", "west"],
+                "answer": answer,
+                "correct_value": "north",
+                "grandparent_id": 1,
+                "parent_id": 2,
+                "grandchild_id": 3,
+                "neighbor_id": 4,
+                "relation_unchanged": False,
+            })
+
+        result = full_quality_pipeline(questions)
+
+        unchanged_agent = [
+            q for q in result
+            if q["type"] == "coordinate_rotation_agent" and q.get("relation_unchanged") is True
+        ]
+        chain = [q for q in result if q["type"] == "attachment_chain"]
+        self.assertEqual([q["question"] for q in unchanged_agent], ["unchanged first"])
+        self.assertEqual(len(chain), 2)
+
     # ------------------------------------------------------------------
     # balance_l2_attachment_per_scene unit tests
     # ------------------------------------------------------------------
@@ -2427,8 +2496,8 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         result = balance_l2_attachment_per_scene(questions)
         self.assertEqual(len(result), 2)
 
-    def test_coordinate_rotation_object_centric_skips_unchanged_candidates(self) -> None:
-        """coordinate_rotation_object_centric keeps only changed answers."""
+    def test_coordinate_rotation_object_centric_generates_unchanged_candidates(self) -> None:
+        """coordinate_rotation_object_centric includes unchanged answers."""
         objects = [
             make_object(1, "table"),
             make_object(2, "chair"),
@@ -2447,7 +2516,8 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                     ],
                 },
             )
-        self.assertEqual(questions, [])
+        self.assertGreater(len(questions), 0)
+        self.assertTrue(all(q.get("relation_unchanged") is True for q in questions))
 
     def test_coordinate_rotation_object_centric_preserves_original_heading(self) -> None:
         objects = [
@@ -2506,8 +2576,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         np.testing.assert_allclose(facing - anchor, [0.0, 2.0, 0.0], atol=1e-8)
         self.assertFalse(np.allclose(facing - anchor, [2.0, 0.0, 0.0], atol=1e-8))
 
-        for q in questions:
-            self.assertFalse(q["relation_unchanged"])
+        self.assertTrue(any(q["relation_unchanged"] is False for q in questions))
 
     # ------------------------------------------------------------------
     # L3 coordinate_rotation_agent: unchanged candidates
@@ -2579,13 +2648,22 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
     # L3 unchanged ratio cap
     # ------------------------------------------------------------------
 
-    def _make_l3_question(self, qtype: str, *, unchanged: bool, question_text: str = "Q") -> dict:
+    def _make_l3_question(
+        self,
+        qtype: str,
+        *,
+        unchanged: bool,
+        question_text: str = "Q",
+        scene_id: str = "scene0000_00",
+    ) -> dict:
         return {
+            "scene_id": scene_id,
             "level": "L3",
             "type": qtype,
             "question": question_text,
             "options": ["A", "B", "C", "D"],
             "answer": "A",
+            "correct_value": "A",
             "relation_unchanged": unchanged,
         }
 
@@ -2691,6 +2769,21 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(ra_unchanged, 1)
         self.assertEqual(oc_unchanged, 0)
 
+    def test_cap_l3_unchanged_ratio_per_scene_type_group(self) -> None:
+        questions = [
+            self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s1_c1", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s1_c2", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s1_c3", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s1_c4", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s1_u1", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s2_c1", scene_id="s2"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s2_u1", scene_id="s2"),
+        ]
+        result = _cap_l3_unchanged_ratio(questions)
+        kept_texts = {q["question"] for q in result}
+        self.assertIn("s1_u1", kept_texts)
+        self.assertNotIn("s2_u1", kept_texts)
+
     # ------------------------------------------------------------------
     # L3 scene-level dedup
     # ------------------------------------------------------------------
@@ -2776,6 +2869,32 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         result = _deduplicate_l3_questions(questions)
         self.assertEqual(len(result), 2)
 
+    def test_dedup_l3_questions_different_scenes_kept_separately(self) -> None:
+        questions = [
+            {
+                "scene_id": "s1",
+                "level": "L3",
+                "type": "coordinate_rotation_agent",
+                "question": "Same question?",
+                "options": ["A", "B", "C", "D"],
+                "answer": "A",
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+            },
+            {
+                "scene_id": "s2",
+                "level": "L3",
+                "type": "coordinate_rotation_agent",
+                "question": "Same question?",
+                "options": ["A", "B", "C", "D"],
+                "answer": "B",
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+            },
+        ]
+        result = _deduplicate_l3_questions(questions)
+        self.assertEqual(len(result), 2)
+
     def test_dedup_l3_questions_includes_attachment_chain(self) -> None:
         questions = [
             {
@@ -2848,88 +2967,6 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         result = _deduplicate_l3_questions(questions)
         self.assertEqual(len(result), 3)
 
-
-    def test_coordinate_rotation_object_centric_skips_unchanged_candidates(self) -> None:
-        """coordinate_rotation_object_centric keeps only changed answers."""
-        objects = [
-            make_object(1, "table"),
-            make_object(2, "chair"),
-            make_object(3, "lamp"),
-        ]
-        with patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),              patch("src.qa_generator._direction_suppression_reason", return_value=None),              patch("src.qa_generator.primary_direction_object_centric", return_value=("north", 0.0)),              patch("src.qa_generator.generate_options", return_value=(["left", "right", "front", "back"], "A")):
-            questions = generate_l3_coordinate_rotation_object_centric(
-                objects,
-                make_camera_pose(),
-                templates={
-                    "L3_coordinate_rotation_object_centric": [
-                        "Standing at {obj_ref} facing {obj_face}, where is {obj_target}?",
-                    ],
-                },
-                max_per_angle=100,
-                max_questions=100,
-            )
-        self.assertEqual(questions, [])
-
-    def test_coordinate_rotation_object_centric_preserves_original_heading(self) -> None:
-        objects = [
-            {
-                "id": 1,
-                "label": "chair",
-                "center": [0.0, 0.0, 1.0],
-                "bbox_min": [-0.1, -0.1, 0.5],
-                "bbox_max": [0.1, 0.1, 1.5],
-            },
-            {
-                "id": 2,
-                "label": "table",
-                "center": [0.0, 2.0, 1.0],
-                "bbox_min": [-0.1, 1.9, 0.5],
-                "bbox_max": [0.1, 2.1, 1.5],
-            },
-            {
-                "id": 3,
-                "label": "lamp",
-                "center": [1.0, 1.0, 1.0],
-                "bbox_min": [0.9, 0.9, 0.5],
-                "bbox_max": [1.1, 1.1, 1.5],
-            },
-        ]
-
-        with patch("src.qa_generator._direction_suppression_reason", return_value=None),              patch("src.qa_generator.generate_options", side_effect=lambda correct, _pool: ([correct, "front", "back", "left"], "A")):
-            questions = generate_l3_coordinate_rotation_object_centric(
-                objects,
-                make_camera_pose(),
-                templates={
-                    "L3_coordinate_rotation_object_centric": [
-                        "If you were {obj_ref} at its rotated position and kept facing the same horizontal direction that originally pointed from {obj_ref} toward {obj_face}, where is {obj_target}?",
-                    ],
-                },
-                max_per_angle=100,
-                max_questions=100,
-            )
-
-        question = next(
-            q for q in questions
-            if q["rotation_angle"] == 90
-            and q["obj_ref_label"] == "chair"
-            and q["obj_face_label"] == "table"
-            and q["obj_target_label"] == "lamp"
-        )
-
-        self.assertEqual(question["old_direction"], "front-right")
-        self.assertEqual(question["new_direction"], "back-right")
-        self.assertFalse(question["relation_unchanged"])
-        self.assertEqual(question["facing_mode"], "preserve_original_heading")
-        self.assertIn("kept facing the same horizontal direction", question["question"])
-        self.assertNotIn("rotated position and faced toward", question["question"])
-
-        anchor = np.asarray(question["facing_anchor_center"], dtype=float)
-        facing = np.asarray(question["facing_target_center"], dtype=float)
-        np.testing.assert_allclose(facing - anchor, [0.0, 2.0, 0.0], atol=1e-8)
-        self.assertFalse(np.allclose(facing - anchor, [2.0, 0.0, 0.0], atol=1e-8))
-
-        for q in questions:
-            self.assertFalse(q["relation_unchanged"])
 
 if __name__ == "__main__":
     unittest.main()
