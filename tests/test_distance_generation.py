@@ -264,30 +264,109 @@ class DistanceMovementSearchTests(unittest.TestCase):
         self.assertIsNone(new_label)
         self.assertFalse(relation_unchanged)
 
-    def test_find_stable_distance_move_rejects_initial_pairs_below_threshold(self) -> None:
+    def test_find_stable_distance_move_allows_initial_pairs_below_threshold_when_bin_changes(self) -> None:
         objects = [
             make_object(1, "box", (0.0, 0.0, 0.0)),
-            make_object(2, "chair", (0.35, 0.0, 0.0)),
+            make_object(2, "chair", (0.3, 0.0, 0.0)),
         ]
         relation = {
             "obj_a_id": 1,
             "obj_b_id": 2,
             "distance_bin": "very close (<1.0m)",
             "distance_bin_id": "very_close",
-            "distance_m": 0.15,
-            "distance_m_raw": 0.15,
+            "distance_m": 0.1,
+            "distance_m_raw": 0.1,
         }
 
-        delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
-            objects,
-            attachment_graph={},
-            target_id=1,
-            relation=relation,
-            room_bounds={
-                "bbox_min": [-1.0, -1.0, -1.0],
-                "bbox_max": [1.0, 1.0, 1.0],
-            },
-        )
+        with patch(
+            "src.qa_generator._iter_distance_move_deltas",
+            return_value=[np.array([-1.1, 0.0, 0.0], dtype=np.float64)],
+        ):
+            delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                relation=relation,
+                room_bounds={
+                    "bbox_min": [-2.0, -1.0, -1.0],
+                    "bbox_max": [1.0, 1.0, 1.0],
+                },
+            )
+
+        self.assertIsNotNone(delta)
+        assert delta is not None
+        self.assertEqual(delta.tolist(), [-1.1, 0.0, 0.0])
+        self.assertEqual(old_label, "very close (<1.0m)")
+        self.assertEqual(new_label, "close (1.0-2.0m)")
+        self.assertFalse(relation_unchanged)
+
+    def test_find_stable_distance_move_allows_new_pairs_below_threshold_when_bin_changes(self) -> None:
+        objects = [
+            make_object(1, "box", (0.0, 0.0, 0.0)),
+            make_object(2, "chair", (1.4, 0.0, 0.0)),
+        ]
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "close (1.0-2.0m)",
+            "distance_bin_id": "close",
+            "distance_m": 1.2,
+            "distance_m_raw": 1.2,
+        }
+
+        with patch(
+            "src.qa_generator._iter_distance_move_deltas",
+            return_value=[np.array([1.1, 0.0, 0.0], dtype=np.float64)],
+        ):
+            delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                relation=relation,
+                room_bounds={
+                    "bbox_min": [-1.0, -1.0, -1.0],
+                    "bbox_max": [2.0, 1.0, 1.0],
+                },
+            )
+
+        self.assertIsNotNone(delta)
+        assert delta is not None
+        self.assertEqual(delta.tolist(), [1.1, 0.0, 0.0])
+        self.assertEqual(old_label, "close (1.0-2.0m)")
+        self.assertEqual(new_label, "very close (<1.0m)")
+        self.assertFalse(relation_unchanged)
+
+    def test_find_stable_distance_move_rejects_below_threshold_pair_without_bin_change(self) -> None:
+        objects = [
+            make_object(1, "box", (0.0, 0.0, 0.0)),
+            make_object(2, "chair", (0.3, 0.0, 0.0)),
+        ]
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "very close (<1.0m)",
+            "distance_bin_id": "very_close",
+            "distance_m": 0.1,
+            "distance_m_raw": 0.1,
+        }
+
+        with patch(
+            "src.qa_generator._iter_distance_move_deltas",
+            return_value=[np.array([-0.5, 0.0, 0.0], dtype=np.float64)],
+        ), patch(
+            "src.qa_generator._iter_valid_object_move_states",
+            return_value=[],
+        ):
+            delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                relation=relation,
+                room_bounds={
+                    "bbox_min": [-1.0, -1.0, -1.0],
+                    "bbox_max": [1.0, 1.0, 1.0],
+                },
+            )
 
         self.assertIsNone(delta)
         self.assertEqual(old_label, "very close (<1.0m)")
@@ -530,40 +609,89 @@ class DistanceMovementSearchTests(unittest.TestCase):
         self.assertEqual(agent_questions, [])
         self.assertEqual(distance_questions, [])
 
-    def test_generate_l2_distance_questions_skip_initial_pairs_below_threshold(self) -> None:
+    def test_generate_l2_distance_questions_allow_initial_pairs_below_threshold_when_bin_changes(self) -> None:
         mover = make_object(1, "box", (0.0, 0.0, 0.0))
-        ref = make_object(2, "chair", (0.35, 0.0, 0.0))
+        ref = make_object(2, "chair", (0.3, 0.0, 0.0))
         relation = {
             "obj_a_id": 1,
             "obj_b_id": 2,
             "distance_bin": "very close (<1.0m)",
             "distance_bin_id": "very_close",
-            "distance_m": 0.15,
-            "distance_m_raw": 0.15,
+            "distance_m": 0.1,
+            "distance_m_raw": 0.1,
         }
 
-        questions = _generate_l2_distance_questions_for_object(
-            query_obj=mover,
-            move_source=mover,
-            move_source_id=1,
-            attachment_remapped=False,
-            relations=[relation],
-            movement_scene_objects=[mover, ref],
-            attachment_graph={},
-            camera_pose=make_camera_pose(),
-            templates={
-                "L2_object_move_distance": [
-                    "move {obj_a} {direction_with_camera_hint} by {distance}: distance of {obj_b} and {obj_c}?"
-                ]
-            },
-            obj_map={1: mover, 2: ref},
-            room_bounds={
-                "bbox_min": [-1.0, -1.0, -1.0],
-                "bbox_max": [1.0, 1.0, 1.0],
-            },
-        )
+        with patch(
+            "src.qa_generator._iter_distance_move_deltas",
+            return_value=[np.array([-1.1, 0.0, 0.0], dtype=np.float64)],
+        ):
+            questions = _generate_l2_distance_questions_for_object(
+                query_obj=mover,
+                move_source=mover,
+                move_source_id=1,
+                attachment_remapped=False,
+                relations=[relation],
+                movement_scene_objects=[mover, ref],
+                attachment_graph={},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_distance": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: distance of {obj_b} and {obj_c}?"
+                    ]
+                },
+                obj_map={1: mover, 2: ref},
+                room_bounds={
+                    "bbox_min": [-2.0, -1.0, -1.0],
+                    "bbox_max": [1.0, 1.0, 1.0],
+                },
+            )
 
-        self.assertEqual(questions, [])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "close (1.0-2.0m)")
+        self.assertEqual(questions[0]["old_correct_value"], "very close (<1.0m)")
+        self.assertEqual(questions[0]["new_distance_bin_id"], "close")
+
+    def test_generate_l2_distance_questions_allow_new_pairs_below_threshold_when_bin_changes(self) -> None:
+        mover = make_object(1, "box", (0.0, 0.0, 0.0))
+        ref = make_object(2, "chair", (1.4, 0.0, 0.0))
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "close (1.0-2.0m)",
+            "distance_bin_id": "close",
+            "distance_m": 1.2,
+            "distance_m_raw": 1.2,
+        }
+
+        with patch(
+            "src.qa_generator._iter_distance_move_deltas",
+            return_value=[np.array([1.1, 0.0, 0.0], dtype=np.float64)],
+        ):
+            questions = _generate_l2_distance_questions_for_object(
+                query_obj=mover,
+                move_source=mover,
+                move_source_id=1,
+                attachment_remapped=False,
+                relations=[relation],
+                movement_scene_objects=[mover, ref],
+                attachment_graph={},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_distance": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: distance of {obj_b} and {obj_c}?"
+                    ]
+                },
+                obj_map={1: mover, 2: ref},
+                room_bounds={
+                    "bbox_min": [-1.0, -1.0, -1.0],
+                    "bbox_max": [2.0, 1.0, 1.0],
+                },
+            )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["correct_value"], "very close (<1.0m)")
+        self.assertEqual(questions[0]["old_correct_value"], "close (1.0-2.0m)")
+        self.assertEqual(questions[0]["new_distance_bin_id"], "very_close")
 
 
 if __name__ == "__main__":

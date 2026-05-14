@@ -4726,9 +4726,6 @@ def _find_stable_distance_move_for_relation(
     obj_map = {int(obj["id"]): obj for obj in objects}
     if obj_a_id not in obj_map or obj_b_id not in obj_map:
         return None, None, None, False
-    if _relation_distance_for_distance_questions(relation) < MIN_DISTANCE_QUESTION_DISTANCE_M:
-        return None, old_label, None, False
-
     for delta in _iter_distance_move_deltas():
         moved_check_objects = apply_movement(movement_check_objects, attachment_graph, target_id, delta)
         if not is_within_room(moved_check_objects, room_min, room_max):
@@ -4761,8 +4758,6 @@ def _find_stable_distance_move_for_relation(
             new_map[obj_a_id],
             new_map[obj_b_id],
         )
-        if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
-            continue
         new_label = str(exact_details["distance_bin"])
         new_near_boundary = bool(exact_details["near_boundary"])
         new_idx = _distance_bin_index(
@@ -4788,8 +4783,6 @@ def _find_stable_distance_move_for_relation(
             new_map[obj_a_id],
             new_map[obj_b_id],
         )
-        if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
-            continue
         new_label = str(exact_details["distance_bin"])
         new_idx = _distance_bin_index(
             new_label,
@@ -4895,8 +4888,6 @@ def _generate_l2_distance_questions_for_object(
             moved_map[int(relation["obj_a_id"])],
             moved_map[int(relation["obj_b_id"])],
         )
-        if float(new_distance.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
-            continue
         answer_value = str(new_distance.get("distance_bin", answer_value))
         obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
         obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
