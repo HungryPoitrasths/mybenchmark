@@ -7748,34 +7748,53 @@ def _enforce_in_frame_mentions(
 def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:
     """Convert a 3D world-frame delta to a camera-relative direction string.
 
-    Projects the world-frame displacement into the camera coordinate system
-    (x=right, y=down, z=forward in OpenCV convention) so that "right" in the
-    question text matches what the viewer actually sees in the image.
-
     Used for ego-centric questions where the reference frame is the camera.
-    Falls back to world-frame labels if *camera_pose* is not provided.
+    Horizontal movement (forward/backward/left/right) uses the camera's
+    forward and right axes projected to the ground XY plane so that camera
+    pitch does not mix horizontal motion into up/down or compress the
+    forward/backward ratio.  Only a delta with a genuine dominant vertical
+    component returns up/down.
+
+    Falls back to world-frame labels if *camera_pose* is not provided or its
+    ground axes degenerate (camera pointing straight down/up).
     """
     if camera_pose is not None:
-        from .utils.coordinate_transform import world_to_camera
-        # Transform delta as a direction (translate origin to camera, then difference)
-        origin_cam = world_to_camera(np.zeros(3), camera_pose)
-        delta_cam = world_to_camera(delta, camera_pose) - origin_cam
-        dx, dy, dz = float(delta_cam[0]), float(delta_cam[1]), float(delta_cam[2])
-        # OpenCV: x=right, y=down, z=forward
-        horiz = abs(dx)
-        depth = abs(dz)
-        vert = abs(dy)
-        dominant = max(horiz, depth, vert)
-        if dominant == vert:
-            return "down" if dy > 0 else "up"
-        elif dominant == depth:
-            return "forward" if dz > 0 else "backward"
-        else:
-            return "right" if dx > 0 else "left"
+        delta = np.asarray(delta, dtype=float)
+
+        # 1. Check whether the delta has a real dominant vertical component
+        horiz_mag = float(np.linalg.norm(delta[:2]))
+        vert_mag = abs(float(delta[2]))
+        if vert_mag > horiz_mag:
+            return "up" if delta[2] > 0 else "down"
+
+        # 2. Horizontal movement: project camera axes to ground XY
+        # rotation.T maps camera axes → world; columns 0,2 = right, forward
+        right_world = np.asarray(camera_pose.rotation.T[:, 0], dtype=float).copy()
+        forward_world = np.asarray(camera_pose.rotation.T[:, 2], dtype=float).copy()
+        right_world[2] = 0.0
+        forward_world[2] = 0.0
+
+        right_norm = float(np.linalg.norm(right_world))
+        forward_norm = float(np.linalg.norm(forward_world))
+        if right_norm > 1e-6 and forward_norm > 1e-6:
+            right_world /= right_norm
+            forward_world /= forward_norm
+
+            fwd_comp = float(np.dot(delta[:2], forward_world[:2]))
+            right_comp = float(np.dot(delta[:2], right_world[:2]))
+
+            if abs(fwd_comp) >= abs(right_comp):
+                return "forward" if fwd_comp > 0 else "backward"
+            else:
+                return "right" if right_comp > 0 else "left"
+
+        # degenerate ground axes (e.g. camera pointing straight down / up) →
+        # fall through to world-frame fallback
 
     # Fallback: world-frame (should not normally be used)
-    axis = np.argmax(np.abs(delta))
-    sign = delta[axis]
+    delta_arr = np.asarray(delta, dtype=float)
+    axis = int(np.argmax(np.abs(delta_arr)))
+    sign = delta_arr[axis]
     labels = {0: ("right", "left"), 1: ("forward", "backward"), 2: ("up", "down")}
     pos_label, neg_label = labels[axis]
     return pos_label if sign > 0 else neg_label
@@ -7855,6 +7874,27 @@ def _delta_to_cardinal_description(delta: np.ndarray) -> str:
 #  Main entry point
 # ---------------------------------------------------------------------------
 
+_QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
+    "L1_direction_agent": [
+        "generate_l1_direction",
+    ],
+    "L2_object_move_agent": [
+        "generate_l2_object_move",
+    ],
+    "L3_coordinate_rotation_agent": [
+        "generate_l3_coordinate_rotation",
+    ],
+}
+"""Map user-facing --only_question_types names to internal generator names."""
+
+_QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
+    "L1_direction_agent": ("L1", "direction_agent"),
+    "L2_object_move_agent": ("L2", "object_move_agent"),
+    "L3_coordinate_rotation_agent": ("L3", "coordinate_rotation_agent"),
+}
+"""(level, type) filter for each --only_question_types entry."""
+
+
 def generate_all_questions(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -7888,6 +7928,7 @@ def generate_all_questions(
     trace_detail: str = "light",
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
+    only_question_types: list[str] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -7937,6 +7978,26 @@ def generate_all_questions(
         "attachment_object_surface_text_by_id",
     )
     attachment_edge_input = len(attachment_edges)
+
+    # Resolve --only_question_types whitelist
+    if only_question_types is not None:
+        unknown = [t for t in only_question_types if t not in _QUESTION_TYPE_TO_GENERATORS]
+        if unknown:
+            raise ValueError(
+                f"Unknown question type(s): {', '.join(sorted(unknown))}. "
+                f"Valid types: {', '.join(sorted(_QUESTION_TYPE_TO_GENERATORS))}"
+            )
+        _allowed_generators: set[str] = set()
+        for t in only_question_types:
+            _allowed_generators.update(_QUESTION_TYPE_TO_GENERATORS[t])
+    else:
+        _allowed_generators = None  # None means "allow all"
+
+    def _generator_allowed(name: str) -> bool:
+        if _allowed_generators is None:
+            return True
+        return name in _allowed_generators
+
     trace_counter = 0
     original_objects = list(objects)
     enrich_objects_with_distance_geometry(objects, instance_mesh_data)
@@ -8311,6 +8372,19 @@ def generate_all_questions(
     )
 
     def _run_question_step(step_name: str, fn: Callable[[], Any]) -> Any:
+        # When --only_question_types filters are active, skip generators
+        # whose step_name is not in the resolved whitelist.  Infrastructure
+        # steps (not starting with "generate_") always run.
+        if (
+            _allowed_generators is not None
+            and step_name.startswith("generate_")
+            and step_name not in _allowed_generators
+        ):
+            logger.info(
+                "QA generation step skipped (not in --only_question_types): %s",
+                step_name,
+            )
+            return []
         step_start = time.perf_counter()
         logger.info(
             "QA generation step start: %s (question_objects=%d, graph_objects=%d, attachment_edges=%d)",
@@ -8570,6 +8644,10 @@ def generate_all_questions(
         len(l1_dist_qs),
         time.perf_counter() - l1_pair_step_start,
     )
+    if not _generator_allowed("generate_l1_direction"):
+        l1_dir_qs.clear()
+    if not _generator_allowed("generate_l1_distance"):
+        l1_dist_qs.clear()
     l1_dir_qs = _register_generated_questions("generate_l1_direction", l1_dir_qs)
     l1_dist_qs = _register_generated_questions("generate_l1_distance", l1_dist_qs)
     _emit_generator_summary(
@@ -9088,6 +9166,26 @@ def generate_all_questions(
                 all_questions,
                 id_to_object,
             ),
+        )
+
+    # Post-filter: when --only_question_types is active, keep only questions
+    # whose (level, type) matches the requested type names.  This catches
+    # generator-internal type leakage (e.g. generate_l2_object_move may also
+    # emit object_move_occlusion / object_move_distance).
+    if only_question_types is not None:
+        allowed_level_types: set[tuple[str, str]] = {
+            _QUESTION_TYPE_TO_LEVEL_TYPE[t] for t in only_question_types
+        }
+        before = len(all_questions)
+        all_questions = [
+            q for q in all_questions
+            if (str(q.get("level", "")).strip(), str(q.get("type", "")).strip()) in allowed_level_types
+        ]
+        logger.info(
+            "Post-filter --only_question_types: %d → %d question(s) (kept types=%s)",
+            before,
+            len(all_questions),
+            sorted(allowed_level_types),
         )
 
     if trace_recorder is not None:

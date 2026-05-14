@@ -9,6 +9,7 @@ from src.relation_engine import (
     primary_direction_allocentric,
     primary_direction_object_centric,
 )
+from src.qa_generator import _delta_to_description
 from src.utils.colmap_loader import CameraPose
 from src.virtual_ops import apply_movement
 
@@ -351,6 +352,83 @@ class RelationEngineDirectionTests(unittest.TestCase):
             moved[0]["support_geom"]["bottom_hull_xy"],
             _rect(1.0, 2.0, 2.0, 3.0),
         )
+
+
+class DeltaToDescriptionTests(unittest.TestCase):
+    def _make_pitched_pose(self, pitch_deg: float) -> CameraPose:
+        rad = np.radians(pitch_deg)
+        return CameraPose(
+            image_name="pitched.jpg",
+            rotation=np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, np.cos(rad), -np.sin(rad)],
+                [0.0, np.sin(rad), np.cos(rad)],
+            ], dtype=np.float64),
+            translation=np.zeros(3, dtype=np.float64),
+        )
+
+    def test_ground_forward_delta_stays_forward_with_pitch(self) -> None:
+        """Camera pitched 20° down – pure ground-forward delta → 'forward', not 'down'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([0.0, 1.0, 0.0])  # world +Y = north / forward
+        self.assertEqual(_delta_to_description(delta, pose), "forward")
+
+    def test_ground_right_delta_stays_right_with_pitch(self) -> None:
+        """Camera pitched 20° down – pure ground-right delta → 'right'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([1.0, 0.0, 0.0])  # world +X = east / right
+        self.assertEqual(_delta_to_description(delta, pose), "right")
+
+    def test_ground_backward_delta_with_pitch(self) -> None:
+        """Camera pitched 20° down – pure ground-backward delta → 'backward'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([0.0, -1.0, 0.0])
+        self.assertEqual(_delta_to_description(delta, pose), "backward")
+
+    def test_ground_left_delta_with_pitch(self) -> None:
+        """Camera pitched 20° down – pure ground-left delta → 'left'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([-1.0, 0.0, 0.0])
+        self.assertEqual(_delta_to_description(delta, pose), "left")
+
+    def test_genuine_up_delta(self) -> None:
+        """Real vertical delta → 'up'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([0.0, 0.0, 2.0])
+        self.assertEqual(_delta_to_description(delta, pose), "up")
+
+    def test_genuine_down_delta(self) -> None:
+        """Real vertical delta → 'down'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([0.0, 0.0, -2.0])
+        self.assertEqual(_delta_to_description(delta, pose), "down")
+
+    def test_mostly_vertical_with_small_horizontal(self) -> None:
+        """Vertical component dominates small horizontal drift → still 'up'."""
+        pose = self._make_pitched_pose(20.0)
+        delta = np.array([0.1, 0.1, 1.0])
+        self.assertEqual(_delta_to_description(delta, pose), "up")
+
+    def test_no_camera_pose_fallback(self) -> None:
+        """No camera_pose → world-frame fallback."""
+        delta = np.array([3.0, 0.0, 0.0])
+        self.assertEqual(_delta_to_description(delta, None), "right")
+
+        delta = np.array([0.0, 4.0, 0.0])
+        self.assertEqual(_delta_to_description(delta, None), "forward")
+
+        delta = np.array([0.0, 0.0, 5.0])
+        self.assertEqual(_delta_to_description(delta, None), "up")
+
+    def test_diagonal_ground_delta_uses_dominant_axis_with_pitch(self) -> None:
+        """Ground delta with both forward and right – picks dominant axis."""
+        pose = self._make_pitched_pose(20.0)
+        # More forward than right
+        delta = np.array([0.3, 1.0, 0.0])
+        self.assertEqual(_delta_to_description(delta, pose), "forward")
+        # More right than forward
+        delta = np.array([1.0, 0.3, 0.0])
+        self.assertEqual(_delta_to_description(delta, pose), "right")
 
 
 if __name__ == "__main__":
