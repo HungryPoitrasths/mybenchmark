@@ -409,23 +409,11 @@ class DistanceMovementSearchTests(unittest.TestCase):
                     "distance_bin_id": "very_close",
                     "near_boundary": False,
                 },
-                {
-                    "distance_m": 0.15,
-                    "distance_bin": "very close (<1.0m)",
-                    "distance_bin_id": "very_close",
-                    "near_boundary": False,
-                },
-                {
-                    "distance_m": 0.35,
-                    "distance_bin": "very close (<1.0m)",
-                    "distance_bin_id": "very_close",
-                    "near_boundary": False,
-                },
             ],
         ):
             delta, old_label, new_label, relation_unchanged = _find_stable_distance_move_for_relation(
                 objects,
-                attachment_graph={},
+                attachment_graph={1: [2]},
                 target_id=1,
                 relation=relation,
                 room_bounds={

@@ -4688,6 +4688,22 @@ def _iter_distance_move_deltas():
             yield np.array(delta, dtype=np.float64, copy=True)
 
 
+def _classify_pair_movement(
+    relation_obj_b_id: int,
+    relation_obj_c_id: int,
+    moved_ids: set[int],
+) -> tuple[bool, bool]:
+    """Return (pair_moves_apart, pair_moves_together) for two relation participants.
+
+    ``pair_moves_apart`` is True when exactly one participant is in *moved_ids*
+    (suitable for "change" questions).  ``pair_moves_together`` is True when
+    both participants are in *moved_ids* (suitable for "unchanged" questions).
+    """
+    b_in = relation_obj_b_id in moved_ids
+    c_in = relation_obj_c_id in moved_ids
+    return (b_in != c_in), (b_in and c_in)
+
+
 def _find_stable_distance_move_for_relation(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -4716,85 +4732,88 @@ def _find_stable_distance_move_for_relation(
     obj_a_id = int(relation["obj_a_id"])
     obj_b_id = int(relation["obj_b_id"])
     moved_ids = get_moved_object_ids(target_id, attachment_graph)
-    affects_a = obj_a_id in moved_ids
-    affects_b = obj_b_id in moved_ids
-    if affects_a == affects_b:
-        return None, None, None, False
+    pair_moves_apart, pair_moves_together = _classify_pair_movement(
+        obj_a_id, obj_b_id, moved_ids,
+    )
 
     movement_check_objects = movement_objects if movement_objects is not None else objects
     room_min, room_max = compute_room_bounds(movement_check_objects, room_bounds=room_bounds)
     obj_map = {int(obj["id"]): obj for obj in objects}
     if obj_a_id not in obj_map or obj_b_id not in obj_map:
         return None, None, None, False
-    for delta in _iter_distance_move_deltas():
-        moved_check_objects = apply_movement(movement_check_objects, attachment_graph, target_id, delta)
-        if not is_within_room(moved_check_objects, room_min, room_max):
-            continue
-        if has_terminal_bbox_collision(
+
+    # pair_moves_apart: search for a distance-bin change
+    if pair_moves_apart:
+        for delta in _iter_distance_move_deltas():
+            moved_check_objects = apply_movement(movement_check_objects, attachment_graph, target_id, delta)
+            if not is_within_room(moved_check_objects, room_min, room_max):
+                continue
+            if has_terminal_bbox_collision(
+                movement_check_objects,
+                moved_check_objects,
+                moved_ids,
+                collision_objects=collision_objects,
+            ):
+                continue
+
+            new_objects = apply_movement(objects, attachment_graph, target_id, delta)
+            new_map = {int(obj["id"]): obj for obj in new_objects}
+            approx_details = compute_distance_details(
+                new_map[obj_a_id],
+                new_map[obj_b_id],
+                force_aabb=True,
+            )
+            approx_idx = _distance_bin_index(
+                str(approx_details.get("distance_bin", "")),
+                bin_id=str(approx_details.get("distance_bin_id", "")).strip() or None,
+            )
+            if approx_idx is None:
+                continue
+            if approx_idx == old_idx and not bool(approx_details.get("near_boundary", False)):
+                continue
+
+            exact_details = compute_distance_details(
+                new_map[obj_a_id],
+                new_map[obj_b_id],
+            )
+            new_label = str(exact_details["distance_bin"])
+            new_near_boundary = bool(exact_details["near_boundary"])
+            new_idx = _distance_bin_index(
+                new_label,
+                bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
+            )
+            if new_idx is None or new_idx == old_idx:
+                continue
+            if new_near_boundary:
+                continue
+            return np.asarray(delta, dtype=np.float64), old_label, new_label, False
+
+        for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
             movement_check_objects,
-            moved_check_objects,
-            moved_ids,
+            attachment_graph,
+            target_id,
+            room_bounds=room_bounds,
             collision_objects=collision_objects,
         ):
-            continue
+            new_objects = apply_movement(objects, attachment_graph, target_id, delta)
+            new_map = {int(obj["id"]): obj for obj in new_objects}
+            exact_details = compute_distance_details(
+                new_map[obj_a_id],
+                new_map[obj_b_id],
+            )
+            new_label = str(exact_details["distance_bin"])
+            new_idx = _distance_bin_index(
+                new_label,
+                bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
+            )
+            if new_idx is None or new_idx == old_idx:
+                continue
+            if bool(exact_details.get("near_boundary", False)):
+                continue
+            return np.asarray(delta, dtype=np.float64), old_label, new_label, False
 
-        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
-        new_map = {int(obj["id"]): obj for obj in new_objects}
-        approx_details = compute_distance_details(
-            new_map[obj_a_id],
-            new_map[obj_b_id],
-            force_aabb=True,
-        )
-        approx_idx = _distance_bin_index(
-            str(approx_details.get("distance_bin", "")),
-            bin_id=str(approx_details.get("distance_bin_id", "")).strip() or None,
-        )
-        if approx_idx is None:
-            continue
-        if approx_idx == old_idx and not bool(approx_details.get("near_boundary", False)):
-            continue
-
-        exact_details = compute_distance_details(
-            new_map[obj_a_id],
-            new_map[obj_b_id],
-        )
-        new_label = str(exact_details["distance_bin"])
-        new_near_boundary = bool(exact_details["near_boundary"])
-        new_idx = _distance_bin_index(
-            new_label,
-            bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
-        )
-        if new_idx is None or new_idx == old_idx:
-            continue
-        if new_near_boundary:
-            continue
-        return np.asarray(delta, dtype=np.float64), old_label, new_label, False
-
-    for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
-        movement_check_objects,
-        attachment_graph,
-        target_id,
-        room_bounds=room_bounds,
-        collision_objects=collision_objects,
-    ):
-        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
-        new_map = {int(obj["id"]): obj for obj in new_objects}
-        exact_details = compute_distance_details(
-            new_map[obj_a_id],
-            new_map[obj_b_id],
-        )
-        new_label = str(exact_details["distance_bin"])
-        new_idx = _distance_bin_index(
-            new_label,
-            bin_id=str(exact_details.get("distance_bin_id", "")).strip() or None,
-        )
-        if new_idx is None or new_idx == old_idx:
-            continue
-        if bool(exact_details.get("near_boundary", False)):
-            continue
-        return np.asarray(delta, dtype=np.float64), old_label, new_label, False
-
-    if allow_unchanged_fallback:
+    # pair_moves_together: unchanged fallback
+    if pair_moves_together and allow_unchanged_fallback:
         for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
             movement_check_objects,
             attachment_graph,
@@ -4809,6 +4828,8 @@ def _find_stable_distance_move_for_relation(
                 new_map[obj_b_id],
             )
             if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
+                continue
+            if bool(exact_details.get("near_boundary", False)):
                 continue
             new_label = str(exact_details["distance_bin"])
             if new_label != old_label:
@@ -4864,9 +4885,8 @@ def _generate_l2_distance_questions_for_object(
             and int(relation_obj_c_id) not in referable_object_ids
         ):
             continue
-        attachment_relation_propagated = any(
-            participant_id in moved_ids and participant_id != move_source_id
-            for participant_id in (int(relation_obj_b_id), int(relation_obj_c_id))
+        _pair_moves_apart, pair_moves_together = _classify_pair_movement(
+            int(relation_obj_b_id), int(relation_obj_c_id), moved_ids,
         )
 
         delta, old_value, answer_value, relation_unchanged = _find_stable_distance_move_for_relation(
@@ -4877,7 +4897,7 @@ def _generate_l2_distance_questions_for_object(
             room_bounds=room_bounds,
             collision_objects=collision_objects,
             movement_objects=movement_scene_objects,
-            allow_unchanged_fallback=attachment_relation_propagated,
+            allow_unchanged_fallback=pair_moves_together,
         )
         if delta is None or answer_value is None or old_value is None:
             continue
@@ -5322,9 +5342,8 @@ def generate_l2_object_move(
                     continue
                 if int(relation_obj_c_id) not in referable_object_ids:
                     continue
-                attachment_relation_propagated = any(
-                    participant_id in moved_ids and participant_id != move_source_id
-                    for participant_id in (relation_obj_b_id, relation_obj_c_id)
+                _pair_moves_apart, pair_moves_together = _classify_pair_movement(
+                    relation_obj_b_id, int(relation_obj_c_id), moved_ids,
                 )
                 obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
                 obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
@@ -5334,6 +5353,9 @@ def generate_l2_object_move(
                 old_value: str | None = None
                 new_value: str | None = None
                 relation_unchanged = False
+                fallback_unchanged: tuple[_SelectedObjectMoveState, str, str] | None = None
+
+                # Phase 1: try selected_state - only accept direction changes
                 if selected_state is not None:
                     new_relation = _relation_map_for_state(selected_state).get(key)
                     if new_relation is not None:
@@ -5343,13 +5365,18 @@ def generate_l2_object_move(
                             new_relation,
                         )
                         if direction_values is not None:
-                            old_value, new_value = direction_values
-                            relation_unchanged = old_value == new_value
-                            if attachment_relation_propagated or not relation_unchanged:
+                            old_val, new_val = direction_values
+                            if old_val == new_val:
+                                # Save as unchanged fallback for pair_moves_together
+                                if pair_moves_together and fallback_unchanged is None:
+                                    fallback_unchanged = (selected_state, old_val, new_val)
+                            else:
                                 agent_state = selected_state
+                                old_value = old_val
+                                new_value = new_val
 
                 if agent_state is None:
-                    fallback_unchanged: tuple[_SelectedObjectMoveState, str, str] | None = None
+                    # Phase 2: fallback states - only accept direction changes
                     for candidate_state in _fallback_states():
                         new_relation = _relation_map_for_state(candidate_state).get(key)
                         if new_relation is None:
@@ -5364,7 +5391,7 @@ def generate_l2_object_move(
                         candidate_old_value, candidate_new_value = direction_values
                         candidate_unchanged = candidate_old_value == candidate_new_value
                         if candidate_unchanged:
-                            if attachment_relation_propagated and fallback_unchanged is None:
+                            if pair_moves_together and fallback_unchanged is None:
                                 fallback_unchanged = (
                                     candidate_state,
                                     candidate_old_value,
@@ -5377,7 +5404,8 @@ def generate_l2_object_move(
                         relation_unchanged = False
                         break
 
-                    if agent_state is None and fallback_unchanged is not None:
+                    # Phase 3: only if pair_moves_together, accept unchanged
+                    if agent_state is None and fallback_unchanged is not None and pair_moves_together:
                         agent_state, old_value, new_value = fallback_unchanged
                         relation_unchanged = True
 
