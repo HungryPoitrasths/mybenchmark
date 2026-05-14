@@ -638,6 +638,30 @@ def primary_direction(
     horizontal_only: bool = False,
 ) -> tuple[str, float]:
     """Return the single most dominant direction of B relative to A."""
+    if horizontal_only:
+        a_world = np.asarray(obj_a_center, dtype=float).copy()
+        b_world = np.asarray(obj_b_center, dtype=float).copy()
+        delta_world = b_world - a_world
+        delta_world[2] = 0.0
+
+        right_world = np.asarray(camera_pose.rotation.T[:, 0], dtype=float).copy()
+        forward_world = np.asarray(camera_pose.rotation.T[:, 2], dtype=float).copy()
+        right_world[2] = 0.0
+        forward_world[2] = 0.0
+
+        right_norm = np.linalg.norm(right_world)
+        forward_norm = np.linalg.norm(forward_world)
+        if right_norm > 1e-6 and forward_norm > 1e-6:
+            right_world /= right_norm
+            forward_world /= forward_norm
+            fwd_comp = float(np.dot(delta_world, forward_world))
+            right_comp = float(np.dot(delta_world, right_world))
+            return _horizontal_direction_from_components(
+                fwd_comp,
+                right_comp,
+                HORIZONTAL_DIRECTIONS,
+            )
+
     a_cam = world_to_camera(np.asarray(obj_a_center, dtype=float), camera_pose)
     b_cam = world_to_camera(np.asarray(obj_b_center, dtype=float), camera_pose)
     delta = b_cam - a_cam  # x=right, y=down, z=forward

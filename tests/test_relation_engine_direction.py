@@ -244,6 +244,26 @@ class RelationEngineDirectionTests(unittest.TestCase):
         self.assertEqual(full_dir, "below")
         self.assertEqual(horiz_dir, "front")
 
+    def test_primary_direction_horizontal_only_normalizes_pitched_camera_floor_axes(self) -> None:
+        angle_deg = 20.0
+        rad = np.radians(angle_deg)
+        pose = CameraPose(
+            image_name="pitched.jpg",
+            rotation=np.array([
+                [1.0, 0.0, 0.0],
+                [0.0, np.cos(rad), -np.sin(rad)],
+                [0.0, np.sin(rad), np.cos(rad)],
+            ], dtype=np.float64),
+            translation=np.zeros(3, dtype=np.float64),
+        )
+
+        a = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+        b = np.array([1.0, 1.0, 0.0], dtype=np.float64)
+
+        horiz_dir, _ = primary_direction(a, b, pose, horizontal_only=True)
+
+        self.assertEqual(horiz_dir, "front-right")
+
     def test_allocentric_parallel_side_edges_use_bbox_centers(self) -> None:
         obj_a = make_object(
             1,
