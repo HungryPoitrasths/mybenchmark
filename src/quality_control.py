@@ -9,10 +9,11 @@ from __future__ import annotations
 import itertools
 import logging
 import random
+import re
 from collections import Counter
 from typing import Any, Callable
 
-from .qa_generator import _cap_l3_unchanged_ratio, _deduplicate_l3_questions
+from .qa_generator import _cap_l3_unchanged_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +49,6 @@ ATTACHMENT_ID_FIELDS = (
     "grandchild_id",
     "neighbor_id",
 )
-L3_COORDINATE_ROTATION_TYPES = {
-    "coordinate_rotation_agent",
-    "coordinate_rotation_object_centric",
-    "coordinate_rotation_allocentric",
-}
-
-
 def _label_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -74,6 +68,50 @@ def _object_id_signature(q: dict[str, Any]) -> tuple:
         for field in ATTACHMENT_ID_FIELDS
         if (value := _id_key(q.get(field))) != ""
     )
+
+
+def _stable_id_sort_key(value: int | str) -> tuple[int, int | str]:
+    if isinstance(value, int):
+        return (0, value)
+    return (1, str(value))
+
+
+def _attachment_pair_object_ids(pair_id: Any) -> tuple[int | str, ...]:
+    pair_text = str(pair_id or "").strip()
+    if not pair_text:
+        return ()
+
+    parts = re.findall(r"\d+", pair_text)
+    if len(parts) < 2:
+        return ()
+    return tuple(_id_key(part) for part in parts[:2])
+
+
+def _other_attachment_object_ids(
+    q: dict[str, Any],
+    pair_object_ids: tuple[int | str, ...],
+) -> tuple[int | str, ...]:
+    excluded_ids = set(pair_object_ids)
+    mentioned_ids: list[int | str] = []
+
+    mentions = q.get("mentioned_objects") or []
+    if mentions:
+        for mention in mentions:
+            if not isinstance(mention, dict):
+                continue
+            obj_id = _id_key(mention.get("obj_id"))
+            if obj_id == "" or obj_id in excluded_ids:
+                continue
+            mentioned_ids.append(obj_id)
+
+    if not mentions:
+        for field in ATTACHMENT_ID_FIELDS:
+            obj_id = _id_key(q.get(field))
+            if obj_id == "" or obj_id in excluded_ids:
+                continue
+            mentioned_ids.append(obj_id)
+
+    return tuple(sorted(set(mentioned_ids), key=_stable_id_sort_key))
 
 
 def _near_duplicate_key(q: dict[str, Any]) -> tuple:
@@ -99,12 +137,6 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
         _label_key(q.get("obj_ref_label")),
     )
     return base + (primary_label, *secondary_labels)
-
-
-def _quality_filter_dedup_applies(q: dict[str, Any]) -> bool:
-    if str(q.get("level", "")) != "L3":
-        return True
-    return str(q.get("type", "")).strip() in L3_COORDINATE_ROTATION_TYPES
 
 
 def _question_preview(question_text: Any, limit: int = 160) -> str:
@@ -195,6 +227,9 @@ def quality_filter(
     Filters:
         1. Direction ambiguity > 0.7 (too close to boundary)
         2. Near-duplicate questions (same frame + type + object ids or label tuple, keep one)
+        3. Cross-frame duplicates (same scene + text + object ids, keep one)
+
+    Duplicate filtering applies to all levels and question types, including L3.
     """
     filtered: list[dict] = []
     removed_counts: Counter = Counter()
@@ -223,14 +258,11 @@ def quality_filter(
 
         filtered.append(q)
 
-    # Filter 2: deduplicate near-identical questions.
-    # Same (scene, frame, type, primary_object) → keep only one.
+    # Filter 2: deduplicate near-identical questions across all question types.
+    # Same (scene, frame, type, object signature/labels) -> keep only one.
     seen_keys: dict[tuple, dict] = {}
     deduped: list[dict] = []
     for q in filtered:
-        if not _quality_filter_dedup_applies(q):
-            deduped.append(q)
-            continue
         key = _near_duplicate_key(q)
         kept_question = seen_keys.get(key)
         if kept_question is not None:
@@ -259,14 +291,11 @@ def quality_filter(
         seen_keys[key] = q
         deduped.append(q)
 
-    # Filter 5: cross-frame dedup within same scene.
-    # Same (scene_id, question_text) on different frames → keep only first.
+    # Filter 3: cross-frame dedup within same scene for all question types.
+    # Same (scene_id, question_text, object signature) -> keep only first.
     seen_text: dict[tuple, dict] = {}
     final: list[dict] = []
     for q in deduped:
-        if not _quality_filter_dedup_applies(q):
-            final.append(q)
-            continue
         text_key = (q.get("scene_id"), q.get("question"), _object_id_signature(q))
         kept_question = seen_text.get(text_key)
         if kept_question is not None:
@@ -384,8 +413,8 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
     equals ``object_rotate_object_centric``:
 
     1. **Changed attachment** (attachment_remapped=True, relation_unchanged=False):
-       Keep at most one question per unique ``attachment_pair_id`` (first in
-       generation order).
+       Keep at most one question per unique ``(attachment_pair_id,
+       other_mentioned_object_ids)`` key (first in generation order).
 
     2. **Unattached** (attachment_remapped=False/absent):
        Keep at most ``floor(len(changed_kept) / 4)``, truncating from the end.
@@ -434,14 +463,19 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
             else:
                 unattached.append(idx)
 
-        seen_pair_ids: set[str] = set()
+        seen_changed_keys: set[tuple[str, tuple[int | str, ...]]] = set()
         changed_kept: list[int] = []
         for idx in changed:
-            pair_id = questions[idx].get("attachment_pair_id", "")
-            if pair_id and pair_id in seen_pair_ids:
+            pair_id = str(questions[idx].get("attachment_pair_id", "") or "").strip()
+            if not pair_id:
+                changed_kept.append(idx)
                 continue
-            if pair_id:
-                seen_pair_ids.add(pair_id)
+            pair_object_ids = _attachment_pair_object_ids(pair_id)
+            other_object_ids = _other_attachment_object_ids(questions[idx], pair_object_ids)
+            dedup_key = (pair_id, other_object_ids)
+            if dedup_key in seen_changed_keys:
+                continue
+            seen_changed_keys.add(dedup_key)
             changed_kept.append(idx)
 
         cap = max(0, len(changed_kept) // 4)
@@ -711,15 +745,13 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
         1. Automatic quality filter
         2. Per-scene-per-qtype L2 attachment balance
         3. Per-scene-per-qtype L3 unchanged ratio cap
-        4. L3 scene-level duplicate cap
-        5. Cap global L1 occlusion not-visible ratio
-        6. Answer-letter distribution balancing
-        7. Log statistics
+        4. Cap global L1 occlusion not-visible ratio
+        5. Answer-letter distribution balancing
+        6. Log statistics
     """
     questions = quality_filter(questions)
     questions = balance_l2_attachment_per_scene(questions)
     questions = _cap_l3_unchanged_ratio(questions)
-    questions = _deduplicate_l3_questions(questions)
     questions = cap_l1_occlusion_not_visible_ratio(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)

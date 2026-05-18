@@ -8019,13 +8019,6 @@ def _enforce_in_frame_mentions(
     return kept
 
 
-_L3_OBJECT_ID_FIELDS: list[str] = [
-    "obj_a_id", "obj_b_id", "obj_ref_id", "obj_face_id", "obj_target_id",
-    "grandparent_id", "parent_id", "grandchild_id", "neighbor_id",
-]
-"""Object ID fields used by L3 questions for deduplication key computation."""
-
-
 def _cap_l3_unchanged_ratio(questions: list[dict]) -> list[dict]:
     """Cap L3 unchanged questions at floor(changed_count / 4) per scene/type.
 
@@ -8065,44 +8058,6 @@ def _cap_l3_unchanged_ratio(questions: list[dict]) -> list[dict]:
         logger.info("L3 unchanged-ratio cap removed %d question(s)", removed)
 
     return [q for idx, q in enumerate(questions) if keep[idx]]
-
-
-def _deduplicate_l3_questions(questions: list[dict]) -> list[dict]:
-    """L3 per-scene deduplication: same question text + object ID combo -> max 2.
-
-    The dedup key is (scene_id, question_text, sorted_object_ids) where the
-    object ids are drawn from _L3_OBJECT_ID_FIELDS.  Questions are kept in
-    generation order.
-    """
-    counts: dict[tuple, int] = {}
-    deduped: list[dict] = []
-    removed = 0
-
-    for q in questions:
-        if str(q.get("level", "")) != "L3":
-            deduped.append(q)
-            continue
-
-        obj_ids: list[int] = []
-        for field in _L3_OBJECT_ID_FIELDS:
-            val = q.get(field)
-            if val is not None:
-                try:
-                    obj_ids.append(int(val))
-                except (TypeError, ValueError):
-                    pass
-        key = (q.get("scene_id"), q.get("question", ""), tuple(sorted(obj_ids)))
-        count = counts.get(key, 0)
-        if count >= 2:
-            removed += 1
-            continue
-        counts[key] = count + 1
-        deduped.append(q)
-
-    if removed:
-        logger.info("L3 scene-level dedup removed %d question(s)", removed)
-
-    return deduped
 
 
 def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = None) -> str:

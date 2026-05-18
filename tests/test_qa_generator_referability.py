@@ -9,7 +9,6 @@ import numpy as np
 from src.qa_generator import (
     enrich_objects_with_distance_geometry,
     _cap_l3_unchanged_ratio,
-    _deduplicate_l3_questions,
     _ensure_question_mentions,
     _enforce_in_frame_mentions,
     generate_all_questions,
@@ -2350,7 +2349,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(counts.get("object_rotate_object_centric", (0, 0)), (0, 0))
         self.assertEqual(sum(1 for q in filtered if q.get("type") == "viewpoint_move"), 1)
 
-    def test_full_quality_pipeline_applies_l3_caps(self) -> None:
+    def test_full_quality_pipeline_applies_l3_ratio_cap_and_global_dedup(self) -> None:
         from src.quality_control import full_quality_pipeline
 
         questions = []
@@ -2417,32 +2416,117 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         ]
         chain = [q for q in result if q["type"] == "attachment_chain"]
         self.assertEqual([q["question"] for q in unchanged_agent], ["unchanged first"])
-        self.assertEqual(len(chain), 2)
+        self.assertEqual(len(chain), 1)
 
     # ------------------------------------------------------------------
     # balance_l2_attachment_per_scene unit tests
     # ------------------------------------------------------------------
 
-    def _make_att_question(self, qtype, attached, unchanged=False, pair_id="", scene="s1"):
+    def _make_att_question(
+        self,
+        qtype,
+        attached,
+        unchanged=False,
+        pair_id="",
+        scene="s1",
+        mentioned_object_ids=None,
+    ):
         q = make_l2_object_move_question(qtype, attached=attached, text=f"{qtype} text")
         q["scene_id"] = scene
         if attached:
             q["relation_unchanged"] = unchanged
             if pair_id:
                 q["attachment_pair_id"] = pair_id
+            if mentioned_object_ids is not None:
+                q["mentioned_objects"] = [
+                    {"role": f"mentioned_{i}", "obj_id": obj_id, "label": f"obj{obj_id}"}
+                    for i, obj_id in enumerate(mentioned_object_ids)
+                ]
         return q
 
-    def test_balance_changed_dedup_by_pair_id(self):
+    def test_balance_changed_dedup_by_pair_id_and_other_mentions(self):
         from src.quality_control import balance_l2_attachment_per_scene
         questions = [
-            self._make_att_question("object_move_agent", attached=True, pair_id="1->2"),
-            self._make_att_question("object_move_agent", attached=True, pair_id="1->2"),
-            self._make_att_question("object_move_agent", attached=True, pair_id="1->3"),
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->2",
+                mentioned_object_ids=[1, 2, 3],
+            ),
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->2",
+                mentioned_object_ids=[2, 1, 3],
+            ),
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->3",
+                mentioned_object_ids=[1, 3, 2],
+            ),
         ]
         result = balance_l2_attachment_per_scene(questions)
         self.assertEqual(len(result), 2)
         pair_ids = [q.get("attachment_pair_id") for q in result]
         self.assertEqual(pair_ids, ["1->2", "1->3"])
+
+    def test_balance_changed_same_pair_keeps_different_other_mentions(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+        questions = [
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->2",
+                mentioned_object_ids=[1, 2, 3],
+            ),
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->2",
+                mentioned_object_ids=[1, 2, 4],
+            ),
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual(len(result), 2)
+        other_ids = [
+            tuple(
+                mention["obj_id"]
+                for mention in q["mentioned_objects"]
+                if mention["obj_id"] not in (1, 2)
+            )
+            for q in result
+        ]
+        self.assertEqual(other_ids, [(3,), (4,)])
+
+    def test_balance_changed_same_pair_falls_back_to_legacy_object_ids(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+        questions = [
+            {
+                **self._make_att_question("object_move_agent", attached=True, pair_id="1->2"),
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+                "obj_c_id": 3,
+            },
+            {
+                **self._make_att_question("object_move_agent", attached=True, pair_id="1->2"),
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+                "obj_c_id": 3,
+            },
+            {
+                **self._make_att_question("object_move_agent", attached=True, pair_id="1->2"),
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+                "obj_c_id": 4,
+            },
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual([q["obj_c_id"] for q in result], [3, 4])
 
     def test_balance_unattached_cap(self):
         from src.quality_control import balance_l2_attachment_per_scene
@@ -2834,190 +2918,6 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         kept_texts = {q["question"] for q in result}
         self.assertIn("s1_u1", kept_texts)
         self.assertNotIn("s2_u1", kept_texts)
-
-    # ------------------------------------------------------------------
-    # L3 scene-level dedup
-    # ------------------------------------------------------------------
-
-    def test_dedup_l3_questions_keeps_max_two_per_key(self) -> None:
-        questions = [
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "A",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "B",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "C",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-        ]
-        result = _deduplicate_l3_questions(questions)
-        self.assertEqual(len(result), 2)
-
-    def test_dedup_l3_questions_different_text_kept_separately(self) -> None:
-        questions = [
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Question A?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "A",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Question B?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "B",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-        ]
-        result = _deduplicate_l3_questions(questions)
-        self.assertEqual(len(result), 2)
-
-    def test_dedup_l3_questions_different_object_ids_kept_separately(self) -> None:
-        questions = [
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "A",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "B",
-                "obj_a_id": 3,
-                "obj_b_id": 4,
-            },
-        ]
-        result = _deduplicate_l3_questions(questions)
-        self.assertEqual(len(result), 2)
-
-    def test_dedup_l3_questions_different_scenes_kept_separately(self) -> None:
-        questions = [
-            {
-                "scene_id": "s1",
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "A",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "scene_id": "s2",
-                "level": "L3",
-                "type": "coordinate_rotation_agent",
-                "question": "Same question?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "B",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-        ]
-        result = _deduplicate_l3_questions(questions)
-        self.assertEqual(len(result), 2)
-
-    def test_dedup_l3_questions_includes_attachment_chain(self) -> None:
-        questions = [
-            {
-                "level": "L3",
-                "type": "attachment_chain",
-                "question": "If X moves, what else moves?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "A",
-                "grandparent_id": 1,
-                "parent_id": 2,
-                "grandchild_id": 3,
-                "neighbor_id": 4,
-            },
-            {
-                "level": "L3",
-                "type": "attachment_chain",
-                "question": "If X moves, what else moves?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "B",
-                "grandparent_id": 1,
-                "parent_id": 2,
-                "grandchild_id": 3,
-                "neighbor_id": 4,
-            },
-            {
-                "level": "L3",
-                "type": "attachment_chain",
-                "question": "If X moves, what else moves?",
-                "options": ["A", "B", "C", "D"],
-                "answer": "C",
-                "grandparent_id": 1,
-                "parent_id": 2,
-                "grandchild_id": 3,
-                "neighbor_id": 4,
-            },
-        ]
-        result = _deduplicate_l3_questions(questions)
-        self.assertEqual(len(result), 2)
-
-    def test_dedup_l3_questions_leaves_non_l3_untouched(self) -> None:
-        questions = [
-            {
-                "level": "L1",
-                "type": "direction_agent",
-                "question": "Where is A relative to B?",
-                "options": ["left", "right", "front", "back"],
-                "answer": "A",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "level": "L1",
-                "type": "direction_agent",
-                "question": "Where is A relative to B?",
-                "options": ["left", "right", "front", "back"],
-                "answer": "B",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-            {
-                "level": "L1",
-                "type": "direction_agent",
-                "question": "Where is A relative to B?",
-                "options": ["left", "right", "front", "back"],
-                "answer": "C",
-                "obj_a_id": 1,
-                "obj_b_id": 2,
-            },
-        ]
-        result = _deduplicate_l3_questions(questions)
-        self.assertEqual(len(result), 3)
-
 
 if __name__ == "__main__":
     unittest.main()

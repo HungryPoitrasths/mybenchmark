@@ -105,6 +105,27 @@ def test_quality_filter_dedups_identical_text_with_same_object_ids_across_frames
     assert len(filtered) == 1
 
 
+def test_quality_filter_dedups_non_coordinate_l3_questions_across_frames() -> None:
+    questions = [
+        {
+            **_make_question("attachment_chain", idx, "both objects"),
+            "level": "L3",
+            "scene_id": "scene0001_00",
+            "image_name": f"{idx:06d}.jpg",
+            "question": "If the desk moves, what else moves with it?",
+            "grandparent_id": 1,
+            "parent_id": 2,
+            "grandchild_id": 3,
+            "neighbor_id": 4,
+        }
+        for idx in range(3)
+    ]
+
+    filtered = quality_filter(questions)
+
+    assert len(filtered) == 1
+
+
 def test_full_quality_pipeline_caps_l1_occlusion_not_visible_ratio() -> None:
     questions = [
         {
