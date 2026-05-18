@@ -5909,7 +5909,7 @@ def generate_l2_object_remove(
         original_visibility[int(obj["id"])] = (status, source_used, reason_code, metrics)
 
     original_ids = {int(obj["id"]) for obj in candidate_objects}
-    candidate_count = len(candidate_objects) * (len(candidate_objects) - 1) if len(candidate_objects) >= 3 else 0
+    candidate_count = len(candidate_objects) * (len(candidate_objects) - 1) if len(candidate_objects) >= 2 else 0
     generated_candidate_count = 0
     processed_candidate_count = 0
     reason_counts: Counter[str] = Counter()
@@ -5937,7 +5937,7 @@ def generate_l2_object_remove(
         removal_progress_context = {
             "removed_object_id": int(obj["id"]),
         }
-        if len(remaining) < 2:
+        if len(remaining) < 1:
             reason_counts["removal_leaves_too_few_objects"] += 1
             _emit_generator_candidate(
                 trace_recorder,

@@ -947,6 +947,62 @@ class QuestionTemplateTests(unittest.TestCase):
             questions[0]["removed_object_occlusion_probe_metrics"]["passes_threshold"],
         )
 
+    def test_object_remove_generation_allows_two_object_scene(self) -> None:
+        camera_pose = make_camera_pose()
+        intrinsics = make_camera_intrinsics()
+        target_points = make_object_remove_target_points()
+        instance_mesh_data = make_object_remove_probe_instance_mesh_data(target_points)
+        objects = [
+            {"id": 1, "label": "chair", "center": [0.0, 0.0, 2.0]},
+            {
+                "id": 2,
+                "label": "lamp",
+                "center": [1.0, 0.0, 2.0],
+                "bbox_min": [-0.2, -0.1, 1.9],
+                "bbox_max": [0.2, 0.1, 2.1],
+            },
+        ]
+        ray_caster = _ScriptedHitPathCaster(
+            [_mixed_boundary_path] + [_visible_target_path] * 19
+            + [_removed_blocking_path] * 12
+        )
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
+                ],
+            ),
+            patch(
+                "src.qa_generator._local_triangle_resamples",
+                return_value=(_local_refine_points(), np.empty((0, 3), dtype=np.float64)),
+            ),
+        ):
+            questions = generate_l2_object_remove(
+                objects=objects,
+                attachment_graph={},
+                camera_pose=camera_pose,
+                templates={
+                    "L2_object_remove": [
+                        "If {obj_a} were removed, what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                color_intrinsics=intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["removed_obj_label"], "chair")
+        self.assertEqual(questions[0]["obj_b_label"], "lamp")
+
     def test_object_remove_generation_skips_candidate_when_refined_precheck_stays_below_threshold(self) -> None:
         camera_pose = make_camera_pose()
         intrinsics = make_camera_intrinsics()
