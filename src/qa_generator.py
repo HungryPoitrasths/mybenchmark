@@ -228,6 +228,9 @@ L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT = 512
 L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
 
+L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR = 4
+
+
 def _is_l2_occlusion_state_transition(
     old_status: str | None,
     new_status: str | None,
@@ -239,11 +242,33 @@ def _is_l2_occlusion_state_transition(
     )
 
 
-def _is_l2_occlusion_not_visible_transition(
+def _is_l2_occlusion_unchanged_candidate(
     old_status: str | None,
     new_status: str | None,
 ) -> bool:
-    return old_status in L1_VISIBLE_OCCLUSION_STATES and new_status == "not visible"
+    return old_status in L1_VISIBLE_OCCLUSION_STATES and old_status == new_status
+
+
+def _select_l2_object_move_occlusion_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    changed_records = [
+        record for record in records
+        if not bool(record["relation_unchanged"])
+    ]
+    unchanged_records = [
+        record for record in records
+        if bool(record["relation_unchanged"])
+    ]
+    selected_unchanged_count = min(
+        len(unchanged_records),
+        len(changed_records) // L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR,
+    )
+    selected_records = changed_records + unchanged_records[:selected_unchanged_count]
+    selected_records.sort(key=lambda record: int(record["candidate_index"]))
+    return selected_records
+
+
 L1_ABSENT_STRICT_NOT_VISIBLE_MAX_RAY_COUNT = 4096
 L1_OCCLUSION_MIN_EFFECTIVE_COUNT = 64
 L1_OCCLUSION_MIN_EFFECTIVE_RATIO = 0.25
@@ -4477,7 +4502,7 @@ def _find_object_move_occlusion_changes(
         )
         if new_status is None or old_status == new_status:
             continue
-        if not _is_l2_occlusion_not_visible_transition(old_status, new_status):
+        if not _is_l2_occlusion_state_transition(old_status, new_status):
             continue
 
         occlusion_changes.append({
@@ -4996,6 +5021,7 @@ def generate_l2_object_move(
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     questions_by_object: dict[int, list[dict]] = {}
+    occlusion_candidate_records: list[dict[str, Any]] = []
     referable_object_ids = {int(o["id"]) for o in objects}
     attachment_referable_ids = (
         _normalize_object_id_set(
@@ -5377,19 +5403,41 @@ def generate_l2_object_move(
                 _L1OcclusionMetrics,
             ] | None = None
             if occlusion_enabled and compare_backend is not None:
+                occlusion_unchanged_fallback: tuple[
+                    _SelectedObjectMoveState,
+                    tuple[
+                        str | None,
+                        str,
+                        str,
+                        _L1OcclusionMetrics,
+                        str | None,
+                        str,
+                        str,
+                        _L1OcclusionMetrics,
+                    ],
+                ] | None = None
                 if selected_state is not None:
                     visibility = _visibility_for_state(query_obj, selected_state)
-                    if _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
+                    if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
                         occlusion_state = selected_state
                         occlusion_visibility = visibility
+                    elif _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4]):
+                        occlusion_unchanged_fallback = (selected_state, visibility)
                 if occlusion_state is None:
                     for candidate_state in _fallback_states():
                         visibility = _visibility_for_state(query_obj, candidate_state)
-                        if not _is_l2_occlusion_not_visible_transition(visibility[0], visibility[4]):
-                            continue
-                        occlusion_state = candidate_state
-                        occlusion_visibility = visibility
-                        break
+                        if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
+                            occlusion_state = candidate_state
+                            occlusion_visibility = visibility
+                            break
+                        if (
+                            occlusion_unchanged_fallback is None
+                            and _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4])
+                        ):
+                            occlusion_unchanged_fallback = (candidate_state, visibility)
+                    if occlusion_state is None and occlusion_unchanged_fallback is not None:
+                        occlusion_state = occlusion_unchanged_fallback[0]
+                        occlusion_visibility = occlusion_unchanged_fallback[1]
 
             if occlusion_state is not None and occlusion_visibility is not None:
                 (
@@ -5404,6 +5452,7 @@ def generate_l2_object_move(
                 ) = occlusion_visibility
                 assert query_old_status is not None
                 assert query_new_status is not None
+                relation_unchanged = query_old_status == query_new_status
                 delta = occlusion_state.delta
                 direction_desc = _delta_to_description(delta, camera_pose)
                 distance_desc = f"{np.linalg.norm(delta):.1f}m"
@@ -5452,12 +5501,12 @@ def generate_l2_object_move(
                     "attachment_remapped": attachment_remapped,
                     "obj_b_id": query_obj_id,
                     "obj_b_label": query_obj["label"],
+                    "relation_unchanged": relation_unchanged,
                     "mentioned_objects": [
                         _mention("moved_object", move_source["label"], move_source_id),
                         _mention("target_object", query_obj["label"], query_obj_id),
                     ],
                     "delta": delta.tolist(),
-                    "relation_unchanged": False,
                     "has_attachment_chain": has_attachment_chain,
                 }
                 if attachment_remapped:
@@ -5466,7 +5515,23 @@ def generate_l2_object_move(
                         occlusion_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
                         occlusion_dict["attachment_parent_id"] = move_source_id
                         occlusion_dict["attachment_child_id"] = direct_children[0]
-                query_obj_questions.append(occlusion_dict)
+                occlusion_candidate_records.append({
+                    "candidate_index": len(occlusion_candidate_records),
+                    "query_obj_id": query_obj_id,
+                    "question": occlusion_dict,
+                    "relation_unchanged": relation_unchanged,
+                    "old_status": query_old_status,
+                    "new_status": query_new_status,
+                    "old_source": query_old_source,
+                    "new_source": query_new_source,
+                    "old_reason_code": query_old_reason_code,
+                    "new_reason_code": query_new_reason_code,
+                    "old_metrics": query_old_metrics,
+                    "new_metrics": query_new_metrics,
+                    "delta": delta.tolist(),
+                    "move_source_id": move_source_id,
+                    "query_obj_id": query_obj_id,
+                })
 
             _dist_before = len(query_obj_questions)
             query_obj_questions.extend(
@@ -5493,6 +5558,13 @@ def generate_l2_object_move(
 
             if query_obj_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
+
+    if occlusion_candidate_records:
+        for record in _select_l2_object_move_occlusion_records(occlusion_candidate_records):
+            questions_by_object.setdefault(
+                int(record["query_obj_id"]),
+                [],
+            ).append(record["question"])
 
     # Cap per query-object instance so repeated labels can still contribute.
     result = [q for group in questions_by_object.values() for q in group]
@@ -7692,7 +7764,10 @@ def _attachment_trace_reason(question: dict[str, Any]) -> str | None:
     if qtype == "attachment_chain":
         return "attachment_chain_two_hop_inference"
     if qtype == "object_move_occlusion":
-        return "attachment_visibility_change"
+        return (
+            "attachment_visibility_preserved_fallback"
+            if relation_unchanged else "attachment_visibility_change"
+        )
     if qtype == "object_move_distance":
         return (
             "attachment_distance_preserved_fallback"
