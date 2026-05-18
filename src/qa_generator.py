@@ -5018,8 +5018,24 @@ def generate_l2_object_move(
     attachment_query_objects: list[dict] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
+    enabled_l2_object_move_types: set[str] | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
+    if enabled_l2_object_move_types is None:
+        enable_agent = True
+        enable_distance = True
+        enable_occlusion = True
+    else:
+        enabled_move_types = {
+            str(move_type).strip()
+            for move_type in enabled_l2_object_move_types
+        }
+        enable_agent = "object_move_agent" in enabled_move_types
+        enable_distance = "object_move_distance" in enabled_move_types
+        enable_occlusion = "object_move_occlusion" in enabled_move_types
+        if not (enable_agent or enable_distance or enable_occlusion):
+            return []
+
     questions_by_object: dict[int, list[dict]] = {}
     occlusion_candidate_records: list[dict[str, Any]] = []
     referable_object_ids = {int(o["id"]) for o in objects}
@@ -5065,7 +5081,8 @@ def generate_l2_object_move(
         _debug_log = None
         _debug_lock = None
     occlusion_enabled = (
-        color_intrinsics is not None
+        enable_occlusion
+        and color_intrinsics is not None
         and ray_caster is not None
         and instance_mesh_data is not None
     )
@@ -5119,19 +5136,21 @@ def generate_l2_object_move(
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
-        selected_state = _select_object_move_state(
-            movement_scene_objects,
-            attachment_graph,
-            move_source_id,
-            camera_pose,
-            room_bounds=room_bounds,
-            collision_objects=collision_objects,
-            allow_unchanged_attachment=has_attachment_chain,
-            color_intrinsics=color_intrinsics,
-            occlusion_backend=occlusion_backend,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
-        )
+        selected_state = None
+        if enable_agent or enable_occlusion:
+            selected_state = _select_object_move_state(
+                movement_scene_objects,
+                attachment_graph,
+                move_source_id,
+                camera_pose,
+                room_bounds=room_bounds,
+                collision_objects=collision_objects,
+                allow_unchanged_attachment=has_attachment_chain,
+                color_intrinsics=color_intrinsics if enable_occlusion else None,
+                occlusion_backend=occlusion_backend if enable_occlusion else "depth",
+                ray_caster=ray_caster if enable_occlusion else None,
+                instance_mesh_data=instance_mesh_data if enable_occlusion else None,
+            )
         if has_attachment_chain:
             _move_src_entry = {
                 "move_source_id": move_source_id,
@@ -5250,7 +5269,7 @@ def generate_l2_object_move(
 
             _debug_agent_checked = 0
             _debug_agent_generated = 0
-            for key, old_relation in base_relation_map.items():
+            for key, old_relation in (base_relation_map.items() if enable_agent else ()):
                 if query_obj_id not in key:
                     continue
 
@@ -5534,24 +5553,25 @@ def generate_l2_object_move(
                 })
 
             _dist_before = len(query_obj_questions)
-            query_obj_questions.extend(
-                _generate_l2_distance_questions_for_object(
-                    query_obj=query_obj,
-                    move_source=move_source,
-                    move_source_id=move_source_id,
-                    attachment_remapped=attachment_remapped,
-                    relations=base_relations,
-                    movement_scene_objects=movement_scene_objects,
-                    relation_scene_objects=relation_scene_objects,
-                    attachment_graph=attachment_graph,
-                    camera_pose=camera_pose,
-                    templates=templates,
-                    obj_map=obj_map,
-                    referable_object_ids=referable_object_ids,
-                    room_bounds=room_bounds,
-                    collision_objects=collision_objects,
+            if enable_distance:
+                query_obj_questions.extend(
+                    _generate_l2_distance_questions_for_object(
+                        query_obj=query_obj,
+                        move_source=move_source,
+                        move_source_id=move_source_id,
+                        attachment_remapped=attachment_remapped,
+                        relations=base_relations,
+                        movement_scene_objects=movement_scene_objects,
+                        relation_scene_objects=relation_scene_objects,
+                        attachment_graph=attachment_graph,
+                        camera_pose=camera_pose,
+                        templates=templates,
+                        obj_map=obj_map,
+                        referable_object_ids=referable_object_ids,
+                        room_bounds=room_bounds,
+                        collision_objects=collision_objects,
+                    )
                 )
-            )
             _dist_count = len(query_obj_questions) - _dist_before
             if has_attachment_chain and _move_src_entry is not None:
                 _move_src_entry["query_objects"][-1]["distance_generated"] = _dist_count
@@ -8221,6 +8241,12 @@ _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
 }
 """(level, type) filter for each --only_question_types entry."""
 
+_L2_OBJECT_MOVE_QUESTION_TYPE_TO_INTERNAL: dict[str, str] = {
+    "L2_object_move_agent": "object_move_agent",
+    "L2_object_move_distance": "object_move_distance",
+}
+"""Internal subtypes enabled inside generate_l2_object_move by public filters."""
+
 
 def generate_all_questions(
     objects: list[dict],
@@ -8320,8 +8346,18 @@ def generate_all_questions(
         _allowed_generators: set[str] = set()
         for t in only_question_types:
             _allowed_generators.update(_QUESTION_TYPE_TO_GENERATORS[t])
+        enabled_l2_object_move_types = {
+            internal_type
+            for t in only_question_types
+            for internal_type in (
+                [_L2_OBJECT_MOVE_QUESTION_TYPE_TO_INTERNAL[t]]
+                if t in _L2_OBJECT_MOVE_QUESTION_TYPE_TO_INTERNAL
+                else []
+            )
+        }
     else:
         _allowed_generators = None  # None means "allow all"
+        enabled_l2_object_move_types = None
 
     def _generator_allowed(name: str) -> bool:
         if _allowed_generators is None:
@@ -9121,6 +9157,7 @@ def generate_all_questions(
                     attachment_query_objects=attachment_query_objects_uniq,
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
+                    enabled_l2_object_move_types=enabled_l2_object_move_types,
                 ),
             ),
         )

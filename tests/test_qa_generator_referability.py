@@ -60,6 +60,46 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
+    def test_generate_all_questions_passes_l2_move_internal_type_filter(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+        ]
+        captured: dict[str, object] = {}
+
+        def fake_generate_l2_object_move(*_args, **kwargs):
+            captured["enabled_l2_object_move_types"] = kwargs.get(
+                "enabled_l2_object_move_types"
+            )
+            return []
+
+        with (
+            patch(
+                "src.qa_generator.generate_l2_object_move",
+                side_effect=fake_generate_l2_object_move,
+            ),
+            patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                referable_object_ids=[1, 2],
+                only_question_types=[
+                    "L2_object_move_distance",
+                    "L2_object_move_agent",
+                    "L2_object_remove",
+                ],
+            )
+
+        self.assertEqual(questions, [])
+        self.assertEqual(
+            captured["enabled_l2_object_move_types"],
+            {"object_move_agent", "object_move_distance"},
+        )
+
     def test_object_move_object_centric_generator_emits_three_role_move_question(self) -> None:
         parent = make_object(1, "table")
         child = make_object(2, "box")

@@ -187,6 +187,92 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertIs(selected_state, fallback_state)
         fallback_mock.assert_called_once()
 
+    def test_generate_l2_object_move_agent_distance_filter_skips_occlusion_helpers(self) -> None:
+        objects = [
+            make_object(1, "sofa", (0.0, 0.0, 2.0)),
+            make_object(2, "cushion", (0.2, 0.0, 2.0)),
+        ]
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator._find_object_move_occlusion_changes") as find_mock,
+            patch("src.qa_generator._query_visibility_for_object_move_state") as query_mock,
+            patch("src.qa_generator._compute_l1_style_visibility_metrics_for_static_target") as static_mock,
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                enabled_l2_object_move_types={
+                    "object_move_agent",
+                    "object_move_distance",
+                },
+            )
+
+        self.assertEqual(questions, [])
+        find_mock.assert_not_called()
+        query_mock.assert_not_called()
+        static_mock.assert_not_called()
+
+    def test_generate_l2_object_move_distance_filter_skips_agent_and_occlusion(self) -> None:
+        objects = [
+            make_object(1, "box", (0.0, 0.0, 2.0)),
+            make_object(2, "chair", (1.0, 0.0, 2.0)),
+        ]
+        distance_question = {
+            "level": "L2",
+            "type": "object_move_distance",
+            "question": "distance?",
+            "options": ["near", "far"],
+            "answer": "near",
+        }
+
+        def fake_distance_questions(**kwargs):
+            if kwargs["move_source_id"] == 1:
+                return [dict(distance_question)]
+            return []
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator._select_object_move_state") as select_mock,
+            patch("src.qa_generator._find_object_move_occlusion_changes") as find_mock,
+            patch("src.qa_generator._query_visibility_for_object_move_state") as query_mock,
+            patch("src.qa_generator._compute_l1_style_visibility_metrics_for_static_target") as static_mock,
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                side_effect=fake_distance_questions,
+            ),
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                enabled_l2_object_move_types={"object_move_distance"},
+            )
+
+        self.assertEqual([q["type"] for q in questions], ["object_move_distance"])
+        select_mock.assert_not_called()
+        find_mock.assert_not_called()
+        query_mock.assert_not_called()
+        static_mock.assert_not_called()
+
     def test_generate_l2_object_move_emits_single_target_l1_style_occlusion_question(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
