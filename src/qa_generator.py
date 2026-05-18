@@ -5509,6 +5509,7 @@ def generate_l2_object_move(
         # Write to debug log file
         _log_path = _os.environ.get("L2_DEBUG_LOG", "output/pilot/debug/l2_debug.jsonl")
         with _debug_lock:
+            Path(_log_path).parent.mkdir(parents=True, exist_ok=True)
             with open(_log_path, "a", encoding="utf-8") as _f:
                 _f.write(_json.dumps(_debug_log, default=str) + "\n")
     return result
