@@ -55,6 +55,7 @@ from src.qa_generator import (
     _in_frame_surface_sample_subset,
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
+    _apply_attachment_surface_text_overrides,
     generate_all_questions,
 )
 from src.referability_checks import (
@@ -3911,9 +3912,25 @@ def _load_cached_scene_questions(
     *,
     scene_ids: list[str],
     max_questions_per_scene_type: int,
+    referability_cache: dict | None = None,
 ) -> tuple[list[dict], int]:
     all_questions: list[dict] = []
     raw_question_count = 0
+    attachment_surface_text_by_scene_image: dict[tuple[str, str], dict[int, str]] = {}
+    if referability_cache is not None:
+        frames = referability_cache.get("frames", referability_cache)
+        if isinstance(frames, dict):
+            for scene_id, scene_frames in frames.items():
+                if not isinstance(scene_frames, dict):
+                    continue
+                for image_name, entry in scene_frames.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    attachment_surface_text_by_scene_image[(str(scene_id), str(image_name))] = (
+                        _attachment_human_review_surface_text_by_object_id(
+                            entry.get("attachment_human_review_cards")
+                        )
+                    )
     for scene_id in scene_ids:
         raw_question_path = raw_questions_dir / f"{scene_id}.json"
         if not raw_question_path.exists():
@@ -3933,6 +3950,18 @@ def _load_cached_scene_questions(
             scene_questions,
             max_questions_per_scene_type=max_questions_per_scene_type,
         )
+        if attachment_surface_text_by_scene_image:
+            for idx, question in enumerate(scene_questions):
+                image_name = str(question.get("image_name", "")).strip()
+                if not image_name:
+                    continue
+                surface_text_by_obj_id = attachment_surface_text_by_scene_image.get((scene_id, image_name))
+                if not surface_text_by_obj_id:
+                    continue
+                scene_questions[idx] = _apply_attachment_surface_text_overrides(
+                    question,
+                    surface_text_by_obj_id,
+                )
         all_questions.extend(scene_questions)
     return all_questions, raw_question_count
 
@@ -3945,6 +3974,7 @@ def _rebuild_pipeline_outputs(
     frame_debug_dir: Path,
     raw_questions_dir: Path,
     scene_ids: list[str],
+    referability_cache: dict | None,
     write_frame_debug: bool,
     run_question_dinox_audit: bool,
     run_question_presence_review: bool,
@@ -3957,6 +3987,7 @@ def _rebuild_pipeline_outputs(
         raw_questions_dir,
         scene_ids=scene_ids,
         max_questions_per_scene_type=max_questions_per_scene_type,
+        referability_cache=referability_cache,
     )
 
     logger.info(
@@ -4720,6 +4751,7 @@ def run_pipeline(
         frame_debug_dir=frame_debug_dir,
         raw_questions_dir=raw_questions_dir,
         scene_ids=completed_scene_ids,
+        referability_cache=referability_cache,
         write_frame_debug=write_frame_debug,
         run_question_dinox_audit=run_question_dinox_audit,
         run_question_presence_review=run_question_presence_review,
