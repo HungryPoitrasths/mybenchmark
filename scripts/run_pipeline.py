@@ -5158,7 +5158,7 @@ def main():
         "--only_question_types",
         nargs="*",
         default=None,
-        help="If provided, only generate the listed question types (e.g. L1_direction_agent L2_object_move_agent L3_coordinate_rotation_agent). When omitted, all types are generated.",
+        help="If provided, only generate the listed question types (e.g. L1_direction_agent L2_object_move_agent L2_object_remove L3_coordinate_rotation_agent). When omitted, all types are generated.",
     )
     parser.add_argument(
         "--max_questions_per_scene_type",
