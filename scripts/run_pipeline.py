@@ -1916,6 +1916,7 @@ def _should_run_attachment_pair_review(question: dict[str, object]) -> bool:
         "object_move_agent",
         "object_move_distance",
         "object_move_occlusion",
+        "object_move_object_centric",
         "object_rotate_object_centric",
         "object_move_allocentric",
     }:
@@ -3843,10 +3844,7 @@ def _deduplicate_scene_questions(scene_questions: list[dict], max_per_key: int =
 
 
 def _canonical_scene_question_type(question: dict) -> str:
-    question_type = str(question.get("type", "")).strip().lower()
-    if question_type == "object_move_object_centric":
-        return "object_rotate_object_centric"
-    return question_type
+    return str(question.get("type", "")).strip().lower()
 
 
 def _apply_scene_type_cap(

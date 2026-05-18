@@ -209,13 +209,13 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual([q["question"] for q in kept if q["type"] == "direction"], [f"d {idx}" for idx in range(5)])
         self.assertEqual([q["question"] for q in kept if q["type"] == "distance"], [f"m {idx}" for idx in range(5)])
 
-    def test_scene_type_cap_canonicalizes_legacy_object_centric_alias(self) -> None:
+    def test_scene_type_cap_counts_object_centric_move_and_rotate_separately(self) -> None:
         questions = [
-            {"scene_id": "scene0000_00", "type": "object_move_object_centric", "question": f"legacy {idx}"}
-            for idx in range(3)
+            {"scene_id": "scene0000_00", "type": "object_move_object_centric", "question": f"move {idx}"}
+            for idx in range(6)
         ] + [
-            {"scene_id": "scene0000_00", "type": "object_rotate_object_centric", "question": f"canonical {idx}"}
-            for idx in range(4)
+            {"scene_id": "scene0000_00", "type": "object_rotate_object_centric", "question": f"rotate {idx}"}
+            for idx in range(6)
         ]
 
         kept = run_pipeline_module._apply_scene_type_cap(
@@ -223,14 +223,15 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             max_questions_per_scene_type=5,
         )
 
-        self.assertEqual(len(kept), 5)
-        self.assertEqual([q["question"] for q in kept], [
-            "legacy 0",
-            "legacy 1",
-            "legacy 2",
-            "canonical 0",
-            "canonical 1",
-        ])
+        self.assertEqual(len(kept), 10)
+        self.assertEqual(
+            [q["question"] for q in kept if q["type"] == "object_move_object_centric"],
+            [f"move {idx}" for idx in range(5)],
+        )
+        self.assertEqual(
+            [q["question"] for q in kept if q["type"] == "object_rotate_object_centric"],
+            [f"rotate {idx}" for idx in range(5)],
+        )
 
     def test_load_cached_scene_questions_applies_scene_type_cap(self) -> None:
         root = make_case_dir("cached_scene_cap")

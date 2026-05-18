@@ -60,6 +60,7 @@ SUMMARY_GROUPS = [
             ("object_move_agent", "L2_object_move_agent"),
             ("object_move_distance", "L2_object_move_distance"),
             ("object_move_occlusion", "L2_object_move_occlusion"),
+            ("object_move_object_centric", "L2_object_move_object_centric"),
             ("object_rotate_object_centric", "L2_object_rotate_object_centric"),
             ("object_move_allocentric", "L2_object_move_allocentric"),
             ("viewpoint_move", "L2_viewpoint_move"),
@@ -92,14 +93,13 @@ QTYPE_LEVEL = {
     for raw, _ in items
 }
 LEVEL_DISPLAY_ORDER = ["L1", "L2", "L3"]
-QUESTION_TYPE_ALIASES = {
-    "object_move_object_centric": "object_rotate_object_centric",
-}
+QUESTION_TYPE_ALIASES: dict[str, str] = {}
 
 OBJECT_MOVE_TYPES = {
     "object_move_agent",
     "object_move_distance",
     "object_move_occlusion",
+    "object_move_object_centric",
     "object_rotate_object_centric",
     "object_move_allocentric",
 }
@@ -113,6 +113,7 @@ VIEWER_QTYPE_ORDER = [
     "object_move_agent",
     "object_move_distance",
     "object_move_occlusion",
+    "object_move_object_centric",
     "object_rotate_object_centric",
     "object_move_allocentric",
     "viewpoint_move",
@@ -197,6 +198,17 @@ SIMPLE_VIEWER_FIELD_SPECS: dict[
         "relations": [
             ("old_visibility", ("old_visibility", "old_correct_value")),
             ("new_visibility", ("new_visibility", "new_correct_value", "correct_value")),
+        ],
+    },
+    "object_move_object_centric": {
+        "objects": [
+            ("moved", ("moved_obj_label",)),
+            ("query", ("query_obj_label",)),
+            ("reference", ("obj_ref_label",)),
+        ],
+        "relations": [
+            ("old_direction", ("old_direction", "old_correct_value")),
+            ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
         ],
     },
     "viewpoint_move": {

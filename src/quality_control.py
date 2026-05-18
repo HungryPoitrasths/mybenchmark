@@ -32,9 +32,7 @@ ATTACHMENT_NEAR_DUP_TYPES = {
     "attachment_type",
     "support_move_consequence",
 }
-QUESTION_TYPE_ALIASES = {
-    "object_move_object_centric": "object_rotate_object_centric",
-}
+QUESTION_TYPE_ALIASES: dict[str, str] = {}
 ATTACHMENT_ID_FIELDS = (
     "obj_a_id",
     "moved_obj_id",

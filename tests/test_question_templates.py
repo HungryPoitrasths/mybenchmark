@@ -27,6 +27,18 @@ EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE = (
     "the objects' 3D bounding-box centers projected onto the floor plane; "
     "above/below use the vertical spatial rule.)"
 )
+EXPECTED_L2_OBJECT_CENTRIC_MOVE_TEMPLATES = [
+    "Imagine you are {obj_move_source} and initially facing the camera. "
+    "If you were shifted {direction} by {distance}, from {obj_query}'s perspective "
+    "(which initially faces the camera too), in which horizontal direction would "
+    "{obj_ref} be? (For horizontal directions, compare the objects' 3D bounding-box "
+    "centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "Imagine you are {obj_move_source} initially facing the camera. "
+    "If you were shifted {direction} by {distance}, from {obj_query}'s perspective "
+    "(which also initially faces the camera), in which horizontal direction is "
+    "{obj_ref}? (For horizontal directions, compare the objects' 3D bounding-box "
+    "centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+]
 
 
 def make_camera_pose() -> CameraPose:
@@ -257,7 +269,7 @@ class _ScriptedHitPathCaster:
 
 
 class QuestionTemplateTests(unittest.TestCase):
-    def test_default_object_centric_rotation_templates_use_explicit_orbit_wording(self) -> None:
+    def test_default_object_centric_templates_split_move_and_rotate_wording(self) -> None:
         templates = _default_templates()
 
         self.assertEqual(
@@ -266,7 +278,7 @@ class QuestionTemplateTests(unittest.TestCase):
         )
         self.assertEqual(
             templates["L2_object_move_object_centric"],
-            [EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE],
+            EXPECTED_L2_OBJECT_CENTRIC_MOVE_TEMPLATES,
         )
 
     def test_default_coordinate_rotation_object_centric_preserves_original_heading_wording(self) -> None:
@@ -278,8 +290,8 @@ class QuestionTemplateTests(unittest.TestCase):
         )
         self.assertNotIn("faced toward {obj_face}'s rotated position", template)
 
-    def test_normalize_template_aliases_backfills_missing_sibling_key(self) -> None:
-        with self.subTest("canonical_present_alias_missing"):
+    def test_normalize_template_aliases_keeps_move_and_rotate_distinct(self) -> None:
+        with self.subTest("rotate_present_move_missing"):
             normalized = _normalize_template_aliases(
                 {
                     "L2_object_rotate_object_centric": [
@@ -287,23 +299,15 @@ class QuestionTemplateTests(unittest.TestCase):
                     ]
                 }
             )
-            self.assertEqual(
-                normalized["L2_object_move_object_centric"],
-                [EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE],
-            )
+            self.assertNotIn("L2_object_move_object_centric", normalized)
 
-        with self.subTest("alias_present_canonical_missing"):
+        with self.subTest("move_present_rotate_missing"):
             normalized = _normalize_template_aliases(
                 {
-                    "L2_object_move_object_centric": [
-                        EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE
-                    ]
+                    "L2_object_move_object_centric": EXPECTED_L2_OBJECT_CENTRIC_MOVE_TEMPLATES
                 }
             )
-            self.assertEqual(
-                normalized["L2_object_rotate_object_centric"],
-                [EXPECTED_L2_OBJECT_CENTRIC_ORBIT_TEMPLATE],
-            )
+            self.assertNotIn("L2_object_rotate_object_centric", normalized)
 
     def test_direction_with_camera_hint_uses_subject_specific_forward_backward_wording(self) -> None:
         self.assertEqual(

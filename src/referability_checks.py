@@ -22,6 +22,17 @@ QUESTION_MENTION_FIELDS: tuple[tuple[str, str, str], ...] = (
 
 _VALID_LABEL_STATUSES = {"absent", "unique", "multiple", "unsure"}
 
+_OBJECT_MOVE_EQUIVALENT_ROLES = {
+    "moved_object",
+    "query_object",
+    "relation_obj_b",
+}
+
+_OBJECT_CENTRIC_MOVE_EQUIVALENT_ROLES = {
+    "moved_object",
+    "query_object",
+}
+
 
 def coerce_object_id(value: object) -> int | None:
     if value is None or value == "":
@@ -282,6 +293,20 @@ def is_static_occlusion_absent_target(
     )
 
 
+def _allows_same_object_multi_role(
+    question: dict[str, Any],
+    roles: set[str],
+) -> bool:
+    qtype = str(question.get("type", "")).strip().lower()
+    if not roles:
+        return False
+    if qtype in {"object_move_agent", "object_move_distance"}:
+        return roles.issubset(_OBJECT_MOVE_EQUIVALENT_ROLES)
+    if qtype in {"object_rotate_object_centric", "object_move_object_centric"}:
+        return roles.issubset(_OBJECT_CENTRIC_MOVE_EQUIVALENT_ROLES)
+    return False
+
+
 def build_question_referability_audit(
     question: dict[str, Any],
     *,
@@ -325,10 +350,15 @@ def build_question_referability_audit(
     multi_role_object_ids = {
         obj_id
         for obj_id, explicit_roles in object_explicit_roles.items()
-        if len(explicit_roles) > 1
+        for fallback_roles in (object_fallback_roles.get(obj_id, set()),)
+        if (
+            len(explicit_roles) > 1
+            and not _allows_same_object_multi_role(question, explicit_roles)
+        )
         or (
             not explicit_roles
-            and len(object_fallback_roles.get(obj_id, set())) > 1
+            and len(fallback_roles) > 1
+            and not _allows_same_object_multi_role(question, fallback_roles)
         )
     }
 

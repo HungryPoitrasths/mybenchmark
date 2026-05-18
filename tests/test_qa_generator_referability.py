@@ -15,6 +15,7 @@ from src.qa_generator import (
     generate_all_questions,
     generate_l1_occlusion_questions,
     generate_l2_object_move,
+    generate_l2_object_move_object_centric,
     generate_l2_object_move_allocentric,
     generate_l2_object_rotate_object_centric,
     generate_l3_attachment_chain,
@@ -60,6 +61,55 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
+    def test_object_move_object_centric_generator_emits_three_role_move_question(self) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        ref = make_object(3, "chair")
+        moved_parent = {**parent, "center": [2.0, 0.0, 1.0]}
+        moved_child = {**child, "center": [3.0, 0.0, 1.0]}
+        moved_objects = [moved_parent, moved_child, ref]
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator._iter_valid_object_move_states",
+                return_value=[
+                    (np.array([1.0, 0.0, 0.0], dtype=np.float64), moved_objects, {1, 2})
+                ],
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                side_effect=[("left", 0.1), ("front", 0.1)],
+            ),
+        ):
+            questions = generate_l2_object_move_object_centric(
+                objects=[parent, child, ref],
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_object_centric": [
+                        "move {obj_move_source} {direction} by {distance}: where is {obj_ref} from {obj_query}?"
+                    ]
+                },
+                movement_objects=[parent, child, ref],
+                object_map={obj["id"]: obj for obj in [parent, child, ref]},
+                attachment_referable_object_ids=[1, 2, 3],
+                attachment_query_objects=[parent, child, ref],
+            )
+
+        self.assertTrue(questions)
+        question = questions[0]
+        self.assertEqual(question["type"], "object_move_object_centric")
+        self.assertEqual(question["moved_obj_id"], 1)
+        self.assertEqual(question["query_obj_id"], 2)
+        self.assertEqual(question["obj_ref_id"], 3)
+        self.assertNotIn("obj_face_id", question)
+        self.assertEqual(
+            [mention["role"] for mention in question["mentioned_objects"]],
+            ["moved_object", "query_object", "reference_object"],
+        )
+
     def test_generate_all_questions_keeps_salvage_only_attachment_pairs_in_attachment_path(self) -> None:
         objects = [
             make_object(9, "desk"),
@@ -597,6 +647,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator.generate_l2_object_move", return_value=[]),
             patch("src.qa_generator.generate_l2_viewpoint_move", return_value=[]),
             patch("src.qa_generator.generate_l2_object_remove", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move_object_centric", return_value=[]),
             patch("src.qa_generator.generate_l2_object_rotate_object_centric", return_value=[]),
             patch("src.qa_generator.generate_l2_object_move_allocentric", return_value=[]),
             patch("src.qa_generator.generate_l3_attachment_chain", return_value=[attachment_question]),

@@ -97,18 +97,30 @@ class MakeViewerTests(unittest.TestCase):
 
         self.assertEqual(filtered, [{"type": "viewpoint_move"}])
 
-    def test_qtypes_filter_accepts_canonical_object_rotate_label_for_legacy_input(self) -> None:
+    def test_qtypes_filter_distinguishes_move_and_rotate_object_centric(self) -> None:
         questions = [
             {"type": "object_move_object_centric", "attachment_remapped": True},
+            {"type": "object_rotate_object_centric", "attachment_remapped": True},
             {"type": "object_move_agent", "attachment_remapped": True},
         ]
 
-        filtered = select_viewer_source_questions(
+        rotate_filtered = select_viewer_source_questions(
             questions,
             requested_qtypes={"object_rotate_object_centric"},
         )
+        move_filtered = select_viewer_source_questions(
+            questions,
+            requested_qtypes={"object_move_object_centric"},
+        )
 
-        self.assertEqual(filtered, [{"type": "object_move_object_centric", "attachment_remapped": True}])
+        self.assertEqual(
+            rotate_filtered,
+            [{"type": "object_rotate_object_centric", "attachment_remapped": True}],
+        )
+        self.assertEqual(
+            move_filtered,
+            [{"type": "object_move_object_centric", "attachment_remapped": True}],
+        )
 
     def test_viewer_attachment_filter_drops_unattached_when_no_attached_globally(self) -> None:
         questions = [
@@ -317,7 +329,7 @@ class MakeViewerTests(unittest.TestCase):
         self.assertIn("审核结论：需要人工复核", roundtrip_text)
         self.assertIn("生成后审核".encode("utf-8"), raw_bytes)
 
-    def test_task_summary_v2_canonicalizes_legacy_object_centric_type(self) -> None:
+    def test_task_summary_v2_reports_object_centric_move_separately(self) -> None:
         questions = [
             {"type": "object_move_object_centric", "attachment_remapped": True},
         ]
@@ -325,7 +337,7 @@ class MakeViewerTests(unittest.TestCase):
         summary = build_task_summary_v2(questions)
 
         self.assertIn(
-            "L2_object_rotate_object_centric: with_attachment=1, without_attachment=0",
+            "L2_object_move_object_centric: with_attachment=1, without_attachment=0",
             summary,
         )
         self.assertIn(
@@ -339,7 +351,6 @@ class MakeViewerTests(unittest.TestCase):
         self.assertNotIn("total=", summary)
         self.assertNotIn("with_attachment_changed=", summary)
         self.assertNotIn("with_attachment_unchanged=", summary)
-        self.assertNotIn("object_move_object_centric", summary)
 
     def test_task_summary_v2_does_not_list_object_rotate_in_other_types(self) -> None:
         questions = [
