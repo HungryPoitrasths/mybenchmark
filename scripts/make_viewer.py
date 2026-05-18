@@ -596,12 +596,17 @@ PAGE = """\
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <style>
 *{{box-sizing:border-box}}
 body{{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}}
 h1{{text-align:center;color:#333;margin-bottom:4px}}
 .stats{{text-align:center;color:#666;font-size:14px;margin-bottom:24px}}
+.viewer-actions{{max-width:1100px;margin:0 auto 14px;display:flex;justify-content:flex-end;gap:10px}}
+.export-edited{{border:1px solid #1d4ed8;background:#2563eb;color:#fff;border-radius:6px;
+                padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer}}
+.export-edited:hover{{background:#1d4ed8}}
 .summary{{max-width:1100px;margin:0 auto 24px;background:#fff;border-radius:10px;
           box-shadow:0 2px 6px rgba(0,0,0,.12);padding:18px 20px}}
 .summary h2{{margin:0 0 12px;color:#111;font-size:18px}}
@@ -612,12 +617,15 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .summary-other{{margin-top:12px;color:#6b7280}}
 .card{{display:flex;background:#fff;border-radius:10px;
        box-shadow:0 2px 6px rgba(0,0,0,.12);margin-bottom:18px;overflow:hidden}}
+.card[data-deleted="true"]{{background:#f3f4f6}}
+.card[data-deleted="true"] .img-wrap,
+.card[data-deleted="true"] .body > :not(.card-actions){{filter:grayscale(1);opacity:.42}}
 .img-wrap{{flex:0 0 auto;width:480px;background:#222;display:flex;
            align-items:center;justify-content:center}}
 .img-wrap img{{width:480px;display:block}}
 .no-img{{width:480px;height:200px;display:flex;align-items:center;
          justify-content:center;color:#999;font-size:13px}}
-.body{{padding:18px 20px;flex:1;min-width:0}}
+.body{{padding:18px 20px 56px;flex:1;min-width:0;position:relative}}
 .meta{{font-size:12px;color:#888;margin-bottom:10px}}
 .badge{{display:inline-block;padding:2px 9px;border-radius:12px;
         font-weight:bold;font-size:11px;margin-right:6px}}
@@ -651,19 +659,77 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .simple-empty{{font-size:13px;color:#9ca3af}}
 .footer{{margin-top:14px;font-size:11px;color:#aaa}}
 .idx{{float:right;color:#ccc;font-size:12px}}
+.card-actions{{position:absolute;right:18px;bottom:16px;display:flex;justify-content:flex-end}}
+.delete-card-toggle{{border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:6px;
+                     padding:7px 11px;font-size:12px;font-weight:700;cursor:pointer}}
+.delete-card-toggle:hover{{background:#f9fafb;border-color:#9ca3af}}
+.card[data-deleted="true"] .delete-card-toggle{{border-color:#2563eb;color:#1d4ed8}}
 </style>
 </head>
 <body>
 <h1>{title}</h1>
 {stats}
+<div class="viewer-actions">
+  <button type="button" class="export-edited" id="export-edited-html">Export Edited HTML</button>
+</div>
 {summary}
 {cards}
+<script>
+(() => {{
+  const editedHtmlFilename = {edited_html_filename_json};
+
+  function setCardDeleted(card, deleted) {{
+    card.dataset.deleted = deleted ? "true" : "false";
+    const button = card.querySelector(".delete-card-toggle");
+    if (button) {{
+      button.textContent = deleted ? "Restore Card" : "Delete Card";
+      button.setAttribute("aria-pressed", deleted ? "true" : "false");
+    }}
+  }}
+
+  document.querySelectorAll(".card").forEach((card) => {{
+    const deleted = card.dataset.deleted === "true";
+    if (!card.dataset.deleted) {{
+      card.dataset.deleted = "false";
+    }}
+    setCardDeleted(card, deleted);
+  }});
+
+  document.addEventListener("click", (event) => {{
+    const button = event.target.closest(".delete-card-toggle");
+    if (!button) {{
+      return;
+    }}
+    const card = button.closest(".card");
+    if (!card) {{
+      return;
+    }}
+    setCardDeleted(card, card.dataset.deleted !== "true");
+  }});
+
+  const exportButton = document.getElementById("export-edited-html");
+  if (exportButton) {{
+    exportButton.addEventListener("click", () => {{
+      const htmlText = "<!DOCTYPE html>\\n" + document.documentElement.outerHTML;
+      const blob = new Blob([htmlText], {{type: "text/html;charset=utf-8"}});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = editedHtmlFilename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }});
+  }}
+}})();
+</script>
 </body>
 </html>
 """
 
 CARD = """\
-<div class="card">
+<div class="card" data-deleted="false">
   <div class="img-wrap">{img}</div>
   <div class="body">
     {meta}
@@ -671,11 +737,12 @@ CARD = """\
     {options}
     {review_notes}
     {footer}
+    <div class="card-actions"><button type="button" class="delete-card-toggle" aria-pressed="false">Delete Card</button></div>
   </div>
 </div>"""
 
 SIMPLE_CARD = """\
-<div class="card">
+<div class="card" data-deleted="false">
   <div class="img-wrap">{img}</div>
   <div class="body">
     {meta}
@@ -686,6 +753,7 @@ SIMPLE_CARD = """\
       {relations}
     </div>
     {footer}
+    <div class="card-actions"><button type="button" class="delete-card-toggle" aria-pressed="false">Delete Card</button></div>
   </div>
 </div>"""
 
@@ -704,6 +772,11 @@ def build_stats_bar(displayed_questions: list[dict]) -> str:
     return '<div class="stats">' + " &nbsp;&middot;&nbsp; ".join(
         html.escape(part) for part in parts
     ) + "</div>"
+
+
+def _default_edited_html_filename(output_path: str | Path) -> str:
+    path = Path(output_path)
+    return f"{path.stem}_edited{path.suffix or '.html'}"
 
 
 def prepare_viewer_questions(
@@ -1230,6 +1303,7 @@ def _build_full_viewer_html_from_displayed_questions(
     max_width: int = 480,
     title: str = "predictive spatial reasoning benchmark",
     include_referability_audit: bool = False,
+    edited_html_filename: str = "viewer_edited.html",
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1255,6 +1329,7 @@ def _build_full_viewer_html_from_displayed_questions(
         stats=stats_html,
         summary=summary_html,
         cards="\n".join(cards),
+        edited_html_filename_json=json.dumps(edited_html_filename),
     )
 
 
@@ -1264,6 +1339,7 @@ def _build_simple_viewer_html_from_displayed_questions(
     *,
     max_width: int = 480,
     title: str = "predictive spatial reasoning benchmark (simple review)",
+    edited_html_filename: str = "viewer_edited.html",
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1292,6 +1368,7 @@ def _build_simple_viewer_html_from_displayed_questions(
         stats=stats_html,
         summary=summary_html,
         cards="\n".join(cards),
+        edited_html_filename_json=json.dumps(edited_html_filename),
     )
 
 
@@ -1307,6 +1384,7 @@ def build_viewer_html(
     include_attachment_unchanged: bool = True,
     include_referability_audit: bool = False,
     apply_filters: bool = False,
+    edited_html_filename: str = "viewer_edited.html",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
         questions,
@@ -1322,6 +1400,7 @@ def build_viewer_html(
         max_width=max_width,
         title=title,
         include_referability_audit=include_referability_audit,
+        edited_html_filename=edited_html_filename,
     )
 
 
@@ -1336,6 +1415,7 @@ def build_simple_viewer_html(
     attachment_only: bool = False,
     include_attachment_unchanged: bool = True,
     apply_filters: bool = False,
+    edited_html_filename: str = "viewer_edited.html",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
         questions,
@@ -1350,6 +1430,7 @@ def build_simple_viewer_html(
         image_root,
         max_width=max_width,
         title=title,
+        edited_html_filename=edited_html_filename,
     )
 
 
@@ -1375,6 +1456,11 @@ def main():
         "--simple_output",
         default=None,
         help="Optional second output path for a simple structured-review HTML page",
+    )
+    parser.add_argument(
+        "--edited_output",
+        default=None,
+        help="Optional filename for the edited HTML exported from the page; defaults to <output>_edited.html",
     )
     parser.add_argument(
         "--qtypes",
@@ -1452,6 +1538,11 @@ def main():
         image_root,
         max_width=args.max_width,
         include_referability_audit=args.include_referability_audit,
+        edited_html_filename=(
+            args.edited_output
+            if args.edited_output
+            else _default_edited_html_filename(args.output)
+        ),
     )
 
     out = Path(args.output)
@@ -1465,6 +1556,13 @@ def main():
             displayed_questions,
             image_root,
             max_width=args.max_width,
+            edited_html_filename=(
+                args.edited_output
+                if args.edited_output
+                else _default_edited_html_filename(
+                    args.simple_output if args.simple_output else args.output
+                )
+            ),
         )
         simple_out = Path(args.simple_output)
         simple_out.parent.mkdir(parents=True, exist_ok=True)
