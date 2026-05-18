@@ -192,6 +192,77 @@ def make_attachment_pair_review_html(
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_scene_type_cap_keeps_first_five_per_type(self) -> None:
+        questions = [
+            {"scene_id": "scene0000_00", "type": "direction", "question": f"d {idx}"}
+            for idx in range(7)
+        ] + [
+            {"scene_id": "scene0000_00", "type": "distance", "question": f"m {idx}"}
+            for idx in range(6)
+        ]
+
+        kept = run_pipeline_module._apply_scene_type_cap(
+            questions,
+            max_questions_per_scene_type=5,
+        )
+
+        self.assertEqual([q["question"] for q in kept if q["type"] == "direction"], [f"d {idx}" for idx in range(5)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "distance"], [f"m {idx}" for idx in range(5)])
+
+    def test_scene_type_cap_canonicalizes_legacy_object_centric_alias(self) -> None:
+        questions = [
+            {"scene_id": "scene0000_00", "type": "object_move_object_centric", "question": f"legacy {idx}"}
+            for idx in range(3)
+        ] + [
+            {"scene_id": "scene0000_00", "type": "object_rotate_object_centric", "question": f"canonical {idx}"}
+            for idx in range(4)
+        ]
+
+        kept = run_pipeline_module._apply_scene_type_cap(
+            questions,
+            max_questions_per_scene_type=5,
+        )
+
+        self.assertEqual(len(kept), 5)
+        self.assertEqual([q["question"] for q in kept], [
+            "legacy 0",
+            "legacy 1",
+            "legacy 2",
+            "canonical 0",
+            "canonical 1",
+        ])
+
+    def test_load_cached_scene_questions_applies_scene_type_cap(self) -> None:
+        root = make_case_dir("cached_scene_cap")
+        self.addCleanup(shutil.rmtree, root, True)
+        raw_questions_dir = root / "_raw_questions_scene_cache"
+        raw_questions_dir.mkdir()
+        scene_id = "scene0000_00"
+        cached_questions = [
+            {
+                "scene_id": scene_id,
+                "image_name": f"{idx:06d}.jpg",
+                "type": "occlusion",
+                "question": f"occlusion {idx}",
+                "obj_a_id": idx,
+            }
+            for idx in range(8)
+        ]
+        (raw_questions_dir / f"{scene_id}.json").write_text(
+            json.dumps(cached_questions),
+            encoding="utf-8",
+        )
+
+        loaded, raw_count = run_pipeline_module._load_cached_scene_questions(
+            raw_questions_dir,
+            scene_ids=[scene_id],
+            max_questions_per_scene_type=5,
+        )
+
+        self.assertEqual(raw_count, 8)
+        self.assertEqual(len(loaded), 5)
+        self.assertEqual([q["question"] for q in loaded], [f"occlusion {idx}" for idx in range(5)])
+
     def test_apply_question_dinox_audit_records_all_unique_mentioned_labels(self) -> None:
         chair_mask = np.zeros((20, 30), dtype=bool)
         chair_mask[2:10, 3:11] = True

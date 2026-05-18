@@ -11,6 +11,7 @@ from src.qa_generator import (
     _make_l1_occlusion_metrics,
     _normalize_template_aliases,
     _removed_object_occludes_target_mesh,
+    generate_l1_occlusion_questions,
     generate_l2_object_remove,
     generate_l2_viewpoint_move,
 )
@@ -331,6 +332,95 @@ class QuestionTemplateTests(unittest.TestCase):
 
         self.assertIn("blocked by another object", question["question"])
         self.assertIn("does not count as occlusion", question["question"])
+
+    def test_l1_occlusion_respects_max_questions_before_more_geometry(self) -> None:
+        objects = [
+            {"id": idx, "label": f"object {idx}"}
+            for idx in range(5)
+        ]
+        label_statuses = {f"object {idx}": "unique" for idx in range(5)}
+        label_counts = {f"object {idx}": 1 for idx in range(5)}
+
+        with patch(
+            "src.qa_generator._compute_l1_occlusion_metrics",
+            return_value=make_l1_metrics("not occluded"),
+        ) as metrics_mock:
+            questions = generate_l1_occlusion_questions(
+                objects=objects,
+                camera_pose=make_camera_pose(),
+                color_intrinsics=None,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                templates={"L1_occlusion": ["What is the occlusion status of {obj_a}?"]},
+                label_statuses=label_statuses,
+                label_counts=label_counts,
+                referable_object_ids=[obj["id"] for obj in objects],
+                max_questions=2,
+            )
+
+        self.assertEqual(len(questions), 2)
+        self.assertEqual(metrics_mock.call_count, 2)
+
+    def test_viewpoint_move_max_questions_zero_skips_visibility_work(self) -> None:
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend") as backend_mock,
+            patch("src.qa_generator._compute_l1_style_visibility_metrics_for_static_target") as visibility_mock,
+        ):
+            questions = generate_l2_viewpoint_move(
+                objects=[{"id": 1, "label": "curtain"}],
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                templates={"L2_viewpoint_move": ["If the camera moves {direction} by {distance}, what happens to {obj_a}?"]},
+                max_questions=0,
+            )
+
+        self.assertEqual(questions, [])
+        self.assertEqual(backend_mock.call_count, 0)
+        self.assertEqual(visibility_mock.call_count, 0)
+
+    def test_viewpoint_move_stops_candidate_scan_after_budget(self) -> None:
+        camera_pose = make_camera_pose()
+        objects = [
+            {"id": 1, "label": "curtain"},
+            {"id": 2, "label": "chair"},
+            {"id": 3, "label": "desk"},
+        ]
+
+        with (
+            patch("src.qa_generator._counterfactual_occlusion_backend", return_value="mesh_ray"),
+            patch("src.qa_generator._build_modified_scene", return_value=None),
+            patch("src.qa_generator.apply_viewpoint_change", return_value=camera_pose),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                side_effect=[
+                    (make_l1_metrics("not occluded"), "mesh_ray"),
+                    (make_l1_metrics("occluded"), "mesh_ray"),
+                ],
+            ) as visibility_mock,
+        ):
+            questions = generate_l2_viewpoint_move(
+                objects=objects,
+                camera_pose=camera_pose,
+                color_intrinsics=make_camera_intrinsics(),
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                templates={"L2_viewpoint_move": ["If the camera moves {direction} by {distance}, what happens to {obj_a}?"]},
+                max_questions=1,
+            )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(visibility_mock.call_count, 2)
 
     def test_viewpoint_move_questions_use_camera_specific_backward_wording(self) -> None:
         camera_pose = make_camera_pose()

@@ -2949,7 +2949,12 @@ def generate_l1_occlusion_questions(
     out_of_frame_label_to_object_ids: dict[str, Any] | None = None,
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
+    max_questions: int | None = None,
 ) -> list[dict[str, Any]]:
+    if max_questions is not None:
+        max_questions = max(int(max_questions), 0)
+        if max_questions <= 0:
+            return []
     normalized_statuses = _normalize_label_statuses(label_statuses)
     normalized_counts = _normalize_label_counts(label_counts)
     normalized_out_of_frame_labels = _normalize_label_list(out_of_frame_not_visible_labels)
@@ -2989,6 +2994,9 @@ def generate_l1_occlusion_questions(
     processed_batch_count = 0
     total_batch_count: int | None = None
 
+    def _budget_reached() -> bool:
+        return max_questions is not None and len(questions) >= max_questions
+
     def _log_progress(
         *,
         label: str | None = None,
@@ -3014,6 +3022,8 @@ def generate_l1_occlusion_questions(
         )
 
     for label in normalized_out_of_frame_labels:
+        if _budget_reached():
+            return questions
         object_ids = normalized_out_of_frame_label_to_ids.get(label, [])
         if not object_ids:
             continue
@@ -3028,6 +3038,8 @@ def generate_l1_occlusion_questions(
                 },
             )
         )
+        if _budget_reached():
+            return questions
         break
 
     def _append_geometry_question(
@@ -3037,6 +3049,8 @@ def generate_l1_occlusion_questions(
         vlm_status: str | None,
         vlm_count: int | None,
     ) -> None:
+        if _budget_reached():
+            return
         obj_id = int(obj["id"])
         metrics = _compute_l1_occlusion_metrics(
             obj=obj,
@@ -3086,6 +3100,8 @@ def generate_l1_occlusion_questions(
     if normalized_statuses:
         total_batch_count = len(normalized_statuses)
         for label, status in sorted(normalized_statuses.items()):
+            if _budget_reached():
+                return questions
             processed_batch_count += 1
             count = normalized_counts.get(label)
             if status != "unique":
@@ -3133,6 +3149,8 @@ def generate_l1_occlusion_questions(
 
     total_batch_count = len(objects)
     for obj in objects:
+        if _budget_reached():
+            return questions
         processed_batch_count += 1
         label = str(obj.get("label", "")).strip().lower()
         if not label:
@@ -5514,12 +5532,27 @@ def generate_l2_viewpoint_move(
     trace_detail: str = "light",
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
+    max_questions: int | None = None,
 ) -> list[dict]:
     """Generate L2.2 viewpoint-movement questions.
 
     Compares target-object visibility before/after moving the observer.
     """
     questions: list[dict] = []
+    if max_questions is not None:
+        max_questions = max(int(max_questions), 0)
+        if max_questions <= 0:
+            _emit_generator_summary(
+                trace_recorder,
+                "generate_l2_viewpoint_move",
+                generated_count=0,
+                candidate_count=0,
+                generated_candidate_count=0,
+                skipped_candidate_count=0,
+                reason_counts={"budget_exhausted": 1},
+                details={"occlusion_mode": "l1_style"},
+            )
+            return questions
     if color_intrinsics is None:
         _emit_generator_summary(
             trace_recorder,
@@ -5545,7 +5578,22 @@ def generate_l2_viewpoint_move(
     last_progress_logged_at = generator_started_at
     slow_warning_emitted = False
     original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
-    for obj in objects:
+    default_missing_visibility = (
+        None,
+        "mesh_ray",
+        "missing_original_visibility",
+        _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray"),
+    )
+
+    def _budget_reached() -> bool:
+        return max_questions is not None and len(questions) >= max_questions
+
+    def _original_visibility_for_obj(
+        obj: dict,
+    ) -> tuple[str | None, str, str, _L1OcclusionMetrics]:
+        obj_id = int(obj["id"])
+        if obj_id in original_visibility:
+            return original_visibility[obj_id]
         metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
             obj=obj,
             camera_pose=camera_pose,
@@ -5558,7 +5606,9 @@ def generate_l2_viewpoint_move(
             modified_scene=scene_context,
         )
         status, reason_code, reason_detail = _resolve_counterfactual_l1_visibility_status(metrics)
-        original_visibility[int(obj["id"])] = (status, source_used, reason_code, metrics)
+        del reason_detail
+        original_visibility[obj_id] = (status, source_used, reason_code, metrics)
+        return original_visibility[obj_id]
 
     for direction, prompt_direction in (
         ("right", "right"),
@@ -5569,6 +5619,22 @@ def generate_l2_viewpoint_move(
         for dist in (1.0, 2.0, 3.0):
             new_pose = apply_viewpoint_change(camera_pose, direction, dist)
             for obj in objects:
+                if _budget_reached():
+                    _emit_generator_summary(
+                        trace_recorder,
+                        "generate_l2_viewpoint_move",
+                        generated_count=len(questions),
+                        candidate_count=candidate_count,
+                        generated_candidate_count=generated_candidate_count,
+                        skipped_candidate_count=max(candidate_count - generated_candidate_count, 0),
+                        reason_counts=dict(reason_counts),
+                        details={
+                            "compare_backend": compare_backend,
+                            "occlusion_mode": "l1_style",
+                            "budget_exhausted": True,
+                        },
+                    )
+                    return questions
                 processed_candidate_count += 1
                 progress_context = {
                     "object_id": int(obj["id"]),
@@ -5578,10 +5644,12 @@ def generate_l2_viewpoint_move(
                 candidate_key = _candidate_key(direction, f"{dist:.1f}", obj["id"])
                 object_ids = [int(obj["id"])]
                 try:
-                    old_status, old_source, old_reason_code, old_metrics = original_visibility.get(
-                        int(obj["id"]),
-                        (None, "mesh_ray", "missing_original_visibility", _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray")),
-                    )
+                    old_status, old_source, old_reason_code, old_metrics = _original_visibility_for_obj(obj)
+                    if old_status is None:
+                        old_status, old_source, old_reason_code, old_metrics = original_visibility.get(
+                            int(obj["id"]),
+                            default_missing_visibility,
+                        )
                     if old_status is None:
                         reason_counts["original_visibility_unresolved"] += 1
                         _emit_generator_candidate(
@@ -7385,6 +7453,33 @@ def _question_uses_attachment_referability(question: dict[str, Any]) -> bool:
     )
 
 
+MIXED_ATTACHMENT_OBJECT_MOVE_TYPES = {
+    "object_move_agent",
+    "object_move_distance",
+}
+
+
+def _effective_referable_ids_for_question(
+    question: dict[str, Any],
+    referable_ids: set[int],
+    *,
+    attachment_referable_ids: set[int] | None = None,
+) -> set[int]:
+    """Return the referable pool used for mention auditing.
+
+    Attachment-remapped agent/distance questions mention an attachment-moved
+    source/query object plus an ordinary spatial reference object.  The latter
+    only needs ordinary frame referability, so these mixed questions must audit
+    against the union rather than the attachment-only pool.
+    """
+    if attachment_referable_ids is None or not _question_uses_attachment_referability(question):
+        return set(referable_ids)
+    qtype = str(question.get("type", "")).strip().lower()
+    if qtype in MIXED_ATTACHMENT_OBJECT_MOVE_TYPES:
+        return set(referable_ids) | set(attachment_referable_ids)
+    return set(attachment_referable_ids)
+
+
 def _attachment_trace_reason(question: dict[str, Any]) -> str | None:
     if not _question_uses_attachment_referability(question):
         return None
@@ -7444,11 +7539,10 @@ def _enforce_referable_mentions(
     kept: list[dict[str, Any]] = []
     removed = 0
     for question in questions:
-        effective_referable_ids = (
-            attachment_referable_ids
-            if attachment_referable_ids is not None
-            and _question_uses_attachment_referability(question)
-            else referable_ids
+        effective_referable_ids = _effective_referable_ids_for_question(
+            question,
+            referable_ids,
+            attachment_referable_ids=attachment_referable_ids,
         )
         audit = build_question_referability_audit(
             question,
@@ -7870,6 +7964,9 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
     "L2_object_move_agent": [
         "generate_l2_object_move",
     ],
+    "L2_object_move_distance": [
+        "generate_l2_object_move",
+    ],
     "L3_coordinate_rotation_agent": [
         "generate_l3_coordinate_rotation",
     ],
@@ -7879,6 +7976,7 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
 _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
     "L1_direction_agent": ("L1", "direction_agent"),
     "L2_object_move_agent": ("L2", "object_move_agent"),
+    "L2_object_move_distance": ("L2", "object_move_distance"),
     "L3_coordinate_rotation_agent": ("L3", "coordinate_rotation_agent"),
 }
 """(level, type) filter for each --only_question_types entry."""
@@ -7918,6 +8016,7 @@ def generate_all_questions(
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
     only_question_types: list[str] | None = None,
+    question_type_budgets: dict[str, int] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -7951,6 +8050,8 @@ def generate_all_questions(
     room_bounds: dict with bbox_min/bbox_max from wall/floor mesh, or None.
     wall_objects: visible filtering for ordinary objects does not touch these;
     they are only used to construct allocentric wall-anchor wording.
+    question_type_budgets: optional per-canonical-type generation budget used
+    to avoid expensive work when the pipeline scene/type cap is already reached.
 
     Returns a list of question dicts.
     """
@@ -7986,6 +8087,26 @@ def generate_all_questions(
         if _allowed_generators is None:
             return True
         return name in _allowed_generators
+
+    def _canonical_budget_type(question_type: str) -> str:
+        question_type = str(question_type).strip().lower()
+        if question_type == "object_move_object_centric":
+            return "object_rotate_object_centric"
+        return question_type
+
+    normalized_question_type_budgets: dict[str, int] = {}
+    if question_type_budgets:
+        for question_type, budget in question_type_budgets.items():
+            canonical_type = _canonical_budget_type(str(question_type))
+            try:
+                normalized_question_type_budgets[canonical_type] = max(int(budget), 0)
+            except (TypeError, ValueError):
+                normalized_question_type_budgets[canonical_type] = 0
+
+    def _question_type_budget(question_type: str) -> int | None:
+        if question_type_budgets is None:
+            return None
+        return normalized_question_type_budgets.get(_canonical_budget_type(question_type))
 
     trace_counter = 0
     original_objects = list(objects)
@@ -8654,6 +8775,7 @@ def generate_all_questions(
                 out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
                 generator_progress_log_seconds=generator_progress_log_seconds,
                 slow_generator_warn_seconds=slow_generator_warn_seconds,
+                max_questions=_question_type_budget("occlusion"),
             ),
         ),
     )
@@ -8804,6 +8926,7 @@ def generate_all_questions(
                 trace_detail=trace_detail,
                 generator_progress_log_seconds=generator_progress_log_seconds,
                 slow_generator_warn_seconds=slow_generator_warn_seconds,
+                max_questions=_question_type_budget("viewpoint_move"),
             ),
         ),
     )

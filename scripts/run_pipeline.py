@@ -139,21 +139,30 @@ def _call_generate_all_questions_compat(**kwargs):
     """Tolerate older generate_all_questions signatures during mixed deploys."""
     global _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED
 
-    try:
-        return generate_all_questions(**kwargs)
-    except TypeError as exc:
-        if "attachment_object_surface_text_by_id" not in str(exc):
+    compat_kwargs = dict(kwargs)
+    while True:
+        try:
+            return generate_all_questions(**compat_kwargs)
+        except TypeError as exc:
+            message = str(exc)
+            if "attachment_object_surface_text_by_id" in message:
+                if "attachment_object_surface_text_by_id" not in compat_kwargs:
+                    raise
+                if not _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED:
+                    logger.warning(
+                        "generate_all_questions compatibility mode: runtime does not support "
+                        "attachment_object_surface_text_by_id; attachment naming overrides "
+                        "will be skipped for this run"
+                    )
+                    _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
+                compat_kwargs.pop("attachment_object_surface_text_by_id", None)
+                continue
+            if "question_type_budgets" in message:
+                if "question_type_budgets" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("question_type_budgets", None)
+                continue
             raise
-        if not _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED:
-            logger.warning(
-                "generate_all_questions compatibility mode: runtime does not support "
-                "attachment_object_surface_text_by_id; attachment naming overrides "
-                "will be skipped for this run"
-            )
-            _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
-        compat_kwargs = dict(kwargs)
-        compat_kwargs.pop("attachment_object_surface_text_by_id", None)
-        return generate_all_questions(**compat_kwargs)
 
 
 def _serialize_question_dinox_detection(detection: dict[str, object]) -> dict[str, object]:
@@ -1414,6 +1423,32 @@ def _question_uses_attachment_referability(question: dict[str, object]) -> bool:
     )
 
 
+MIXED_ATTACHMENT_OBJECT_MOVE_TYPES = {
+    "object_move_agent",
+    "object_move_distance",
+}
+
+
+def _effective_question_referability_ids(
+    question: dict[str, object],
+    *,
+    frame_referable_ids: list[int],
+    attachment_frame_referable_ids: list[int] | None = None,
+) -> list[int]:
+    if (
+        attachment_frame_referable_ids is None
+        or not _question_uses_attachment_referability(question)
+    ):
+        return list(frame_referable_ids)
+    question_type = str(question.get("type", "")).strip().lower()
+    if question_type in MIXED_ATTACHMENT_OBJECT_MOVE_TYPES:
+        return sorted(
+            set(int(obj_id) for obj_id in frame_referable_ids)
+            | set(int(obj_id) for obj_id in attachment_frame_referable_ids)
+        )
+    return list(attachment_frame_referable_ids)
+
+
 def _build_question_referability_audit(
     question: dict[str, object],
     *,
@@ -1422,11 +1457,10 @@ def _build_question_referability_audit(
     frame_referable_ids: list[int],
     attachment_frame_referable_ids: list[int] | None = None,
 ) -> dict[str, object]:
-    effective_frame_referable_ids = (
-        attachment_frame_referable_ids
-        if attachment_frame_referable_ids is not None
-        and _question_uses_attachment_referability(question)
-        else frame_referable_ids
+    effective_frame_referable_ids = _effective_question_referability_ids(
+        question,
+        frame_referable_ids=frame_referable_ids,
+        attachment_frame_referable_ids=attachment_frame_referable_ids,
     )
     return _shared_build_question_referability_audit(
         question,
@@ -3808,6 +3842,55 @@ def _deduplicate_scene_questions(scene_questions: list[dict], max_per_key: int =
     return kept
 
 
+def _canonical_scene_question_type(question: dict) -> str:
+    question_type = str(question.get("type", "")).strip().lower()
+    if question_type == "object_move_object_centric":
+        return "object_rotate_object_centric"
+    return question_type
+
+
+def _apply_scene_type_cap(
+    questions: list[dict],
+    *,
+    max_questions_per_scene_type: int,
+    type_counts: Counter[str] | None = None,
+) -> list[dict]:
+    if max_questions_per_scene_type <= 0:
+        if type_counts is not None:
+            type_counts.update(
+                _canonical_scene_question_type(question)
+                for question in questions
+                if _canonical_scene_question_type(question)
+            )
+        return list(questions)
+
+    counts = type_counts if type_counts is not None else Counter()
+    kept: list[dict] = []
+    for question in questions:
+        canonical_type = _canonical_scene_question_type(question)
+        if not canonical_type:
+            kept.append(question)
+            continue
+        if counts[canonical_type] >= max_questions_per_scene_type:
+            continue
+        kept.append(question)
+        counts[canonical_type] += 1
+    return kept
+
+
+def _remaining_scene_type_budgets(
+    type_counts: Counter[str],
+    *,
+    max_questions_per_scene_type: int,
+) -> dict[str, int] | None:
+    if max_questions_per_scene_type <= 0:
+        return None
+    return {
+        question_type: max(max_questions_per_scene_type - int(type_counts[question_type]), 0)
+        for question_type in ("occlusion", "viewpoint_move")
+    }
+
+
 def _make_dedup_key(q: dict) -> tuple:
     """Build a dedup key from question text + sorted object IDs."""
     obj_id_fields = [
@@ -3829,6 +3912,7 @@ def _load_cached_scene_questions(
     raw_questions_dir: Path,
     *,
     scene_ids: list[str],
+    max_questions_per_scene_type: int,
 ) -> tuple[list[dict], int]:
     all_questions: list[dict] = []
     raw_question_count = 0
@@ -3847,6 +3931,10 @@ def _load_cached_scene_questions(
             continue
         raw_question_count += len(scene_questions)
         scene_questions = _deduplicate_scene_questions(scene_questions)
+        scene_questions = _apply_scene_type_cap(
+            scene_questions,
+            max_questions_per_scene_type=max_questions_per_scene_type,
+        )
         all_questions.extend(scene_questions)
     return all_questions, raw_question_count
 
@@ -3865,10 +3953,12 @@ def _rebuild_pipeline_outputs(
     vlm_url: str | None,
     vlm_model: str | None,
     question_presence_review_workers: int,
+    max_questions_per_scene_type: int,
 ) -> list[dict]:
     all_questions, raw_question_count = _load_cached_scene_questions(
         raw_questions_dir,
         scene_ids=scene_ids,
+        max_questions_per_scene_type=max_questions_per_scene_type,
     )
 
     logger.info(
@@ -3951,6 +4041,7 @@ def run_pipeline(
     resume: bool = False,
     reset: int | None = None,
     only_question_types: list[str] | None = None,
+    max_questions_per_scene_type: int = 5,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -3963,6 +4054,9 @@ def run_pipeline(
         raise ValueError("reset must be >= 1")
     if reset is not None and not resume:
         raise ValueError("reset requires resume=True")
+    max_questions_per_scene_type = int(max_questions_per_scene_type)
+    if max_questions_per_scene_type < 0:
+        raise ValueError("max_questions_per_scene_type must be >= 0")
 
     meta_dir = output_dir / "scene_metadata"
     questions_dir = output_dir / "questions"
@@ -4150,6 +4244,10 @@ def run_pipeline(
     ) -> None:
         raw_question_path = raw_questions_dir / f"{scene_id}.json"
         scene_questions = _deduplicate_scene_questions(scene_questions)
+        scene_questions = _apply_scene_type_cap(
+            scene_questions,
+            max_questions_per_scene_type=max_questions_per_scene_type,
+        )
         _write_json_file(raw_question_path, scene_questions)
         _mark_pipeline_scene_completed(
             scene_status_doc,
@@ -4169,6 +4267,7 @@ def run_pipeline(
 
     for scene_index, scene_dir in pending_scene_entries:
         scene_id = scene_dir.name
+        scene_question_type_counts: Counter[str] = Counter()
         logger.info(
             "=== Processing scene %s (%d/%d) ===",
             scene_id,
@@ -4486,6 +4585,10 @@ def run_pipeline(
 
                 with _timed_frame_phase(frame_ctx, "generate_all_questions"):
                     try:
+                        question_type_budgets = _remaining_scene_type_budgets(
+                            scene_question_type_counts,
+                            max_questions_per_scene_type=max_questions_per_scene_type,
+                        )
                         questions = _call_generate_all_questions_compat(
                             objects=scene["objects"],
                             attachment_graph=attachment_graph,
@@ -4516,6 +4619,7 @@ def run_pipeline(
                             generator_progress_log_seconds=generator_progress_log_seconds,
                             slow_generator_warn_seconds=slow_generator_warn_seconds,
                             only_question_types=only_question_types,
+                            question_type_budgets=question_type_budgets,
                         )
                     except Exception:
                         logger.exception(
@@ -4541,6 +4645,11 @@ def run_pipeline(
                         referability_entry=referability_entry,
                         frame_referable_ids=referable_ids or [],
                         attachment_frame_referable_ids=attachment_referable_ids or [],
+                    )
+                    kept_questions = _apply_scene_type_cap(
+                        kept_questions,
+                        max_questions_per_scene_type=max_questions_per_scene_type,
+                        type_counts=scene_question_type_counts,
                     )
                 frame_kept_count = len(kept_questions)
                 scene_questions.extend(kept_questions)
@@ -4619,6 +4728,7 @@ def run_pipeline(
         vlm_url=vlm_url,
         vlm_model=vlm_model,
         question_presence_review_workers=question_presence_review_workers,
+        max_questions_per_scene_type=max_questions_per_scene_type,
     )
     """
         if not has_nontrivial_attachment(attachment_graph):
@@ -5052,11 +5162,19 @@ def main():
         default=None,
         help="If provided, only generate the listed question types (e.g. L1_direction_agent L2_object_move_agent L3_coordinate_rotation_agent). When omitted, all types are generated.",
     )
+    parser.add_argument(
+        "--max_questions_per_scene_type",
+        type=int,
+        default=5,
+        help="Maximum kept questions per scene and canonical question type. Use 0 to disable.",
+    )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
         parser.error("--reset must be >= 1")
     if args.reset is not None and not args.resume:
         parser.error("--reset requires --resume")
+    if int(args.max_questions_per_scene_type) < 0:
+        parser.error("--max_questions_per_scene_type must be >= 0")
 
     _set_pipeline_random_seed()
 
@@ -5090,6 +5208,7 @@ def main():
         resume=args.resume,
         reset=args.reset,
         only_question_types=args.only_question_types,
+        max_questions_per_scene_type=args.max_questions_per_scene_type,
     )
 
 
