@@ -27,6 +27,7 @@ OBJECT_ID_FIELDS = (
     "obj_ref_id",
     "obj_face_id",
     "obj_target_id",
+    "target_obj_id",
     "query_obj_id",
     "moved_obj_id",
     "removed_obj_id",
@@ -35,6 +36,8 @@ OBJECT_ID_FIELDS = (
     "grandparent_id",
     "grandchild_id",
     "neighbor_id",
+    "attachment_parent_id",
+    "attachment_child_id",
 )
 
 
@@ -425,6 +428,14 @@ def _question_object_ids(question: dict[str, Any]) -> set[int]:
     ids: set[int] = set()
     for field in OBJECT_ID_FIELDS:
         obj_id = _as_int(question.get(field))
+        if obj_id is not None:
+            ids.add(obj_id)
+    for mention in question.get("mentioned_objects", []) or []:
+        if not isinstance(mention, dict):
+            continue
+        obj_id = _as_int(mention.get("object_id"))
+        if obj_id is None:
+            obj_id = _as_int(mention.get("id"))
         if obj_id is not None:
             ids.add(obj_id)
     return ids
