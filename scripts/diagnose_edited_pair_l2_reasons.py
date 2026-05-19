@@ -26,6 +26,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.qa_generator import (  # noqa: E402
+    EXCLUDED_LABELS,
     MIN_DISTANCE_QUESTION_DISTANCE_M,
     _build_modified_scene,
     _classify_pair_movement,
@@ -116,6 +117,17 @@ def _normalize_ids(value: Any) -> set[int]:
     return out
 
 
+def _merge_objects_by_id(*object_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    objects_by_id: dict[int, dict[str, Any]] = {}
+    for object_list in object_lists:
+        for obj in object_list:
+            obj_id = _as_int(obj.get("id"))
+            if obj_id is None:
+                continue
+            objects_by_id[obj_id] = obj
+    return list(objects_by_id.values())
+
+
 def _merge_frame_attachment_rows(
     attachment_graph: dict[int, list[int]],
     frame_debug: dict[str, Any] | None,
@@ -135,6 +147,36 @@ def _merge_frame_attachment_rows(
         if child_id not in children:
             children.append(child_id)
     return {parent: sorted(children) for parent, children in merged.items()}
+
+
+def _attachment_graph_closure_ids(
+    *,
+    attachment_graph: dict[int, list[int]],
+    attachment_referable_ids: set[int],
+) -> set[int]:
+    allowed = set(attachment_referable_ids)
+    stack = list(attachment_referable_ids)
+    parent_by_child: dict[int, int] = {}
+    for parent_id, child_ids in attachment_graph.items():
+        for child_id in child_ids:
+            parent_by_child[int(child_id)] = int(parent_id)
+    visited: set[int] = set()
+    while stack:
+        current = int(stack.pop())
+        if current in visited:
+            continue
+        visited.add(current)
+        allowed.add(current)
+        parent_id = parent_by_child.get(current)
+        if parent_id is not None and parent_id not in allowed:
+            allowed.add(parent_id)
+            stack.append(parent_id)
+        for child_id in attachment_graph.get(current, []) or []:
+            child_id = int(child_id)
+            if child_id not in allowed:
+                allowed.add(child_id)
+                stack.append(child_id)
+    return allowed
 
 
 def _load_frame_debug_map(pilot_root: Path) -> dict[tuple[str, str], dict[str, Any]]:
@@ -737,18 +779,54 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         referable_ids = _normalize_ids((frame_debug or {}).get("pipeline_referable_object_ids_used_for_generation"))
         if not referable_ids:
             referable_ids = _normalize_ids((frame_debug or {}).get("referable_object_ids"))
+        visible_ids = _normalize_ids((frame_debug or {}).get("pipeline_visible_object_ids_used_for_generation"))
+        if not visible_ids:
+            visible_ids = {int(obj["id"]) for obj in objects}
+        attachment_referable_ids = _normalize_ids(
+            (frame_debug or {}).get("pipeline_attachment_referable_object_ids_used_for_generation")
+        )
+        if not attachment_referable_ids:
+            attachment_referable_ids = _normalize_ids((frame_debug or {}).get("attachment_referable_object_ids"))
+        visible_graph_seed_objects = [
+            obj for obj in objects
+            if int(obj["id"]) in visible_ids
+            and str(obj.get("label", "")).strip().lower() not in EXCLUDED_LABELS
+        ]
+        collision_objects = list(visible_graph_seed_objects)
         attachment_graph = _merge_frame_attachment_rows(
             get_scene_attachment_graph(scene, scene_id=scene_id),
             frame_debug,
         )
+        attachment_graph = {
+            int(parent_id): [
+                int(child_id)
+                for child_id in child_ids
+                if int(child_id) in visible_ids
+            ]
+            for parent_id, child_ids in attachment_graph.items()
+            if int(parent_id) in visible_ids
+        }
+        graph_eligible_ids = _attachment_graph_closure_ids(
+            attachment_graph=attachment_graph,
+            attachment_referable_ids=attachment_referable_ids or {parent_id, child_id},
+        )
+        movement_objects = [
+            obj for obj in visible_graph_seed_objects
+            if int(obj["id"]) in graph_eligible_ids
+        ]
+        objects_uniq = [
+            obj for obj in visible_graph_seed_objects
+            if int(obj["id"]) in referable_ids
+        ]
+        relation_objects = _merge_objects_by_id(objects_uniq, movement_objects)
         moved_ids = set(get_moved_object_ids(parent_id, attachment_graph))
-        base_relations = compute_all_relations(objects, camera_pose, None, None)
+        base_relations = compute_all_relations(relation_objects, camera_pose, None, None)
         valid_states, invalid_reasons = _valid_move_states(
-            objects=objects,
+            objects=movement_objects,
             attachment_graph=attachment_graph,
             move_source_id=parent_id,
             room_bounds=scene.get("room_bounds"),
-            collision_objects=None,
+            collision_objects=collision_objects,
         )
 
         direction = _diagnose_direction(
@@ -762,8 +840,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             camera_pose=camera_pose,
         )
         distance = _diagnose_distance(
-            objects=objects,
-            movement_objects=objects,
+            objects=relation_objects,
+            movement_objects=movement_objects,
             query_obj_id=child_id,
             move_source_id=parent_id,
             moved_ids=moved_ids,
@@ -773,7 +851,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             invalid_reasons=invalid_reasons,
             referable_ids=referable_ids,
             room_bounds=scene.get("room_bounds"),
-            collision_objects=None,
+            collision_objects=collision_objects,
         )
         if args.no_occlusion:
             occlusion = {
@@ -791,13 +869,13 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                 )
             color_intrinsics, ray_caster, instance_mesh_data, resource_errors = occlusion_resource_cache[scene_id]
             occlusion = _diagnose_occlusion(
-                objects=objects,
+                objects=movement_objects,
                 query_obj=obj_map[child_id],
                 move_source_id=parent_id,
                 attachment_graph=attachment_graph,
                 camera_pose=camera_pose,
                 room_bounds=scene.get("room_bounds"),
-                collision_objects=None,
+                collision_objects=collision_objects,
                 color_intrinsics=color_intrinsics,
                 ray_caster=ray_caster,
                 instance_mesh_data=instance_mesh_data,
@@ -821,6 +899,12 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "child_in_moved_ids": child_id in moved_ids,
             "moved_ids": sorted(moved_ids),
             "referable_ids": sorted(referable_ids),
+            "visible_ids": sorted(visible_ids),
+            "attachment_referable_ids": sorted(attachment_referable_ids),
+            "movement_object_ids": sorted(int(obj["id"]) for obj in movement_objects),
+            "collision_object_ids": sorted(int(obj["id"]) for obj in collision_objects),
+            "relation_object_ids": sorted(int(obj["id"]) for obj in relation_objects),
+            "child_in_attachment_query_pool": child_id in attachment_referable_ids,
             "valid_move_state_count": len(valid_states),
             "invalid_move_reason_counts": dict(sorted(invalid_reasons.items())),
             "direction": direction,
