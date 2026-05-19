@@ -567,9 +567,14 @@ def _reason_for_pair(
         return "parent_or_child_not_in_pipeline_visible_ids"
     if parent_id not in attach_used_ids or child_id not in attach_used_ids:
         return "parent_or_child_not_in_pipeline_attachment_referable_ids"
-    if (parent_id, child_id) not in attachment_row_pairs:
+    pair_in_attachment_rows = (parent_id, child_id) in attachment_row_pairs
+    if not pair_in_attachment_rows:
         return "pair_referable_but_not_in_frame_attachment_graph_rows"
     if raw_summary["child_object_hits"] == 0 and raw_summary["pair_object_hits"] == 0:
+        if raw_summary["parent_object_hits"] > 0:
+            return "pair_in_attachment_graph_but_only_parent_raw_questions_generated"
+        if pair_in_attachment_rows:
+            return "pair_in_attachment_graph_but_child_generated_zero_raw_questions"
         return "no_raw_question_mentions_child_or_pair"
     if raw_summary["child_object_hits"] > 0 and final_summary["child_object_hits"] == 0:
         return "raw_question_mentions_child_but_not_in_final_questions_after_caps_or_qc"
