@@ -61,7 +61,7 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
-    def test_object_move_occlusion_selector_keeps_attachment_priority_unchanged_record(self) -> None:
+    def test_object_move_occlusion_selector_caps_priority_unchanged_record(self) -> None:
         records = [
             {
                 "candidate_index": 0,
@@ -80,7 +80,40 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         selected = _select_l2_object_move_occlusion_records(records)
 
-        self.assertEqual([record["query_obj_id"] for record in selected], [2])
+        self.assertEqual(selected, [])
+
+    def test_object_move_occlusion_selector_counts_priority_unchanged_in_ratio(self) -> None:
+        records = [
+            *[
+                {
+                    "candidate_index": idx,
+                    "query_obj_id": idx,
+                    "relation_unchanged": False,
+                    "question": {"question": f"changed {idx}"},
+                }
+                for idx in range(4)
+            ],
+            {
+                "candidate_index": 4,
+                "query_obj_id": 40,
+                "relation_unchanged": True,
+                "attachment_priority_pair": True,
+                "question": {"question": "priority unchanged"},
+            },
+            {
+                "candidate_index": 5,
+                "query_obj_id": 50,
+                "relation_unchanged": True,
+                "question": {"question": "normal unchanged"},
+            },
+        ]
+
+        selected = _select_l2_object_move_occlusion_records(records)
+
+        self.assertEqual(
+            [record["query_obj_id"] for record in selected],
+            [0, 1, 2, 3, 40],
+        )
 
     def test_generate_all_questions_passes_l2_move_internal_type_filter(self) -> None:
         objects = [
@@ -2897,6 +2930,54 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         result = balance_l2_attachment_per_scene(questions)
         unchanged_count = sum(1 for q in result if q.get("relation_unchanged"))
         self.assertEqual(unchanged_count, 2)
+
+    def test_balance_priority_unchanged_does_not_bypass_changed_ratio(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+
+        questions = [
+            {
+                **self._make_att_question(
+                    "object_move_agent",
+                    attached=True,
+                    pair_id="1->2",
+                    unchanged=True,
+                    text="priority unchanged",
+                ),
+                "attachment_priority_pair": True,
+            }
+        ]
+
+        self.assertEqual(balance_l2_attachment_per_scene(questions), [])
+
+        questions = [
+            self._make_att_question("object_move_agent", attached=True, pair_id=f"1->{i}", text=f"changed {i}")
+            for i in range(4)
+        ] + [
+            {
+                **self._make_att_question(
+                    "object_move_agent",
+                    attached=True,
+                    pair_id="2->3",
+                    unchanged=True,
+                    text="priority unchanged",
+                ),
+                "attachment_priority_pair": True,
+            },
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="3->4",
+                unchanged=True,
+                text="normal unchanged",
+            ),
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if q.get("relation_unchanged")],
+            ["priority unchanged"],
+        )
 
     def test_balance_zero_changed_caps_to_zero(self):
         from src.quality_control import balance_l2_attachment_per_scene

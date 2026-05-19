@@ -252,25 +252,19 @@ def _is_l2_occlusion_unchanged_candidate(
 def _select_l2_object_move_occlusion_records(
     records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    priority_records = [
-        record for record in records
-        if bool(record.get("attachment_priority_pair", False))
-    ]
     changed_records = [
         record for record in records
         if not bool(record["relation_unchanged"])
-        and not bool(record.get("attachment_priority_pair", False))
     ]
     unchanged_records = [
         record for record in records
         if bool(record["relation_unchanged"])
-        and not bool(record.get("attachment_priority_pair", False))
     ]
     selected_unchanged_count = min(
         len(unchanged_records),
         len(changed_records) // L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR,
     )
-    selected_records = priority_records + changed_records + unchanged_records[:selected_unchanged_count]
+    selected_records = changed_records + unchanged_records[:selected_unchanged_count]
     selected_records.sort(key=lambda record: int(record["candidate_index"]))
     return selected_records
 
