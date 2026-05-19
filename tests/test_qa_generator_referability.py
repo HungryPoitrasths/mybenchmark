@@ -2343,6 +2343,95 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(question["attachment_pair_id"], "1->3")
         self.assertEqual(question["attachment_child_id"], 3)
 
+    def test_object_move_agent_allows_priority_child_unchanged_fallback(self) -> None:
+        parent = make_object(1, "desk")
+        priority_child = make_object(3, "bottle")
+        ref = make_object(4, "chair")
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=[parent, priority_child, ref],
+            moved_ids={1, 3},
+        )
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=selected_state),
+            patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                return_value=[{
+                    "obj_a_id": 3,
+                    "obj_b_id": 4,
+                    "direction_b_rel_a": "left",
+                }],
+            ),
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            questions = generate_l2_object_move(
+                objects=[parent, priority_child, ref],
+                attachment_graph={1: [3]},
+                attached_by={3: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=[parent, priority_child, ref],
+                object_map={obj["id"]: obj for obj in [parent, priority_child, ref]},
+                attachment_priority_pairs=[(1, 3)],
+                enabled_l2_object_move_types={"object_move_agent"},
+            )
+
+        question = next(q for q in questions if q.get("type") == "object_move_agent")
+        self.assertEqual(question["query_obj_id"], 3)
+        self.assertTrue(question["relation_unchanged"])
+        self.assertTrue(question["attachment_priority_pair"])
+        self.assertEqual(question["attachment_pair_id"], "1->3")
+
+    def test_object_move_distance_allows_priority_child_unchanged_fallback(self) -> None:
+        parent = make_object(1, "desk")
+        priority_child = make_object(3, "bottle")
+        captured = []
+
+        def fake_distance_questions(**kwargs):
+            captured.append((
+                int(kwargs["move_source_id"]),
+                int(kwargs["query_obj"]["id"]),
+                kwargs.get("allow_unchanged_fallback"),
+            ))
+            return [{
+                "level": "L2",
+                "type": "object_move_distance",
+                "question": "distance",
+                "options": ["A", "B"],
+                "answer": "A",
+                "moved_obj_id": 1,
+                "query_obj_id": 3,
+                "attachment_remapped": True,
+            }]
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=None),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                side_effect=fake_distance_questions,
+            ),
+        ):
+            questions = generate_l2_object_move(
+                objects=[parent, priority_child],
+                attachment_graph={1: [3]},
+                attached_by={3: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=[parent, priority_child],
+                object_map={1: parent, 3: priority_child},
+                attachment_priority_pairs=[(1, 3)],
+                enabled_l2_object_move_types={"object_move_distance"},
+            )
+
+        self.assertIn((1, 3, True), captured)
+        question = questions[0]
+        self.assertTrue(question["attachment_priority_pair"])
+        self.assertEqual(question["attachment_pair_id"], "1->3")
+        self.assertEqual(question["attachment_child_id"], 3)
+
     def test_rotate_generator_prefers_changed_rotation_over_larger_unchanged_attachment_fallback(self) -> None:
         child = make_object(1, "cup")
         parent = make_object(2, "table")

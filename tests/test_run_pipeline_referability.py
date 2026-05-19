@@ -2,6 +2,7 @@
 import shutil
 import unittest
 import uuid
+from collections import Counter
 from pathlib import Path
 import contextlib
 from unittest.mock import Mock, patch
@@ -192,12 +193,18 @@ def make_attachment_pair_review_html(
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
-    def test_scene_type_cap_keeps_first_five_per_type(self) -> None:
+    def test_scene_type_cap_only_limits_l1_occlusion_and_l2_viewpoint_move(self) -> None:
         questions = [
             {"scene_id": "scene0000_00", "type": "direction", "question": f"d {idx}"}
             for idx in range(7)
         ] + [
             {"scene_id": "scene0000_00", "type": "distance", "question": f"m {idx}"}
+            for idx in range(6)
+        ] + [
+            {"scene_id": "scene0000_00", "type": "occlusion", "question": f"o {idx}"}
+            for idx in range(7)
+        ] + [
+            {"scene_id": "scene0000_00", "type": "viewpoint_move", "question": f"v {idx}"}
             for idx in range(6)
         ]
 
@@ -206,10 +213,12 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             max_questions_per_scene_type=5,
         )
 
-        self.assertEqual([q["question"] for q in kept if q["type"] == "direction"], [f"d {idx}" for idx in range(5)])
-        self.assertEqual([q["question"] for q in kept if q["type"] == "distance"], [f"m {idx}" for idx in range(5)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "direction"], [f"d {idx}" for idx in range(7)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "distance"], [f"m {idx}" for idx in range(6)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "occlusion"], [f"o {idx}" for idx in range(5)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "viewpoint_move"], [f"v {idx}" for idx in range(5)])
 
-    def test_scene_type_cap_counts_object_centric_move_and_rotate_separately(self) -> None:
+    def test_scene_type_cap_does_not_limit_object_move_or_rotate_types(self) -> None:
         questions = [
             {"scene_id": "scene0000_00", "type": "object_move_object_centric", "question": f"move {idx}"}
             for idx in range(6)
@@ -223,14 +232,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             max_questions_per_scene_type=5,
         )
 
-        self.assertEqual(len(kept), 10)
+        self.assertEqual(len(kept), 12)
         self.assertEqual(
             [q["question"] for q in kept if q["type"] == "object_move_object_centric"],
-            [f"move {idx}" for idx in range(5)],
+            [f"move {idx}" for idx in range(6)],
         )
         self.assertEqual(
             [q["question"] for q in kept if q["type"] == "object_rotate_object_centric"],
-            [f"rotate {idx}" for idx in range(5)],
+            [f"rotate {idx}" for idx in range(6)],
         )
 
     def test_load_cached_scene_questions_applies_scene_type_cap(self) -> None:
@@ -263,6 +272,21 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(raw_count, 8)
         self.assertEqual(len(loaded), 5)
         self.assertEqual([q["question"] for q in loaded], [f"occlusion {idx}" for idx in range(5)])
+
+    def test_remaining_scene_type_budgets_only_tracks_occlusion_and_viewpoint_move(self) -> None:
+        budgets = run_pipeline_module._remaining_scene_type_budgets(
+            Counter(
+                {
+                    "occlusion": 3,
+                    "viewpoint_move": 5,
+                    "object_move_agent": 99,
+                    "distance": 99,
+                }
+            ),
+            max_questions_per_scene_type=5,
+        )
+
+        self.assertEqual(budgets, {"occlusion": 2, "viewpoint_move": 0})
 
     def test_apply_question_dinox_audit_records_all_unique_mentioned_labels(self) -> None:
         chair_mask = np.zeros((20, 30), dtype=bool)

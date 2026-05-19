@@ -4875,8 +4875,9 @@ def _find_stable_distance_move_for_relation(
                 continue
             return np.asarray(delta, dtype=np.float64), old_label, new_label, False
 
-    # pair_moves_together: unchanged fallback
-    if pair_moves_together and allow_unchanged_fallback:
+    # Attachment priority children may still be useful when their distance bin
+    # stays stable after a valid move, especially when no crossing is possible.
+    if allow_unchanged_fallback and (pair_moves_together or pair_moves_apart):
         for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
             movement_check_objects,
             attachment_graph,
@@ -4918,6 +4919,7 @@ def _generate_l2_distance_questions_for_object(
     referable_object_ids: set[int] | None = None,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    allow_unchanged_fallback: bool = False,
 ) -> list[dict[str, Any]]:
     """Generate L2 distance questions using pair-specific stable cross-bin moves."""
     tpl_list = templates.get(
@@ -4960,7 +4962,7 @@ def _generate_l2_distance_questions_for_object(
             room_bounds=room_bounds,
             collision_objects=collision_objects,
             movement_objects=movement_scene_objects,
-            allow_unchanged_fallback=pair_moves_together,
+            allow_unchanged_fallback=pair_moves_together or allow_unchanged_fallback,
         )
         if delta is None or answer_value is None or old_value is None:
             continue
@@ -5335,6 +5337,7 @@ def generate_l2_object_move(
                 _pair_moves_apart, pair_moves_together = _classify_pair_movement(
                     relation_obj_b_id, int(relation_obj_c_id), moved_ids,
                 )
+                allow_unchanged_agent_fallback = pair_moves_together or is_priority_query
                 obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
                 obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
                 _debug_agent_checked += 1
@@ -5357,8 +5360,7 @@ def generate_l2_object_move(
                         if direction_values is not None:
                             old_val, new_val = direction_values
                             if old_val == new_val:
-                                # Save as unchanged fallback for pair_moves_together
-                                if pair_moves_together and fallback_unchanged is None:
+                                if allow_unchanged_agent_fallback and fallback_unchanged is None:
                                     fallback_unchanged = (selected_state, old_val, new_val)
                             else:
                                 agent_state = selected_state
@@ -5381,7 +5383,7 @@ def generate_l2_object_move(
                         candidate_old_value, candidate_new_value = direction_values
                         candidate_unchanged = candidate_old_value == candidate_new_value
                         if candidate_unchanged:
-                            if pair_moves_together and fallback_unchanged is None:
+                            if allow_unchanged_agent_fallback and fallback_unchanged is None:
                                 fallback_unchanged = (
                                     candidate_state,
                                     candidate_old_value,
@@ -5394,8 +5396,11 @@ def generate_l2_object_move(
                         relation_unchanged = False
                         break
 
-                    # Phase 3: only if pair_moves_together, accept unchanged
-                    if agent_state is None and fallback_unchanged is not None and pair_moves_together:
+                    if (
+                        agent_state is None
+                        and fallback_unchanged is not None
+                        and allow_unchanged_agent_fallback
+                    ):
                         agent_state, old_value, new_value = fallback_unchanged
                         relation_unchanged = True
 
@@ -5634,6 +5639,7 @@ def generate_l2_object_move(
                         referable_object_ids=referable_object_ids,
                         room_bounds=room_bounds,
                         collision_objects=collision_objects,
+                        allow_unchanged_fallback=is_priority_query,
                     )
                 )
                 if is_priority_query:

@@ -3873,6 +3873,9 @@ def _canonical_scene_question_type(question: dict) -> str:
     return str(question.get("type", "")).strip().lower()
 
 
+_SCENE_TYPE_CAP_LIMITED_TYPES = {"occlusion", "viewpoint_move"}
+
+
 def _apply_scene_type_cap(
     questions: list[dict],
     *,
@@ -3884,7 +3887,7 @@ def _apply_scene_type_cap(
             type_counts.update(
                 _canonical_scene_question_type(question)
                 for question in questions
-                if _canonical_scene_question_type(question)
+                if _canonical_scene_question_type(question) in _SCENE_TYPE_CAP_LIMITED_TYPES
             )
         return list(questions)
 
@@ -3893,6 +3896,9 @@ def _apply_scene_type_cap(
     for question in questions:
         canonical_type = _canonical_scene_question_type(question)
         if not canonical_type:
+            kept.append(question)
+            continue
+        if canonical_type not in _SCENE_TYPE_CAP_LIMITED_TYPES:
             kept.append(question)
             continue
         if counts[canonical_type] >= max_questions_per_scene_type:
@@ -3911,7 +3917,7 @@ def _remaining_scene_type_budgets(
         return None
     return {
         question_type: max(max_questions_per_scene_type - int(type_counts[question_type]), 0)
-        for question_type in ("occlusion", "viewpoint_move")
+        for question_type in sorted(_SCENE_TYPE_CAP_LIMITED_TYPES)
     }
 
 
@@ -5253,7 +5259,7 @@ def main():
         "--max_questions_per_scene_type",
         type=int,
         default=5,
-        help="Maximum kept questions per scene and canonical question type. Use 0 to disable.",
+        help="Maximum kept questions per scene for L1 occlusion and L2 viewpoint_move only; these two generators also receive the remaining budget for early stop. Other question types are uncapped. Use 0 to disable.",
     )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
