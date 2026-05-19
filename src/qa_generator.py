@@ -8040,39 +8040,63 @@ def _enforce_in_frame_mentions(
 
 
 def _cap_l3_unchanged_ratio(questions: list[dict]) -> list[dict]:
-    """Cap L3 unchanged questions at floor(changed_count / 4) per scene/type.
+    """Cap L3 unchanged questions at floor(changed_count / 4) per qtype.
 
     Only applies to L3 questions whose *type* is NOT attachment_chain.
     ``changed_count`` counts questions where ``relation_unchanged is False``.
-    Unchanged questions are retained in their original generation order.
+    For each qtype across the full batch, unchanged candidates are first capped
+    at 3 per scene, then truncated to the batch-level
+    ``floor(changed_count / 4)`` quota in original generation order.
     """
     from collections import defaultdict
 
-    groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+    groups: dict[str, list[int]] = defaultdict(list)
     for idx, q in enumerate(questions):
         if str(q.get("level", "")) == "L3" and str(q.get("type", "")) != "attachment_chain":
-            groups[(str(q.get("scene_id", "")), str(q.get("type", "")))].append(idx)
+            groups[str(q.get("type", ""))].append(idx)
 
     if not groups:
         return questions
 
     keep = [True] * len(questions)
     removed = 0
-    for indices in groups.values():
+    for qtype, indices in groups.items():
         changed_count = sum(
             1 for idx in indices
             if questions[idx].get("relation_unchanged") is False
         )
         max_unchanged = changed_count // 4
-        kept_unchanged = 0
+        scene_counts: defaultdict[str, int] = defaultdict(int)
+        unchanged_candidates: list[int] = []
         for idx in indices:
             if questions[idx].get("relation_unchanged") is not True:
                 continue
-            if kept_unchanged < max_unchanged:
-                kept_unchanged += 1
-            else:
+            scene_id = str(questions[idx].get("scene_id", ""))
+            if scene_counts[scene_id] >= 3:
                 keep[idx] = False
                 removed += 1
+                continue
+            scene_counts[scene_id] += 1
+            unchanged_candidates.append(idx)
+
+        for idx in unchanged_candidates[max_unchanged:]:
+            keep[idx] = False
+            removed += 1
+
+        original_unchanged_count = sum(
+            1 for idx in indices if questions[idx].get("relation_unchanged") is True
+        )
+        kept_unchanged_count = min(len(unchanged_candidates), max_unchanged)
+        if original_unchanged_count != kept_unchanged_count:
+            logger.info(
+                "L3 unchanged-ratio cap (%s): changed=%d, kept_unchanged=%d/%d after scene_cap=%d, batch_cap=%d",
+                qtype,
+                changed_count,
+                kept_unchanged_count,
+                original_unchanged_count,
+                len(unchanged_candidates),
+                max_unchanged,
+            )
 
     if removed:
         logger.info("L3 unchanged-ratio cap removed %d question(s)", removed)

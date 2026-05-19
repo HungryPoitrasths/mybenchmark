@@ -2470,8 +2470,13 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         pair_id="",
         scene="s1",
         mentioned_object_ids=None,
+        text=None,
     ):
-        q = make_l2_object_move_question(qtype, attached=attached, text=f"{qtype} text")
+        q = make_l2_object_move_question(
+            qtype,
+            attached=attached,
+            text=text or f"{qtype} text",
+        )
         q["scene_id"] = scene
         if attached:
             q["relation_unchanged"] = unchanged
@@ -2623,18 +2628,32 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         result = balance_l2_attachment_per_scene(questions)
         self.assertEqual(len(result), 3)
 
-    def test_balance_different_scenes_independent(self):
+    def test_balance_changed_dedup_does_not_cross_scene_boundaries(self):
         from src.quality_control import balance_l2_attachment_per_scene
         questions = [
-            self._make_att_question("object_move_agent", attached=True, pair_id="1->2", scene="s1"),
-            self._make_att_question("object_move_agent", attached=False, scene="s1"),
-            self._make_att_question("object_move_agent", attached=True, pair_id="a->b", scene="s2"),
-            self._make_att_question("object_move_agent", attached=False, scene="s2"),
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->2",
+                scene="s1",
+                text="s1 changed",
+                mentioned_object_ids=[1, 2, 3],
+            ),
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                pair_id="1->2",
+                scene="s2",
+                text="s2 changed",
+                mentioned_object_ids=[1, 2, 3],
+            ),
         ]
         result = balance_l2_attachment_per_scene(questions)
         self.assertEqual(len(result), 2)
-        scenes = {q["scene_id"] for q in result}
-        self.assertEqual(scenes, {"s1", "s2"})
+        self.assertEqual(
+            [(q["scene_id"], q["question"]) for q in result],
+            [("s1", "s1 changed"), ("s2", "s2 changed")],
+        )
 
     def test_balance_different_qtypes_independent(self):
         from src.quality_control import balance_l2_attachment_per_scene
@@ -2651,16 +2670,27 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         from src.quality_control import balance_l2_attachment_per_scene
         questions = []
         for i in range(4):
-            questions.append(self._make_att_question("object_move_agent", attached=True, pair_id=f"1->{i}"))
-            questions.append(self._make_att_question("object_move_agent", attached=False))
+            questions.append(
+                self._make_att_question(
+                    "object_move_agent",
+                    attached=True,
+                    pair_id=f"1->{i}",
+                    text=f"changed {i}",
+                )
+            )
+            questions.append(
+                self._make_att_question(
+                    "object_move_agent",
+                    attached=False,
+                    text=f"free {i}",
+                )
+            )
         result = balance_l2_attachment_per_scene(questions)
         self.assertEqual(len(result), 5)
-        texts = [q["question"] for q in result]
-        self.assertEqual(texts, [
-            "object_move_agent text", "object_move_agent text",
-            "object_move_agent text", "object_move_agent text",
-            "object_move_agent text",
-        ])
+        self.assertEqual(
+            [q["question"] for q in result],
+            ["changed 0", "free 0", "changed 1", "changed 2", "changed 3"],
+        )
 
     def test_balance_non_l2_move_passes_through(self):
         from src.quality_control import balance_l2_attachment_per_scene
@@ -2670,6 +2700,124 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         ]
         result = balance_l2_attachment_per_scene(questions)
         self.assertEqual(len(result), 2)
+
+    def test_balance_unchanged_cap_is_batch_level_per_qtype(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+
+        questions = [
+            self._make_att_question("object_move_agent", attached=True, pair_id="1->2", scene="s1", text="s1 c1"),
+            self._make_att_question("object_move_agent", attached=True, pair_id="1->3", scene="s1", text="s1 c2"),
+            self._make_att_question("object_move_agent", attached=True, unchanged=True, pair_id="4->5", scene="s1", text="s1 u1"),
+            self._make_att_question("object_move_agent", attached=True, pair_id="6->7", scene="s2", text="s2 c1"),
+            self._make_att_question("object_move_agent", attached=True, pair_id="6->8", scene="s2", text="s2 c2"),
+            self._make_att_question("object_move_agent", attached=True, unchanged=True, pair_id="9->10", scene="s2", text="s2 u1"),
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if q.get("relation_unchanged") is True],
+            ["s1 u1"],
+        )
+
+    def test_balance_unattached_cap_is_batch_level_per_qtype(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+
+        questions = [
+            self._make_att_question("object_move_agent", attached=True, pair_id="1->2", scene="s1", text="s1 c1"),
+            self._make_att_question("object_move_agent", attached=True, pair_id="1->3", scene="s1", text="s1 c2"),
+            self._make_att_question("object_move_agent", attached=False, scene="s1", text="s1 free"),
+            self._make_att_question("object_move_agent", attached=True, pair_id="4->5", scene="s2", text="s2 c1"),
+            self._make_att_question("object_move_agent", attached=True, pair_id="4->6", scene="s2", text="s2 c2"),
+            self._make_att_question("object_move_agent", attached=False, scene="s2", text="s2 free"),
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if not q.get("attachment_remapped")],
+            ["s1 free"],
+        )
+
+    def test_balance_unchanged_candidates_are_capped_at_three_per_scene(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+
+        questions = [
+            *[
+                self._make_att_question(
+                    "object_move_agent",
+                    attached=True,
+                    pair_id=f"1->{i}",
+                    scene="s1",
+                    text=f"s1 c{i}",
+                )
+                for i in range(16)
+            ],
+            *[
+                self._make_att_question(
+                    "object_move_agent",
+                    attached=True,
+                    unchanged=True,
+                    pair_id=f"10->{i}",
+                    scene="s1",
+                    text=f"s1 u{i}",
+                )
+                for i in range(5)
+            ],
+            self._make_att_question(
+                "object_move_agent",
+                attached=True,
+                unchanged=True,
+                pair_id="20->1",
+                scene="s2",
+                text="s2 u0",
+            ),
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if q.get("relation_unchanged") is True],
+            ["s1 u0", "s1 u1", "s1 u2", "s2 u0"],
+        )
+
+    def test_balance_unattached_candidates_are_capped_at_three_per_scene(self):
+        from src.quality_control import balance_l2_attachment_per_scene
+
+        questions = [
+            *[
+                self._make_att_question(
+                    "object_move_agent",
+                    attached=True,
+                    pair_id=f"1->{i}",
+                    scene="s1",
+                    text=f"s1 c{i}",
+                )
+                for i in range(16)
+            ],
+            *[
+                self._make_att_question(
+                    "object_move_agent",
+                    attached=False,
+                    scene="s1",
+                    text=f"s1 free{i}",
+                )
+                for i in range(5)
+            ],
+            self._make_att_question(
+                "object_move_agent",
+                attached=False,
+                scene="s2",
+                text="s2 free0",
+            ),
+        ]
+
+        result = balance_l2_attachment_per_scene(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if not q.get("attachment_remapped")],
+            ["s1 free0", "s1 free1", "s1 free2", "s2 free0"],
+        )
 
     def test_coordinate_rotation_object_centric_generates_unchanged_candidates(self) -> None:
         """coordinate_rotation_object_centric includes unchanged answers."""
@@ -2944,7 +3092,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(ra_unchanged, 1)
         self.assertEqual(oc_unchanged, 0)
 
-    def test_cap_l3_unchanged_ratio_per_scene_type_group(self) -> None:
+    def test_cap_l3_unchanged_ratio_uses_batch_level_cap_across_scenes(self) -> None:
         questions = [
             self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s1_c1", scene_id="s1"),
             self._make_l3_question("coordinate_rotation_agent", unchanged=False, question_text="s1_c2", scene_id="s1"),
@@ -2958,6 +3106,68 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         kept_texts = {q["question"] for q in result}
         self.assertIn("s1_u1", kept_texts)
         self.assertNotIn("s2_u1", kept_texts)
+
+    def test_cap_l3_unchanged_ratio_caps_candidates_at_three_per_scene(self) -> None:
+        questions = [
+            *[
+                self._make_l3_question(
+                    "coordinate_rotation_agent",
+                    unchanged=False,
+                    question_text=f"c{i}",
+                    scene_id="s1",
+                )
+                for i in range(16)
+            ],
+            *[
+                self._make_l3_question(
+                    "coordinate_rotation_agent",
+                    unchanged=True,
+                    question_text=f"s1_u{i}",
+                    scene_id="s1",
+                )
+                for i in range(5)
+            ],
+            self._make_l3_question(
+                "coordinate_rotation_agent",
+                unchanged=True,
+                question_text="s2_u0",
+                scene_id="s2",
+            ),
+        ]
+
+        result = _cap_l3_unchanged_ratio(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if q["relation_unchanged"]],
+            ["s1_u0", "s1_u1", "s1_u2", "s2_u0"],
+        )
+
+    def test_cap_l3_unchanged_ratio_preserves_generation_order_after_both_filters(self) -> None:
+        questions = [
+            *[
+                self._make_l3_question(
+                    "coordinate_rotation_agent",
+                    unchanged=False,
+                    question_text=f"c{i}",
+                    scene_id="s1",
+                )
+                for i in range(20)
+            ],
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s1_u1", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s2_u1", scene_id="s2"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s1_u2", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s2_u2", scene_id="s2"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s1_u3", scene_id="s1"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s2_u3", scene_id="s2"),
+            self._make_l3_question("coordinate_rotation_agent", unchanged=True, question_text="s1_u4", scene_id="s1"),
+        ]
+
+        result = _cap_l3_unchanged_ratio(questions)
+
+        self.assertEqual(
+            [q["question"] for q in result if q["relation_unchanged"]],
+            ["s1_u1", "s2_u1", "s1_u2", "s2_u2", "s1_u3"],
+        )
 
 if __name__ == "__main__":
     unittest.main()

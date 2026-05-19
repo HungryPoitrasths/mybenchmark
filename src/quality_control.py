@@ -407,25 +407,28 @@ def cap_l1_occlusion_not_visible_ratio(
 
 
 def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
-    """Balance L2 object-move attachment counts per (scene_id, qtype).
+    """Balance L2 attachment variants per batch and canonical qtype.
 
-    For each (scene_id, qtype) group where qtype starts with ``object_move_`` or
-    equals ``object_rotate_object_centric``:
+    Applies only to L2 qtypes whose canonical type starts with ``object_move_``
+    or equals ``object_rotate_object_centric``.
 
-    1. **Changed attachment** (attachment_remapped=True, relation_unchanged=False):
-       Keep at most one question per unique ``(attachment_pair_id,
-       other_mentioned_object_ids)`` key (first in generation order).
+    For each canonical qtype across the full batch:
 
-    2. **Unattached** (attachment_remapped=False/absent):
-       Keep at most ``floor(len(changed_kept) / 4)``, truncating from the end.
+    1. **Changed attachment** (``attachment_remapped=True``,
+       ``relation_unchanged=False``):
+       Keep all questions after deduping repeated attachment changes within the
+       same scene by ``(attachment_pair_id, other_mentioned_object_ids)``.
+    2. **Unattached** (``attachment_remapped=False``/absent):
+       First keep at most 3 per scene, then keep at most
+       ``floor(len(changed_kept) / 4)`` across the whole batch.
+    3. **Attached unchanged** (``attachment_remapped=True``,
+       ``relation_unchanged=True``):
+       First keep at most 3 per scene, then keep at most
+       ``floor(len(changed_kept) / 4)`` across the whole batch.
 
-    3. **Attached unchanged** (attachment_remapped=True, relation_unchanged=True):
-       Keep at most ``floor(len(changed_kept) / 4)``, truncating from the end.
-
-    Generation order is preserved within each group.  Questions of other types
-    pass through unchanged.
+    Earlier-generated questions win whenever trimming is required. Questions of
+    other types pass through unchanged.
     """
-    import math
 
     def _bucket(qtype: str) -> str:
         canonical = str(QUESTION_TYPE_ALIASES.get(qtype, qtype)).strip()
@@ -433,14 +436,24 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
             return canonical
         return ""
 
-    grouped: dict[tuple[str, str], list[int]] = {}
+    def _cap_candidates_per_scene(indices: list[int]) -> list[int]:
+        kept: list[int] = []
+        scene_counts: Counter[str] = Counter()
+        for idx in indices:
+            scene_id = str(questions[idx].get("scene_id", ""))
+            if scene_counts[scene_id] >= 3:
+                continue
+            scene_counts[scene_id] += 1
+            kept.append(idx)
+        return kept
+
+    grouped: dict[str, list[int]] = {}
     pass_through: list[int] = []
     for idx, q in enumerate(questions):
         qtype = str(q.get("type", "")).strip()
         bucket = _bucket(qtype)
-        scene_id = str(q.get("scene_id", ""))
         if bucket and str(q.get("level", "")) == "L2":
-            grouped.setdefault((scene_id, bucket), []).append(idx)
+            grouped.setdefault(bucket, []).append(idx)
         else:
             pass_through.append(idx)
 
@@ -448,7 +461,7 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
     for pt_idx in pass_through:
         keep[pt_idx] = True
 
-    for (scene_id, qtype), indices in grouped.items():
+    for qtype, indices in grouped.items():
         changed: list[int] = []
         unattached: list[int] = []
         unchanged: list[int] = []
@@ -463,40 +476,46 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
             else:
                 unattached.append(idx)
 
-        seen_changed_keys: set[tuple[str, tuple[int | str, ...]]] = set()
+        seen_changed_keys: set[tuple[str, str, tuple[int | str, ...]]] = set()
         changed_kept: list[int] = []
         for idx in changed:
+            scene_id = str(questions[idx].get("scene_id", ""))
             pair_id = str(questions[idx].get("attachment_pair_id", "") or "").strip()
             if not pair_id:
                 changed_kept.append(idx)
                 continue
             pair_object_ids = _attachment_pair_object_ids(pair_id)
             other_object_ids = _other_attachment_object_ids(questions[idx], pair_object_ids)
-            dedup_key = (pair_id, other_object_ids)
+            dedup_key = (scene_id, pair_id, other_object_ids)
             if dedup_key in seen_changed_keys:
                 continue
             seen_changed_keys.add(dedup_key)
             changed_kept.append(idx)
 
-        cap = max(0, len(changed_kept) // 4)
+        batch_cap = max(0, len(changed_kept) // 4)
+        unattached_scene_capped = _cap_candidates_per_scene(unattached)
+        unchanged_scene_capped = _cap_candidates_per_scene(unchanged)
 
-        unattached_kept = unattached[:cap]
-        unchanged_kept = unchanged[:cap]
+        unattached_kept = unattached_scene_capped[:batch_cap]
+        unchanged_kept = unchanged_scene_capped[:batch_cap]
 
         kept_count = len(changed_kept) + len(unattached_kept) + len(unchanged_kept)
         removed_count = len(indices) - kept_count
         if removed_count:
             logger.info(
-                "Attachment balance (%s, %s): changed=%d/%d, unattached=%d/%d, unchanged=%d/%d, cap=%d",
-                scene_id,
+                "Attachment balance (%s): changed=%d/%d, unattached=%d/%d after scene_cap=%d/%d, unchanged=%d/%d after scene_cap=%d/%d, batch_cap=%d",
                 qtype,
                 len(changed_kept),
                 len(changed),
                 len(unattached_kept),
                 len(unattached),
+                len(unattached_scene_capped),
+                len(unattached),
                 len(unchanged_kept),
                 len(unchanged),
-                cap,
+                len(unchanged_scene_capped),
+                len(unchanged),
+                batch_cap,
             )
 
         for idx in changed_kept:
@@ -743,8 +762,8 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
 
     Steps:
         1. Automatic quality filter
-        2. Per-scene-per-qtype L2 attachment balance
-        3. Per-scene-per-qtype L3 unchanged ratio cap
+        2. Batch-level-per-qtype L2 attachment balance
+        3. Batch-level-per-qtype L3 unchanged ratio cap
         4. Cap global L1 occlusion not-visible ratio
         5. Answer-letter distribution balancing
         6. Log statistics
