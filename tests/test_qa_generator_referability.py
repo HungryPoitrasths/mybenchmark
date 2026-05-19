@@ -11,6 +11,7 @@ from src.qa_generator import (
     _cap_l3_unchanged_ratio,
     _ensure_question_mentions,
     _enforce_in_frame_mentions,
+    _select_l2_object_move_occlusion_records,
     generate_all_questions,
     generate_l1_occlusion_questions,
     generate_l2_object_move,
@@ -60,6 +61,27 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
+    def test_object_move_occlusion_selector_keeps_attachment_priority_unchanged_record(self) -> None:
+        records = [
+            {
+                "candidate_index": 0,
+                "query_obj_id": 1,
+                "relation_unchanged": True,
+                "question": {"question": "normal unchanged"},
+            },
+            {
+                "candidate_index": 1,
+                "query_obj_id": 2,
+                "relation_unchanged": True,
+                "attachment_priority_pair": True,
+                "question": {"question": "priority unchanged"},
+            },
+        ]
+
+        selected = _select_l2_object_move_occlusion_records(records)
+
+        self.assertEqual([record["query_obj_id"] for record in selected], [2])
+
     def test_generate_all_questions_passes_l2_move_internal_type_filter(self) -> None:
         objects = [
             make_object(1, "table"),
@@ -107,6 +129,21 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         moved_parent = {**parent, "center": [2.0, 0.0, 1.0]}
         moved_child = {**child, "center": [3.0, 0.0, 1.0]}
         moved_objects = [moved_parent, moved_child, ref]
+        old_parent_center = np.array(parent["center"], dtype=np.float64)
+        old_child_center = np.array(child["center"], dtype=np.float64)
+        moved_parent_center = np.array(moved_parent["center"], dtype=np.float64)
+        moved_child_center = np.array(moved_child["center"], dtype=np.float64)
+        ref_center = np.array(ref["center"], dtype=np.float64)
+
+        def object_centric_direction(anchor_center, _face_center, target_center, **_kwargs):
+            anchor = np.asarray(anchor_center, dtype=np.float64)
+            target = np.asarray(target_center, dtype=np.float64)
+            if np.allclose(target, ref_center):
+                if np.allclose(anchor, old_parent_center) or np.allclose(anchor, old_child_center):
+                    return "left", 0.1
+                if np.allclose(anchor, moved_parent_center) or np.allclose(anchor, moved_child_center):
+                    return "front", 0.1
+            return "left", 0.9
 
         with (
             patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
@@ -118,7 +155,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             ),
             patch(
                 "src.qa_generator.primary_direction_object_centric",
-                side_effect=[("left", 0.1), ("front", 0.1)],
+                side_effect=object_centric_direction,
             ),
         ):
             questions = generate_l2_object_move_object_centric(
@@ -149,6 +186,64 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             ["moved_object", "query_object", "reference_object"],
         )
 
+    def test_object_move_object_centric_generator_allows_move_source_as_query(self) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        ref = make_object(3, "chair")
+        moved_parent = {**parent, "center": [1.5, 0.0, 1.0]}
+        moved_child = {**child, "center": [2.5, 0.0, 1.0]}
+        moved_objects = [moved_parent, moved_child, ref]
+        old_parent_center = np.array(parent["center"], dtype=np.float64)
+        old_child_center = np.array(child["center"], dtype=np.float64)
+        moved_parent_center = np.array(moved_parent["center"], dtype=np.float64)
+        moved_child_center = np.array(moved_child["center"], dtype=np.float64)
+        ref_center = np.array(ref["center"], dtype=np.float64)
+
+        def object_centric_direction(anchor_center, _face_center, target_center, **_kwargs):
+            anchor = np.asarray(anchor_center, dtype=np.float64)
+            target = np.asarray(target_center, dtype=np.float64)
+            if np.allclose(target, ref_center):
+                if np.allclose(anchor, old_parent_center) or np.allclose(anchor, old_child_center):
+                    return "left", 0.1
+                if np.allclose(anchor, moved_parent_center) or np.allclose(anchor, moved_child_center):
+                    return "front", 0.1
+            return "left", 0.9
+
+        with (
+            patch("src.qa_generator._has_stable_object_centric_facing", return_value=True),
+            patch(
+                "src.qa_generator._iter_valid_object_move_states",
+                return_value=[
+                    (np.array([0.5, 0.0, 0.0], dtype=np.float64), moved_objects, {1, 2})
+                ],
+            ),
+            patch(
+                "src.qa_generator.primary_direction_object_centric",
+                side_effect=object_centric_direction,
+            ),
+        ):
+            questions = generate_l2_object_move_object_centric(
+                objects=[parent, child, ref],
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_object_centric": [
+                        "move {obj_move_source} {direction} by {distance}: where is {obj_ref} from {obj_query}?"
+                    ]
+                },
+                movement_objects=[parent, child, ref],
+                object_map={obj["id"]: obj for obj in [parent, child, ref]},
+                attachment_referable_object_ids=[1, 2, 3],
+                attachment_query_objects=[parent, child, ref],
+            )
+
+        question = next(q for q in questions if q["query_obj_id"] == 1)
+        self.assertEqual(question["type"], "object_move_object_centric")
+        self.assertEqual(question["moved_obj_id"], 1)
+        self.assertEqual(question["query_obj_id"], 1)
+        self.assertEqual(question["obj_ref_id"], 3)
+
     def test_generate_all_questions_keeps_salvage_only_attachment_pairs_in_attachment_path(self) -> None:
         objects = [
             make_object(9, "desk"),
@@ -178,6 +273,9 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 int(parent_id): [int(child_id) for child_id in child_ids]
                 for parent_id, child_ids in attachment_graph_arg.items()
             }
+            captured["attachment_priority_pairs"] = list(
+                kwargs.get("attachment_priority_pairs") or []
+            )
             return [{
                 "level": "L2",
                 "type": "object_move_agent",
@@ -244,6 +342,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                     {"parent_id": 9, "child_id": 32, "type": "attached_to"},
                     {"parent_id": 9, "child_id": 34, "type": "attached_to"},
                 ],
+                attachment_priority_pairs=[(9, 31), (9, 32)],
                 trace_recorder=trace_events.append,
                 trace_detail="full",
             )
@@ -252,6 +351,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["attachment_query_objects"], [9, 31, 32, 34])
         self.assertEqual(captured["movement_objects"], [9, 31, 32, 34])
         self.assertEqual(captured["attachment_graph"], {9: [31, 32, 34]})
+        self.assertEqual(captured["attachment_priority_pairs"], [(9, 31), (9, 32)])
         self.assertEqual(questions, [])
         pool_snapshot = next(
             event for event in trace_events
@@ -2135,6 +2235,113 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(question["moved_obj_id"], 1)
         self.assertTrue(question["attachment_remapped"])
         self.assertTrue(question["relation_unchanged"])
+
+    def test_object_move_priority_child_overrides_attachment_pair_metadata(self) -> None:
+        parent = make_object(1, "desk")
+        first_child = make_object(2, "keyboard")
+        priority_child = make_object(3, "bottle")
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=[parent, first_child, priority_child],
+            moved_ids={1, 2, 3},
+        )
+
+        def fake_distance_questions(*, query_obj, **_kwargs):
+            if int(query_obj["id"]) != 3:
+                return []
+            return [{
+                "level": "L2",
+                "type": "object_move_distance",
+                "question": "distance",
+                "options": ["A", "B"],
+                "answer": "A",
+                "moved_obj_id": 1,
+                "query_obj_id": 3,
+                "attachment_remapped": True,
+                "attachment_pair_id": "1->2",
+                "attachment_parent_id": 1,
+                "attachment_child_id": 2,
+            }]
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=selected_state),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                side_effect=fake_distance_questions,
+            ),
+        ):
+            questions = generate_l2_object_move(
+                objects=[parent, first_child, priority_child],
+                attachment_graph={1: [2, 3]},
+                attached_by={2: 1, 3: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=[parent, first_child, priority_child],
+                object_map={1: parent, 2: first_child, 3: priority_child},
+                attachment_priority_pairs=[(1, 3)],
+                enabled_l2_object_move_types={"object_move_distance"},
+            )
+
+        question = questions[0]
+        self.assertEqual(question["query_obj_id"], 3)
+        self.assertTrue(question["attachment_priority_pair"])
+        self.assertEqual(question["attachment_pair_id"], "1->3")
+        self.assertEqual(question["attachment_child_id"], 3)
+
+    def test_object_move_agent_marks_priority_child_query(self) -> None:
+        parent = make_object(1, "desk")
+        first_child = make_object(2, "keyboard")
+        priority_child = make_object(3, "bottle")
+        ref = make_object(4, "chair")
+        moved_parent = {**parent, "center": [1.5, 0.0, 1.0]}
+        moved_first_child = {**first_child, "center": [2.5, 0.0, 1.0]}
+        moved_priority_child = {**priority_child, "center": [3.5, 0.0, 1.0]}
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=[moved_parent, moved_first_child, moved_priority_child, ref],
+            moved_ids={1, 2, 3},
+        )
+        relation_call_count = 0
+
+        def fake_relations(*_args, **_kwargs):
+            nonlocal relation_call_count
+            relation_call_count += 1
+            if relation_call_count == 1:
+                return [{
+                    "obj_a_id": 3,
+                    "obj_b_id": 4,
+                    "direction_b_rel_a": "left",
+                }]
+            return [{
+                "obj_a_id": 3,
+                "obj_b_id": 4,
+                "direction_b_rel_a": "front-left",
+            }]
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=selected_state),
+            patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
+            patch("src.qa_generator.compute_all_relations", side_effect=fake_relations),
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            questions = generate_l2_object_move(
+                objects=[parent, first_child, priority_child, ref],
+                attachment_graph={1: [2, 3]},
+                attached_by={2: 1, 3: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=[parent, first_child, priority_child, ref],
+                object_map={obj["id"]: obj for obj in [parent, first_child, priority_child, ref]},
+                attachment_priority_pairs=[(1, 3)],
+                enabled_l2_object_move_types={"object_move_agent"},
+            )
+
+        question = next(q for q in questions if q.get("type") == "object_move_agent")
+        self.assertEqual(question["query_obj_id"], 3)
+        self.assertTrue(question["attachment_priority_pair"])
+        self.assertEqual(question["attachment_pair_id"], "1->3")
+        self.assertEqual(question["attachment_child_id"], 3)
 
     def test_rotate_generator_prefers_changed_rotation_over_larger_unchanged_attachment_fallback(self) -> None:
         child = make_object(1, "cup")

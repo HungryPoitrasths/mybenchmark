@@ -3025,6 +3025,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["attachment_object_surface_text_by_id"] = dict(
                 kwargs.get("attachment_object_surface_text_by_id") or {}
             )
+            captured["attachment_priority_pairs"] = list(
+                kwargs.get("attachment_priority_pairs") or []
+            )
             captured["occlusion_eligible_object_ids"] = list(kwargs["occlusion_eligible_object_ids"] or [])
             captured["mention_in_frame_ratio_by_obj_id"] = dict(
                 kwargs.get("mention_in_frame_ratio_by_obj_id") or {}
@@ -3083,6 +3086,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["referable_object_ids"], [1, 2])
         self.assertEqual(captured["attachment_referable_object_ids"], [1, 2])
         self.assertEqual(captured["attachment_object_surface_text_by_id"], {1: "blue cup", 2: "wooden table"})
+        self.assertEqual(captured["attachment_priority_pairs"], [(2, 1)])
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
         self.assertEqual(captured["mention_in_frame_ratio_by_obj_id"], {1: 0.95, 2: 0.85})
         self.assertEqual(captured["label_statuses"], {"cup": "unique", "table": "unique"})

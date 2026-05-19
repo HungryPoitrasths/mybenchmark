@@ -158,6 +158,11 @@ def _call_generate_all_questions_compat(**kwargs):
                     _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
                 compat_kwargs.pop("attachment_object_surface_text_by_id", None)
                 continue
+            if "attachment_priority_pairs" in message:
+                if "attachment_priority_pairs" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("attachment_priority_pairs", None)
+                continue
             if "question_type_budgets" in message:
                 if "question_type_budgets" not in compat_kwargs:
                     raise
@@ -1406,6 +1411,26 @@ def _normalize_label_to_object_ids(value: object) -> dict[str, list[int]]:
 
 def _coerce_object_id(value: object) -> int | None:
     return _shared_coerce_object_id(value)
+
+
+def _attachment_human_review_priority_pairs(cards: object) -> list[tuple[int, int]]:
+    if not isinstance(cards, list):
+        return []
+    pairs: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for card in cards:
+        if not isinstance(card, dict):
+            continue
+        parent_id = _coerce_object_id(card.get("parent_id"))
+        child_id = _coerce_object_id(card.get("child_id"))
+        if parent_id is None or child_id is None:
+            continue
+        pair = (int(parent_id), int(child_id))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        pairs.append(pair)
+    return pairs
 
 
 def _iter_question_referability_mentions(
@@ -4449,6 +4474,7 @@ def run_pipeline(
             referable_ids = None
             attachment_referable_ids = None
             attachment_object_surface_text_by_id: dict[int, str] = {}
+            attachment_priority_pairs: list[tuple[int, int]] = []
             label_statuses = None
             label_counts = None
             out_of_frame_not_visible_labels: list[str] = []
@@ -4529,6 +4555,9 @@ def run_pipeline(
                                 referability_entry.get("attachment_human_review_cards")
                             )
                         )
+                        attachment_priority_pairs = _attachment_human_review_priority_pairs(
+                            referability_entry.get("attachment_human_review_cards")
+                        )
                         if raw_attachment_referable_ids is None:
                             raw_attachment_referable_ids = _derive_final_referability_fields(
                                 referability_entry
@@ -4541,6 +4570,7 @@ def run_pipeline(
                     else:
                         raw_referable_ids = []
                         attachment_object_surface_text_by_id = {}
+                        attachment_priority_pairs = []
 
                 with _timed_frame_phase(frame_ctx, "in_frame_ratio_projected_area_map_build"):
                     mention_in_frame_ratio_by_obj_id = _build_visible_object_in_frame_ratio_map(
@@ -4635,6 +4665,7 @@ def run_pipeline(
                             referable_object_ids=referable_ids,
                             attachment_referable_object_ids=attachment_referable_ids,
                             attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
+                            attachment_priority_pairs=attachment_priority_pairs,
                             occlusion_eligible_object_ids=occlusion_eligible_ids,
                             mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
                             label_statuses=label_statuses,
@@ -4871,6 +4902,9 @@ def run_pipeline(
 
             visible_id_set = set(int(obj_id) for obj_id in visible_ids)
             referable_ids = None
+            attachment_referable_ids = None
+            attachment_object_surface_text_by_id: dict[int, str] = {}
+            attachment_priority_pairs: list[tuple[int, int]] = []
             label_statuses = None
             label_counts = None
             out_of_frame_not_visible_labels: list[str] = []
@@ -4900,6 +4934,26 @@ def run_pipeline(
                 )
                 referable_ids = [
                     int(obj_id) for obj_id in referability_entry.get("referable_object_ids", [])
+                    if int(obj_id) in visible_id_set
+                ]
+                raw_attachment_referable_ids = referability_entry.get(
+                    "attachment_referable_object_ids"
+                )
+                attachment_object_surface_text_by_id = (
+                    _attachment_human_review_surface_text_by_object_id(
+                        referability_entry.get("attachment_human_review_cards")
+                    )
+                )
+                attachment_priority_pairs = _attachment_human_review_priority_pairs(
+                    referability_entry.get("attachment_human_review_cards")
+                )
+                if raw_attachment_referable_ids is None:
+                    raw_attachment_referable_ids = _derive_final_referability_fields(
+                        referability_entry
+                    ).get("attachment_referable_object_ids", [])
+                attachment_referable_ids = [
+                    int(obj_id)
+                    for obj_id in (raw_attachment_referable_ids or [])
                     if int(obj_id) in visible_id_set
                 ]
                 if not referable_ids and not _has_l1_visibility_candidates(
@@ -4943,6 +4997,9 @@ def run_pipeline(
                 instance_mesh_data=instance_mesh_data,
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
+                attachment_referable_object_ids=attachment_referable_ids,
+                attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
+                attachment_priority_pairs=attachment_priority_pairs,
                 occlusion_eligible_object_ids=occlusion_eligible_ids,
                 mention_in_frame_ratio_by_obj_id=mention_in_frame_ratio_by_obj_id,
                 label_statuses=label_statuses,

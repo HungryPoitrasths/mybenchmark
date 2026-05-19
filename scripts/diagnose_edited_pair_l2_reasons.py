@@ -551,6 +551,8 @@ def _diagnose_occlusion(
     ray_caster,
     instance_mesh_data,
     resource_errors: list[str],
+    max_states: int,
+    exact_selected_state: bool,
 ) -> dict[str, Any]:
     if resource_errors or color_intrinsics is None or ray_caster is None or instance_mesh_data is None:
         return {
@@ -593,19 +595,21 @@ def _diagnose_occlusion(
             "state_examples": [],
         }
 
-    selected_state = _select_object_move_state(
-        objects,
-        attachment_graph,
-        move_source_id,
-        camera_pose,
-        room_bounds=room_bounds,
-        collision_objects=collision_objects,
-        allow_unchanged_attachment=len(moved_ids) > 1,
-        color_intrinsics=color_intrinsics,
-        occlusion_backend="mesh_ray",
-        ray_caster=ray_caster,
-        instance_mesh_data=instance_mesh_data,
-    )
+    selected_state = None
+    if exact_selected_state:
+        selected_state = _select_object_move_state(
+            objects,
+            attachment_graph,
+            move_source_id,
+            camera_pose,
+            room_bounds=room_bounds,
+            collision_objects=collision_objects,
+            allow_unchanged_attachment=len(moved_ids) > 1,
+            color_intrinsics=color_intrinsics,
+            occlusion_backend="mesh_ray",
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
     states = []
     if selected_state is not None:
         states.append(("selected", selected_state))
@@ -627,6 +631,8 @@ def _diagnose_occlusion(
             f"fallback_{idx}",
             _make_selected_object_move_state(delta, moved_objects, set(state_moved_ids)),
         ))
+        if max_states > 0 and len(states) >= max_states:
+            break
 
     if not states:
         return {
@@ -698,6 +704,8 @@ def _diagnose_occlusion(
         "original_status": original_status,
         "original_reason_code": old_reason_code,
         "state_examples": state_examples,
+        "state_count_checked": len(states),
+        "state_count_limit": max_states,
     }
 
 
@@ -880,6 +888,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
                 ray_caster=ray_caster,
                 instance_mesh_data=instance_mesh_data,
                 resource_errors=resource_errors,
+                max_states=int(args.max_occlusion_states),
+                exact_selected_state=bool(args.exact_occlusion_selected_state),
             )
 
         for key, section in (("direction", direction), ("distance", distance), ("occlusion", occlusion)):
@@ -941,6 +951,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--all_pairs", action="store_true", help="Analyze pairs that already reached benchmark too")
     parser.add_argument("--no_occlusion", action="store_true", help="Skip mesh-ray occlusion diagnosis")
+    parser.add_argument(
+        "--max_occlusion_states",
+        type=int,
+        default=6,
+        help=(
+            "Maximum valid object-move states to ray-check per pair for occlusion diagnosis. "
+            "Use 0 for no limit. Default keeps diagnostics responsive."
+        ),
+    )
+    parser.add_argument(
+        "--exact_occlusion_selected_state",
+        action="store_true",
+        help=(
+            "Also run the generator's expensive selected-state search before fallback states. "
+            "This is closer to generation but can be very slow."
+        ),
+    )
     return parser.parse_args()
 
 

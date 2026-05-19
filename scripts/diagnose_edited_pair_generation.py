@@ -436,6 +436,8 @@ def _question_object_ids(question: dict[str, Any]) -> set[int]:
         obj_id = _as_int(mention.get("object_id"))
         if obj_id is None:
             obj_id = _as_int(mention.get("id"))
+        if obj_id is None:
+            obj_id = _as_int(mention.get("obj_id"))
         if obj_id is not None:
             ids.add(obj_id)
     return ids

@@ -252,19 +252,25 @@ def _is_l2_occlusion_unchanged_candidate(
 def _select_l2_object_move_occlusion_records(
     records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    priority_records = [
+        record for record in records
+        if bool(record.get("attachment_priority_pair", False))
+    ]
     changed_records = [
         record for record in records
         if not bool(record["relation_unchanged"])
+        and not bool(record.get("attachment_priority_pair", False))
     ]
     unchanged_records = [
         record for record in records
         if bool(record["relation_unchanged"])
+        and not bool(record.get("attachment_priority_pair", False))
     ]
     selected_unchanged_count = min(
         len(unchanged_records),
         len(changed_records) // L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR,
     )
-    selected_records = changed_records + unchanged_records[:selected_unchanged_count]
+    selected_records = priority_records + changed_records + unchanged_records[:selected_unchanged_count]
     selected_records.sort(key=lambda record: int(record["candidate_index"]))
     return selected_records
 
@@ -801,6 +807,32 @@ def _normalize_attachment_surface_text_by_object_id(
         if text:
             normalized[obj_id] = text
     return dict(sorted(normalized.items()))
+
+
+def _normalize_attachment_priority_pairs(
+    value: Any,
+    field_name: str,
+) -> set[tuple[int, int]]:
+    if value is None:
+        return set()
+    if not isinstance(value, (list, tuple, set)):
+        raise TypeError(f"{field_name} must be a list of parent/child pairs")
+    pairs: set[tuple[int, int]] = set()
+    for item in value:
+        if isinstance(item, dict):
+            parent_raw = item.get("parent_id")
+            child_raw = item.get("child_id")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            parent_raw, child_raw = item[0], item[1]
+        else:
+            raise TypeError(f"{field_name} contains an invalid pair item: {item!r}")
+        try:
+            parent_id = int(parent_raw)
+            child_id = int(child_raw)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{field_name} contains a non-integer pair item: {item!r}") from exc
+        pairs.add((parent_id, child_id))
+    return pairs
 
 
 def _replace_attachment_surface_text(text: str, old_label: str, new_label: str) -> str:
@@ -5016,6 +5048,7 @@ def generate_l2_object_move(
     instance_mesh_data: InstanceMeshData | None = None,
     attachment_referable_object_ids: list[int] | None = None,
     attachment_query_objects: list[dict] | None = None,
+    attachment_priority_pairs: list[dict[str, Any]] | list[list[int]] | list[tuple[int, int]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
     enabled_l2_object_move_types: set[str] | None = None,
@@ -5048,6 +5081,13 @@ def generate_l2_object_move(
         else set(referable_object_ids)
     )
     attachment_query_pool = attachment_query_objects if attachment_query_objects is not None else objects
+    attachment_priority_pair_set = _normalize_attachment_priority_pairs(
+        attachment_priority_pairs,
+        "attachment_priority_pairs",
+    )
+    attachment_priority_children_by_parent: dict[int, set[int]] = {}
+    for parent_id, child_id in attachment_priority_pair_set:
+        attachment_priority_children_by_parent.setdefault(parent_id, set()).add(child_id)
     movement_scene_objects = _merge_scene_objects_by_id(
         movement_objects if movement_objects is not None else objects,
         collision_objects if collision_objects is not None else [],
@@ -5183,6 +5223,18 @@ def generate_l2_object_move(
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
         ]
+        priority_query_ids = {
+            int(child_id)
+            for child_id in attachment_priority_children_by_parent.get(move_source_id, set())
+            if int(child_id) in moved_ids
+        }
+        if priority_query_ids:
+            query_objects.sort(
+                key=lambda candidate_obj: (
+                    int(candidate_obj["id"]) not in priority_query_ids,
+                    int(candidate_obj["id"]),
+                )
+            )
 
         def _relation_map_for_state(state: _SelectedObjectMoveState) -> dict[tuple[int, int], dict[str, Any]]:
             delta_key = _delta_key(state.delta)
@@ -5249,6 +5301,7 @@ def generate_l2_object_move(
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
+            is_priority_query = query_obj_id in priority_query_ids
             _emit_generator_candidate(
                 trace_recorder,
                 trace_detail=trace_detail,
@@ -5398,6 +5451,11 @@ def generate_l2_object_move(
                             agent_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
                             agent_dict["attachment_parent_id"] = move_source_id
                             agent_dict["attachment_child_id"] = direct_children[0]
+                    if is_priority_query:
+                        agent_dict["attachment_priority_pair"] = True
+                        agent_dict["attachment_pair_id"] = f"{move_source_id}->{query_obj_id}"
+                        agent_dict["attachment_parent_id"] = move_source_id
+                        agent_dict["attachment_child_id"] = query_obj_id
                     query_obj_questions.append(agent_dict)
                     _debug_agent_generated += 1
 
@@ -5528,12 +5586,17 @@ def generate_l2_object_move(
                     "delta": delta.tolist(),
                     "has_attachment_chain": has_attachment_chain,
                 }
+                if is_priority_query:
+                    occlusion_dict["attachment_priority_pair"] = True
+                    occlusion_dict["attachment_pair_id"] = f"{move_source_id}->{query_obj_id}"
+                    occlusion_dict["attachment_parent_id"] = move_source_id
+                    occlusion_dict["attachment_child_id"] = query_obj_id
                 if attachment_remapped:
                     direct_children = attachment_graph.get(move_source_id, [])
                     if direct_children:
-                        occlusion_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
-                        occlusion_dict["attachment_parent_id"] = move_source_id
-                        occlusion_dict["attachment_child_id"] = direct_children[0]
+                        occlusion_dict.setdefault("attachment_pair_id", f"{move_source_id}->{direct_children[0]}")
+                        occlusion_dict.setdefault("attachment_parent_id", move_source_id)
+                        occlusion_dict.setdefault("attachment_child_id", direct_children[0])
                 occlusion_candidate_records.append({
                     "candidate_index": len(occlusion_candidate_records),
                     "query_obj_id": query_obj_id,
@@ -5550,6 +5613,7 @@ def generate_l2_object_move(
                     "delta": delta.tolist(),
                     "move_source_id": move_source_id,
                     "query_obj_id": query_obj_id,
+                    "attachment_priority_pair": is_priority_query,
                 })
 
             _dist_before = len(query_obj_questions)
@@ -5572,6 +5636,12 @@ def generate_l2_object_move(
                         collision_objects=collision_objects,
                     )
                 )
+                if is_priority_query:
+                    for distance_question in query_obj_questions[_dist_before:]:
+                        distance_question["attachment_priority_pair"] = True
+                        distance_question["attachment_pair_id"] = f"{move_source_id}->{query_obj_id}"
+                        distance_question["attachment_parent_id"] = move_source_id
+                        distance_question["attachment_child_id"] = query_obj_id
             _dist_count = len(query_obj_questions) - _dist_before
             if has_attachment_chain and _move_src_entry is not None:
                 _move_src_entry["query_objects"][-1]["distance_generated"] = _dist_count
@@ -6658,7 +6728,7 @@ def generate_l2_object_move_object_centric(
         has_attachment_chain = attachment_remapped
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
-            if int(candidate_obj["id"]) in moved_ids and int(candidate_obj["id"]) != move_source_id
+            if int(candidate_obj["id"]) in moved_ids
         ]
         if not query_objects:
             continue
@@ -6741,11 +6811,6 @@ def generate_l2_object_move_object_centric(
                     moved_ref = moved_map.get(ref_id, ref)
                     new_query_center = np.array(moved_query["center"], dtype=float)
                     new_facing_center = new_query_center + facing_offset
-                    if not _has_stable_object_centric_facing(
-                        new_query_center,
-                        new_facing_center,
-                    ):
-                        continue
                     new_ref_c = np.array(moved_ref["center"], dtype=float)
                     new_dir, new_amb = primary_direction_object_centric(
                         new_query_center,
@@ -8290,6 +8355,7 @@ def generate_all_questions(
     referable_object_ids: list[int] | None = None,
     attachment_referable_object_ids: list[int] | None = None,
     attachment_object_surface_text_by_id: dict[int, str] | dict[str, str] | None = None,
+    attachment_priority_pairs: list[dict[str, Any]] | list[list[int]] | list[tuple[int, int]] | None = None,
     occlusion_eligible_object_ids: list[int] | None = None,
     mention_in_frame_ratio_by_obj_id: dict[int, float] | None = None,
     label_statuses: dict[str, Any] | None = None,
@@ -8322,6 +8388,8 @@ def generate_all_questions(
     fall back to the ordinary referable object pool.
     attachment_object_surface_text_by_id: optional frame-level human-reviewed
     attachment naming overrides used only by attachment-centric questions.
+    attachment_priority_pairs: optional human-reviewed attachment pairs whose
+    child objects should be preferred in L2 object-move child query selection.
     occlusion_eligible_object_ids: compatibility field retained for trace/debug
     output. Downstream mention filtering now only requires mentions to be in
     the visible object pool.
@@ -8356,6 +8424,12 @@ def generate_all_questions(
     attachment_object_surface_text_by_id = _normalize_attachment_surface_text_by_object_id(
         attachment_object_surface_text_by_id,
         "attachment_object_surface_text_by_id",
+    )
+    attachment_priority_pairs = sorted(
+        _normalize_attachment_priority_pairs(
+            attachment_priority_pairs,
+            "attachment_priority_pairs",
+        )
     )
     attachment_edge_input = len(attachment_edges)
 
@@ -9179,6 +9253,7 @@ def generate_all_questions(
                     instance_mesh_data=instance_mesh_data,
                     attachment_referable_object_ids=sorted(attachment_referable_set),
                     attachment_query_objects=attachment_query_objects_uniq,
+                    attachment_priority_pairs=attachment_priority_pairs,
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
                     enabled_l2_object_move_types=enabled_l2_object_move_types,
