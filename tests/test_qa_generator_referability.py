@@ -155,6 +155,99 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             {"object_move_agent", "object_move_distance"},
         )
 
+    def test_generate_all_questions_only_question_types_accepts_new_reference_frame_types(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "chair"),
+            make_object(4, "sofa"),
+        ]
+
+        cases = [
+            (
+                "L2_object_rotate_object_centric",
+                "generate_l2_object_rotate_object_centric",
+                {
+                    "level": "L2",
+                    "type": "object_rotate_object_centric",
+                    "moved_obj_id": 1,
+                    "moved_obj_label": "table",
+                    "query_obj_id": 2,
+                    "query_obj_label": "box",
+                    "obj_ref_id": 3,
+                    "obj_ref_label": "chair",
+                    "obj_face_id": 4,
+                    "obj_face_label": "sofa",
+                },
+            ),
+            (
+                "L2_object_move_allocentric",
+                "generate_l2_object_move_allocentric",
+                {
+                    "level": "L2",
+                    "type": "object_move_allocentric",
+                    "moved_obj_id": 1,
+                    "moved_obj_label": "table",
+                    "query_obj_id": 2,
+                    "query_obj_label": "box",
+                    "obj_ref_id": 3,
+                    "obj_ref_label": "chair",
+                },
+            ),
+            (
+                "L3_coordinate_rotation_object_centric",
+                "generate_l3_coordinate_rotation_object_centric",
+                {
+                    "level": "L3",
+                    "type": "coordinate_rotation_object_centric",
+                    "obj_ref_id": 1,
+                    "obj_ref_label": "table",
+                    "obj_face_id": 2,
+                    "obj_face_label": "box",
+                    "obj_target_id": 3,
+                    "obj_target_label": "chair",
+                },
+            ),
+            (
+                "L3_coordinate_rotation_allocentric",
+                "generate_l3_coordinate_rotation_allocentric",
+                {
+                    "level": "L3",
+                    "type": "coordinate_rotation_allocentric",
+                    "obj_a_id": 1,
+                    "obj_a_label": "table",
+                    "obj_b_id": 2,
+                    "obj_b_label": "box",
+                },
+            ),
+        ]
+
+        for public_type, generator_name, question_fields in cases:
+            with self.subTest(public_type=public_type):
+                question = {
+                    **question_fields,
+                    "question": f"{public_type} question",
+                    "options": ["front", "back", "left", "right"],
+                    "answer": "A",
+                    "correct_value": "front",
+                    "relation_unchanged": False,
+                }
+                with patch(f"src.qa_generator.{generator_name}", return_value=[question]):
+                    questions = generate_all_questions(
+                        objects=objects,
+                        attachment_graph={},
+                        attached_by={},
+                        support_chain_graph={},
+                        support_chain_by={},
+                        camera_pose=make_camera_pose(),
+                        templates={},
+                        visible_object_ids=[1, 2, 3, 4],
+                        referable_object_ids=[1, 2, 3, 4],
+                        only_question_types=[public_type],
+                    )
+
+                self.assertEqual([q["type"] for q in questions], [question_fields["type"]])
+
     def test_object_move_object_centric_generator_emits_three_role_move_question(self) -> None:
         parent = make_object(1, "table")
         child = make_object(2, "box")
