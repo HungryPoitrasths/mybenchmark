@@ -407,15 +407,21 @@ def build_question_referability_audit(
                 _add_reason("mentioned_nonreferable_object", mention_reasons)
 
             if label_key:
-                if label_status == "multiple":
-                    _add_reason("mentioned_label_not_unique", mention_reasons)
-                elif label_status != "unique":
-                    _add_reason("mentioned_label_not_resolved", mention_reasons)
+                explicit_referable_obj_id = (
+                    mention_obj_id is not None
+                    and mention_obj_id in referable_set
+                    and not bool(mention.get("obj_id_parse_failed", False))
+                )
+                if not explicit_referable_obj_id:
+                    if label_status == "multiple":
+                        _add_reason("mentioned_label_not_unique", mention_reasons)
+                    elif label_status != "unique":
+                        _add_reason("mentioned_label_not_resolved", mention_reasons)
 
-                if len(referable_label_ids) != 1:
-                    _add_reason("mentioned_label_not_resolved", mention_reasons)
-                elif mention_obj_id is not None and mention_obj_id not in set(referable_label_ids):
-                    _add_reason("mentioned_nonreferable_object", mention_reasons)
+                    if len(referable_label_ids) != 1:
+                        _add_reason("mentioned_label_not_resolved", mention_reasons)
+                    elif mention_obj_id is not None and mention_obj_id not in set(referable_label_ids):
+                        _add_reason("mentioned_nonreferable_object", mention_reasons)
             elif mention_obj_id is None:
                 _add_reason("mentioned_label_not_resolved", mention_reasons)
 

@@ -352,7 +352,12 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["movement_objects"], [9, 31, 32, 34])
         self.assertEqual(captured["attachment_graph"], {9: [31, 32, 34]})
         self.assertEqual(captured["attachment_priority_pairs"], [(9, 31), (9, 32)])
-        self.assertEqual(questions, [])
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["query_obj_id"], 31)
+        self.assertEqual(
+            questions[0]["question_referability_audit"]["decision"],
+            "pass",
+        )
         pool_snapshot = next(
             event for event in trace_events
             if event.get("event") == "object_pool_snapshot"
