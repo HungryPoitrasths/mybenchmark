@@ -365,10 +365,10 @@ def _resolve_scene_files(scene_path: Path) -> tuple[str, Path, Path, Path]:
     return scene_id, mesh_file, seg_file, anno_file
 
 
-def _load_scene_geometry(
+def _load_scannet_scene_geometry(
     scene_path: str | Path,
 ) -> SceneGeometry:
-    """Load one scene's aligned vertices, faces, segment ids, and annotations."""
+    """Load one ScanNet v2 scene's aligned vertices, faces, segment ids, and annotations."""
     import open3d as o3d
 
     scene_path = Path(scene_path)
@@ -409,6 +409,36 @@ def _load_scene_geometry(
         anno_list = annotations
 
     return scene_id, vertices, faces, seg_indices, anno_list
+
+
+def _load_scene_geometry(
+    scene_path: str | Path,
+    dataset: str | None = None,
+) -> SceneGeometry:
+    """Load scene geometry, auto-detecting ScanNet v2 vs ScanNet++ format.
+
+    Args:
+        scene_path: Path to the scene directory.
+        dataset: ``"scannet"``, ``"scannetpp"``, or ``None`` (auto-detect).
+
+    Returns:
+        (scene_id, vertices, faces, seg_indices, anno_list).
+    """
+    scene_path = Path(scene_path)
+
+    if dataset == "scannetpp" or (
+        dataset is None and _is_scannetpp_geometry_dir(scene_path)
+    ):
+        from .datasets.scannetpp import load_scannetpp_scene_geometry
+        return load_scannetpp_scene_geometry(scene_path)
+
+    return _load_scannet_scene_geometry(scene_path)
+
+
+def _is_scannetpp_geometry_dir(path: Path) -> bool:
+    """Lazy import wrapper for has_scannetpp_geometry."""
+    from .datasets.scannetpp import has_scannetpp_geometry
+    return has_scannetpp_geometry(path)
 
 
 def _sample_surface_points_from_triangles(
@@ -567,10 +597,13 @@ def load_instance_mesh_data(
     instance_ids: list[int] | None = None,
     n_surface_samples: int = 512,
     preloaded_geometry: SceneGeometry | None = None,
+    dataset: str | None = None,
 ) -> InstanceMeshData:
     """Return instance triangle ownership and cached sampled surface points."""
     if preloaded_geometry is None:
-        _scene_id, vertices, faces, seg_indices, anno_list = _load_scene_geometry(scene_path)
+        _scene_id, vertices, faces, seg_indices, anno_list = _load_scene_geometry(
+            scene_path, dataset=dataset,
+        )
     else:
         _scene_id, vertices, faces, seg_indices, anno_list = preloaded_geometry
     requested_ids = None if instance_ids is None else {int(x) for x in instance_ids}
@@ -906,11 +939,15 @@ def _build_support_geom(
 def parse_scene(
     scene_path: str | Path,
     preloaded_geometry: SceneGeometry | None = None,
+    dataset: str | None = None,
 ) -> dict[str, Any] | None:
-    """Parse a single ScanNet scene.
+    """Parse a single ScanNet or ScanNet++ scene.
 
     Args:
-        scene_path: Path to the scene directory (e.g. ``scans/scene0000_00/``).
+        scene_path: Path to the scene directory (e.g. ``scans/scene0000_00/``
+            or ``scannetcpp/0d2ee665be/``).
+        preloaded_geometry: Optional preloaded geometry tuple.
+        dataset: ``"scannet"``, ``"scannetpp"``, or ``None`` (auto-detect).
 
     Returns:
         Scene dict with keys ``scene_id`` and ``objects``.
@@ -921,7 +958,9 @@ def parse_scene(
 
     try:
         if preloaded_geometry is None:
-            scene_id, vertices, _faces, seg_indices, anno_list = _load_scene_geometry(scene_path)
+            scene_id, vertices, _faces, seg_indices, anno_list = _load_scene_geometry(
+                scene_path, dataset=dataset,
+            )
         else:
             scene_id, vertices, _faces, seg_indices, anno_list = preloaded_geometry
     except FileNotFoundError as exc:
@@ -1031,10 +1070,11 @@ def parse_all_scenes(
     dataset_root = Path(dataset_root)
     scenes: list[dict[str, Any]] = []
 
-    # ScanNet scene dirs contain a pose/ subdirectory
+    # ScanNet v2 scene dirs contain a pose/ subdirectory;
+    # ScanNet++ scene dirs contain scans/mesh_aligned_0.05.ply etc.
     scene_dirs = sorted(
         p for p in dataset_root.iterdir()
-        if p.is_dir() and (p / "pose").exists()
+        if p.is_dir() and ((p / "pose").exists() or _is_scannetpp_geometry_dir(p))
     )
     logger.info("Found %d candidate scene directories", len(scene_dirs))
 

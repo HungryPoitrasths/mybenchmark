@@ -248,6 +248,8 @@ def _get_question_dinox_cache_entry(
     data_root: Path,
     detection_cache: dict[tuple[str, str, str], dict[str, object]],
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     cache_key = (scene_id, image_name, label)
     cached = detection_cache.get(cache_key)
@@ -275,11 +277,19 @@ def _get_question_dinox_cache_entry(
 
     image_shape = image_shape_cache.get(image_cache_key)
     if image_cache_key not in image_shape_cache:
-        image_path = data_root / scene_id / "color" / image_name
+        from src.datasets import make_data_source
+        ds_dinox = make_data_source(
+            dataset, data_root / scene_id, sensor=scannetpp_sensor,
+        )
+        image_path = ds_dinox.image_path(image_name)
         image = cv2.imread(str(image_path))
         image_shape = None if image is None else tuple(image.shape)
         image_shape_cache[image_cache_key] = image_shape
-    image_path = data_root / scene_id / "color" / image_name
+    from src.datasets import make_data_source
+    ds_dinox = make_data_source(
+        dataset, data_root / scene_id, sensor=scannetpp_sensor,
+    )
+    image_path = ds_dinox.image_path(image_name)
     if image_shape is None:
         cached = {
             "status": "error",
@@ -359,6 +369,8 @@ def _apply_question_dinox_audit(
     *,
     questions: list[dict[str, object]],
     data_root: Path,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> list[dict[str, object]]:
     detection_cache: dict[tuple[str, str, str], dict[str, object]] = {}
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None] = {}
@@ -412,6 +424,8 @@ def _apply_question_dinox_audit(
                 data_root=data_root,
                 detection_cache=detection_cache,
                 image_shape_cache=image_shape_cache,
+                dataset=dataset,
+                scannetpp_sensor=scannetpp_sensor,
             )
 
             label_audit = _copy_question_dinox_cache_entry(cached)
@@ -514,6 +528,8 @@ def _build_question_post_dinox_label_review(
     data_root: Path,
     detection_cache: dict[tuple[str, str, str], dict[str, object]],
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     label = str(target.get("label", "")).strip().lower()
     roles = list(target.get("roles", []))
@@ -542,6 +558,8 @@ def _build_question_post_dinox_label_review(
         data_root=data_root,
         detection_cache=detection_cache,
         image_shape_cache=image_shape_cache,
+        dataset=dataset,
+        scannetpp_sensor=scannetpp_sensor,
     )
     strong_detections = [
         detection for detection in cached.get("strong_detections", [])
@@ -583,6 +601,8 @@ def _run_question_post_dinox_stage(
     data_root: Path,
     detection_cache: dict[tuple[str, str, str], dict[str, object]],
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     scene_id = str(question.get("scene_id", "")).strip()
     image_name = str(question.get("image_name", "")).strip()
@@ -600,6 +620,8 @@ def _run_question_post_dinox_stage(
             data_root=data_root,
             detection_cache=detection_cache,
             image_shape_cache=image_shape_cache,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
         label_audits.append(label_audit)
 
@@ -635,6 +657,8 @@ def _get_question_post_mesh_resources(
     objects_by_id: dict[int, dict[str, object]],
     scene_mesh_cache: dict[str, object],
     scene_depth_intrinsics_cache: dict[str, object],
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     scene_dir = frame_context.get("scene_dir") if isinstance(frame_context, dict) else None
     pose = frame_context.get("pose") if isinstance(frame_context, dict) else None
@@ -644,7 +668,11 @@ def _get_question_post_mesh_resources(
     if scene_id and scene_id not in scene_depth_intrinsics_cache:
         if isinstance(scene_dir, Path):
             try:
-                scene_depth_intrinsics_cache[scene_id] = load_scannet_depth_intrinsics(scene_dir)
+                from src.datasets import make_data_source
+                ds_mesh = make_data_source(
+                    dataset, scene_dir, sensor=scannetpp_sensor,
+                )
+                scene_depth_intrinsics_cache[scene_id] = ds_mesh.load_depth_intrinsics()
             except Exception:
                 scene_depth_intrinsics_cache[scene_id] = None
         else:
@@ -653,11 +681,13 @@ def _get_question_post_mesh_resources(
     if scene_id and scene_id not in scene_mesh_cache:
         if isinstance(scene_dir, Path):
             try:
-                scene_mesh_cache[scene_id] = load_instance_mesh_data(
-                    scene_dir,
-                    instance_ids=sorted(int(obj_id) for obj_id in objects_by_id.keys()),
-                    n_surface_samples=1,
-                )
+                mesh_kwargs = {
+                    "instance_ids": sorted(int(obj_id) for obj_id in objects_by_id.keys()),
+                    "n_surface_samples": 1,
+                }
+                if dataset == "scannetpp":
+                    mesh_kwargs["dataset"] = "scannetpp"
+                scene_mesh_cache[scene_id] = load_instance_mesh_data(scene_dir, **mesh_kwargs)
             except Exception as exc:
                 logger.warning("Question post-generation mesh load failed for %s: %s", scene_id, exc)
                 scene_mesh_cache[scene_id] = None
@@ -713,6 +743,8 @@ def _run_question_post_mesh_stage(
     scene_mesh_cache: dict[str, object],
     scene_depth_intrinsics_cache: dict[str, object],
     topology_cache: dict[tuple[str, int], dict[str, object]],
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     scene_id = str(question.get("scene_id", "")).strip()
     image_name = str(question.get("image_name", "")).strip()
@@ -727,6 +759,8 @@ def _run_question_post_mesh_stage(
         objects_by_id=objects_by_id,
         scene_mesh_cache=scene_mesh_cache,
         scene_depth_intrinsics_cache=scene_depth_intrinsics_cache,
+        dataset=dataset,
+        scannetpp_sensor=scannetpp_sensor,
     )
     pose = mesh_resources["pose"]
     color_intrinsics = mesh_resources["color_intrinsics"]
@@ -800,6 +834,8 @@ def _run_question_post_mesh_stage(
                     data_root=data_root,
                     detection_cache=detection_cache,
                     image_shape_cache=image_shape_cache,
+                    dataset=dataset,
+                    scannetpp_sensor=scannetpp_sensor,
                 )
                 if str(cached.get("status", "")).strip().lower() != "ok":
                     mesh_review["reason"] = "dinox_error"
@@ -874,6 +910,8 @@ def _apply_question_post_generation_audit(
     data_root: Path,
     output_dir: Path,
     frame_context_by_key: dict[tuple[str, str], dict[str, object]] | None = None,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> list[dict[str, object]]:
     detection_cache: dict[tuple[str, str, str], dict[str, object]] = {}
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None] = {}
@@ -882,6 +920,8 @@ def _apply_question_post_generation_audit(
             questions=questions,
             data_root=data_root,
             output_dir=output_dir,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
     scene_mesh_cache: dict[str, object] = {}
     scene_depth_intrinsics_cache: dict[str, object] = {}
@@ -901,6 +941,8 @@ def _apply_question_post_generation_audit(
             data_root=data_root,
             detection_cache=detection_cache,
             image_shape_cache=image_shape_cache,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
         mesh_stage = _run_question_post_mesh_stage(
             question=question,
@@ -912,6 +954,8 @@ def _apply_question_post_generation_audit(
             scene_mesh_cache=scene_mesh_cache,
             scene_depth_intrinsics_cache=scene_depth_intrinsics_cache,
             topology_cache=topology_cache,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
         _apply_question_post_review_results(
             question,
@@ -1625,6 +1669,8 @@ def _build_question_review_scene_context(
     scene_id: str,
     data_root: Path,
     output_dir: Path,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     scene_dir = data_root / scene_id
     scene = None
@@ -1643,7 +1689,10 @@ def _build_question_review_scene_context(
             errors.append("invalid_scene_metadata")
     elif scene_dir.exists():
         try:
-            scene = parse_scene(scene_dir)
+            if dataset == "scannetpp":
+                scene = parse_scene(scene_dir, dataset="scannetpp")
+            else:
+                scene = parse_scene(scene_dir)
         except Exception as e:
             logger.warning("Question review parse fallback failed for %s: %s", scene_id, e)
             errors.append("parse_scene_failed")
@@ -1666,14 +1715,15 @@ def _build_question_review_scene_context(
     poses: dict[str, object] = {}
     color_intrinsics = None
     if scene_dir.exists():
+        from src.datasets import make_data_source
+        ds_review = make_data_source(dataset, scene_dir, sensor=scannetpp_sensor)
         try:
-            axis_align = load_axis_alignment(scene_dir)
-            poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+            poses = ds_review.load_poses()
         except Exception as e:
             logger.warning("Question review pose load failed for %s: %s", scene_id, e)
             errors.append("missing_pose_data")
         try:
-            color_intrinsics = load_scannet_intrinsics(scene_dir)
+            color_intrinsics = ds_review.load_intrinsics()
         except Exception as e:
             logger.warning(
                 "Question review color intrinsics load failed for %s: %s",
@@ -1699,8 +1749,12 @@ def _build_question_review_frame_context(
     image_name: str,
     data_root: Path,
     scene_context: dict[str, object],
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
-    image_path = data_root / scene_id / "color" / image_name
+    from src.datasets import make_data_source
+    ds_review = make_data_source(dataset, data_root / scene_id, sensor=scannetpp_sensor)
+    image_path = ds_review.image_path(image_name)
     image_exists = image_path.exists()
     image_b64 = None
     mime = "image/jpeg"
@@ -1794,6 +1848,8 @@ def _prebuild_question_review_frame_contexts(
     questions: list[dict[str, object]],
     data_root: Path,
     output_dir: Path,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[tuple[str, str], dict[str, object]]:
     frame_keys: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -1814,12 +1870,16 @@ def _prebuild_question_review_frame_contexts(
                 scene_id=scene_id,
                 data_root=data_root,
                 output_dir=output_dir,
+                dataset=dataset,
+                scannetpp_sensor=scannetpp_sensor,
             )
         frame_contexts[(scene_id, image_name)] = _build_question_review_frame_context(
             scene_id=scene_id,
             image_name=image_name,
             data_root=data_root,
             scene_context=scene_contexts[scene_id],
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
     return frame_contexts
 
@@ -2584,6 +2644,8 @@ def _run_question_presence_review(
     vlm_model: str | None,
     workers: int = 8,
     frame_context_by_key: dict[tuple[str, str], dict[str, object]] | None = None,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> dict[str, object]:
     from scripts.make_viewer import build_viewer_html
 
@@ -2622,6 +2684,7 @@ def _run_question_presence_review(
             build_viewer_html(
                 [],
                 data_root,
+                dataset=dataset,
                 title="question presence manual review",
                 include_referability_audit=False,
                 apply_filters=False,
@@ -2645,6 +2708,8 @@ def _run_question_presence_review(
             questions=review_questions,
             data_root=data_root,
             output_dir=output_dir,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
 
     if presence_review_targets or attachment_pair_review_targets:
@@ -2735,6 +2800,7 @@ def _run_question_presence_review(
     flagged_html = build_viewer_html(
         flagged_questions,
         data_root,
+        dataset=dataset,
         title="question presence manual review",
         include_referability_audit=False,
         apply_filters=False,
@@ -4013,6 +4079,8 @@ def _rebuild_pipeline_outputs(
     vlm_model: str | None,
     question_presence_review_workers: int,
     max_questions_per_scene_type: int,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> list[dict]:
     all_questions, raw_question_count = _load_cached_scene_questions(
         raw_questions_dir,
@@ -4032,6 +4100,8 @@ def _rebuild_pipeline_outputs(
             questions=final_questions,
             data_root=Path(data_root),
             output_dir=output_dir,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
     if run_question_dinox_audit:
         final_questions = _apply_question_post_generation_audit(
@@ -4039,6 +4109,8 @@ def _rebuild_pipeline_outputs(
             data_root=Path(data_root),
             output_dir=output_dir,
             frame_context_by_key=question_review_frame_contexts,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
     else:
         logger.info("Skipping DINO-X-dependent post-generation audit")
@@ -4070,6 +4142,8 @@ def _rebuild_pipeline_outputs(
             vlm_model=vlm_model,
             workers=question_presence_review_workers,
             frame_context_by_key=question_review_frame_contexts,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
         )
 
     logger.info(
@@ -4083,6 +4157,8 @@ def _rebuild_pipeline_outputs(
 def run_pipeline(
     data_root: Path,
     output_dir: Path,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
     max_scenes: int = 300,
     max_frames: int = 5,
     use_occlusion: bool = True,
@@ -4117,6 +4193,8 @@ def run_pipeline(
     max_questions_per_scene_type = int(max_questions_per_scene_type)
     if max_questions_per_scene_type < 0:
         raise ValueError("max_questions_per_scene_type must be >= 0")
+    if dataset not in ("scannet", "scannetpp"):
+        raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
 
     meta_dir = output_dir / "scene_metadata"
     questions_dir = output_dir / "questions"
@@ -4126,10 +4204,14 @@ def run_pipeline(
     if write_frame_debug:
         frame_debug_dir.mkdir(parents=True, exist_ok=True)
 
-    discovered_scene_dirs = sorted(
-        p for p in data_root.iterdir()
-        if p.is_dir() and (p / "pose").exists()
-    )
+    if dataset == "scannetpp":
+        from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
+        discovered_scene_dirs = resolve_scannetpp_scene_dirs(data_root)
+    else:
+        discovered_scene_dirs = sorted(
+            p for p in data_root.iterdir()
+            if p.is_dir() and (p / "pose").exists()
+        )
     cached_scene_ids = _get_referability_scene_ids(referability_cache)
     scene_dirs = [p for p in discovered_scene_dirs if p.name in cached_scene_ids]
     scene_limit = max(0, int(max_scenes))
@@ -4345,7 +4427,10 @@ def run_pipeline(
             except Exception as e:
                 logger.warning("Scene geometry preload failed for %s: %s", scene_id, e)
 
-        scene = parse_scene(scene_dir, preloaded_geometry=preloaded_geometry)
+        parse_kwargs = {"preloaded_geometry": preloaded_geometry}
+        if dataset == "scannetpp":
+            parse_kwargs["dataset"] = "scannetpp"
+        scene = parse_scene(scene_dir, **parse_kwargs)
         if scene is None:
             _persist_completed_scene(
                 scene_id,
@@ -4373,7 +4458,13 @@ def run_pipeline(
             )
             continue
 
+        scene["depth_source"] = "none" if dataset == "scannetpp" else "sensor"
         _write_json_file(meta_dir / f"{scene_id}.json", scene)
+
+        ds = None
+        if dataset == "scannetpp":
+            from src.datasets import make_data_source
+            ds = make_data_source(dataset, scene_dir, sensor=scannetpp_sensor)
 
         scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
         frames = _frames_from_referability_cache(scene_frames)
@@ -4389,14 +4480,26 @@ def run_pipeline(
             )
             continue
 
-        axis_align = load_axis_alignment(scene_dir)
-        poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        if ds is not None:
+            axis_align = ds.load_axis_alignment()
+            poses = ds.load_poses()
+        else:
+            axis_align = load_axis_alignment(scene_dir)
+            poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
         ray_caster = None
         if needs_mesh_resources:
-            mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
+            if ds is not None:
+                mesh_path = ds.mesh_path()
+            else:
+                mesh_path = scene_dir / f"{scene_id}_vh_clean.ply"
+                if not mesh_path.exists():
+                    mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
             if not mesh_path.exists():
-                mesh_path = scene_dir / f"{scene_id}_vh_clean_2.ply"
-            if mesh_path.exists() and RayCaster is not None:
+                raise RuntimeError(
+                    f"{occlusion_backend} backend requested for {scene_id}, "
+                    f"but mesh not found at {mesh_path}"
+                )
+            if RayCaster is not None:
                 try:
                     ray_caster = RayCaster.from_ply(str(mesh_path), axis_alignment=axis_align)
                 except Exception as e:
@@ -4412,12 +4515,14 @@ def run_pipeline(
 
         instance_mesh_data = None
         try:
-            instance_mesh_data = load_instance_mesh_data(
-                scene_dir,
-                instance_ids=[int(o["id"]) for o in scene["objects"]],
-                n_surface_samples=512,
-                preloaded_geometry=preloaded_geometry,
-            )
+            instance_mesh_kwargs = {
+                "instance_ids": [int(o["id"]) for o in scene["objects"]],
+                "n_surface_samples": 512,
+                "preloaded_geometry": preloaded_geometry,
+            }
+            if dataset == "scannetpp":
+                instance_mesh_kwargs["dataset"] = "scannetpp"
+            instance_mesh_data = load_instance_mesh_data(scene_dir, **instance_mesh_kwargs)
         except Exception as e:
             if needs_mesh_resources:
                 raise RuntimeError(
@@ -4433,12 +4538,18 @@ def run_pipeline(
         depth_intrinsics = None
         if use_occlusion:
             try:
-                depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
+                if ds is not None:
+                    depth_intrinsics = ds.load_depth_intrinsics()
+                else:
+                    depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
             except Exception as e:
                 logger.warning("Depth intrinsics load failed for %s: %s", scene_id, e)
 
         try:
-            color_intrinsics = load_scannet_intrinsics(scene_dir)
+            if ds is not None:
+                color_intrinsics = ds.load_intrinsics()
+            else:
+                color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception as e:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, e)
             color_intrinsics = None
@@ -4504,9 +4615,12 @@ def run_pipeline(
                     if image_name in poses:
                         camera_pose = poses[image_name]
                         if use_occlusion and depth_intrinsics is not None:
-                            frame_id = image_name.replace(".jpg", "")
-                            depth_path = scene_dir / "depth" / f"{frame_id}.png"
-                            if depth_path.exists():
+                            if ds is not None:
+                                depth_path = ds.depth_image_path(image_name)
+                            else:
+                                frame_id, _ = os.path.splitext(image_name)
+                                depth_path = scene_dir / "depth" / f"{frame_id}.png"
+                            if depth_path is not None and depth_path.exists():
                                 try:
                                     depth_image = load_depth_image(depth_path)
                                 except Exception as e:
@@ -4796,6 +4910,8 @@ def run_pipeline(
         vlm_model=vlm_model,
         question_presence_review_workers=question_presence_review_workers,
         max_questions_per_scene_type=max_questions_per_scene_type,
+        dataset=dataset,
+        scannetpp_sensor=scannetpp_sensor,
     )
     """
         if not has_nontrivial_attachment(attachment_graph):
@@ -4838,6 +4954,7 @@ def run_pipeline(
                 instance_ids=[int(o["id"]) for o in scene["objects"]],
                 n_surface_samples=512,
                 preloaded_geometry=preloaded_geometry,
+                dataset=dataset,
             )
         except Exception as e:
             if needs_mesh_resources:
@@ -4855,13 +4972,13 @@ def run_pipeline(
         depth_intrinsics = None
         if use_occlusion:
             try:
-                depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
+                depth_intrinsics = ds.load_depth_intrinsics()
             except Exception as e:
                 logger.warning("Depth intrinsics load failed for %s: %s", scene_id, e)
 
         # Load colour intrinsics for local ROI blur check
         try:
-            color_intrinsics = load_scannet_intrinsics(scene_dir)
+            color_intrinsics = ds.load_intrinsics()
         except Exception as e:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, e)
             color_intrinsics = None
@@ -5143,7 +5260,15 @@ def main():
     parser.add_argument(
         "--data_root", type=str,
         default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
-        help="Root directory of ScanNet scans (contains scene subdirectories)",
+        help="Root directory containing scene subdirectories (ScanNet v2 or ScanNet++)",
+    )
+    parser.add_argument(
+        "--dataset", type=str, choices=("scannet", "scannetpp"), default="scannet",
+        help="Dataset to process (scannet or scannetpp)",
+    )
+    parser.add_argument(
+        "--scannetpp_sensor", type=str, choices=("iphone", "dslr"), default="iphone",
+        help="Sensor to use when dataset=scannetpp",
     )
     parser.add_argument(
         "--output_dir", type=str, default="output",
@@ -5290,6 +5415,8 @@ def main():
     run_pipeline(
         data_root=Path(args.data_root),
         output_dir=Path(args.output_dir),
+        dataset=args.dataset,
+        scannetpp_sensor=args.scannetpp_sensor,
         max_scenes=args.max_scenes,
         max_frames=args.max_frames,
         use_occlusion=not args.no_occlusion,

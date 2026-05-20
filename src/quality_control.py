@@ -188,8 +188,13 @@ def _near_duplicate_detail(
         signature_text = ", ".join(f"{field}={value}" for field, value in object_ids.items())
         if not signature_text:
             signature_text = "no distinguishing object ids"
+        signature_label = (
+            "attachment-id signature"
+            if signature.get("type") in ATTACHMENT_NEAR_DUP_TYPES
+            else "object-id signature"
+        )
         detail = (
-            f"same scene/frame/type and object-id signature as "
+            f"same scene/frame/type and {signature_label} as "
             f"{duplicate_of_id or 'earlier kept question'} ({signature_text})"
         )
     else:

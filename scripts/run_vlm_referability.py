@@ -4167,7 +4167,7 @@ class _AttachmentPairSalvageHtmlParser(HTMLParser):
 
         name = str(attrs_map.get("name", "")).strip().lower()
         value = html.unescape(str(attrs_map.get("value", ""))).strip()
-        if name == "image_id":
+        if name in {"image_id", "scene_id"}:
             self._current_card["image_id"] = value
             self._current_card["image_name"] = _salvage_review_image_name_with_original_suffix(
                 original_image_name=str(self._current_card.get("image_name", "")),
@@ -4678,7 +4678,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
       <div class="summary-scenes"><strong>referability cache:</strong> {html.escape(referability_cache_output or "-")}</div>
       <div class="summary-scenes"><strong>scene review files:</strong> {html.escape(edited_html_target_display)}</div>
       <div class="summary-scenes"><strong>per-scene targets:</strong> {_render_simple_list(per_scene_output_lines)}</div>
-      <div class="summary-scenes"><strong>pipeline input:</strong> run_pipeline first reads a neighboring legacy edited*.html when exactly one such file exists; otherwise it reads the per-scene edited HTML files shown above. This salvage_review.html file is a batch summary only.</div>
+      <div class="summary-scenes"><strong>pipeline input:</strong> run_pipeline reads the per-scene edited HTML files shown above, or a legacy neighboring edited*.html only when no per-scene files exist and exactly one legacy file matches. This salvage_review.html file is a batch summary only.</div>
       <div class="summary-scenes"><strong>included scenes:</strong> {_render_simple_list(included_scene_ids)}</div>
       {('<div class="summary-actions"><button type="button" id="export-edited-html" class="summary-action">Export Edited HTML</button></div>' if editable_scene_id is not None else '')}
     </section>
@@ -4693,7 +4693,7 @@ def _render_attachment_pair_salvage_review_html(review_doc: dict[str, Any]) -> s
           if (imageIdInput) {{
             const imageId = imageIdInput.value.trim();
             const originalImageName = card.getAttribute('data-image-name') || '';
-            const suffixMatch = originalImageName.match(/(\.[^./\\\\]+)$/);
+            const suffixMatch = originalImageName.match(/(\\.[^./\\\\]+)$/);
             const nextImageName = imageId ? `${{imageId}}${{suffixMatch ? suffixMatch[1] : ''}}` : '';
             card.dataset.imageName = nextImageName;
             card.setAttribute('data-image-name', nextImageName);
@@ -5476,12 +5476,23 @@ def _projected_bbox_outside_distance_px(
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics,
 ) -> float:
+    from src.utils.coordinate_transform import project_camera_points_to_image
+
+    points_world = np.stack(
+        [np.asarray(p, dtype=np.float64) for p in _object_bbox_projection_points(obj)],
+        axis=0,
+    )
+    points_cam = (
+        camera_pose.rotation @ points_world.T + camera_pose.translation.reshape(3, 1)
+    ).T
+    uv_all, depths = project_camera_points_to_image(points_cam, color_intrinsics)
+
     projected: list[tuple[float, float]] = []
-    for point in _object_bbox_projection_points(obj):
-        uv, depth = project_to_image(point, camera_pose, color_intrinsics)
-        if uv is None or depth <= 0:
+    for i in range(len(uv_all)):
+        if depths[i] <= 0 or not np.isfinite(uv_all[i]).all():
             continue
-        projected.append((float(uv[0]), float(uv[1])))
+        projected.append((float(uv_all[i, 0]), float(uv_all[i, 1])))
+
     if not projected:
         return float(max(color_intrinsics.width, color_intrinsics.height) * 4)
 
@@ -6888,41 +6899,45 @@ def _in_frame_surface_sample_subset(
     sample_triangle_ids: np.ndarray | None = None,
     sample_barycentrics: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    from src.utils.coordinate_transform import project_camera_points_to_image
+
     points = np.asarray(sample_points, dtype=np.float64)
-    if len(points) == 0:
+    n = len(points)
+    if n == 0:
         return (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.int64),
             np.empty((0, 3), dtype=np.float64),
         )
 
-    in_frame_indices: list[int] = []
-    for idx, point in enumerate(points):
-        uv, depth = project_to_image(point, camera_pose, color_intrinsics)
-        if uv is None or depth <= 0:
-            continue
-        u = float(uv[0])
-        v = float(uv[1])
-        if 0 <= u < color_intrinsics.width and 0 <= v < color_intrinsics.height:
-            in_frame_indices.append(int(idx))
-    if not in_frame_indices:
+    # Batch world→camera → image (distortion-aware when intrinsics has one)
+    points_cam = (camera_pose.rotation @ points.T + camera_pose.translation.reshape(3, 1)).T
+    uv_all, depths = project_camera_points_to_image(points_cam, color_intrinsics)
+
+    in_frame_mask = (
+        (depths > 0)
+        & np.isfinite(uv_all).all(axis=1)
+        & (uv_all[:, 0] >= 0) & (uv_all[:, 0] < color_intrinsics.width)
+        & (uv_all[:, 1] >= 0) & (uv_all[:, 1] < color_intrinsics.height)
+    )
+    in_frame_indices = np.where(in_frame_mask)[0]
+    if len(in_frame_indices) == 0:
         return (
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.int64),
             np.empty((0, 3), dtype=np.float64),
         )
 
-    index_array = np.asarray(in_frame_indices, dtype=np.int64)
     return (
-        points[index_array],
+        points[in_frame_indices],
         (
-            np.asarray(sample_triangle_ids, dtype=np.int64)[index_array]
-            if sample_triangle_ids is not None and len(sample_triangle_ids) == len(points)
+            np.asarray(sample_triangle_ids, dtype=np.int64)[in_frame_indices]
+            if sample_triangle_ids is not None and len(sample_triangle_ids) == n
             else np.empty((0,), dtype=np.int64)
         ),
         (
-            np.asarray(sample_barycentrics, dtype=np.float64)[index_array]
-            if sample_barycentrics is not None and len(sample_barycentrics) == len(points)
+            np.asarray(sample_barycentrics, dtype=np.float64)[in_frame_indices]
+            if sample_barycentrics is not None and len(sample_barycentrics) == n
             else np.empty((0, 3), dtype=np.float64)
         ),
     )
@@ -7249,6 +7264,7 @@ def _make_lazy_mesh_ray_resource_getters(
     scene_objects: list[dict[str, Any]],
     axis_alignment: np.ndarray | None,
     preloaded_geometry: Any | None = None,
+    data_source: Any | None = None,
 ) -> tuple[Callable[[], Any], Callable[[int], InstanceMeshData]]:
     object_ids = sorted(
         {
@@ -7261,7 +7277,10 @@ def _make_lazy_mesh_ray_resource_getters(
 
     def _get_ray_caster() -> Any:
         if "ray_caster" not in resource_cache:
-            mesh_path = _resolve_scene_mesh_path(scene_dir)
+            if data_source is not None:
+                mesh_path = data_source.mesh_path()
+            else:
+                mesh_path = _resolve_scene_mesh_path(scene_dir)
             resource_cache["ray_caster"] = RayCaster.from_ply(
                 str(mesh_path),
                 axis_alignment=axis_alignment,
@@ -8411,13 +8430,19 @@ def main():
     parser.add_argument(
         "--data_root", type=str,
         default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
-        help="ScanNet scene root; supports .../data, .../data/scans, or a directory containing scene folders directly",
+        help="Scene root directory (ScanNet v2: .../scans; ScanNet++: .../scannetcpp)",
+    )
+    parser.add_argument(
+        "--dataset", type=str,
+        choices=("scannetv2", "scannetpp"),
+        default="scannetv2",
+        help="Dataset type: scannetv2 (default) or scannetpp",
     )
     parser.add_argument(
         "--split",
         choices=("train", "val", "all"),
-        default="train",
-        help="ScanNet split to process using fixed metadata scene lists; --split all runs train first, then val",
+        default=None,
+        help="ScanNet v2 split; ignored for scannetpp (default: train for v2, unused for scannetpp)",
     )
     parser.add_argument(
         "--output", type=str, required=True,
@@ -8533,6 +8558,10 @@ def main():
         default=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
         help="Object-level projected_area_px hard-fail threshold for attachment pair salvage review",
     )
+    parser.add_argument(
+        "--scannetpp_sensor", type=str, choices=("iphone", "dslr"), default="iphone",
+        help="Sensor to use when dataset=scannetpp",
+    )
     args = parser.parse_args()
     _reset_vlm_call_failure_count()
     if args.reset is not None and int(args.reset) <= 0:
@@ -8545,6 +8574,11 @@ def main():
         )
     except ValueError as exc:
         parser.error(str(exc))
+    if args.dataset == "scannetv2" and args.split is None:
+        args.split = "train"  # backward compat: default split for v2
+    if args.dataset == "scannetpp" and args.split is not None:
+        logger.info("--split is ignored for ScanNet++; processing all discovered scenes")
+        args.split = None
     if scene_number_range is not None and args.split == "all":
         parser.error("--scene_number only supports --split train or --split val; --split all is ambiguous")
     if int(args.vlm_workers) <= 0:
@@ -8598,13 +8632,24 @@ def main():
     )
 
     data_root = Path(args.data_root)
-    selected_split = args.split or _infer_default_split(data_root)
-    scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
-    logger.info(
-        "Found %d candidate scenes for split=%s",
-        len(scene_entries),
-        selected_split,
-    )
+    if args.dataset == "scannetpp":
+        from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
+        selected_split = "scannetpp"
+        scannetpp_dirs = resolve_scannetpp_scene_dirs(data_root)
+        scene_entries = [(None, d) for d in scannetpp_dirs]  # split=None
+        logger.info(
+            "Found %d ScanNet++ scene directories under %s",
+            len(scene_entries),
+            data_root,
+        )
+    else:
+        selected_split = args.split or _infer_default_split(data_root)
+        scene_entries = _resolve_scannet_scene_dirs(data_root, selected_split)
+        logger.info(
+            "Found %d candidate scenes for split=%s",
+            len(scene_entries),
+            selected_split,
+        )
     output_arg = Path(args.output)
     batch_output_path = _build_batch_output_path(output_arg)
     scene_status_path = _scene_status_output_path(output_arg)
@@ -8728,7 +8773,7 @@ def main():
         logger.info("Saved attachment pair salvage review JSON to %s", attachment_pair_salvage_review_output)
         logger.info("Saved attachment pair salvage review HTML to %s", attachment_pair_salvage_review_html_output)
         logger.warning(
-            "run_pipeline does not read %s directly; it first reads a neighboring legacy edited*.html when exactly one such file exists, otherwise it reads the per-scene edited HTML files listed below.",
+            "run_pipeline does not read %s directly; it reads the per-scene edited HTML files listed below, or a neighboring legacy edited*.html only when no per-scene files exist and exactly one legacy file matches.",
             attachment_pair_salvage_review_html_output,
         )
         logger.warning("========== 人工审核 ==========")
@@ -8833,6 +8878,11 @@ def main():
         scene_dir: Path,
     ) -> SceneWorkerResult:
         scene_id = scene_dir.name
+        # DataSource for path/camera abstraction
+        data_source = None
+        if args.dataset == "scannetpp":
+            from src.datasets.scannetpp import ScanNetPPDataSource
+            data_source = ScanNetPPDataSource(scene_dir, sensor=args.scannetpp_sensor)
         scene_index = scene_index_by_id.get(scene_id, scene_position + 1)
         if scene_number_range is not None:
             logger.info(
@@ -8894,7 +8944,10 @@ def main():
             preloaded_geometry = _load_scene_geometry(scene_dir)
         except Exception as exc:
             logger.warning("Scene geometry preload failed for %s: %s", scene_id, exc)
-        scene = parse_scene(scene_dir, preloaded_geometry=preloaded_geometry)
+        parse_kwargs = {"preloaded_geometry": preloaded_geometry}
+        if data_source is not None:
+            parse_kwargs["dataset"] = "scannetpp"
+        scene = parse_scene(scene_dir, **parse_kwargs)
         if scene is None:
             return _build_result(
                 pipeline_outcome="parse_scene_failed",
@@ -8947,10 +9000,17 @@ def main():
                 ),
             )
 
-        axis_align = load_axis_alignment(scene_dir)
-        poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
+        if data_source is not None:
+            axis_align = data_source.load_axis_alignment()
+            poses = data_source.load_poses()
+        else:
+            axis_align = load_axis_alignment(scene_dir)
+            poses = load_scannet_poses(scene_dir, axis_alignment=axis_align)
         try:
-            color_intrinsics = load_scannet_intrinsics(scene_dir)
+            if data_source is not None:
+                color_intrinsics = data_source.load_intrinsics()
+            else:
+                color_intrinsics = load_scannet_intrinsics(scene_dir)
         except Exception as exc:
             logger.warning("Color intrinsics load failed for %s: %s", scene_id, exc)
             return _build_result(
@@ -8968,15 +9028,20 @@ def main():
             )
         selector_instance_mesh_data: InstanceMeshData | None = None
         try:
-            selector_instance_mesh_data = load_instance_mesh_data(
-                scene_dir,
-                instance_ids=[
+            instance_mesh_kwargs = {
+                "instance_ids": [
                     int(obj["id"])
                     for obj in scene["objects"]
                     if obj.get("id") is not None
                 ],
-                n_surface_samples=1,
-                preloaded_geometry=preloaded_geometry,
+                "n_surface_samples": 1,
+                "preloaded_geometry": preloaded_geometry,
+            }
+            if data_source is not None:
+                instance_mesh_kwargs["dataset"] = "scannetpp"
+            selector_instance_mesh_data = load_instance_mesh_data(
+                scene_dir,
+                **instance_mesh_kwargs,
             )
         except Exception as exc:
             logger.warning(
@@ -8995,6 +9060,7 @@ def main():
             poses=poses,
             instance_mesh_data=selector_instance_mesh_data,
             preloaded_geometry=preloaded_geometry,
+            data_source=data_source,
         )
         if not frame_candidates:
             return _build_result(
@@ -9011,11 +9077,14 @@ def main():
                 ),
             )
 
-        try:
-            depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
-        except Exception as exc:
-            logger.warning("Depth intrinsics load failed for %s: %s", scene_id, exc)
-            depth_intrinsics = None
+        if data_source is not None:
+            depth_intrinsics = data_source.load_depth_intrinsics()  # None for DSLR
+        else:
+            try:
+                depth_intrinsics = load_scannet_depth_intrinsics(scene_dir)
+            except Exception as exc:
+                logger.warning("Depth intrinsics load failed for %s: %s", scene_id, exc)
+                depth_intrinsics = None
 
         objects_by_id = {int(obj["id"]): obj for obj in scene["objects"]}
         ray_caster_getter, instance_mesh_data_getter = _make_lazy_mesh_ray_resource_getters(
@@ -9023,6 +9092,7 @@ def main():
             scene_objects=scene["objects"],
             axis_alignment=axis_align,
             preloaded_geometry=preloaded_geometry,
+            data_source=data_source,
         )
         scene_grouping_summary = _prepare_scene_grouping_summary(scene_id, scene_split)
         attachment_pair_salvage_scene_review: dict[str, Any] | None = None
@@ -9070,7 +9140,10 @@ def main():
         def _load_scene_image(image_name: str) -> np.ndarray | None:
             cached_image = scene_image_cache.get(image_name, _cache_miss)
             if cached_image is _cache_miss:
-                image_path = scene_dir / "color" / image_name
+                if data_source is not None:
+                    image_path = data_source.image_path(image_name)
+                else:
+                    image_path = scene_dir / "color" / image_name
                 cached_image = cv2.imread(str(image_path))
                 if cached_image is None:
                     logger.warning("Cannot read image %s", image_path)
@@ -9083,9 +9156,12 @@ def main():
                 return cached_depth if isinstance(cached_depth, np.ndarray) else None
 
             depth_image = None
-            frame_id = Path(image_name).stem
-            depth_path = scene_dir / "depth" / f"{frame_id}.png"
-            if depth_intrinsics is not None and depth_path.exists():
+            if data_source is not None:
+                depth_path = data_source.depth_image_path(image_name)
+            else:
+                frame_id = Path(image_name).stem
+                depth_path = scene_dir / "depth" / f"{frame_id}.png"
+            if depth_intrinsics is not None and depth_path is not None and depth_path.exists():
                 try:
                     depth_image = load_depth_image(depth_path)
                 except Exception as exc:

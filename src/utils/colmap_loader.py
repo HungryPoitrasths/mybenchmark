@@ -27,7 +27,11 @@ import numpy as np
 
 @dataclass
 class CameraIntrinsics:
-    """Pinhole camera intrinsic parameters."""
+    """Camera intrinsic parameters with optional distortion.
+
+    Distortion fields default to pinhole (no distortion) for backward
+    compatibility with existing ScanNet v2 code.
+    """
 
     width: int
     height: int
@@ -35,6 +39,8 @@ class CameraIntrinsics:
     fy: float
     cx: float
     cy: float
+    distortion_model: str = ""  # "" (pinhole), "OPENCV_FISHEYE", …
+    distortion_params: np.ndarray | None = None  # e.g. [k1,k2,k3,k4]
 
     def to_matrix(self) -> np.ndarray:
         """Return 3×3 intrinsic matrix K."""
@@ -42,6 +48,11 @@ class CameraIntrinsics:
             [[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]],
             dtype=np.float64,
         )
+
+    @property
+    def is_distorted(self) -> bool:
+        """True when a distortion model is active."""
+        return bool(self.distortion_model)
 
 
 @dataclass

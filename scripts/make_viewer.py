@@ -93,7 +93,9 @@ QTYPE_LEVEL = {
     for raw, _ in items
 }
 LEVEL_DISPLAY_ORDER = ["L1", "L2", "L3"]
-QUESTION_TYPE_ALIASES: dict[str, str] = {}
+QUESTION_TYPE_ALIASES: dict[str, str] = {
+    "L2_object_move_object_centric": "object_move_object_centric",
+}
 
 OBJECT_MOVE_TYPES = {
     "object_move_agent",
@@ -1186,10 +1188,13 @@ def _build_summary_html(displayed_questions: list[dict]) -> str:
     )
 
 
-def _build_image_html(question: dict, image_root: Path, max_width: int) -> str:
+def _build_image_html(question: dict, image_root: Path, max_width: int, dataset: str = "scannet") -> str:
     scene = str(question.get("scene_id", ""))
     frame = str(question.get("image_name", ""))
-    img_path = image_root / scene / "color" / frame
+    if dataset == "scannetpp":
+        img_path = image_root / scene / "dslr" / "resized_images" / frame
+    else:
+        img_path = image_root / scene / "color" / frame
     b64 = img_to_b64(img_path, max_width)
     if b64:
         return f'<img src="data:image/jpeg;base64,{b64}">'
@@ -1304,6 +1309,7 @@ def _build_full_viewer_html_from_displayed_questions(
     title: str = "predictive spatial reasoning benchmark",
     include_referability_audit: bool = False,
     edited_html_filename: str = "viewer_edited.html",
+    dataset: str = "scannet",
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1312,7 +1318,7 @@ def _build_full_viewer_html_from_displayed_questions(
     for idx, question in enumerate(displayed_questions, start=1):
         cards.append(
             CARD.format(
-                img=_build_image_html(question, image_root, max_width),
+                img=_build_image_html(question, image_root, max_width, dataset=dataset),
                 meta=_build_meta_html(question, idx),
                 question=html.escape(str(question.get("question", ""))),
                 options=_build_options_html(question),
@@ -1340,6 +1346,7 @@ def _build_simple_viewer_html_from_displayed_questions(
     max_width: int = 480,
     title: str = "predictive spatial reasoning benchmark (simple review)",
     edited_html_filename: str = "viewer_edited.html",
+    dataset: str = "scannet",
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1349,7 +1356,7 @@ def _build_simple_viewer_html_from_displayed_questions(
         objects, relations = _build_simple_sections(question)
         cards.append(
             SIMPLE_CARD.format(
-                img=_build_image_html(question, image_root, max_width),
+                img=_build_image_html(question, image_root, max_width, dataset=dataset),
                 meta=_build_meta_html(question, idx),
                 question=(
                     f'<p class="qtext">{html.escape(str(question.get("question", "")))}</p>'
@@ -1385,6 +1392,7 @@ def build_viewer_html(
     include_referability_audit: bool = False,
     apply_filters: bool = False,
     edited_html_filename: str = "viewer_edited.html",
+    dataset: str = "scannet",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
         questions,
@@ -1401,6 +1409,7 @@ def build_viewer_html(
         title=title,
         include_referability_audit=include_referability_audit,
         edited_html_filename=edited_html_filename,
+        dataset=dataset,
     )
 
 
@@ -1416,6 +1425,7 @@ def build_simple_viewer_html(
     include_attachment_unchanged: bool = True,
     apply_filters: bool = False,
     edited_html_filename: str = "viewer_edited.html",
+    dataset: str = "scannet",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
         questions,
@@ -1431,6 +1441,7 @@ def build_simple_viewer_html(
         max_width=max_width,
         title=title,
         edited_html_filename=edited_html_filename,
+        dataset=dataset,
     )
 
 
@@ -1507,6 +1518,10 @@ def main():
         action="store_true",
         help="Apply legacy attachment-based auto-trimming after explicit viewer filters",
     )
+    parser.add_argument(
+        "--dataset", type=str, choices=("scannet", "scannetpp"), default="scannet",
+        help="Dataset format (scannet or scannetpp)",
+    )
     args = parser.parse_args()
 
     if Image is None:
@@ -1543,6 +1558,7 @@ def main():
             if args.edited_output
             else _default_edited_html_filename(args.output)
         ),
+        dataset=args.dataset,
     )
 
     out = Path(args.output)
@@ -1563,6 +1579,7 @@ def main():
                     args.simple_output if args.simple_output else args.output
                 )
             ),
+            dataset=args.dataset,
         )
         simple_out = Path(args.simple_output)
         simple_out.parent.mkdir(parents=True, exist_ok=True)

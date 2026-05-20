@@ -26,7 +26,7 @@ from .utils.colmap_loader import (
     load_scannet_intrinsics,
     load_scannet_poses,
 )
-from .utils.coordinate_transform import is_in_image, project_to_image
+from .utils.coordinate_transform import is_in_image
 
 logger = logging.getLogger(__name__)
 
@@ -234,27 +234,37 @@ def _project_object_roi(
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
 ) -> dict[str, Any]:
-    """Project an object's bbox to image space and summarise the footprint."""
+    """Project an object's bbox to image space and summarise the footprint.
+
+    Uses :func:`project_camera_points_to_image` so that distortion models
+    (e.g. ``OPENCV_FISHEYE``) are respected when present in *intrinsics*.
+    """
+    from .utils.coordinate_transform import project_camera_points_to_image
+
     bbox_min = np.array(obj["bbox_min"], dtype=np.float64)
     bbox_max = np.array(obj["bbox_max"], dtype=np.float64)
     mid = (bbox_min + bbox_max) / 2.0
 
-    sample_points = []
+    sample_points_world = []
     for x in [bbox_min[0], bbox_max[0]]:
         for y in [bbox_min[1], bbox_max[1]]:
             for z in [bbox_min[2], bbox_max[2]]:
-                sample_points.append(np.array([x, y, z], dtype=np.float64))
-    sample_points.append(mid)
+                sample_points_world.append(np.array([x, y, z], dtype=np.float64))
+    sample_points_world.append(mid)
+    points_world = np.stack(sample_points_world, axis=0)  # (9, 3)
 
-    projected: list[tuple[float, float]] = []
+    # Batch world→camera
+    points_cam = (pose.rotation @ points_world.T + pose.translation.reshape(3, 1)).T
+    uv_all, depths = project_camera_points_to_image(points_cam, intrinsics)
+
     in_frame = 0
     valid = 0
-    for pt in sample_points:
-        uv, depth = project_to_image(pt, pose, intrinsics)
-        if uv is None or depth <= 0:
+    projected: list[tuple[float, float]] = []
+    for i in range(len(uv_all)):
+        if depths[i] <= 0 or not np.isfinite(uv_all[i]).all():
             continue
         valid += 1
-        u, v = float(uv[0]), float(uv[1])
+        u, v = float(uv_all[i, 0]), float(uv_all[i, 1])
         projected.append((u, v))
         if 0 <= u < intrinsics.width and 0 <= v < intrinsics.height:
             in_frame += 1
@@ -317,12 +327,18 @@ def _build_projection_visibility_meta(
     *,
     roi_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from .utils.coordinate_transform import project_camera_points_to_image
+
     center = np.array(obj["center"], dtype=np.float64)
-    uv, depth = project_to_image(center, pose, intrinsics)
+    point_cam = pose.world_to_camera_point(center)
+    uv_all, depths = project_camera_points_to_image(point_cam.reshape(1, 3), intrinsics)
+    depth = float(depths[0])
+    uv = uv_all[0] if depth > 0 and np.isfinite(uv_all[0]).all() else None
+
     resolved_roi_info = roi_info or _project_object_roi(obj, pose, intrinsics)
     return {
         "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
-        "depth_m": float(depth),
+        "depth_m": depth,
         "bbox_in_frame_ratio": float(resolved_roi_info["bbox_in_frame_ratio"]),
         "projected_area_px": float(resolved_roi_info["projected_area_px"]),
         "edge_margin_px": float(resolved_roi_info["edge_margin_px"]),
@@ -600,12 +616,17 @@ def _build_selector_visibility_meta(
     max_depth: float = 8.0,
     include_roi_metrics: bool = False,
 ) -> dict[str, Any]:
+    from .utils.coordinate_transform import project_camera_points_to_image
+
     center = np.array(obj["center"], dtype=np.float64)
-    uv, depth = project_to_image(center, pose, intrinsics)
+    point_cam = pose.world_to_camera_point(center)
+    uv_all, depths = project_camera_points_to_image(point_cam.reshape(1, 3), intrinsics)
+    depth = float(depths[0])
+    uv = uv_all[0] if depth > 0 and np.isfinite(uv_all[0]).all() else None
 
     meta: dict[str, Any] = {
         "center_uv_px": [float(uv[0]), float(uv[1])] if uv is not None else None,
-        "depth_m": float(depth),
+        "depth_m": depth,
         "bbox_in_frame_ratio": 0.0,
         "projected_area_px": 0.0,
     }
@@ -1090,27 +1111,51 @@ def select_frames(
     poses: dict[str, CameraPose] | None = None,
     instance_mesh_data: InstanceMeshData | None = None,
     preloaded_geometry: Any | None = None,
+    data_source: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Select representative frames for a ScanNet scene."""
+    """Select representative frames for a scene.
+
+    When *data_source* is provided, camera data and image paths are resolved
+    through it (supports ScanNet++).  When ``None``, the existing ScanNet v2
+    file-based loading is used (backward compatible).
+    """
     scene_path = Path(scene_path)
 
     intrinsics = color_intrinsics
     loaded_poses = poses
     axis_align = axis_alignment
-    if intrinsics is None or loaded_poses is None:
-        intr_path = scene_path / "intrinsic" / "intrinsic_color.txt"
-        if not intr_path.exists():
-            intr_path = scene_path / "intrinsic_color.txt"
-        pose_dir = scene_path / "pose"
-        if (intrinsics is None and not intr_path.exists()) or (loaded_poses is None and not pose_dir.exists()):
-            logger.warning("Intrinsic or pose directory missing for %s", scene_path.name)
-            return []
-    if intrinsics is None:
-        intrinsics = load_scannet_intrinsics(scene_path)
-    if axis_align is None:
-        axis_align = load_axis_alignment(scene_path)
-    if loaded_poses is None:
-        loaded_poses = load_scannet_poses(scene_path, axis_alignment=axis_align)
+    color_dir: Path | None = None
+    _resolve_image_path = None  # callable or None
+
+    if data_source is not None:
+        if intrinsics is None:
+            intrinsics = data_source.load_intrinsics()
+        if axis_align is None:
+            axis_align = data_source.load_axis_alignment()
+        if loaded_poses is None:
+            loaded_poses = data_source.load_poses()
+        # image path resolution via data_source
+        def _resolve_image_path(name: str) -> Path:
+            return data_source.image_path(name)
+    else:
+        # ScanNet v2 legacy path
+        if intrinsics is None or loaded_poses is None:
+            intr_path = scene_path / "intrinsic" / "intrinsic_color.txt"
+            if not intr_path.exists():
+                intr_path = scene_path / "intrinsic_color.txt"
+            pose_dir = scene_path / "pose"
+            if (intrinsics is None and not intr_path.exists()) or (loaded_poses is None and not pose_dir.exists()):
+                logger.warning("Intrinsic or pose directory missing for %s", scene_path.name)
+                return []
+        if intrinsics is None:
+            intrinsics = load_scannet_intrinsics(scene_path)
+        if axis_align is None:
+            axis_align = load_axis_alignment(scene_path)
+        if loaded_poses is None:
+            loaded_poses = load_scannet_poses(scene_path, axis_alignment=axis_align)
+        color_dir = scene_path / "color"
+        def _resolve_image_path(name: str) -> Path:
+            return color_dir / name
 
     if not loaded_poses:
         logger.warning("No valid poses found for %s", scene_path.name)
@@ -1122,7 +1167,6 @@ def select_frames(
             attachment_ids.add(int(parent_id))
             attachment_ids.update(children)
 
-    color_dir = scene_path / "color"
     n_sampled_frames = 0
     n_missing_images = 0
     sampled_frames: list[dict[str, Any]] = []
@@ -1131,7 +1175,7 @@ def select_frames(
             continue
 
         n_sampled_frames += 1
-        image_path = color_dir / image_name
+        image_path = _resolve_image_path(image_name)
         if not image_path.exists():
             n_missing_images += 1
             logger.debug("Missing color frame %s in %s", image_name, scene_path.name)

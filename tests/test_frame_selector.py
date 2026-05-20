@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 import src.frame_selector as frame_selector
+import src.utils.coordinate_transform as coordinate_transform
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 
 TEST_TMP_ROOT = Path(__file__).resolve().parent / "_tmp"
@@ -205,9 +206,12 @@ class FrameSelectorTests(unittest.TestCase):
 
         with (
             patch.object(
-                frame_selector,
-                "project_to_image",
-                return_value=(np.array([10.0, 10.0], dtype=np.float64), 2.0),
+                coordinate_transform,
+                "project_camera_points_to_image",
+                return_value=(
+                    np.array([[10.0, 10.0]], dtype=np.float64),
+                    np.array([2.0], dtype=np.float64),
+                ),
             ),
             patch.object(
                 frame_selector,
@@ -236,9 +240,12 @@ class FrameSelectorTests(unittest.TestCase):
 
         with (
             patch.object(
-                frame_selector,
-                "project_to_image",
-                return_value=(np.array([320.0, 240.0], dtype=np.float64), 2.0),
+                coordinate_transform,
+                "project_camera_points_to_image",
+                return_value=(
+                    np.array([[320.0, 240.0]], dtype=np.float64),
+                    np.array([2.0], dtype=np.float64),
+                ),
             ),
             patch.object(
                 frame_selector,
@@ -305,9 +312,12 @@ class FrameSelectorTests(unittest.TestCase):
 
         with (
             patch.object(
-                frame_selector,
-                "project_to_image",
-                return_value=(np.array([320.0, 240.0], dtype=np.float64), 2.0),
+                coordinate_transform,
+                "project_camera_points_to_image",
+                return_value=(
+                    np.array([[320.0, 240.0]], dtype=np.float64),
+                    np.array([2.0], dtype=np.float64),
+                ),
             ),
             patch.object(frame_selector, "is_in_image", return_value=True),
             patch.object(

@@ -3,6 +3,7 @@ from .coordinate_transform import (
     world_to_camera,
     camera_to_image,
     project_to_image,
+    project_camera_points_to_image,
     get_camera_right,
     get_camera_forward,
     get_camera_up,
