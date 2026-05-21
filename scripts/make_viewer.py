@@ -1188,11 +1188,24 @@ def _build_summary_html(displayed_questions: list[dict]) -> str:
     )
 
 
-def _build_image_html(question: dict, image_root: Path, max_width: int, dataset: str = "scannet") -> str:
+def _build_image_html(
+    question: dict,
+    image_root: Path,
+    max_width: int,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
+) -> str:
     scene = str(question.get("scene_id", ""))
     frame = str(question.get("image_name", ""))
     if dataset == "scannetpp":
-        img_path = image_root / scene / "dslr" / "resized_images" / frame
+        if scannetpp_sensor == "iphone":
+            img_path = image_root / scene / frame
+        elif scannetpp_sensor == "dslr":
+            img_path = image_root / scene / "dslr" / "resized_images" / frame
+        else:
+            raise ValueError(
+                f"scannetpp_sensor must be 'iphone' or 'dslr', got {scannetpp_sensor!r}"
+            )
     else:
         img_path = image_root / scene / "color" / frame
     b64 = img_to_b64(img_path, max_width)
@@ -1310,6 +1323,7 @@ def _build_full_viewer_html_from_displayed_questions(
     include_referability_audit: bool = False,
     edited_html_filename: str = "viewer_edited.html",
     dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1318,7 +1332,13 @@ def _build_full_viewer_html_from_displayed_questions(
     for idx, question in enumerate(displayed_questions, start=1):
         cards.append(
             CARD.format(
-                img=_build_image_html(question, image_root, max_width, dataset=dataset),
+                img=_build_image_html(
+                    question,
+                    image_root,
+                    max_width,
+                    dataset=dataset,
+                    scannetpp_sensor=scannetpp_sensor,
+                ),
                 meta=_build_meta_html(question, idx),
                 question=html.escape(str(question.get("question", ""))),
                 options=_build_options_html(question),
@@ -1347,6 +1367,7 @@ def _build_simple_viewer_html_from_displayed_questions(
     title: str = "predictive spatial reasoning benchmark (simple review)",
     edited_html_filename: str = "viewer_edited.html",
     dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1356,7 +1377,13 @@ def _build_simple_viewer_html_from_displayed_questions(
         objects, relations = _build_simple_sections(question)
         cards.append(
             SIMPLE_CARD.format(
-                img=_build_image_html(question, image_root, max_width, dataset=dataset),
+                img=_build_image_html(
+                    question,
+                    image_root,
+                    max_width,
+                    dataset=dataset,
+                    scannetpp_sensor=scannetpp_sensor,
+                ),
                 meta=_build_meta_html(question, idx),
                 question=(
                     f'<p class="qtext">{html.escape(str(question.get("question", "")))}</p>'
@@ -1393,6 +1420,7 @@ def build_viewer_html(
     apply_filters: bool = False,
     edited_html_filename: str = "viewer_edited.html",
     dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
         questions,
@@ -1410,6 +1438,7 @@ def build_viewer_html(
         include_referability_audit=include_referability_audit,
         edited_html_filename=edited_html_filename,
         dataset=dataset,
+        scannetpp_sensor=scannetpp_sensor,
     )
 
 
@@ -1426,6 +1455,7 @@ def build_simple_viewer_html(
     apply_filters: bool = False,
     edited_html_filename: str = "viewer_edited.html",
     dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
         questions,
@@ -1442,6 +1472,7 @@ def build_simple_viewer_html(
         title=title,
         edited_html_filename=edited_html_filename,
         dataset=dataset,
+        scannetpp_sensor=scannetpp_sensor,
     )
 
 
@@ -1522,6 +1553,10 @@ def main():
         "--dataset", type=str, choices=("scannet", "scannetpp"), default="scannet",
         help="Dataset format (scannet or scannetpp)",
     )
+    parser.add_argument(
+        "--scannetpp_sensor", type=str, choices=("iphone", "dslr"), default="iphone",
+        help="Sensor to use when dataset=scannetpp",
+    )
     args = parser.parse_args()
 
     if Image is None:
@@ -1559,6 +1594,7 @@ def main():
             else _default_edited_html_filename(args.output)
         ),
         dataset=args.dataset,
+        scannetpp_sensor=args.scannetpp_sensor,
     )
 
     out = Path(args.output)
@@ -1580,6 +1616,7 @@ def main():
                 )
             ),
             dataset=args.dataset,
+            scannetpp_sensor=args.scannetpp_sensor,
         )
         simple_out = Path(args.simple_output)
         simple_out.parent.mkdir(parents=True, exist_ok=True)

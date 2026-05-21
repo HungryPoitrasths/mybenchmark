@@ -681,6 +681,67 @@ class MakeViewerTests(unittest.TestCase):
         self.assertIn("Relations", simple_html)
         self.assertIn('class="opt correct">A.&nbsp; left', simple_html)
 
+    def test_scannetpp_iphone_viewer_uses_extracted_frame_root(self) -> None:
+        questions = [
+            {
+                "type": "direction_agent",
+                "scene_id": "0d2ee665be",
+                "image_name": "frame_000000.jpg",
+                "question": "Where is the chair?",
+            }
+        ]
+        seen_paths: list[Path] = []
+
+        def fake_img_to_b64(path: Path, max_width: int) -> str:
+            seen_paths.append(path)
+            return "encoded"
+
+        with mock.patch("scripts.make_viewer.img_to_b64", side_effect=fake_img_to_b64):
+            html_text = build_viewer_html(
+                questions,
+                Path("output/scannetpp_iphone_frames"),
+                dataset="scannetpp",
+                scannetpp_sensor="iphone",
+            )
+
+        self.assertEqual(
+            seen_paths,
+            [Path("output/scannetpp_iphone_frames/0d2ee665be/frame_000000.jpg")],
+        )
+        self.assertIn("data:image/jpeg;base64,encoded", html_text)
+
+    def test_scannetpp_dslr_viewer_uses_resized_images_dir(self) -> None:
+        questions = [
+            {
+                "type": "direction_agent",
+                "scene_id": "0d2ee665be",
+                "image_name": "DSC00001.JPG",
+                "question": "Where is the chair?",
+            }
+        ]
+        seen_paths: list[Path] = []
+
+        def fake_img_to_b64(path: Path, max_width: int) -> str:
+            seen_paths.append(path)
+            return "encoded"
+
+        with mock.patch("scripts.make_viewer.img_to_b64", side_effect=fake_img_to_b64):
+            build_viewer_html(
+                questions,
+                Path("/home/sujinyue/datasets/scannetpp"),
+                dataset="scannetpp",
+                scannetpp_sensor="dslr",
+            )
+
+        self.assertEqual(
+            seen_paths,
+            [
+                Path(
+                    "/home/sujinyue/datasets/scannetpp/0d2ee665be/dslr/resized_images/DSC00001.JPG"
+                )
+            ],
+        )
+
     def test_build_simple_viewer_html_direction_agent_shows_answer_and_uses_column_layout(self) -> None:
         html_text = build_simple_viewer_html(
             [

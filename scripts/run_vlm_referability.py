@@ -9838,6 +9838,15 @@ def main():
         )
     else:
         scene_worker_count = min(int(args.scene_workers), len(target_scene_entries))
+        if args.dataset == "scannetpp" and scene_worker_count > 1:
+            logger.warning(
+                "ScanNet++ scene-level concurrency was requested with --scene_workers=%d; "
+                "using 1 scene worker to avoid native Open3D/CV2 memory corruption on large meshes. "
+                "VLM/frame-level concurrency still uses --vlm_workers=%d.",
+                scene_worker_count,
+                int(args.vlm_workers),
+            )
+            scene_worker_count = 1
         reorder_buffer: dict[int, SceneWorkerResult] = {}
         next_commit_position = 0
         next_submit_position = 0

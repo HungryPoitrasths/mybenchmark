@@ -2663,6 +2663,9 @@ def _run_question_presence_review(
     review_json_path = output_dir / "question_presence_review.json"
     flagged_json_path = output_dir / "question_presence_review_flagged.json"
     flagged_html_path = output_dir / "question_presence_review_flagged.html"
+    viewer_image_root = data_root
+    if dataset == "scannetpp" and scannetpp_sensor == "iphone":
+        viewer_image_root = Path("output") / "scannetpp_iphone_frames"
     if not review_questions:
         review_payload = {
             "name": "CausalSpatial-Bench question presence review",
@@ -2683,8 +2686,9 @@ def _run_question_presence_review(
         flagged_html_path.write_text(
             build_viewer_html(
                 [],
-                data_root,
+                viewer_image_root,
                 dataset=dataset,
+                scannetpp_sensor=scannetpp_sensor,
                 title="question presence manual review",
                 include_referability_audit=False,
                 apply_filters=False,
@@ -2799,8 +2803,9 @@ def _run_question_presence_review(
 
     flagged_html = build_viewer_html(
         flagged_questions,
-        data_root,
+        viewer_image_root,
         dataset=dataset,
+        scannetpp_sensor=scannetpp_sensor,
         title="question presence manual review",
         include_referability_audit=False,
         apply_filters=False,
