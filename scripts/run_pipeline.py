@@ -4206,7 +4206,10 @@ def run_pipeline(
 
     if dataset == "scannetpp":
         from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
-        discovered_scene_dirs = resolve_scannetpp_scene_dirs(data_root)
+        discovered_scene_dirs = resolve_scannetpp_scene_dirs(
+            data_root,
+            sensor=scannetpp_sensor,
+        )
     else:
         discovered_scene_dirs = sorted(
             p for p in data_root.iterdir()

@@ -14,7 +14,9 @@ from typing import Iterator
 import numpy as np
 
 from src.datasets.scannetpp import (
+    has_scannetpp_dslr,
     has_scannetpp_geometry,
+    has_scannetpp_iphone,
     is_scannetpp_scene_dir,
     load_scannetpp_dslr_camera,
     load_scannetpp_dslr_intrinsics,
@@ -103,6 +105,7 @@ def _make_tiny_scene(
     root: Path,
     *,
     include_dslr: bool = False,
+    include_iphone: bool = False,
     bad_anno: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Create a minimal ScanNet++ scene under root."""
@@ -140,6 +143,20 @@ def _make_tiny_scene(
         dslr.mkdir(parents=True, exist_ok=True)
         (dslr / "transforms.json").write_text("{}", encoding="utf-8")
         (root / "dslr" / "resized_images").mkdir(parents=True, exist_ok=True)
+
+    if include_iphone:
+        iphone_colmap = root / "iphone" / "colmap"
+        iphone_colmap.mkdir(parents=True, exist_ok=True)
+        (root / "iphone" / "rgb.mkv").write_bytes(b"video")
+        (iphone_colmap / "cameras.txt").write_text(
+            "1 OPENCV 1920 1440 1435.54 1436.06 963.39 722.32 "
+            "0.067 -0.081 -0.00047 0.00184\n",
+            encoding="utf-8",
+        )
+        (iphone_colmap / "images.txt").write_text(
+            "0 1 0 0 0 0 0 0 1 frame_000000.jpg\n\n",
+            encoding="utf-8",
+        )
 
     return np.array(vertices, dtype=np.float64), np.array(faces, dtype=np.int64)
 
@@ -192,12 +209,19 @@ class IsScanNetPPSceneDirTests(unittest.TestCase):
             _make_tiny_scene(root, include_dslr=True)
             self.assertTrue(is_scannetpp_scene_dir(root))
 
+    def test_sensor_specific_predicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_tiny_scene(root, include_iphone=True)
+            self.assertTrue(has_scannetpp_iphone(root))
+            self.assertFalse(has_scannetpp_dslr(root))
+
 
 class ResolveScanNetPPSceneDirsTests(unittest.TestCase):
     def test_single_scene_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _make_tiny_scene(root, include_dslr=True)
+            _make_tiny_scene(root, include_iphone=True)
             self.assertEqual(resolve_scannetpp_scene_dirs(root), [root.resolve()])
 
     def test_parent_directory_with_multiple_scenes(self) -> None:
@@ -205,8 +229,8 @@ class ResolveScanNetPPSceneDirsTests(unittest.TestCase):
             parent = Path(tmp)
             for name in ("aaa", "bbb", "not_a_scene"):
                 (parent / name).mkdir()
-            _make_tiny_scene(parent / "aaa", include_dslr=True)
-            _make_tiny_scene(parent / "bbb", include_dslr=True)
+            _make_tiny_scene(parent / "aaa", include_iphone=True)
+            _make_tiny_scene(parent / "bbb", include_iphone=True)
 
             result = resolve_scannetpp_scene_dirs(parent)
             self.assertEqual(result, sorted([(parent / "aaa").resolve(), (parent / "bbb").resolve()]))
@@ -216,17 +240,27 @@ class ResolveScanNetPPSceneDirsTests(unittest.TestCase):
             parent = Path(tmp)
             (parent / "readme.txt").touch()
             (parent / "empty_dir").mkdir()
-            _make_tiny_scene(parent / "scene1", include_dslr=True)
+            _make_tiny_scene(parent / "scene1", include_iphone=True)
 
             result = resolve_scannetpp_scene_dirs(parent)
             self.assertEqual(result, [(parent / "scene1").resolve()])
 
-    def test_scenes_without_dslr_are_excluded(self) -> None:
+    def test_scenes_without_requested_sensor_are_excluded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             (parent / "has_3d_only").mkdir()
             _make_tiny_scene(parent / "has_3d_only")
             self.assertEqual(resolve_scannetpp_scene_dirs(parent), [])
+
+    def test_dslr_sensor_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            _make_tiny_scene(parent / "dslr_scene", include_dslr=True)
+            _make_tiny_scene(parent / "iphone_scene", include_iphone=True)
+            self.assertEqual(
+                resolve_scannetpp_scene_dirs(parent, sensor="dslr"),
+                [(parent / "dslr_scene").resolve()],
+            )
 
 
 class LoadScanNetPPGeometryTests(unittest.TestCase):

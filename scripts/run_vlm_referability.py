@@ -8635,7 +8635,10 @@ def main():
     if args.dataset == "scannetpp":
         from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
         selected_split = "scannetpp"
-        scannetpp_dirs = resolve_scannetpp_scene_dirs(data_root)
+        scannetpp_dirs = resolve_scannetpp_scene_dirs(
+            data_root,
+            sensor=args.scannetpp_sensor,
+        )
         scene_entries = [(None, d) for d in scannetpp_dirs]  # split=None
         logger.info(
             "Found %d ScanNet++ scene directories under %s",

@@ -73,8 +73,19 @@ def has_scannetpp_geometry(path: Path) -> bool:
     )
 
 
-def is_scannetpp_scene_dir(path: Path) -> bool:
-    """Return True when path has 3D files plus the DSLR files needed later."""
+def has_scannetpp_iphone(path: Path) -> bool:
+    """Return True when path has 3D files plus iPhone COLMAP/video assets."""
+    path = Path(path)
+    return (
+        has_scannetpp_geometry(path)
+        and (path / "iphone" / "rgb.mkv").is_file()
+        and (path / "iphone" / "colmap" / "cameras.txt").is_file()
+        and (path / "iphone" / "colmap" / "images.txt").is_file()
+    )
+
+
+def has_scannetpp_dslr(path: Path) -> bool:
+    """Return True when path has 3D files plus DSLR assets."""
     path = Path(path)
     return (
         has_scannetpp_geometry(path)
@@ -83,23 +94,34 @@ def is_scannetpp_scene_dir(path: Path) -> bool:
     )
 
 
-def resolve_scannetpp_scene_dirs(data_root: Path) -> list[Path]:
-    """Discover complete ScanNet++ scene directories.
+def is_scannetpp_scene_dir(path: Path) -> bool:
+    """Return True when path has 3D files plus the DSLR files needed later."""
+    return has_scannetpp_dslr(path)
+
+
+def resolve_scannetpp_scene_dirs(data_root: Path, sensor: str = "iphone") -> list[Path]:
+    """Discover ScanNet++ scene directories for the requested sensor.
 
     Supports either a dataset root containing scene subdirectories or one scene
-    directory directly. "Complete" means DSLR assets are present too; use
-    has_scannetpp_geometry for 3D-only checks.
+    directory directly. Use ``has_scannetpp_geometry`` for 3D-only checks.
     """
     data_root = Path(data_root).resolve()
     if not data_root.is_dir():
         raise FileNotFoundError(f"Not a directory: {data_root}")
 
-    if is_scannetpp_scene_dir(data_root):
+    if sensor == "iphone":
+        predicate = has_scannetpp_iphone
+    elif sensor == "dslr":
+        predicate = has_scannetpp_dslr
+    else:
+        raise ValueError(f"sensor must be 'iphone' or 'dslr', got {sensor!r}")
+
+    if predicate(data_root):
         return [data_root]
 
     return sorted(
         child for child in data_root.iterdir()
-        if child.is_dir() and is_scannetpp_scene_dir(child)
+        if child.is_dir() and predicate(child)
     )
 
 
