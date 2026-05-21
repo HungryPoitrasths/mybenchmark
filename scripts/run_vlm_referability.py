@@ -3262,6 +3262,7 @@ def _select_attachment_group_representatives(
     poses: dict[str, CameraPose] | None = None,
     frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     frame_review_batch_getter: Callable[[list[dict[str, Any]]], dict[str, Any] | None] | None = None,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
     attachment_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     max_accepted_frame_count: int | None = None,
     vlm_workers: int = 1,
@@ -3298,6 +3299,7 @@ def _select_attachment_group_representatives(
         scored_frames = _score_group_frames_by_brisque(
             sampled_frames=sampled_frames,
             color_dir=color_dir,
+            scene_image_getter=scene_image_getter,
         )
         ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         accepted_frame: dict[str, Any] | None = None
@@ -4773,6 +4775,7 @@ def _select_non_attachment_group_representatives(
     vlm_workers: int = 1,
     frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     frame_review_batch_getter: Callable[[list[dict[str, Any]]], dict[str, Any] | None] | None = None,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     debug_groups_out: list[dict[str, Any]] | None = None,
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
@@ -4814,6 +4817,7 @@ def _select_non_attachment_group_representatives(
         scored_frames = _score_group_frames_by_brisque(
             sampled_frames=sampled_frames,
             color_dir=color_dir,
+            scene_image_getter=scene_image_getter,
         )
         ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         referable_object_ids_by_image_name: dict[str, list[int]] = {}
@@ -7875,6 +7879,8 @@ def _enrich_final_scene_entries_out_of_frame(
     poses: dict[str, CameraPose],
     color_intrinsics: CameraIntrinsics | None,
     depth_intrinsics: CameraIntrinsics | None,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
+    scene_image_path_getter: Callable[[str], Path] | None = None,
     referability_entry_getter: Callable[[str], dict[str, Any] | None] | None = None,
     instance_mesh_data_getter: Callable[[int], InstanceMeshData] | None = None,
 ) -> dict[str, dict[str, Any]]:
@@ -7897,8 +7903,15 @@ def _enrich_final_scene_entries_out_of_frame(
             enriched_entries[image_name] = updated_entry
             continue
 
-        image_path = scene_dir / "color" / image_name
-        image = cv2.imread(str(image_path))
+        image_path = (
+            scene_image_path_getter(image_name)
+            if callable(scene_image_path_getter)
+            else scene_dir / "color" / image_name
+        )
+        if callable(scene_image_getter):
+            image = scene_image_getter(image_name)
+        else:
+            image = cv2.imread(str(image_path))
         if image is None:
             logger.warning("Cannot read image %s for out-of-frame enrichment", image_path)
             enriched_entries[image_name] = updated_entry
@@ -8280,6 +8293,7 @@ def _select_and_rerank_frames(
     vlm_workers: int = 1,
     frame_review_getter: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
     frame_review_batch_getter: Callable[[list[dict[str, Any]]], dict[str, Any] | None] | None = None,
+    scene_image_getter: Callable[[str], np.ndarray | None] | None = None,
     referability_entry_builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | None] | None = None,
     stats_output: dict[str, Any] | None = None,
     debug_output: dict[str, Any] | None = None,
@@ -8318,6 +8332,7 @@ def _select_and_rerank_frames(
         vlm_workers=vlm_workers,
         frame_review_getter=frame_review_getter,
         frame_review_batch_getter=frame_review_batch_getter,
+        scene_image_getter=scene_image_getter,
         referability_entry_builder=referability_entry_builder,
         debug_groups_out=group_debug,
         frame_clarity_batch_size=frame_clarity_batch_size,
@@ -9140,13 +9155,15 @@ def main():
                 != "projection_fallback"
             )
 
+        def _scene_image_path(image_name: str) -> Path:
+            if data_source is not None:
+                return data_source.image_path(image_name)
+            return scene_dir / "color" / image_name
+
         def _load_scene_image(image_name: str) -> np.ndarray | None:
             cached_image = scene_image_cache.get(image_name, _cache_miss)
             if cached_image is _cache_miss:
-                if data_source is not None:
-                    image_path = data_source.image_path(image_name)
-                else:
-                    image_path = scene_dir / "color" / image_name
+                image_path = _scene_image_path(image_name)
                 cached_image = cv2.imread(str(image_path))
                 if cached_image is None:
                     logger.warning("Cannot read image %s", image_path)
@@ -9338,7 +9355,7 @@ def main():
                 scene_objects=scene["objects"],
                 objects_by_id=objects_by_id,
                 image=image,
-                image_path=scene_dir / "color" / image_name,
+                image_path=_scene_image_path(image_name),
                 camera_pose=poses[image_name],
                 color_intrinsics=color_intrinsics,
                 depth_image=_load_scene_depth_image(image_name),
@@ -9544,6 +9561,7 @@ def main():
                 vlm_workers=int(args.vlm_workers),
                 frame_review_getter=_get_reviewed_frame,
                 frame_review_batch_getter=_get_reviewed_frames,
+                scene_image_getter=_load_scene_image,
                 referability_entry_builder=_get_referability_entry,
                 debug_output=scene_grouping_summary,
                 frame_clarity_batch_size=int(args.frame_clarity_batch_size),
@@ -9570,6 +9588,7 @@ def main():
                 poses=poses,
                 frame_review_getter=_get_reviewed_frame,
                 frame_review_batch_getter=_get_reviewed_frames,
+                scene_image_getter=_load_scene_image,
                 attachment_entry_builder=_build_attachment_entry,
                 max_accepted_frame_count=int(args.max_frames),
                 vlm_workers=int(args.vlm_workers),
@@ -9753,6 +9772,8 @@ def main():
                 poses=poses,
                 color_intrinsics=color_intrinsics,
                 depth_intrinsics=depth_intrinsics,
+                scene_image_getter=_load_scene_image,
+                scene_image_path_getter=_scene_image_path,
                 referability_entry_getter=lambda image_name: _get_referability_entry_by_image_name(image_name),
                 instance_mesh_data_getter=instance_mesh_data_getter,
             )
