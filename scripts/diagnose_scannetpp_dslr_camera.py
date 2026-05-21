@@ -77,7 +77,7 @@ def _write_image_unicode_safe(path: Path, image: np.ndarray) -> None:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Diagnose ScanNet++ DSLR camera projection")
-    p.add_argument("--data_root", default="/home/sujinyue/datasets/scannetcpp",
+    p.add_argument("--data_root", default="/home/sujinyue/datasets/scannetpp",
                    help="ScanNet++ data root (default: %(default)s)")
     p.add_argument("--scene", default="0d2ee665be",
                    help="Scene ID (default: %(default)s)")

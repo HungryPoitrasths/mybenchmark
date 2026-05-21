@@ -945,7 +945,7 @@ def parse_scene(
 
     Args:
         scene_path: Path to the scene directory (e.g. ``scans/scene0000_00/``
-            or ``scannetcpp/0d2ee665be/``).
+            or ``scannetpp/0d2ee665be/``).
         preloaded_geometry: Optional preloaded geometry tuple.
         dataset: ``"scannet"``, ``"scannetpp"``, or ``None`` (auto-detect).
 
@@ -1090,4 +1090,3 @@ def parse_all_scenes(
 
     logger.info("Parsed %d / %d scenes successfully", len(scenes), len(scene_dirs))
     return scenes
-

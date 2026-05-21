@@ -29,6 +29,7 @@ def _write_image_unicode_safe(path: Path, image: np.ndarray) -> None:
     ok, encoded = cv2.imencode(ext, image)
     if not ok:
         raise RuntimeError(f"cv2.imencode failed for {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(encoded.tobytes())
 
 
@@ -42,7 +43,7 @@ def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Extract ScanNet++ iPhone frames from rgb.mkv"
     )
-    p.add_argument("--data_root", default="/home/sujinyue/datasets/scannetcpp")
+    p.add_argument("--data_root", default="/home/sujinyue/datasets/scannetpp")
     p.add_argument("--scene", default="0d2ee665be")
     p.add_argument("--output_root", default="output/scannetpp_iphone_frames")
     p.add_argument("--overwrite", action="store_true")

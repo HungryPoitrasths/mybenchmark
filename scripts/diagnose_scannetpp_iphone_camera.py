@@ -87,7 +87,7 @@ def _parse_args():
         description="Diagnose ScanNet++ iPhone camera projection"
     )
     p.add_argument(
-        "--data_root", default="/home/sujinyue/datasets/scannetcpp",
+        "--data_root", default="/home/sujinyue/datasets/scannetpp",
         help="ScanNet++ data root (default: %(default)s)",
     )
     p.add_argument(

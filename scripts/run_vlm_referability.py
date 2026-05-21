@@ -8430,7 +8430,7 @@ def main():
     parser.add_argument(
         "--data_root", type=str,
         default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),
-        help="Scene root directory (ScanNet v2: .../scans; ScanNet++: .../scannetcpp)",
+        help="Scene root directory (ScanNet v2: .../scans; ScanNet++: .../scannetpp)",
     )
     parser.add_argument(
         "--dataset", type=str,
