@@ -1079,53 +1079,35 @@ def _resolve_referability_cache_review_html_paths(
     scene_html_paths = sorted(path.parent.glob(f"{path.stem}_*_edited.html"))
     if scene_html_paths:
         expected_scene_ids = _expected_referability_cache_scene_ids(cache_doc)
-        missing_paths = [
-            (scene_id, _referability_cache_scene_edited_html_path(path, scene_id))
-            for scene_id in expected_scene_ids
-            if not _referability_cache_scene_edited_html_path(path, scene_id).exists()
-        ]
-        if missing_paths:
+        existing_scene_ids: list[str] = []
+        missing_scene_ids: list[str] = []
+        for scene_id in expected_scene_ids:
+            if _referability_cache_scene_edited_html_path(path, scene_id).exists():
+                existing_scene_ids.append(scene_id)
+            else:
+                missing_scene_ids.append(scene_id)
+        if missing_scene_ids:
             missing_lines = "\n".join(
-                f"- {scene_id}: {expected_path.resolve()}"
-                for scene_id, expected_path in missing_paths
+                f"- {scene_id}: {_referability_cache_scene_edited_html_path(path, scene_id).resolve()}"
+                for scene_id in missing_scene_ids
             )
-            raise ValueError(
-                "[缺少按 scene 划分的人工审核文件]\n"
+            logger.warning(
+                "[缺少按 scene 划分的人工审核文件 / incomplete scene-scoped review HTML]\n"
                 f"referability_cache: {path}\n"
                 f"检测到新格式文件: {_referability_cache_scene_edited_html_glob(path)}\n"
                 f"期望 scene: {', '.join(expected_scene_ids) or '<none>'}\n"
                 "缺失文件:\n"
                 f"{missing_lines}\n"
-                "请先为该 batch 的每个 scene 导出对应的 <cache-stem>_<scene_id>_edited.html。"
+                "缺少人工审核文件的 scene 将跳过 salvage 回填。"
             )
-        return [
-            _referability_cache_scene_edited_html_path(path, scene_id)
-            for scene_id in expected_scene_ids
-        ], "scene-scoped"
+        if existing_scene_ids:
+            return [
+                _referability_cache_scene_edited_html_path(path, scene_id)
+                for scene_id in existing_scene_ids
+            ], "scene-scoped"
+        return [], "none"
 
-    legacy_html_paths = _referability_cache_legacy_edited_html_paths(path)
-    if not legacy_html_paths:
-        raise ValueError(
-            "[缺少人工审核文件 edited*.html]\n"
-            f"referability_cache: {path}\n"
-            f"expected_glob: {_referability_cache_legacy_edited_html_glob(path)}\n"
-            "请先完成人工审核，并把导出的文件命名为 edited*.html 放到上面这个目录；"
-            "legacy 模式下必须恰好有一个匹配文件。"
-        )
-    if len(legacy_html_paths) > 1:
-        candidate_lines = "\n".join(
-            f"- {candidate.resolve()}"
-            for candidate in legacy_html_paths
-        )
-        raise ValueError(
-            "[legacy 人工审核文件 edited*.html 存在多个候选]\n"
-            f"referability_cache: {path}\n"
-            f"expected_glob: {_referability_cache_legacy_edited_html_glob(path)}\n"
-            "matched_paths:\n"
-            f"{candidate_lines}\n"
-            "请只保留一个唯一的 edited*.html，避免 pipeline 误读。"
-        )
-    return [legacy_html_paths[0]], "legacy"
+    return [], "none"
 
 
 def _load_single_referability_cache(
@@ -1190,16 +1172,22 @@ def _load_single_referability_cache(
             if persistable_repaired_count > 0:
                 _write_json_file(path, persistable_data)
                 logger.info("Wrote repaired referability cache to %s", path)
-    logger.info(
-        "Loaded referability cache from %s with automatic human salvage backfill enabled via %s (%s)",
-        path,
-        (
-            review_html_paths[0]
-            if len(review_html_paths) == 1
-            else _referability_cache_scene_edited_html_glob(path)
-        ),
-        review_html_mode,
-    )
+    if review_html_mode == "none":
+        logger.info(
+            "Loaded referability cache from %s without human salvage backfill (no review HTML found)",
+            path,
+        )
+    else:
+        logger.info(
+            "Loaded referability cache from %s with automatic human salvage backfill enabled via %s (%s)",
+            path,
+            (
+                review_html_paths[0]
+                if len(review_html_paths) == 1
+                else _referability_cache_scene_edited_html_glob(path)
+            ),
+            review_html_mode,
+        )
     return data
 
 
