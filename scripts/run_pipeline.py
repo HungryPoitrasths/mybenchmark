@@ -1115,16 +1115,21 @@ def _load_single_referability_cache(
     *,
     repair_inconsistent_entries: bool = False,
     persist_repaired_entries: bool = False,
+    no_salvage: bool = False,
 ) -> dict | None:
     if not path.exists():
         logger.warning("Referability cache not found: %s", path)
         return None
     with open(path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
-    review_html_paths, review_html_mode = _resolve_referability_cache_review_html_paths(
-        path=path,
-        cache_doc=raw_data,
-    )
+    if no_salvage:
+        review_html_paths: list[Path] = []
+        review_html_mode = "none"
+    else:
+        review_html_paths, review_html_mode = _resolve_referability_cache_review_html_paths(
+            path=path,
+            cache_doc=raw_data,
+        )
     data = raw_data
     for review_html_path in review_html_paths:
         html_text = review_html_path.read_text(encoding="utf-8")
@@ -1174,8 +1179,9 @@ def _load_single_referability_cache(
                 logger.info("Wrote repaired referability cache to %s", path)
     if review_html_mode == "none":
         logger.info(
-            "Loaded referability cache from %s without human salvage backfill (no review HTML found)",
+            "Loaded referability cache from %s without human salvage backfill (%s)",
             path,
+            "disabled via --no_salvage" if no_salvage else "no review HTML found",
         )
     else:
         logger.info(
@@ -1262,6 +1268,7 @@ def _load_referability_cache(
     *,
     repair_inconsistent_entries: bool = False,
     persist_repaired_entries: bool = False,
+    no_salvage: bool = False,
 ) -> dict | None:
     paths, used_glob = _expand_referability_cache_paths(path_or_pattern)
     if len(paths) == 1 and not used_glob:
@@ -1269,6 +1276,7 @@ def _load_referability_cache(
             paths[0],
             repair_inconsistent_entries=repair_inconsistent_entries,
             persist_repaired_entries=persist_repaired_entries,
+            no_salvage=no_salvage,
         )
 
     loaded_docs: list[tuple[Path, dict[str, object]]] = []
@@ -1277,6 +1285,7 @@ def _load_referability_cache(
             path,
             repair_inconsistent_entries=repair_inconsistent_entries,
             persist_repaired_entries=persist_repaired_entries,
+            no_salvage=no_salvage,
         )
         if loaded is None:
             raise ValueError(f"Referability cache not found: {path}")
@@ -5371,6 +5380,11 @@ def main():
         help="Before resuming, remove the most recently completed N scene cache/status entries so they will be regenerated",
     )
     parser.add_argument(
+        "--no_salvage",
+        action="store_true",
+        help="Skip automatic human salvage backfill from _edited.html review files",
+    )
+    parser.add_argument(
         "--only_question_types",
         nargs="*",
         default=None,
@@ -5406,6 +5420,7 @@ def main():
         args.referability_cache,
         repair_inconsistent_entries=args.repair_referability_cache,
         persist_repaired_entries=args.repair_referability_cache,
+        no_salvage=args.no_salvage,
     )
 
     run_pipeline(
