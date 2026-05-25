@@ -2955,29 +2955,28 @@ def _build_visible_object_in_frame_ratio_map(
         return {}
 
     ratios_by_obj_id: dict[int, float] = {}
-    object_reviews = (referability_entry or {}).get("object_reviews")
-    if isinstance(object_reviews, dict):
-        for obj_id in visible_ids:
-            review = object_reviews.get(str(obj_id))
-            if not isinstance(review, dict):
-                review = object_reviews.get(obj_id)
-            if not isinstance(review, dict):
-                continue
-            try:
-                ratios_by_obj_id[int(obj_id)] = float(review.get("bbox_in_frame_ratio", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                continue
-    elif isinstance(object_reviews, list):
-        for review in object_reviews:
+
+    def _ingest_review_container(container: object) -> None:
+        if isinstance(container, dict):
+            entries = container.items()
+        elif isinstance(container, list):
+            entries = [(None, item) for item in container]
+        else:
+            return
+
+        for key, review in entries:
             if not isinstance(review, dict):
                 continue
             try:
-                obj_id = int(review.get("obj_id"))
+                obj_id = int(review.get("obj_id", key))
                 ratio = float(review.get("bbox_in_frame_ratio", 0.0) or 0.0)
             except (TypeError, ValueError):
                 continue
             if obj_id in visible_ids:
                 ratios_by_obj_id[obj_id] = ratio
+
+    _ingest_review_container((referability_entry or {}).get("object_reviews"))
+    _ingest_review_container((referability_entry or {}).get("visibility_audit_by_object_id"))
 
     missing_ids = [
         int(obj_id)

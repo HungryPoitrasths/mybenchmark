@@ -2943,6 +2943,37 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 write_frame_debug=False,
             )
 
+    def test_in_frame_ratio_map_uses_visibility_audit_without_fallback(self) -> None:
+        referability_entry = {
+            "object_reviews": {
+                "1": {
+                    "obj_id": 1,
+                    "bbox_in_frame_ratio": 0.95,
+                },
+            },
+            "visibility_audit_by_object_id": {
+                "2": {
+                    "obj_id": 2,
+                    "bbox_in_frame_ratio": 0.85,
+                },
+            },
+        }
+
+        with patch.object(
+            run_pipeline_module,
+            "compute_frame_object_visibility",
+            side_effect=AssertionError("should use cached visibility audit"),
+        ):
+            ratios = run_pipeline_module._build_visible_object_in_frame_ratio_map(
+                visible_object_ids=[1, 2],
+                referability_entry=referability_entry,
+                scene_objects=[make_object(1, "cup"), make_object(2, "table")],
+                camera_pose=make_camera_pose("000123.jpg"),
+                color_intrinsics=make_camera_intrinsics(),
+            )
+
+        self.assertEqual(ratios, {1: 0.95, 2: 0.85})
+
     def test_run_pipeline_uses_cached_candidate_pool_directly(self) -> None:
         root = make_case_dir("pipeline")
         self.addCleanup(shutil.rmtree, root, True)
