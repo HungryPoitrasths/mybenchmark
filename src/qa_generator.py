@@ -5499,6 +5499,10 @@ def generate_l2_object_move(
         has_attachment_chain = attachment_remapped
         selected_state = None
         if enable_agent or enable_occlusion:
+            _occlusion_for_this_source = (
+                enable_occlusion
+                and move_source_id in occlusion_allowed_ids
+            )
             selected_state = _select_object_move_state(
                 movement_scene_objects,
                 attachment_graph,
@@ -5507,11 +5511,11 @@ def generate_l2_object_move(
                 room_bounds=room_bounds,
                 collision_objects=collision_objects,
                 allow_unchanged_attachment=has_attachment_chain,
-                color_intrinsics=color_intrinsics if enable_occlusion else None,
-                occlusion_backend=occlusion_backend if enable_occlusion else "depth",
-                ray_caster=ray_caster if enable_occlusion else None,
-                instance_mesh_data=instance_mesh_data if enable_occlusion else None,
-                precomputed_original_visibility=original_visibility if enable_occlusion else None,
+                color_intrinsics=color_intrinsics if _occlusion_for_this_source else None,
+                occlusion_backend=occlusion_backend if _occlusion_for_this_source else "depth",
+                ray_caster=ray_caster if _occlusion_for_this_source else None,
+                instance_mesh_data=instance_mesh_data if _occlusion_for_this_source else None,
+                precomputed_original_visibility=original_visibility if _occlusion_for_this_source else None,
             )
         if has_attachment_chain:
             _move_src_entry = {

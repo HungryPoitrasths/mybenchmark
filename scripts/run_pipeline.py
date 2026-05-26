@@ -168,6 +168,11 @@ def _call_generate_all_questions_compat(**kwargs):
                     raise
                 compat_kwargs.pop("question_type_budgets", None)
                 continue
+            if "max_occlusion_objects" in message:
+                if "max_occlusion_objects" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("max_occlusion_objects", None)
+                continue
             raise
 
 
@@ -4179,6 +4184,7 @@ def run_pipeline(
     reset: int | None = None,
     only_question_types: list[str] | None = None,
     max_questions_per_scene_type: int = 5,
+    max_occlusion_objects: int | None = 20,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -4194,6 +4200,10 @@ def run_pipeline(
     max_questions_per_scene_type = int(max_questions_per_scene_type)
     if max_questions_per_scene_type < 0:
         raise ValueError("max_questions_per_scene_type must be >= 0")
+    if max_occlusion_objects is not None:
+        max_occlusion_objects = int(max_occlusion_objects)
+        if max_occlusion_objects < 0:
+            raise ValueError("max_occlusion_objects must be >= 0 or None")
     if dataset not in ("scannet", "scannetpp"):
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
 
@@ -4804,6 +4814,7 @@ def run_pipeline(
                             slow_generator_warn_seconds=slow_generator_warn_seconds,
                             only_question_types=only_question_types,
                             question_type_budgets=question_type_budgets,
+                            max_occlusion_objects=max_occlusion_objects,
                         )
                     except Exception:
                         logger.exception(
@@ -5138,6 +5149,7 @@ def run_pipeline(
                 wall_objects=scene.get("wall_objects"),
                 attachment_edges=scene.get("attachment_edges", []),
                 only_question_types=only_question_types,
+                max_occlusion_objects=max_occlusion_objects,
             )
 
             for q in questions:
@@ -5402,6 +5414,12 @@ def main():
         default=5,
         help="Maximum kept questions per scene for L1 occlusion and L2 viewpoint_move only; these two generators also receive the remaining budget for early stop. Other question types are uncapped. Use 0 to disable.",
     )
+    parser.add_argument(
+        "--max_occlusion_objects",
+        type=int,
+        default=20,
+        help="Maximum number of movement objects per frame that run expensive L2 object-move occlusion mesh-ray visibility checks. Use 0 to disable the cap.",
+    )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
         parser.error("--reset must be >= 1")
@@ -5409,6 +5427,8 @@ def main():
         parser.error("--reset requires --resume")
     if int(args.max_questions_per_scene_type) < 0:
         parser.error("--max_questions_per_scene_type must be >= 0")
+    if int(args.max_occlusion_objects) < 0:
+        parser.error("--max_occlusion_objects must be >= 0")
 
     _set_pipeline_random_seed()
 
@@ -5446,6 +5466,7 @@ def main():
         reset=args.reset,
         only_question_types=args.only_question_types,
         max_questions_per_scene_type=args.max_questions_per_scene_type,
+        max_occlusion_objects=(None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects)),
     )
 
 
