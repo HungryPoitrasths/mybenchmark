@@ -16,6 +16,18 @@ def world_to_camera(point_world: np.ndarray, pose: CameraPose) -> np.ndarray:
     return pose.rotation @ point_world + pose.translation
 
 
+def world_to_camera_batch(points_world: np.ndarray, pose: CameraPose) -> np.ndarray:
+    """Transform ``(N, 3)`` world-space points to camera coordinates."""
+    points = np.asarray(points_world, dtype=np.float64)
+    if points.size == 0:
+        return np.empty((0, 3), dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError("points_world must have shape (N, 3)")
+    rotation = np.asarray(pose.rotation, dtype=np.float64)
+    translation = np.asarray(pose.translation, dtype=np.float64)
+    return points @ rotation.T + translation
+
+
 def camera_to_image(
     point_cam: np.ndarray, intrinsics: CameraIntrinsics
 ) -> np.ndarray | None:
@@ -66,9 +78,20 @@ def _project_pinhole_batch(
     z = points_cam[:, 2]
     valid = z > 0
     if valid.any():
-        uv[valid, 0] = intrinsics.fx * points_cam[valid, 0] / z[valid] + intrinsics.cx
-        uv[valid, 1] = intrinsics.fy * points_cam[valid, 1] / z[valid] + intrinsics.cy
+        uv[valid, 0] = (
+            intrinsics.fx * points_cam[valid, 0] / z[valid] + intrinsics.cx
+        )
+        uv[valid, 1] = (
+            intrinsics.fy * points_cam[valid, 1] / z[valid] + intrinsics.cy
+        )
     return uv
+
+
+def project_pinhole_batch(
+    points_cam: np.ndarray, intrinsics: CameraIntrinsics
+) -> np.ndarray:
+    """Public wrapper for pinhole projection of camera-space point batches."""
+    return _project_pinhole_batch(points_cam, intrinsics)
 
 
 def _project_fisheye_batch(

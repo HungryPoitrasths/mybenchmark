@@ -165,6 +165,47 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(changes[1]["old"]["visibility_status"], "occluded")
         self.assertEqual(changes[1]["new"]["visibility_status"], "not occluded")
 
+    def test_find_object_move_occlusion_changes_skips_tiny_projected_moved_bbox(self) -> None:
+        objects = [make_object(1, "pin", (0.0, 0.0, 2.0))]
+        moved_objects = [dict(objects[0])]
+        moved_objects[0]["bbox_min"] = [-0.005, -0.005, 2.0]
+        moved_objects[0]["bbox_max"] = [0.005, 0.005, 2.01]
+
+        with (
+            patch(
+                "src.qa_generator._counterfactual_occlusion_backend",
+                return_value="mesh_ray",
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+            ) as static_mock,
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
+            ) as moved_mock,
+        ):
+            changes = _find_object_move_occlusion_changes(
+                original_objects=objects,
+                moved_objects=moved_objects,
+                moved_ids={1},
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                precomputed_original_visibility={
+                    1: (
+                        "not occluded",
+                        "mesh_ray",
+                        "resolved_visibility",
+                        make_l1_metrics("not occluded"),
+                    ),
+                },
+            )
+
+        self.assertEqual(changes, [])
+        static_mock.assert_not_called()
+        moved_mock.assert_not_called()
+
     def test_select_object_move_state_keeps_attachment_fallback_when_no_meaningful_delta(self) -> None:
         objects = [
             make_object(1, "bed", (0.0, 0.0, 2.0)),

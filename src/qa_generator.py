@@ -67,7 +67,12 @@ from .virtual_ops import (
 )
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
-from .utils.coordinate_transform import is_in_image, project_to_image
+from .utils.coordinate_transform import (
+    is_in_image,
+    project_pinhole_batch,
+    project_to_image,
+    world_to_camera_batch,
+)
 from .utils.depth_occlusion import (
     MIN_IN_FRAME_RATIO,
     MIN_PROJECTED_AREA_PX,
@@ -1610,6 +1615,68 @@ def _projected_area_from_records(
     area = max(0.0, u_max - u_min) * max(0.0, v_max - v_min)
     in_frame_count = sum(1 for rec in projected_records if bool(rec["in_frame"]))
     return float(area), float(in_frame_count / len(projected_records))
+
+
+def _quick_moved_bbox_projection(
+    moved_target: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> tuple[float, float]:
+    """Cheaply estimate projected_area and in_frame_ratio from bbox corners only.
+
+    The projected area is used only as a conservative prefilter. It is trusted
+    for pinhole intrinsics when all bbox corners are in front of the camera; in
+    other cases this returns 0 area so callers fall back to the full sampler.
+    """
+    if color_intrinsics.is_distorted:
+        return 0.0, 0.0
+
+    try:
+        bbox_min = np.asarray(moved_target.get("bbox_min"), dtype=np.float64)
+        bbox_max = np.asarray(moved_target.get("bbox_max"), dtype=np.float64)
+    except (TypeError, ValueError):
+        return 0.0, 0.0
+    if bbox_min.shape != (3,) or bbox_max.shape != (3,):
+        return 0.0, 0.0
+    if not (np.all(np.isfinite(bbox_min)) and np.all(np.isfinite(bbox_max))):
+        return 0.0, 0.0
+
+    corners = np.array([
+        [bbox_min[0], bbox_min[1], bbox_min[2]],
+        [bbox_max[0], bbox_min[1], bbox_min[2]],
+        [bbox_min[0], bbox_max[1], bbox_min[2]],
+        [bbox_max[0], bbox_max[1], bbox_min[2]],
+        [bbox_min[0], bbox_min[1], bbox_max[2]],
+        [bbox_max[0], bbox_min[1], bbox_max[2]],
+        [bbox_min[0], bbox_max[1], bbox_max[2]],
+        [bbox_max[0], bbox_max[1], bbox_max[2]],
+    ], dtype=np.float64)
+
+    cam_points = world_to_camera_batch(corners, camera_pose)
+    valid = np.isfinite(cam_points[:, 2]) & (cam_points[:, 2] > 0)
+    if not valid.any():
+        return 0.0, 0.0
+    if not valid.all():
+        return 0.0, 0.0
+
+    uv = project_pinhole_batch(cam_points, color_intrinsics)
+    finite = np.isfinite(uv).all(axis=1)
+    if not finite.any():
+        return 0.0, 0.0
+
+    uv = uv[finite]
+    u_min = max(0.0, float(np.min(uv[:, 0])))
+    v_min = max(0.0, float(np.min(uv[:, 1])))
+    u_max = min(float(color_intrinsics.width), float(np.max(uv[:, 0])))
+    v_max = min(float(color_intrinsics.height), float(np.max(uv[:, 1])))
+    projected_area = max(0.0, u_max - u_min) * max(0.0, v_max - v_min)
+    in_frame = (
+        (0.0 <= uv[:, 0])
+        & (uv[:, 0] < float(color_intrinsics.width))
+        & (0.0 <= uv[:, 1])
+        & (uv[:, 1] < float(color_intrinsics.height))
+    )
+    return float(projected_area), float(np.count_nonzero(in_frame) / len(corners))
 
 
 def _in_frame_surface_sample_subset(
@@ -4668,6 +4735,7 @@ def _find_object_move_occlusion_changes(
     )
     original_scene_context = None
     original_map = {int(obj["id"]): obj for obj in original_objects}
+    moved_map = {int(obj["id"]): obj for obj in moved_objects}
     occlusion_changes: list[dict] = []
     for target_obj_id in sorted(int(obj_id) for obj_id in moved_ids):
         target_obj = original_map.get(target_obj_id)
@@ -4700,6 +4768,16 @@ def _find_object_move_occlusion_changes(
             )
         if old_status is None:
             continue
+
+        moved_target = moved_map.get(target_obj_id)
+        if moved_target is not None and old_status in L1_VISIBLE_OCCLUSION_STATES:
+            quick_area, _quick_in_frame_ratio = _quick_moved_bbox_projection(
+                moved_target,
+                camera_pose,
+                color_intrinsics,
+            )
+            if 0.0 < quick_area < MIN_PROJECTED_AREA_PX:
+                continue
 
         new_metrics, new_source = _compute_l1_style_visibility_metrics_for_moved_target(
             target_obj_id=target_obj_id,
