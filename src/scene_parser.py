@@ -630,25 +630,56 @@ def load_instance_mesh_data(
         for seg_id in seg_ids:
             segment_to_instance[int(seg_id)] = instance_id
 
+    # --- Vectorized triangle-to-instance classification ---
+    # Build a lookup array: seg_to_inst_arr[seg_id] -> instance_id (or -1)
+    max_seg_id = max(segment_to_instance.keys()) if segment_to_instance else -1
+    seg_to_inst_arr = np.full(max_seg_id + 1, -1, dtype=np.int64)
+    for seg_id, inst_id in segment_to_instance.items():
+        seg_to_inst_arr[seg_id] = inst_id
+
+    faces_arr = np.asarray(faces, dtype=np.int64)
+    seg_indices_arr = np.asarray(seg_indices, dtype=np.int64)
+    tri_seg_ids = seg_indices_arr[faces_arr]  # (N_tri, 3)
+
+    # Map segment IDs to instance IDs via array indexing
+    tri_seg_clamped = np.clip(tri_seg_ids, 0, max_seg_id)
+    tri_inst_ids = seg_to_inst_arr[tri_seg_clamped]  # (N_tri, 3)
+    # Restore -1 for out-of-range segment IDs
+    out_of_range_mask = (tri_seg_ids < 0) | (tri_seg_ids > max_seg_id)
+    tri_inst_ids[out_of_range_mask] = -1
+
+    # Interior: all 3 vertices map to the same valid instance
+    interior_mask = (
+        (tri_inst_ids[:, 0] == tri_inst_ids[:, 1])
+        & (tri_inst_ids[:, 1] == tri_inst_ids[:, 2])
+        & (tri_inst_ids[:, 0] >= 0)
+    )
+
+    # Boundary: at least one valid instance, but not all same
+    has_valid = np.any(tri_inst_ids >= 0, axis=1)
+    boundary_mask = has_valid & ~interior_mask
+
+    # Group interior triangles by instance ID
+    interior_indices = np.flatnonzero(interior_mask)
+    interior_inst_ids = tri_inst_ids[interior_indices, 0]
     triangle_ids_by_instance: dict[int, list[int]] = {}
+    for inst_id in np.unique(interior_inst_ids):
+        triangle_ids_by_instance[int(inst_id)] = interior_indices[
+            interior_inst_ids == inst_id
+        ].tolist()
+
+    # Group boundary triangles by instance ID (each valid instance gets the tri)
+    boundary_indices = np.flatnonzero(boundary_mask)
     boundary_triangle_ids_by_instance: dict[int, list[int]] = {}
-
-    for tri_id, face in enumerate(faces):
-        tri_seg_ids = seg_indices[face]
-        tri_instance_ids = [
-            segment_to_instance.get(int(seg_id), -1)
-            for seg_id in tri_seg_ids
-        ]
-        valid_ids = [inst_id for inst_id in tri_instance_ids if inst_id >= 0]
-        if not valid_ids:
-            continue
-
-        if tri_instance_ids[0] == tri_instance_ids[1] == tri_instance_ids[2] and tri_instance_ids[0] >= 0:
-            triangle_ids_by_instance.setdefault(tri_instance_ids[0], []).append(int(tri_id))
-            continue
-
-        for inst_id in set(valid_ids):
-            boundary_triangle_ids_by_instance.setdefault(inst_id, []).append(int(tri_id))
+    if len(boundary_indices) > 0:
+        boundary_inst_cols = tri_inst_ids[boundary_indices]  # (N_boundary, 3)
+        for col in range(3):
+            col_ids = boundary_inst_cols[:, col]
+            valid_col = col_ids >= 0
+            for inst_id in np.unique(col_ids[valid_col]):
+                inst_id_int = int(inst_id)
+                tris = boundary_indices[valid_col & (col_ids == inst_id)].tolist()
+                boundary_triangle_ids_by_instance.setdefault(inst_id_int, []).extend(tris)
 
     triangle_arrays = {
         inst_id: np.array(tri_ids, dtype=np.int64)
