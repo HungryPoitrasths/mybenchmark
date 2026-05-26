@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import gc
 import inspect
 import json
 import math
@@ -242,6 +243,7 @@ L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
 
 L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR = 4
+_MODIFIED_SCENE_CACHE_MAX_SIZE = 8
 
 
 def _is_l2_occlusion_state_transition(
@@ -455,6 +457,23 @@ class _SelectedObjectMoveState:
     moved_ids: set[int]
     changed_relations: list[dict[str, Any]]
     used_changed_delta: bool
+
+
+class _LazyStateList:
+    """Lazily materializes states from a generator, caching as consumed."""
+
+    __slots__ = ("_gen", "_cache")
+
+    def __init__(self, gen):
+        self._gen = gen
+        self._cache = []
+
+    def __iter__(self):
+        yield from self._cache
+        for item in self._gen:
+            self._cache.append(item)
+            yield item
+        self._gen = iter(())
 
 
 def _instance_triangle_id_set(
@@ -3948,6 +3967,11 @@ def _build_modified_scene(
         ignored_tri_ids=frozenset(ignored_tri_ids),
     )
     if cache is not None:
+        if len(cache) >= _MODIFIED_SCENE_CACHE_MAX_SIZE:
+            for evict_key in list(cache.keys()):
+                if evict_key != frozenset():
+                    del cache[evict_key]
+                    break
         cache[cache_key] = result
     return result
 
@@ -5325,6 +5349,7 @@ def generate_l2_object_move(
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
     enabled_l2_object_move_types: set[str] | None = None,
+    max_occlusion_objects: int | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     if enabled_l2_object_move_types is None:
@@ -5401,7 +5426,30 @@ def generate_l2_object_move(
     )
     compare_backend = None
     original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
+    occlusion_source_objects = movement_scene_objects
+    occlusion_allowed_ids = {int(o["id"]) for o in movement_scene_objects}
     if occlusion_enabled:
+        if (
+            max_occlusion_objects is not None
+            and max_occlusion_objects >= 0
+            and len(movement_scene_objects) > max_occlusion_objects
+        ):
+            has_chain = [
+                obj
+                for obj in movement_scene_objects
+                if len(get_attachment_chain_ids(int(obj["id"]), attachment_graph)) > 0
+            ]
+            has_chain_ids = {int(obj["id"]) for obj in has_chain}
+            no_chain = [
+                obj
+                for obj in movement_scene_objects
+                if int(obj["id"]) not in has_chain_ids
+            ]
+            occlusion_source_objects = has_chain[:max_occlusion_objects]
+            remaining = max_occlusion_objects - len(occlusion_source_objects)
+            if remaining > 0:
+                occlusion_source_objects.extend(no_chain[:remaining])
+        occlusion_allowed_ids = {int(o["id"]) for o in occlusion_source_objects}
         compare_backend = _counterfactual_occlusion_backend(
             occlusion_backend,
             ray_caster,
@@ -5412,7 +5460,7 @@ def generate_l2_object_move(
             instance_mesh_data,
             set(),
         )
-        for visibility_obj in movement_scene_objects:
+        for visibility_obj in occlusion_source_objects:
             metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
                 obj=visibility_obj,
                 camera_pose=camera_pose,
@@ -5492,7 +5540,7 @@ def generate_l2_object_move(
                 _L1OcclusionMetrics,
             ],
         ] = {}
-        alternative_states: list[_SelectedObjectMoveState] | None = None
+        alternative_states: _LazyStateList | None = None
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
@@ -5557,11 +5605,11 @@ def generate_l2_object_move(
                 state_visibility_cache[cache_key] = visibility
             return visibility
 
-        def _fallback_states() -> list[_SelectedObjectMoveState]:
+        def _fallback_states() -> _LazyStateList:
             nonlocal alternative_states
             if alternative_states is None:
                 excluded_deltas = [selected_state.delta] if selected_state is not None else []
-                alternative_states = list(
+                alternative_states = _LazyStateList(
                     _iter_additional_object_move_states(
                         movement_scene_objects,
                         attachment_graph,
@@ -5756,7 +5804,11 @@ def generate_l2_object_move(
                 str,
                 _L1OcclusionMetrics,
             ] | None = None
-            if occlusion_enabled and compare_backend is not None:
+            if (
+                occlusion_enabled
+                and compare_backend is not None
+                and move_source_id in occlusion_allowed_ids
+            ):
                 occlusion_unchanged_fallback: tuple[
                     _SelectedObjectMoveState,
                     tuple[
@@ -5927,6 +5979,21 @@ def generate_l2_object_move(
             if query_obj_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
 
+        # --- Memory cleanup between source objects ---
+        del state_relation_cache, state_visibility_cache, alternative_states
+        _inst_dict = (
+            getattr(instance_mesh_data, "__dict__", None)
+            if instance_mesh_data is not None
+            else None
+        )
+        if _inst_dict is not None and "_modified_scene_cache" in _inst_dict:
+            _mc = _inst_dict["_modified_scene_cache"]
+            _empty_entry = _mc.get(frozenset())
+            _mc.clear()
+            if _empty_entry is not None:
+                _mc[frozenset()] = _empty_entry
+        gc.collect()
+
     if occlusion_candidate_records:
         for record in _select_l2_object_move_occlusion_records(occlusion_candidate_records):
             questions_by_object.setdefault(
@@ -5937,6 +6004,12 @@ def generate_l2_object_move(
     # Cap per query-object instance so repeated labels can still contribute.
     result = [q for group in questions_by_object.values() for q in group]
     result = [_annotate_attachment_trace_reason(q) for q in result]
+    # Cleanup caches accumulated on instance_mesh_data.
+    if instance_mesh_data is not None:
+        _inst_dict = getattr(instance_mesh_data, "__dict__", None)
+        if _inst_dict is not None:
+            _inst_dict.pop("_modified_scene_cache", None)
+            _inst_dict.pop("_intersector_cache", None)
     if _has_att:
         from collections import Counter as _Counter
         _types = _Counter(q['type'] for q in result)
@@ -8667,6 +8740,7 @@ def generate_all_questions(
     slow_generator_warn_seconds: float = 60.0,
     only_question_types: list[str] | None = None,
     question_type_budgets: dict[str, int] | None = None,
+    max_occlusion_objects: int | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -9551,6 +9625,7 @@ def generate_all_questions(
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
                     enabled_l2_object_move_types=enabled_l2_object_move_types,
+                    max_occlusion_objects=max_occlusion_objects,
                 ),
             ),
         )
