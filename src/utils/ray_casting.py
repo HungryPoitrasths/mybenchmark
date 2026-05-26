@@ -444,6 +444,100 @@ class RayCaster:
 
         return first_hits, has_any_hit, forced_blocked
 
+    def _batch_first_hit_distances(
+        self,
+        origins: np.ndarray,
+        directions: np.ndarray,
+        max_distances: np.ndarray,
+        ignored_tri_ids: Optional[set[int]] = None,
+    ) -> np.ndarray:
+        """Return first non-ignored hit distance per ray, or ``inf`` on miss."""
+        origins = np.asarray(origins, dtype=np.float64)
+        directions = np.asarray(directions, dtype=np.float64)
+        max_distances = np.asarray(max_distances, dtype=np.float64)
+        n_rays = len(origins)
+        result = np.full(n_rays, np.inf, dtype=np.float64)
+        if n_rays == 0:
+            return result
+
+        dir_norms = np.linalg.norm(directions, axis=1)
+        valid_mask = (
+            np.isfinite(dir_norms)
+            & (dir_norms > 1e-12)
+            & np.isfinite(max_distances)
+            & (max_distances > 1e-12)
+        )
+        if not np.any(valid_mask):
+            return result
+
+        valid_ray_indices = np.flatnonzero(valid_mask)
+        query_origins = origins[valid_mask]
+        query_directions = directions[valid_mask] / dir_norms[valid_mask][:, None]
+        query_max_distances = max_distances[valid_mask]
+
+        locations, index_ray, index_tri = self.intersector.intersects_location(
+            ray_origins=query_origins,
+            ray_directions=query_directions,
+            multiple_hits=True,
+        )
+        if (
+            self.has_embree
+            and self._reliable_intersector is not None
+            and self._reliable_intersector is not self.intersector
+        ):
+            hit_query_indices = (
+                np.unique(np.asarray(index_ray, dtype=np.int64))
+                if len(index_ray) > 0
+                else np.empty(0, dtype=np.int64)
+            )
+            missing_query_indices = np.setdiff1d(
+                np.arange(len(query_origins), dtype=np.int64),
+                hit_query_indices,
+                assume_unique=False,
+            )
+            if len(missing_query_indices) > 0:
+                retry_locations, retry_index_ray, retry_index_tri = self._reliable_intersector.intersects_location(
+                    ray_origins=query_origins[missing_query_indices],
+                    ray_directions=query_directions[missing_query_indices],
+                    multiple_hits=True,
+                )
+                if len(retry_locations) > 0:
+                    retry_index_ray = missing_query_indices[
+                        np.asarray(retry_index_ray, dtype=np.int64)
+                    ]
+                    if len(locations) == 0:
+                        locations = retry_locations
+                        index_ray = retry_index_ray
+                        index_tri = retry_index_tri
+                    else:
+                        locations = np.concatenate([locations, retry_locations], axis=0)
+                        index_ray = np.concatenate([index_ray, retry_index_ray], axis=0)
+                        index_tri = np.concatenate([index_tri, retry_index_tri], axis=0)
+
+        if len(locations) == 0:
+            return result
+
+        index_ray = np.asarray(index_ray, dtype=np.int64)
+        distances = np.linalg.norm(locations - query_origins[index_ray], axis=1)
+        within_mask = distances <= query_max_distances[index_ray]
+        if not np.any(within_mask):
+            return result
+
+        candidate_indices = np.flatnonzero(within_mask)
+        candidate_distances = distances[candidate_indices]
+        candidate_rays = index_ray[candidate_indices]
+        order = np.lexsort((candidate_distances, candidate_rays))
+        ignored = ignored_tri_ids or set()
+        for ordered_idx in order:
+            hit_idx = int(candidate_indices[int(ordered_idx)])
+            tri_id = int(index_tri[hit_idx])
+            if ignored and tri_id in ignored:
+                continue
+            ray_idx = int(valid_ray_indices[int(index_ray[hit_idx])])
+            if not np.isfinite(result[ray_idx]):
+                result[ray_idx] = float(distances[hit_idx])
+        return result
+
     def _hits_up_to_distance(
         self,
         origin: np.ndarray,

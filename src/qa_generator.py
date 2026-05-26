@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import inspect
 import json
 import math
+import os
 import random
 import logging
 import re
@@ -75,6 +76,13 @@ from .utils.depth_occlusion import (
     compute_mesh_depth_occlusion,
     compute_mesh_depth_occlusion_metrics,
 )
+
+_DEBUG_VERIFY_BATCH = (
+    os.environ.get("_DEBUG_VERIFY_BATCH")
+    or os.environ.get("DEBUG_VERIFY_BATCH")
+    or ""
+).strip().lower() in {"1", "true", "yes", "on"}
+
 try:
     from .utils.ray_casting import (
         _LOCAL_BOUNDARY_RESAMPLE_COUNT,
@@ -451,6 +459,16 @@ def _instance_triangle_id_set(
     if instance_mesh_data is None:
         return set()
 
+    instance_dict = getattr(instance_mesh_data, "__dict__", None)
+    cache = (
+        instance_dict.setdefault("_triangle_id_set_cache", {})
+        if instance_dict is not None
+        else None
+    )
+    obj_id = int(obj_id)
+    if cache is not None and obj_id in cache:
+        return cache[obj_id]
+
     triangle_ids_by_instance = getattr(instance_mesh_data, "triangle_ids_by_instance", {}) or {}
     boundary_triangle_ids_by_instance = getattr(
         instance_mesh_data,
@@ -465,9 +483,15 @@ def _instance_triangle_id_set(
         if arr is not None and len(arr) > 0
     ]
     if not tri_parts:
-        return set()
+        result: set[int] = set()
+        if cache is not None:
+            cache[obj_id] = result
+        return result
     tri_ids = np.unique(np.concatenate(tri_parts).astype(np.int64))
-    return {int(tid) for tid in tri_ids.tolist()}
+    result = {int(tid) for tid in tri_ids.tolist()}
+    if cache is not None:
+        cache[obj_id] = result
+    return result
 
 
 def _instance_surface_samples(
@@ -1902,7 +1926,7 @@ def _removed_object_occludes_target_mesh(
         instance_mesh_data,
         target_obj_id,
     )
-    target_tri_ids = _instance_triangle_id_set(instance_mesh_data, target_obj_id)
+    target_tri_ids = set(_instance_triangle_id_set(instance_mesh_data, target_obj_id))
     if len(sample_triangle_ids) == len(sample_points):
         target_tri_ids.update(int(tid) for tid in np.asarray(sample_triangle_ids, dtype=np.int64))
     if not target_tri_ids:
@@ -2748,25 +2772,42 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
     probe_visible_count = 0
     probe_valid_count = 0
     if probe_sample_count > 0:
-        for point in np.asarray(bbox_probe_points, dtype=np.float64):
-            direction = np.asarray(point, dtype=np.float64) - np.asarray(camera_pose.position, dtype=np.float64)
-            target_dist = float(np.linalg.norm(direction))
-            if not np.isfinite(target_dist) or target_dist <= 1e-6:
-                continue
-            probe_valid_count += 1
-            hit_path = _counterfactual_hit_path(
-                modified_scene=moved_scene_context,
-                camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
-                direction=direction,
-                max_distance=target_dist + 0.05,
-                target_triangle_ids=set(),
-                target_caster=None,
-                target_delta=np.zeros(3, dtype=np.float64),
-                blocker_casters=blocker_casters,
-                blocker_deltas=moved_blocker_deltas,
+        camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+        probe_points = np.asarray(bbox_probe_points, dtype=np.float64)
+        probe_directions = probe_points - camera_pos
+        target_dists = np.linalg.norm(probe_directions, axis=1)
+        valid_probe_mask = np.isfinite(target_dists) & (target_dists > 1e-6)
+        probe_valid_count = int(np.count_nonzero(valid_probe_mask))
+        if probe_valid_count > 0:
+            max_distances = target_dists + 0.05
+            origins = np.broadcast_to(camera_pos, probe_directions.shape).copy()
+            first_dists = _batch_first_hit_distances_compat(
+                moved_scene_context.ray_caster,
+                origins=origins,
+                directions=probe_directions,
+                max_distances=max_distances,
+                ignored_tri_ids=set(moved_scene_context.ignored_tri_ids),
             )
-            if not hit_path or float(hit_path[0][1]) >= target_dist - 0.05:
-                probe_visible_count += 1
+            for blocker_id, blocker_caster in blocker_casters.items():
+                blocker_delta = moved_blocker_deltas.get(blocker_id)
+                if blocker_delta is None:
+                    continue
+                blocker_origins = np.broadcast_to(
+                    camera_pos - np.asarray(blocker_delta, dtype=np.float64),
+                    probe_directions.shape,
+                ).copy()
+                blocker_dists = _batch_first_hit_distances_compat(
+                    blocker_caster,
+                    origins=blocker_origins,
+                    directions=probe_directions,
+                    max_distances=max_distances,
+                )
+                first_dists = np.minimum(first_dists, blocker_dists)
+            visible_probe_mask = (
+                valid_probe_mask
+                & (first_dists >= (target_dists - 0.05))
+            )
+            probe_visible_count = int(np.count_nonzero(visible_probe_mask))
 
     visible_count, valid_count = _compute_counterfactual_target_visibility_stats(
         modified_scene=moved_scene_context,
@@ -3705,6 +3746,48 @@ def _hits_up_to_distance_from_caster(
     return filtered
 
 
+def _batch_first_hit_distances_compat(
+    caster,
+    origins: np.ndarray,
+    directions: np.ndarray,
+    max_distances: np.ndarray,
+    ignored_tri_ids: set[int] | None = None,
+) -> np.ndarray:
+    """Return first-hit distances using RayCaster's batch path when available."""
+    origins = np.asarray(origins, dtype=np.float64)
+    directions = np.asarray(directions, dtype=np.float64)
+    max_distances = np.asarray(max_distances, dtype=np.float64)
+    result = np.full(len(origins), np.inf, dtype=np.float64)
+    if caster is None or len(origins) == 0:
+        return result
+
+    batch_first_hits = getattr(caster, "_batch_first_hit_distances", None)
+    if callable(batch_first_hits):
+        return np.asarray(
+            batch_first_hits(
+                origins=origins,
+                directions=directions,
+                max_distances=max_distances,
+                ignored_tri_ids=ignored_tri_ids,
+            ),
+            dtype=np.float64,
+        )
+
+    for ray_idx, (origin, direction, max_distance) in enumerate(
+        zip(origins, directions, max_distances)
+    ):
+        hits = _hits_up_to_distance_from_caster(
+            caster,
+            origin=np.asarray(origin, dtype=np.float64),
+            direction=np.asarray(direction, dtype=np.float64),
+            max_distance=float(max_distance),
+            ignored_tri_ids=ignored_tri_ids,
+        )
+        if hits:
+            result[ray_idx] = float(hits[0][1])
+    return result
+
+
 def _counterfactual_hit_path(
     modified_scene: _ModifiedSceneContext,
     camera_pos: np.ndarray,
@@ -3774,6 +3857,18 @@ def _build_modified_scene(
     if ray_caster is None:
         return None
 
+    cache_key = frozenset(int(obj_id) for obj_id in removed_ids)
+    cache = None
+    instance_dict = (
+        getattr(instance_mesh_data, "__dict__", None)
+        if instance_mesh_data is not None
+        else None
+    )
+    if instance_dict is not None:
+        cache = instance_dict.setdefault("_modified_scene_cache", {})
+        if cache_key in cache:
+            return cache[cache_key]
+
     ignored_tri_ids: set[int] = set()
     if instance_mesh_data is not None:
         for obj_id in removed_ids:
@@ -3781,10 +3876,13 @@ def _build_modified_scene(
                 _instance_triangle_id_set(instance_mesh_data, int(obj_id))
             )
 
-    return _ModifiedSceneContext(
+    result = _ModifiedSceneContext(
         ray_caster=ray_caster,
         ignored_tri_ids=frozenset(ignored_tri_ids),
     )
+    if cache is not None:
+        cache[cache_key] = result
+    return result
 
 
 def _compute_target_visibility(
@@ -3900,24 +3998,94 @@ def _compute_counterfactual_target_visibility_stats(
     mixed_records: list[int] = []
     counterfactual_target_tri_ids = {_COUNTERFACTUAL_TARGET_TRI_ID}
 
+    fast_classifications: dict[int, str] = {}
+    if target_caster is not None:
+        max_distances = expected_dists + hit_epsilon
+        origins = np.broadcast_to(camera_pos, directions.shape).copy()
+        static_ignored_tri_ids = set(modified_scene.ignored_tri_ids)
+        static_ignored_tri_ids.update(int(tid) for tid in target_triangle_ids)
+        first_other_dists = _batch_first_hit_distances_compat(
+            modified_scene.ray_caster,
+            origins=origins,
+            directions=directions,
+            max_distances=max_distances,
+            ignored_tri_ids=static_ignored_tri_ids,
+        )
+        for blocker_id, blocker_caster in blocker_casters.items():
+            blocker_delta = b_deltas.get(blocker_id)
+            if blocker_delta is None:
+                continue
+            blocker_origins = np.broadcast_to(
+                camera_pos - np.asarray(blocker_delta, dtype=np.float64),
+                directions.shape,
+            ).copy()
+            blocker_dists = _batch_first_hit_distances_compat(
+                blocker_caster,
+                origins=blocker_origins,
+                directions=directions,
+                max_distances=max_distances,
+            )
+            first_other_dists = np.minimum(first_other_dists, blocker_dists)
+
+        target_origins = np.broadcast_to(camera_pos - t_delta, directions.shape).copy()
+        first_target_dists = _batch_first_hit_distances_compat(
+            target_caster,
+            origins=target_origins,
+            directions=directions,
+            max_distances=max_distances,
+        )
+        target_at_sample = np.abs(first_target_dists - expected_dists) <= hit_epsilon
+        fast_visible = target_at_sample & (first_other_dists > first_target_dists)
+        fast_external = target_at_sample & (first_other_dists < first_target_dists)
+        for ray_idx in np.flatnonzero(fast_visible):
+            fast_classifications[int(ray_idx)] = "visible"
+        for ray_idx in np.flatnonzero(fast_external):
+            fast_classifications[int(ray_idx)] = "externally_occluded"
+
     for ray_idx, (direction, expected_dist) in enumerate(zip(directions, expected_dists)):
-        hit_path = _counterfactual_hit_path(
-            modified_scene=modified_scene,
-            camera_pos=camera_pos,
-            direction=direction,
-            max_distance=float(expected_dist) + hit_epsilon,
-            target_triangle_ids=target_triangle_ids,
-            target_caster=target_caster,
-            target_delta=t_delta,
-            blocker_casters=blocker_casters,
-            blocker_deltas=b_deltas,
-        )
-        classification = _classify_hit_path(
-            hit_path,
-            expected_dist=float(expected_dist),
-            target_tri_ids=counterfactual_target_tri_ids,
-            hit_epsilon=hit_epsilon,
-        )
+        classification = fast_classifications.get(ray_idx)
+        if classification is not None:
+            if _DEBUG_VERIFY_BATCH:
+                hit_path = _counterfactual_hit_path(
+                    modified_scene=modified_scene,
+                    camera_pos=camera_pos,
+                    direction=direction,
+                    max_distance=float(expected_dist) + hit_epsilon,
+                    target_triangle_ids=target_triangle_ids,
+                    target_caster=target_caster,
+                    target_delta=t_delta,
+                    blocker_casters=blocker_casters,
+                    blocker_deltas=b_deltas,
+                )
+                slow_classification = _classify_hit_path(
+                    hit_path,
+                    expected_dist=float(expected_dist),
+                    target_tri_ids=counterfactual_target_tri_ids,
+                    hit_epsilon=hit_epsilon,
+                )
+                assert classification == slow_classification, (
+                    classification,
+                    slow_classification,
+                    ray_idx,
+                )
+        else:
+            hit_path = _counterfactual_hit_path(
+                modified_scene=modified_scene,
+                camera_pos=camera_pos,
+                direction=direction,
+                max_distance=float(expected_dist) + hit_epsilon,
+                target_triangle_ids=target_triangle_ids,
+                target_caster=target_caster,
+                target_delta=t_delta,
+                blocker_casters=blocker_casters,
+                blocker_deltas=b_deltas,
+            )
+            classification = _classify_hit_path(
+                hit_path,
+                expected_dist=float(expected_dist),
+                target_tri_ids=counterfactual_target_tri_ids,
+                hit_epsilon=hit_epsilon,
+            )
         if classification == "visible":
             visible_count += 1
             valid_count += 1
@@ -4408,6 +4576,10 @@ def _select_object_move_state(
     occlusion_backend: str = "depth",
     ray_caster=None,
     instance_mesh_data: InstanceMeshData | None = None,
+    precomputed_original_visibility: dict[
+        int,
+        tuple[str | None, str, str, _L1OcclusionMetrics],
+    ] | None = None,
 ) -> _SelectedObjectMoveState | None:
     delta, changed = _find_object_move_delta_and_changes(
         objects,
@@ -4420,6 +4592,7 @@ def _select_object_move_state(
         occlusion_backend=occlusion_backend,
         ray_caster=ray_caster,
         instance_mesh_data=instance_mesh_data,
+        precomputed_original_visibility=precomputed_original_visibility,
     )
     if delta is not None:
         return _make_selected_object_move_state(
@@ -4479,6 +4652,12 @@ def _find_object_move_occlusion_changes(
     occlusion_backend: str,
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
+    *,
+    early_exit: bool = False,
+    precomputed_original_visibility: dict[
+        int,
+        tuple[str | None, str, str, _L1OcclusionMetrics],
+    ] | None = None,
 ) -> list[dict]:
     """Return L1-style visibility changes for moved targets."""
     if color_intrinsics is None:
@@ -4487,7 +4666,7 @@ def _find_object_move_occlusion_changes(
     compare_backend = _counterfactual_occlusion_backend(
         occlusion_backend, ray_caster, instance_mesh_data,
     )
-    original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
+    original_scene_context = None
     original_map = {int(obj["id"]): obj for obj in original_objects}
     occlusion_changes: list[dict] = []
     for target_obj_id in sorted(int(obj_id) for obj_id in moved_ids):
@@ -4495,20 +4674,30 @@ def _find_object_move_occlusion_changes(
         if target_obj is None:
             continue
 
-        old_metrics, old_source = _compute_l1_style_visibility_metrics_for_static_target(
-            obj=target_obj,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            depth_image=None,
-            depth_intrinsics=None,
-            occlusion_backend=compare_backend,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
-            modified_scene=original_scene_context,
+        cached_original = (
+            precomputed_original_visibility.get(target_obj_id)
+            if precomputed_original_visibility is not None
+            else None
         )
-        old_status, old_reason_code, _old_reason_detail = _resolve_counterfactual_l1_visibility_status(
-            old_metrics
-        )
+        if cached_original is not None:
+            old_status, old_source, old_reason_code, old_metrics = cached_original
+        else:
+            if original_scene_context is None:
+                original_scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
+            old_metrics, old_source = _compute_l1_style_visibility_metrics_for_static_target(
+                obj=target_obj,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend=compare_backend,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+                modified_scene=original_scene_context,
+            )
+            old_status, old_reason_code, _old_reason_detail = _resolve_counterfactual_l1_visibility_status(
+                old_metrics
+            )
         if old_status is None:
             continue
 
@@ -4552,6 +4741,8 @@ def _find_object_move_occlusion_changes(
                 "visibility_metrics": _l1_occlusion_metrics_payload(new_metrics),
             },
         })
+        if early_exit:
+            return occlusion_changes
 
     return occlusion_changes
 
@@ -4643,6 +4834,10 @@ def _find_object_move_delta_and_changes(
     occlusion_backend: str = "depth",
     ray_caster=None,
     instance_mesh_data: InstanceMeshData | None = None,
+    precomputed_original_visibility: dict[
+        int,
+        tuple[str | None, str, str, _L1OcclusionMetrics],
+    ] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Return the first valid movement delta that yields relation or visibility changes."""
     delta, changed = find_meaningful_movement(
@@ -4677,6 +4872,8 @@ def _find_object_move_delta_and_changes(
             occlusion_backend=occlusion_backend,
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
+            early_exit=False,
+            precomputed_original_visibility=precomputed_original_visibility,
         )
         return delta, _merge_changed_relations(changed, occlusion_changed)
 
@@ -4699,6 +4896,8 @@ def _find_object_move_delta_and_changes(
             occlusion_backend=occlusion_backend,
             ray_caster=ray_caster,
             instance_mesh_data=instance_mesh_data,
+            early_exit=True,
+            precomputed_original_visibility=precomputed_original_visibility,
         )
         if occlusion_changed:
             return candidate_delta, occlusion_changed
@@ -5186,6 +5385,7 @@ def generate_l2_object_move(
                 occlusion_backend=occlusion_backend if enable_occlusion else "depth",
                 ray_caster=ray_caster if enable_occlusion else None,
                 instance_mesh_data=instance_mesh_data if enable_occlusion else None,
+                precomputed_original_visibility=original_visibility if enable_occlusion else None,
             )
         if has_attachment_chain:
             _move_src_entry = {
