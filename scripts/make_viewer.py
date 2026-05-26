@@ -23,6 +23,14 @@ Usage:
         --output output/pilot_meshray/attachment_viewer.html \
         --attachment_only
 
+    python scripts/make_viewer.py \
+        --questions output/scannetpp/benchmark.json \
+        --image_root /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames \
+        --dataset scannetpp \
+        --scannetpp_sensor iphone \
+        --output output/scannetpp/viewer.html \
+        --simple_output output/scannetpp/viewer_simple.html
+
 """
 
 from __future__ import annotations
@@ -1188,30 +1196,112 @@ def _build_summary_html(displayed_questions: list[dict]) -> str:
     )
 
 
+def _resolve_image_path(
+    question: dict,
+    image_root: Path,
+    dataset: str = "scannet",
+    scannetpp_sensor: str = "iphone",
+) -> Path:
+    scene = str(question.get("scene_id", ""))
+    frame = str(question.get("image_name", ""))
+    if dataset == "scannetpp":
+        if scannetpp_sensor == "iphone":
+            return image_root / scene / frame
+        elif scannetpp_sensor == "dslr":
+            return image_root / scene / "dslr" / "resized_images" / frame
+        else:
+            raise ValueError(
+                f"scannetpp_sensor must be 'iphone' or 'dslr', got {scannetpp_sensor!r}"
+            )
+    return image_root / scene / "color" / frame
+
+
+def _new_image_stats() -> dict[str, object]:
+    return {
+        "total": 0,
+        "embedded": 0,
+        "missing": 0,
+        "missing_paths": [],
+    }
+
+
+def _record_image_result(
+    image_stats: dict[str, object] | None,
+    img_path: Path,
+    *,
+    embedded: bool,
+) -> None:
+    if image_stats is None:
+        return
+    image_stats["total"] = int(image_stats.get("total", 0)) + 1
+    if embedded:
+        image_stats["embedded"] = int(image_stats.get("embedded", 0)) + 1
+        return
+
+    image_stats["missing"] = int(image_stats.get("missing", 0)) + 1
+    missing_paths = image_stats.setdefault("missing_paths", [])
+    if isinstance(missing_paths, list) and len(missing_paths) < 5:
+        missing_paths.append(str(img_path))
+
+
 def _build_image_html(
     question: dict,
     image_root: Path,
     max_width: int,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    image_stats: dict[str, object] | None = None,
 ) -> str:
-    scene = str(question.get("scene_id", ""))
-    frame = str(question.get("image_name", ""))
-    if dataset == "scannetpp":
-        if scannetpp_sensor == "iphone":
-            img_path = image_root / scene / frame
-        elif scannetpp_sensor == "dslr":
-            img_path = image_root / scene / "dslr" / "resized_images" / frame
-        else:
-            raise ValueError(
-                f"scannetpp_sensor must be 'iphone' or 'dslr', got {scannetpp_sensor!r}"
-            )
-    else:
-        img_path = image_root / scene / "color" / frame
+    img_path = _resolve_image_path(question, image_root, dataset, scannetpp_sensor)
     b64 = img_to_b64(img_path, max_width)
     if b64:
+        _record_image_result(image_stats, img_path, embedded=True)
         return f'<img src="data:image/jpeg;base64,{b64}">'
+    _record_image_result(image_stats, img_path, embedded=False)
     return '<div class="no-img">image not found</div>'
+
+
+def _warn_if_scannetpp_iphone_root_looks_raw(image_root: Path) -> None:
+    """Warn when an iPhone viewer root looks like raw ScanNet++ data."""
+    if (
+        (image_root / "iphone").is_dir()
+        and (image_root / "scans").is_dir()
+        and not any(image_root.glob("frame_*.jpg"))
+    ):
+        print(
+            "Warning: --image_root looks like a raw ScanNet++ scene directory. "
+            "For --dataset scannetpp --scannetpp_sensor iphone, pass the extracted "
+            "frame root, e.g. /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
+        )
+
+
+def _print_image_stats(
+    image_stats: dict[str, object],
+    *,
+    label: str,
+    image_root: Path,
+    dataset: str,
+    scannetpp_sensor: str,
+) -> None:
+    total = int(image_stats.get("total", 0))
+    embedded = int(image_stats.get("embedded", 0))
+    missing = int(image_stats.get("missing", 0))
+    print(f"{label} images: embedded {embedded}/{total}; missing {missing}")
+    if missing <= 0:
+        return
+
+    if dataset == "scannetpp" and scannetpp_sensor == "iphone":
+        _warn_if_scannetpp_iphone_root_looks_raw(image_root)
+        print(
+            "ScanNet++ iPhone image path format: "
+            "<image_root>/<scene_id>/<image_name>"
+        )
+
+    missing_paths = image_stats.get("missing_paths", [])
+    if isinstance(missing_paths, list) and missing_paths:
+        print("First missing image paths:")
+        for path in missing_paths:
+            print(f"  {path}")
 
 
 def _build_options_html(question: dict) -> str:
@@ -1324,6 +1414,7 @@ def _build_full_viewer_html_from_displayed_questions(
     edited_html_filename: str = "viewer_edited.html",
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    image_stats: dict[str, object] | None = None,
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1338,6 +1429,7 @@ def _build_full_viewer_html_from_displayed_questions(
                     max_width,
                     dataset=dataset,
                     scannetpp_sensor=scannetpp_sensor,
+                    image_stats=image_stats,
                 ),
                 meta=_build_meta_html(question, idx),
                 question=html.escape(str(question.get("question", ""))),
@@ -1368,6 +1460,7 @@ def _build_simple_viewer_html_from_displayed_questions(
     edited_html_filename: str = "viewer_edited.html",
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    image_stats: dict[str, object] | None = None,
 ) -> str:
     summary_html = _build_summary_html(displayed_questions)
     stats_html = build_stats_bar(displayed_questions)
@@ -1383,6 +1476,7 @@ def _build_simple_viewer_html_from_displayed_questions(
                     max_width,
                     dataset=dataset,
                     scannetpp_sensor=scannetpp_sensor,
+                    image_stats=image_stats,
                 ),
                 meta=_build_meta_html(question, idx),
                 question=(
@@ -1491,7 +1585,11 @@ def main():
     parser.add_argument(
         "--image_root",
         required=True,
-        help="Root of ScanNet scans (parent of scene dirs)",
+        help=(
+            "Image root. For ScanNet, pass the scans root containing scene/color. "
+            "For ScanNet++ iPhone, pass the extracted frame root, e.g. "
+            "/home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
+        ),
     )
     parser.add_argument("--output", default="viewer.html")
     parser.add_argument(
@@ -1583,6 +1681,7 @@ def main():
         apply_filters=args.apply_auto_filters,
         shuffle_seed=args.shuffle_seed,
     )
+    full_image_stats = _new_image_stats()
     html_text = _build_full_viewer_html_from_displayed_questions(
         displayed_questions,
         image_root,
@@ -1595,6 +1694,7 @@ def main():
         ),
         dataset=args.dataset,
         scannetpp_sensor=args.scannetpp_sensor,
+        image_stats=full_image_stats,
     )
 
     out = Path(args.output)
@@ -1602,8 +1702,16 @@ def main():
     out.write_text(html_text, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
     print(f"Saved: {out}  ({size_kb} KB)")
+    _print_image_stats(
+        full_image_stats,
+        label="Full viewer",
+        image_root=image_root,
+        dataset=args.dataset,
+        scannetpp_sensor=args.scannetpp_sensor,
+    )
 
     if args.simple_output:
+        simple_image_stats = _new_image_stats()
         simple_html = _build_simple_viewer_html_from_displayed_questions(
             displayed_questions,
             image_root,
@@ -1617,12 +1725,20 @@ def main():
             ),
             dataset=args.dataset,
             scannetpp_sensor=args.scannetpp_sensor,
+            image_stats=simple_image_stats,
         )
         simple_out = Path(args.simple_output)
         simple_out.parent.mkdir(parents=True, exist_ok=True)
         simple_out.write_text(simple_html, encoding="utf-8")
         simple_size_kb = simple_out.stat().st_size // 1024
         print(f"Saved: {simple_out}  ({simple_size_kb} KB)")
+        _print_image_stats(
+            simple_image_stats,
+            label="Simple viewer",
+            image_root=image_root,
+            dataset=args.dataset,
+            scannetpp_sensor=args.scannetpp_sensor,
+        )
 
 
 if __name__ == "__main__":
