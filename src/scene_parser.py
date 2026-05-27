@@ -585,9 +585,9 @@ def _adaptive_instance_surface_sample_counts(
         # Use sqrt(area ratio) to improve coverage on larger objects without
         # blowing up runtime on very large instances.
         scale = float(np.sqrt(max(area / min_area, 1.0)))
-        counts[int(inst_id)] = max(
-            base_count,
-            int(np.ceil(base_count * scale)),
+        counts[int(inst_id)] = min(
+            2048,
+            max(base_count, int(np.ceil(base_count * scale))),
         )
     return counts
 
