@@ -15,6 +15,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import gc
 import glob
 import json
 import logging
@@ -4928,6 +4929,11 @@ def run_pipeline(
             frame_count=len(frames),
             pipeline_outcome="processed",
         )
+
+        # Explicitly release heavy scene resources and force GC to reclaim
+        # trimesh/Embree C-extension objects that have cyclic references.
+        del ray_caster, instance_mesh_data
+        gc.collect()
 
     completed_scene_ids, _, scene_status_changed = _reconcile_pipeline_completed_scenes(
         scene_status_doc,
