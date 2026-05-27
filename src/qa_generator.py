@@ -5369,7 +5369,7 @@ def generate_l2_object_move(
     trace_detail: str = "light",
     enabled_l2_object_move_types: set[str] | None = None,
     max_occlusion_objects: int | None = None,
-    max_move_sources: int | None = 20,
+    max_move_sources: int | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     if enabled_l2_object_move_types is None:
@@ -8801,7 +8801,7 @@ def generate_all_questions(
     only_question_types: list[str] | None = None,
     question_type_budgets: dict[str, int] | None = None,
     max_occlusion_objects: int | None = None,
-    max_move_sources: int | None = 20,
+    max_move_sources: int | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 

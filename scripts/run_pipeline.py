@@ -4191,7 +4191,7 @@ def run_pipeline(
     only_question_types: list[str] | None = None,
     max_questions_per_scene_type: int = 5,
     max_occlusion_objects: int | None = 20,
-    max_move_sources: int | None = 20,
+    max_move_sources: int | None = None,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -5457,8 +5457,8 @@ def main():
     parser.add_argument(
         "--max_move_sources",
         type=int,
-        default=20,
-        help="Maximum number of source objects to process in the L2 object-move outer loop (find_meaningful_movement is O(n^2) per object). Use 0 to disable the cap.",
+        default=0,
+        help="Maximum number of source objects to process in the L2 object-move outer loop. Use 0 (default) to disable the cap.",
     )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
