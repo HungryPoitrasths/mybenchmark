@@ -4555,6 +4555,26 @@ def run_pipeline(
                 e,
             )
 
+        # Release preloaded geometry — vertices/faces are now owned by
+        # instance_mesh_data and ray_caster; keeping this around wastes memory.
+        del preloaded_geometry
+
+        # Share vertex/face arrays between instance_mesh_data and ray_caster
+        # to avoid keeping two large copies of the same mesh in memory.
+        if (
+            instance_mesh_data is not None
+            and ray_caster is not None
+            and hasattr(ray_caster, "mesh")
+        ):
+            rc_verts = np.asarray(ray_caster.mesh.vertices, dtype=np.float64)
+            rc_faces = np.asarray(ray_caster.mesh.faces, dtype=np.int64)
+            if (
+                rc_verts.shape == instance_mesh_data.vertices.shape
+                and rc_faces.shape == instance_mesh_data.faces.shape
+            ):
+                instance_mesh_data.vertices = rc_verts
+                instance_mesh_data.faces = rc_faces
+
         depth_intrinsics = None
         if use_occlusion:
             try:
