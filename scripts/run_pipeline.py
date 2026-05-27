@@ -173,6 +173,11 @@ def _call_generate_all_questions_compat(**kwargs):
                     raise
                 compat_kwargs.pop("max_occlusion_objects", None)
                 continue
+            if "max_move_sources" in message:
+                if "max_move_sources" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("max_move_sources", None)
+                continue
             raise
 
 
@@ -4185,6 +4190,7 @@ def run_pipeline(
     only_question_types: list[str] | None = None,
     max_questions_per_scene_type: int = 5,
     max_occlusion_objects: int | None = 20,
+    max_move_sources: int | None = 20,
 ):
     """Execute the full CausalSpatial-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -4815,6 +4821,7 @@ def run_pipeline(
                             only_question_types=only_question_types,
                             question_type_budgets=question_type_budgets,
                             max_occlusion_objects=max_occlusion_objects,
+                            max_move_sources=max_move_sources,
                         )
                     except Exception:
                         logger.exception(
@@ -5150,6 +5157,7 @@ def run_pipeline(
                 attachment_edges=scene.get("attachment_edges", []),
                 only_question_types=only_question_types,
                 max_occlusion_objects=max_occlusion_objects,
+                max_move_sources=max_move_sources,
             )
 
             for q in questions:
@@ -5420,6 +5428,12 @@ def main():
         default=20,
         help="Maximum number of movement objects per frame that run expensive L2 object-move occlusion mesh-ray visibility checks. Use 0 to disable the cap.",
     )
+    parser.add_argument(
+        "--max_move_sources",
+        type=int,
+        default=20,
+        help="Maximum number of source objects to process in the L2 object-move outer loop (find_meaningful_movement is O(n^2) per object). Use 0 to disable the cap.",
+    )
     args = parser.parse_args()
     if args.reset is not None and int(args.reset) <= 0:
         parser.error("--reset must be >= 1")
@@ -5467,6 +5481,7 @@ def main():
         only_question_types=args.only_question_types,
         max_questions_per_scene_type=args.max_questions_per_scene_type,
         max_occlusion_objects=(None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects)),
+        max_move_sources=(None if int(args.max_move_sources) == 0 else int(args.max_move_sources)),
     )
 
 

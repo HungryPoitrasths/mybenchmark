@@ -244,6 +244,8 @@ L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
 L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR = 4
 _MODIFIED_SCENE_CACHE_MAX_SIZE = 8
+_INTERSECTOR_CACHE_MAX_SIZE = 4
+_OCCLUSION_CANDIDATE_SEARCH_LIMIT = 8
 
 
 def _is_l2_occlusion_state_transition(
@@ -548,6 +550,8 @@ def _get_instance_intersector(
         "_intersector_cache", {}
     )
     if obj_id in cache:
+        # Move to end for LRU ordering.
+        cache[obj_id] = cache.pop(obj_id)
         return cache[obj_id]
 
     tri_ids_set = _instance_triangle_id_set(instance_mesh_data, obj_id)
@@ -572,6 +576,17 @@ def _get_instance_intersector(
         vertices=sub_vertices, faces=sub_faces_local, process=False
     )
     caster = RayCaster(sub_mesh)
+    # Evict oldest non-None entries if cache exceeds size limit.
+    while len(cache) >= _INTERSECTOR_CACHE_MAX_SIZE:
+        for evict_key in list(cache.keys()):
+            if cache[evict_key] is not None:
+                del cache[evict_key]
+                break
+        else:
+            # All entries are None (lightweight), just pop the oldest.
+            oldest_key = next(iter(cache))
+            del cache[oldest_key]
+        break
     cache[obj_id] = caster
     return caster
 
@@ -4982,6 +4997,7 @@ def _find_object_move_delta_and_changes(
     if not occlusion_enabled:
         return None, []
 
+    _occlusion_candidates_tried = 0
     for candidate_delta, moved_scene_objects, moved_ids in _iter_valid_object_move_states(
         objects,
         attachment_graph,
@@ -4989,6 +5005,9 @@ def _find_object_move_delta_and_changes(
         room_bounds=room_bounds,
         collision_objects=collision_objects,
     ):
+        _occlusion_candidates_tried += 1
+        if _occlusion_candidates_tried > _OCCLUSION_CANDIDATE_SEARCH_LIMIT:
+            break
         occlusion_changed = _find_object_move_occlusion_changes(
             original_objects=objects,
             moved_objects=moved_scene_objects,
@@ -5350,6 +5369,7 @@ def generate_l2_object_move(
     trace_detail: str = "light",
     enabled_l2_object_move_types: set[str] | None = None,
     max_occlusion_objects: int | None = None,
+    max_move_sources: int | None = 20,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     if enabled_l2_object_move_types is None:
@@ -5394,8 +5414,12 @@ def generate_l2_object_move(
     obj_map = {int(o["id"]): o for o in relation_scene_objects}
     if object_map is not None:
         obj_map.update({int(obj_id): obj for obj_id, obj in object_map.items()})
+    import time as _time_mod
+    _t0 = _time_mod.time()
     base_relations = compute_all_relations(relation_scene_objects, camera_pose, None, None)
     base_relation_map = _relation_map_by_pair(base_relations)
+    logger.info("L2 object_move: compute_all_relations done in %.1fs (%d relations, %d objects)",
+                _time_mod.time() - _t0, len(base_relations), len(relation_scene_objects))
 
     # DEBUG: log object pool sizes to JSON file
     import sys as _sys, json as _json, os as _os, threading as _threading
@@ -5460,7 +5484,10 @@ def generate_l2_object_move(
             instance_mesh_data,
             set(),
         )
-        for visibility_obj in occlusion_source_objects:
+        for _vis_idx, visibility_obj in enumerate(occlusion_source_objects, 1):
+            if _vis_idx == 1 or _vis_idx % 5 == 0:
+                logger.info("L2 object_move: precompute visibility %d/%d",
+                            _vis_idx, len(occlusion_source_objects))
             metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
                 obj=visibility_obj,
                 camera_pose=camera_pose,
@@ -5482,9 +5509,30 @@ def generate_l2_object_move(
                 metrics,
             )
 
-    for source_obj in movement_scene_objects:
-        # Skip structural room elements — they cannot be "moved" in any
-        # meaningful physical sense and confuse human annotators.
+    logger.info("L2 object_move: precompute done, entering main loop (%d source objects, max_move_sources=%s)",
+                len(movement_scene_objects), max_move_sources)
+    # Sort: prioritize objects that have attachment chains (can generate
+    # attachment-related questions), then by priority pair membership.
+    _attachment_parent_ids = {
+        int(parent_id)
+        for parent_id, children in attachment_graph.items()
+        if children
+    }
+    _priority_parent_ids = set(attachment_priority_children_by_parent.keys())
+    movement_scene_objects_sorted = sorted(
+        movement_scene_objects,
+        key=lambda obj: (
+            int(obj["id"]) not in _priority_parent_ids,
+            int(obj["id"]) not in _attachment_parent_ids,
+            int(obj["id"]),
+        ),
+    )
+    _source_loop_t0 = _time_mod.time()
+    _source_loop_count = 0
+    for source_obj in movement_scene_objects_sorted:
+        if max_move_sources is not None and _source_loop_count >= max_move_sources:
+            logger.info("L2 object_move: reached max_move_sources=%d, stopping early", max_move_sources)
+            break
         if source_obj.get("label", "").lower() in EXCLUDED_LABELS:
             continue
 
@@ -5494,6 +5542,11 @@ def generate_l2_object_move(
             continue
         if move_source_id not in attachment_referable_ids:
             continue
+        _source_loop_count += 1
+        if _source_loop_count == 1 or _source_loop_count % 10 == 0:
+            logger.info("L2 object_move: source_obj %d (id=%d, label=%s), elapsed=%.1fs",
+                        _source_loop_count, move_source_id,
+                        source_obj.get("label", "?"), _time_mod.time() - _source_loop_t0)
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
@@ -5990,12 +6043,15 @@ def generate_l2_object_move(
             if instance_mesh_data is not None
             else None
         )
-        if _inst_dict is not None and "_modified_scene_cache" in _inst_dict:
-            _mc = _inst_dict["_modified_scene_cache"]
-            _empty_entry = _mc.get(frozenset())
-            _mc.clear()
-            if _empty_entry is not None:
-                _mc[frozenset()] = _empty_entry
+        if _inst_dict is not None:
+            if "_modified_scene_cache" in _inst_dict:
+                _mc = _inst_dict["_modified_scene_cache"]
+                _empty_entry = _mc.get(frozenset())
+                _mc.clear()
+                if _empty_entry is not None:
+                    _mc[frozenset()] = _empty_entry
+            # Clear per-instance intersectors (Embree BVH) to reclaim memory.
+            _inst_dict.pop("_intersector_cache", None)
         gc.collect()
 
     if occlusion_candidate_records:
@@ -8745,6 +8801,7 @@ def generate_all_questions(
     only_question_types: list[str] | None = None,
     question_type_budgets: dict[str, int] | None = None,
     max_occlusion_objects: int | None = None,
+    max_move_sources: int | None = 20,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -9630,6 +9687,7 @@ def generate_all_questions(
                     trace_detail=trace_detail,
                     enabled_l2_object_move_types=enabled_l2_object_move_types,
                     max_occlusion_objects=max_occlusion_objects,
+                    max_move_sources=max_move_sources,
                 ),
             ),
         )
