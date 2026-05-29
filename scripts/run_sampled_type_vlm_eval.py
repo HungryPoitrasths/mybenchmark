@@ -313,14 +313,20 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
-def make_client(base_url: str, api_key: str, timeout: float):
+def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
+    if api_provider == "anthropic":
+        from anthropic import Anthropic
+
+        return Anthropic(api_key=api_key, base_url=base_url, timeout=timeout)
+
     from openai import OpenAI
 
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
 
 class ThreadLocalOpenAIClientFactory:
-    def __init__(self, *, base_url: str, api_key: str, timeout: float) -> None:
+    def __init__(self, *, api_provider: str, base_url: str, api_key: str, timeout: float) -> None:
+        self.api_provider = api_provider
         self.base_url = base_url
         self.api_key = api_key
         self.timeout = timeout
@@ -329,7 +335,7 @@ class ThreadLocalOpenAIClientFactory:
     def get_client(self) -> Any:
         client = getattr(self.local, "client", None)
         if client is None:
-            client = make_client(self.base_url, self.api_key, self.timeout)
+            client = make_client(self.api_provider, self.base_url, self.api_key, self.timeout)
             self.local.client = client
         return client
 
@@ -337,6 +343,7 @@ class ThreadLocalOpenAIClientFactory:
 def call_model(
     client: Any,
     *,
+    api_provider: str,
     model: str,
     image_path: Path,
     prompt: str,
@@ -345,6 +352,69 @@ def call_model(
     api_image_max_px: int,
 ) -> str:
     b64, mime = _encode_image(image_path, api_image_max_px)
+    data_url = f"data:{mime};base64,{b64}"
+    if api_provider == "openai_responses":
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "input_text", "text": SYSTEM_PROMPT},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_image", "image_url": data_url},
+                        {"type": "input_text", "text": prompt},
+                    ],
+                },
+            ],
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+        )
+        output_text = getattr(response, "output_text", None)
+        if output_text:
+            return str(output_text).strip()
+        chunks: list[str] = []
+        for item in getattr(response, "output", []) or []:
+            for content in getattr(item, "content", []) or []:
+                text = getattr(content, "text", None)
+                if text:
+                    chunks.append(str(text))
+        return "\n".join(chunks).strip()
+
+    if api_provider == "anthropic":
+        response = client.messages.create(
+            model=model,
+            system=SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime,
+                                "data": b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                },
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        chunks = [
+            str(getattr(block, "text", ""))
+            for block in getattr(response, "content", []) or []
+            if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+        ]
+        return "\n".join(chunks).strip()
+
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -354,7 +424,7 @@ def call_model(
                 "content": [
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        "image_url": {"url": data_url},
                     },
                     {"type": "text", "text": prompt},
                 ],
@@ -779,6 +849,7 @@ def run_api_question(
         try:
             raw_response = call_model(
                 client_factory.get_client(),
+                api_provider=args.api_provider,
                 model=args.model,
                 image_path=resolution.path,
                 prompt=prompt,
@@ -831,6 +902,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "seed": args.seed,
             "model": args.model,
             "base_url": args.base_url,
+            "api_provider": args.api_provider,
             "scannetpp_sensor": args.scannetpp_sensor,
             "vlm_workers": args.vlm_workers,
         }
@@ -842,13 +914,16 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
 
     client_factory: ThreadLocalOpenAIClientFactory | None = None
     if not args.skip_api:
+        default_api_key_env = "ANTHROPIC_AUTH_TOKEN" if args.api_provider == "anthropic" else "OPENAI_API_KEY"
         api_key = (
             args.api_key
-            or os.getenv(args.api_key_env)
-            or os.getenv("OPENAI_API_KEY")
+            or (os.getenv(args.api_key_env) if args.api_key_env else None)
+            or os.getenv(default_api_key_env)
+            or os.getenv("DASHSCOPE_API_KEY")
             or "EMPTY"
         )
         client_factory = ThreadLocalOpenAIClientFactory(
+            api_provider=args.api_provider,
             base_url=args.base_url,
             api_key=api_key,
             timeout=args.timeout,
@@ -968,8 +1043,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone", help="ScanNet++ image layout, matching scripts/make_viewer.py")
     parser.add_argument("--base_url", "--vlm_url", dest="base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL")
     parser.add_argument("--model", "--vlm_model", dest="model", default="qwen3.5-flash", help="Model name")
-    parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or OPENAI_API_KEY")
-    parser.add_argument("--api_key_env", default="DASHSCOPE_API_KEY", help="Environment variable for API key")
+    parser.add_argument(
+        "--api_provider",
+        choices=("openai_chat", "openai_responses", "anthropic"),
+        default="openai_chat",
+        help="Wire protocol to use for image+text VLM calls",
+    )
+    parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or provider defaults")
+    parser.add_argument("--api_key_env", default=None, help="Environment variable for API key")
     parser.add_argument("--max_tokens", type=int, default=512, help="Maximum model output tokens")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
     parser.add_argument("--api_image_max_px", type=int, default=1280, help="Resize longest image side for API; 0 disables")
