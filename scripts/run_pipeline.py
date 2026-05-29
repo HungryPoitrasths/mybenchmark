@@ -2940,6 +2940,57 @@ def _frames_from_referability_cache(scene_frames: dict[str, dict]) -> list[dict[
     return frames
 
 
+def _support_chain_graph_has_two_hop_chain(
+    support_chain_graph: dict[int, list[int]] | dict[str, list[int]],
+) -> bool:
+    graph = {
+        int(parent_id): [int(child_id) for child_id in (child_ids or [])]
+        for parent_id, child_ids in (support_chain_graph or {}).items()
+    }
+    return any(
+        graph.get(int(child_id))
+        for child_ids in graph.values()
+        for child_id in child_ids
+    )
+
+
+def _frame_has_l3_attachment_chain(
+    frame: dict[str, object],
+    referability_entry: dict[str, object] | None,
+    support_chain_graph: dict[int, list[int]] | dict[str, list[int]],
+) -> bool:
+    visible_ids = set(_normalize_object_ids(frame.get("visible_object_ids")))
+    if not visible_ids:
+        visible_ids = set(_normalize_object_ids((referability_entry or {}).get("candidate_visible_object_ids")))
+
+    raw_attachment_referable_ids = None
+    if referability_entry is not None:
+        raw_attachment_referable_ids = referability_entry.get("attachment_referable_object_ids")
+        if raw_attachment_referable_ids is None:
+            raw_attachment_referable_ids = _derive_final_referability_fields(
+                referability_entry
+            ).get("attachment_referable_object_ids", [])
+    attachment_referable_ids = set(_normalize_object_ids(raw_attachment_referable_ids))
+    if not visible_ids or not attachment_referable_ids:
+        return False
+
+    graph = {
+        int(parent_id): [int(child_id) for child_id in (child_ids or [])]
+        for parent_id, child_ids in (support_chain_graph or {}).items()
+    }
+    eligible_ids = visible_ids & attachment_referable_ids
+    for grandparent_id, parent_ids in graph.items():
+        if grandparent_id not in eligible_ids:
+            continue
+        for parent_id in parent_ids:
+            parent_id = int(parent_id)
+            if parent_id not in eligible_ids:
+                continue
+            if any(int(grandchild_id) in eligible_ids for grandchild_id in graph.get(parent_id, [])):
+                return True
+    return False
+
+
 def _normalize_object_ids(value: object) -> list[int]:
     object_ids: list[int] = []
     if not isinstance(value, list):
@@ -4213,6 +4264,7 @@ def run_pipeline(
             raise ValueError("max_occlusion_objects must be >= 0 or None")
     if dataset not in ("scannet", "scannetpp"):
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
+    l3_attachment_chain_only = only_question_types == ["L3_attachment_chain"]
 
     meta_dir = output_dir / "scene_metadata"
     questions_dir = output_dir / "questions"
@@ -4478,6 +4530,15 @@ def run_pipeline(
                 pipeline_outcome="no_support_relations",
             )
             continue
+        if l3_attachment_chain_only and not _support_chain_graph_has_two_hop_chain(support_chain_graph):
+            logger.info("Scene %s has no two-hop attachment chain; skipping", scene_id)
+            _persist_completed_scene(
+                scene_id,
+                scene_questions=scene_questions,
+                frame_count=0,
+                pipeline_outcome="no_two_hop_attachment_chain",
+            )
+            continue
 
         scene["depth_source"] = "none" if dataset == "scannetpp" else "sensor"
         _write_json_file(meta_dir / f"{scene_id}.json", scene)
@@ -4489,6 +4550,48 @@ def run_pipeline(
 
         scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
         frames = _frames_from_referability_cache(scene_frames)
+        if l3_attachment_chain_only:
+            l3_frames: list[dict[str, object]] = []
+            skipped_l3_frames: list[dict[str, object]] = []
+            for frame in frames:
+                image_name = str(frame.get("image_name", "")).strip()
+                referability_entry = scene_frames.get(image_name)
+                if _frame_has_l3_attachment_chain(frame, referability_entry, support_chain_graph):
+                    l3_frames.append(frame)
+                else:
+                    skipped_l3_frames.append(frame)
+            if write_frame_debug:
+                for frame in skipped_l3_frames:
+                    image_name = str(frame.get("image_name", "")).strip()
+                    selector_visible_ids = _normalize_object_ids(frame.get("visible_object_ids"))
+                    frame_attachment_rows = _filter_frame_attachment_rows(
+                        scene_attachment_rows,
+                        set(selector_visible_ids),
+                    )
+                    scene_frame_debug_entries.append(
+                        _build_frame_debug_entry(
+                            image_name=image_name,
+                            scene_objects=scene["objects"],
+                            objects_by_id=objects_by_id,
+                            selector_visible_ids=selector_visible_ids,
+                            pipeline_visible_ids=selector_visible_ids,
+                            occlusion_eligible_object_ids=[],
+                            pipeline_referable_object_ids=[],
+                            pipeline_attachment_referable_object_ids=_normalize_object_ids(
+                                (scene_frames.get(image_name) or {}).get("attachment_referable_object_ids")
+                            ),
+                            referability_entry=scene_frames.get(image_name),
+                            frame_attachment_rows=frame_attachment_rows,
+                            pipeline_skip_reason="no_l3_attachment_chain_frame",
+                        )
+                    )
+            logger.info(
+                "L3 attachment-chain-only mode kept %d/%d frame candidates for %s",
+                len(l3_frames),
+                len(frames),
+                scene_id,
+            )
+            frames = l3_frames
         if len(frames) > frame_limit:
             frames = frames[:frame_limit]
         if not frames:
@@ -4567,14 +4670,19 @@ def run_pipeline(
             and ray_caster is not None
             and hasattr(ray_caster, "mesh")
         ):
-            rc_verts = np.asarray(ray_caster.mesh.vertices, dtype=np.float64)
-            rc_faces = np.asarray(ray_caster.mesh.faces, dtype=np.int64)
-            if (
-                rc_verts.shape == instance_mesh_data.vertices.shape
-                and rc_faces.shape == instance_mesh_data.faces.shape
-            ):
-                instance_mesh_data.vertices = rc_verts
-                instance_mesh_data.faces = rc_faces
+            try:
+                rc_verts = np.asarray(ray_caster.mesh.vertices, dtype=np.float64)
+                rc_faces = np.asarray(ray_caster.mesh.faces, dtype=np.int64)
+            except (TypeError, ValueError):
+                rc_verts = None
+                rc_faces = None
+            if rc_verts is not None and rc_faces is not None:
+                if (
+                    rc_verts.shape == instance_mesh_data.vertices.shape
+                    and rc_faces.shape == instance_mesh_data.faces.shape
+                ):
+                    instance_mesh_data.vertices = rc_verts
+                    instance_mesh_data.faces = rc_faces
 
         depth_intrinsics = None
         if use_occlusion:
@@ -5438,7 +5546,7 @@ def main():
             "L1_direction_agent, L2_object_move_agent, L2_object_move_distance, "
             "L2_object_move_object_centric, L2_object_rotate_object_centric, "
             "L2_object_move_allocentric, L2_object_remove, "
-            "L3_coordinate_rotation_agent, L3_coordinate_rotation_object_centric, "
+            "L3_attachment_chain, L3_coordinate_rotation_agent, L3_coordinate_rotation_object_centric, "
             "L3_coordinate_rotation_allocentric. When omitted, all types are generated."
         ),
     )

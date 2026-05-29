@@ -2824,6 +2824,66 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             ["000100.jpg", "000900.jpg", "000500.jpg"],
         )
 
+    def test_support_chain_graph_has_two_hop_chain_requires_depth_two(self) -> None:
+        self.assertFalse(run_pipeline_module._support_chain_graph_has_two_hop_chain({}))
+        self.assertFalse(run_pipeline_module._support_chain_graph_has_two_hop_chain({1: [2]}))
+        self.assertTrue(run_pipeline_module._support_chain_graph_has_two_hop_chain({1: [2], 2: [3]}))
+
+    def test_frame_has_l3_attachment_chain_requires_visible_attachment_referable_two_hop(self) -> None:
+        support_chain_graph = {1: [2], 2: [3]}
+        frame = {"image_name": "chain.jpg", "visible_object_ids": [1, 2, 3, 4]}
+
+        self.assertTrue(
+            run_pipeline_module._frame_has_l3_attachment_chain(
+                frame,
+                {"attachment_referable_object_ids": [1, 2, 3]},
+                support_chain_graph,
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._frame_has_l3_attachment_chain(
+                frame,
+                {"attachment_referable_object_ids": [1, 2]},
+                support_chain_graph,
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._frame_has_l3_attachment_chain(
+                {"image_name": "one-hop.jpg", "visible_object_ids": [1, 2, 4]},
+                {"attachment_referable_object_ids": [1, 2, 3]},
+                support_chain_graph,
+            )
+        )
+
+    def test_l3_attachment_chain_filter_runs_before_max_frame_limit(self) -> None:
+        scene_frames = {
+            "000001.jpg": {
+                "frame_usable": True,
+                "candidate_visible_object_ids": [1, 2],
+                "attachment_referable_object_ids": [1, 2],
+                "final_selection_rank": 1,
+            },
+            "000002.jpg": {
+                "frame_usable": True,
+                "candidate_visible_object_ids": [1, 2, 3],
+                "attachment_referable_object_ids": [1, 2, 3],
+                "final_selection_rank": 2,
+            },
+        }
+        frames = run_pipeline_module._frames_from_referability_cache(scene_frames)
+        eligible_frames = [
+            frame
+            for frame in frames
+            if run_pipeline_module._frame_has_l3_attachment_chain(
+                frame,
+                scene_frames[str(frame["image_name"])],
+                {1: [2], 2: [3]},
+            )
+        ]
+
+        self.assertEqual([frame["image_name"] for frame in frames], ["000001.jpg", "000002.jpg"])
+        self.assertEqual([frame["image_name"] for frame in eligible_frames[:1]], ["000002.jpg"])
+
     def test_run_pipeline_rejects_stale_cache_when_full_frame_marks_label_absent(self) -> None:
         root = make_case_dir("pipeline_l1_absent_candidate")
         self.addCleanup(shutil.rmtree, root, True)

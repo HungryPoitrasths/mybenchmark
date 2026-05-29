@@ -8731,6 +8731,9 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
     "L2_object_remove": [
         "generate_l2_object_remove",
     ],
+    "L3_attachment_chain": [
+        "generate_l3_attachment_chain",
+    ],
     "L3_coordinate_rotation_agent": [
         "generate_l3_coordinate_rotation",
     ],
@@ -8751,6 +8754,7 @@ _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
     "L2_object_rotate_object_centric": ("L2", "object_rotate_object_centric"),
     "L2_object_move_allocentric": ("L2", "object_move_allocentric"),
     "L2_object_remove": ("L2", "object_remove"),
+    "L3_attachment_chain": ("L3", "attachment_chain"),
     "L3_coordinate_rotation_agent": ("L3", "coordinate_rotation_agent"),
     "L3_coordinate_rotation_object_centric": ("L3", "coordinate_rotation_object_centric"),
     "L3_coordinate_rotation_allocentric": ("L3", "coordinate_rotation_allocentric"),

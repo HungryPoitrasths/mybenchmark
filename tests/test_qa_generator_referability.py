@@ -195,6 +195,28 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
                 },
             ),
             (
+                "L3_attachment_chain",
+                "generate_l3_attachment_chain",
+                {
+                    "level": "L3",
+                    "type": "attachment_chain",
+                    "grandparent_id": 1,
+                    "grandparent_label": "table",
+                    "parent_id": 2,
+                    "parent_label": "box",
+                    "grandchild_id": 3,
+                    "grandchild_label": "chair",
+                    "neighbor_id": 4,
+                    "neighbor_label": "sofa",
+                    "mentioned_objects": [
+                        {"role": "grandparent", "label": "table", "obj_id": 1},
+                        {"role": "parent", "label": "box", "obj_id": 2},
+                        {"role": "grandchild", "label": "chair", "obj_id": 3},
+                        {"role": "neighbor", "label": "sofa", "obj_id": 4},
+                    ],
+                },
+            ),
+            (
                 "L3_coordinate_rotation_object_centric",
                 "generate_l3_coordinate_rotation_object_centric",
                 {
