@@ -12,6 +12,7 @@ Example:
         --root output/scannetpp_polit \
         --scannet_image_root data/scannet \
         --scannetpp_image_root output/scannetpp_iphone_frames \
+        --scannetpp_sensor iphone \
         --base_url https://www.packyapi.com/v1 \
         --model qwen3.5-flash \
         --output_json output/type_sample_eval/results.json \
@@ -269,6 +270,7 @@ def resolve_image(
     *,
     scannet_roots: list[Path],
     scannetpp_roots: list[Path],
+    scannetpp_sensor: str,
 ) -> ImageResolution:
     dataset = str(question.get("_dataset") or "scannet")
     scene = str(question.get("scene_id") or "")
@@ -278,11 +280,19 @@ def resolve_image(
     candidates: list[Path] = []
     for root in roots:
         if dataset == "scannetpp":
+            if scannetpp_sensor == "iphone":
+                candidates.append(root / scene / image_name)
+            elif scannetpp_sensor == "dslr":
+                candidates.append(root / scene / "dslr" / "resized_images" / image_name)
+            else:
+                raise ValueError(
+                    f"scannetpp_sensor must be 'iphone' or 'dslr', got {scannetpp_sensor!r}"
+                )
             candidates.extend(
                 [
                     root / scene / image_name,
-                    root / scene / "iphone" / "rgb" / image_name,
                     root / scene / "dslr" / "resized_images" / image_name,
+                    root / scene / "iphone" / "rgb" / image_name,
                 ]
             )
         else:
@@ -750,6 +760,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "seed": args.seed,
             "model": args.model,
             "base_url": args.base_url,
+            "scannetpp_sensor": args.scannetpp_sensor,
         }
     )
 
@@ -778,6 +789,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             question,
             scannet_roots=[Path(p) for p in args.scannet_image_root],
             scannetpp_roots=[Path(p) for p in args.scannetpp_image_root],
+            scannetpp_sensor=args.scannetpp_sensor,
         )
 
         raw_response: str | None = None
@@ -842,6 +854,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=20260529, help="Random seed for sampling")
     parser.add_argument("--scannet_image_root", action="append", default=None, help="ScanNet image root; can be repeated")
     parser.add_argument("--scannetpp_image_root", action="append", default=None, help="ScanNet++ image root; can be repeated")
+    parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone", help="ScanNet++ image layout, matching scripts/make_viewer.py")
     parser.add_argument("--base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL")
     parser.add_argument("--model", default="qwen3.5-flash", help="Model name")
     parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or OPENAI_API_KEY")
