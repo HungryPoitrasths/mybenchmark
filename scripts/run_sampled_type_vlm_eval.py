@@ -13,8 +13,8 @@ Example:
         --scannet_image_root data/scannet \
         --scannetpp_image_root output/scannetpp_iphone_frames \
         --scannetpp_sensor iphone \
-        --base_url https://www.packyapi.com/v1 \
-        --model qwen3.5-flash \
+        --vlm_url https://www.packyapi.com/v1 \
+        --vlm_model qwen3.5-flash \
         --output_json output/type_sample_eval/results.json \
         --output_html output/type_sample_eval/viewer.html
 """
@@ -311,10 +311,10 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
-def make_client(base_url: str, api_key: str):
+def make_client(base_url: str, api_key: str, timeout: float):
     from openai import OpenAI
 
-    return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
 
 def call_model(
@@ -770,12 +770,13 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
 
     client = None
     if not args.skip_api:
-        api_key = args.api_key or os.getenv(args.api_key_env) or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise SystemExit(
-                f"API key required: pass --api_key or set {args.api_key_env}/OPENAI_API_KEY"
-            )
-        client = make_client(args.base_url, api_key)
+        api_key = (
+            args.api_key
+            or os.getenv(args.api_key_env)
+            or os.getenv("OPENAI_API_KEY")
+            or "EMPTY"
+        )
+        client = make_client(args.base_url, api_key, args.timeout)
 
     api_calls = 0
     for idx, question in enumerate(selected, 1):
@@ -800,6 +801,11 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             error = "api_skipped"
         else:
             prompt = build_prompt(question)
+            print(
+                f"[{idx}/{len(selected)}] {question.get('type')} "
+                f"{question.get('scene_id')}/{question.get('image_name')} -> API",
+                flush=True,
+            )
             for attempt in range(args.retries + 1):
                 try:
                     raw_response = call_model(
@@ -812,12 +818,26 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
                         api_image_max_px=args.api_image_max_px,
                     )
                     api_calls += 1
+                    print(
+                        f"[{idx}/{len(selected)}] done",
+                        flush=True,
+                    )
                     break
                 except Exception as exc:  # pragma: no cover - network/API dependent
                     if attempt >= args.retries:
                         error = f"api_error: {exc}"
+                        print(
+                            f"[{idx}/{len(selected)}] failed: {exc}",
+                            flush=True,
+                        )
                     else:
-                        time.sleep(args.retry_delay * (2 ** attempt))
+                        wait = args.retry_delay * (2 ** attempt)
+                        print(
+                            f"[{idx}/{len(selected)}] attempt {attempt + 1} failed: {exc}; "
+                            f"retrying in {wait:.1f}s",
+                            flush=True,
+                        )
+                        time.sleep(wait)
 
         results_by_uid[uid] = result_from_question(
             question,
@@ -855,8 +875,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannet_image_root", action="append", default=None, help="ScanNet image root; can be repeated")
     parser.add_argument("--scannetpp_image_root", action="append", default=None, help="ScanNet++ image root; can be repeated")
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone", help="ScanNet++ image layout, matching scripts/make_viewer.py")
-    parser.add_argument("--base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL")
-    parser.add_argument("--model", default="qwen3.5-flash", help="Model name")
+    parser.add_argument("--base_url", "--vlm_url", dest="base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL")
+    parser.add_argument("--model", "--vlm_model", dest="model", default="qwen3.5-flash", help="Model name")
     parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or OPENAI_API_KEY")
     parser.add_argument("--api_key_env", default="DASHSCOPE_API_KEY", help="Environment variable for API key")
     parser.add_argument("--max_tokens", type=int, default=512, help="Maximum model output tokens")
@@ -864,9 +884,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--api_image_max_px", type=int, default=1280, help="Resize longest image side for API; 0 disables")
     parser.add_argument("--html_image_max_px", type=int, default=720, help="Resize longest image side embedded in HTML; 0 disables")
     parser.add_argument("--delay", type=float, default=0.2, help="Delay between API calls")
+    parser.add_argument("--timeout", type=float, default=60.0, help="Per-request API timeout in seconds")
     parser.add_argument("--retries", type=int, default=2, help="Retries per API call")
     parser.add_argument("--retry_delay", type=float, default=2.0, help="Initial retry delay in seconds")
-    parser.add_argument("--checkpoint_every", type=int, default=25, help="Save JSON every N processed questions")
+    parser.add_argument("--checkpoint_every", type=int, default=1, help="Save JSON every N processed questions")
     parser.add_argument("--output_json", default="output/type_sample_vlm_eval/results.json", help="Resumable JSON result path")
     parser.add_argument("--output_html", default="output/type_sample_vlm_eval/viewer.html", help="HTML report path")
     parser.add_argument("--title", default="Sampled VLM Spatial QA Evaluation", help="HTML report title")
