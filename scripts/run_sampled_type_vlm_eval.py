@@ -31,7 +31,9 @@ import os
 import random
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from io import BytesIO
@@ -315,6 +317,21 @@ def make_client(base_url: str, api_key: str, timeout: float):
     from openai import OpenAI
 
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+
+
+class ThreadLocalOpenAIClientFactory:
+    def __init__(self, *, base_url: str, api_key: str, timeout: float) -> None:
+        self.base_url = base_url
+        self.api_key = api_key
+        self.timeout = timeout
+        self.local = threading.local()
+
+    def get_client(self) -> Any:
+        client = getattr(self.local, "client", None)
+        if client is None:
+            client = make_client(self.base_url, self.api_key, self.timeout)
+            self.local.client = client
+        return client
 
 
 def call_model(
@@ -741,6 +758,60 @@ pre {{
 """
 
 
+def run_api_question(
+    *,
+    args: argparse.Namespace,
+    client_factory: ThreadLocalOpenAIClientFactory,
+    idx: int,
+    total: int,
+    question: dict[str, Any],
+    resolution: ImageResolution,
+) -> dict[str, Any]:
+    raw_response: str | None = None
+    error: str | None = None
+    prompt = build_prompt(question)
+    print(
+        f"[{idx}/{total}] {question.get('type')} "
+        f"{question.get('scene_id')}/{question.get('image_name')} -> API",
+        flush=True,
+    )
+    for attempt in range(args.retries + 1):
+        try:
+            raw_response = call_model(
+                client_factory.get_client(),
+                model=args.model,
+                image_path=resolution.path,
+                prompt=prompt,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                api_image_max_px=args.api_image_max_px,
+            )
+            print(f"[{idx}/{total}] done", flush=True)
+            break
+        except Exception as exc:  # pragma: no cover - network/API dependent
+            if attempt >= args.retries:
+                error = f"api_error: {exc}"
+                print(f"[{idx}/{total}] failed: {exc}", flush=True)
+            else:
+                wait = args.retry_delay * (2 ** attempt)
+                print(
+                    f"[{idx}/{total}] attempt {attempt + 1} failed: {exc}; "
+                    f"retrying in {wait:.1f}s",
+                    flush=True,
+                )
+                time.sleep(wait)
+
+    if args.delay > 0:
+        time.sleep(args.delay)
+
+    return result_from_question(
+        question,
+        image_resolution=resolution,
+        raw_response=raw_response,
+        error=error,
+    )
+
+
 def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     roots = [Path(root) for root in args.root]
     all_questions, metadata = load_questions(roots)
@@ -761,6 +832,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "model": args.model,
             "base_url": args.base_url,
             "scannetpp_sensor": args.scannetpp_sensor,
+            "vlm_workers": args.vlm_workers,
         }
     )
 
@@ -768,7 +840,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     existing = load_existing_results(output_json)
     results_by_uid: dict[str, dict[str, Any]] = {}
 
-    client = None
+    client_factory: ThreadLocalOpenAIClientFactory | None = None
     if not args.skip_api:
         api_key = (
             args.api_key
@@ -776,9 +848,14 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             or os.getenv("OPENAI_API_KEY")
             or "EMPTY"
         )
-        client = make_client(args.base_url, api_key, args.timeout)
+        client_factory = ThreadLocalOpenAIClientFactory(
+            base_url=args.base_url,
+            api_key=api_key,
+            timeout=args.timeout,
+        )
 
-    api_calls = 0
+    api_call_count = 0
+    api_work: list[tuple[int, dict[str, Any], ImageResolution]] = []
     for idx, question in enumerate(selected, 1):
         uid = str(question["question_uid"])
         cached = existing.get(uid)
@@ -800,44 +877,8 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
         elif args.skip_api:
             error = "api_skipped"
         else:
-            prompt = build_prompt(question)
-            print(
-                f"[{idx}/{len(selected)}] {question.get('type')} "
-                f"{question.get('scene_id')}/{question.get('image_name')} -> API",
-                flush=True,
-            )
-            for attempt in range(args.retries + 1):
-                try:
-                    raw_response = call_model(
-                        client,
-                        model=args.model,
-                        image_path=resolution.path,
-                        prompt=prompt,
-                        max_tokens=args.max_tokens,
-                        temperature=args.temperature,
-                        api_image_max_px=args.api_image_max_px,
-                    )
-                    api_calls += 1
-                    print(
-                        f"[{idx}/{len(selected)}] done",
-                        flush=True,
-                    )
-                    break
-                except Exception as exc:  # pragma: no cover - network/API dependent
-                    if attempt >= args.retries:
-                        error = f"api_error: {exc}"
-                        print(
-                            f"[{idx}/{len(selected)}] failed: {exc}",
-                            flush=True,
-                        )
-                    else:
-                        wait = args.retry_delay * (2 ** attempt)
-                        print(
-                            f"[{idx}/{len(selected)}] attempt {attempt + 1} failed: {exc}; "
-                            f"retrying in {wait:.1f}s",
-                            flush=True,
-                        )
-                        time.sleep(wait)
+            api_work.append((idx, question, resolution))
+            continue
 
         results_by_uid[uid] = result_from_question(
             question,
@@ -845,9 +886,6 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             raw_response=raw_response,
             error=error,
         )
-
-        if args.delay > 0 and not args.skip_api and resolution.path is not None:
-            time.sleep(args.delay)
 
         if idx % args.checkpoint_every == 0:
             ordered = [results_by_uid[str(q["question_uid"])] for q in selected if str(q["question_uid"]) in results_by_uid]
@@ -859,8 +897,61 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             )
             print(f"checkpoint: {len(ordered)}/{len(selected)} results saved")
 
+    if api_work:
+        if client_factory is None:
+            raise RuntimeError("client_factory was not initialized")
+        workers = max(1, int(args.vlm_workers))
+        print(f"running {len(api_work)} VLM request(s) with --vlm_workers {workers}", flush=True)
+
+        def _store_result(row: dict[str, Any]) -> None:
+            nonlocal api_call_count
+            results_by_uid[str(row["question_uid"])] = row
+            api_call_count += 1
+            if api_call_count % args.checkpoint_every == 0:
+                ordered_rows = [
+                    results_by_uid[str(q["question_uid"])]
+                    for q in selected
+                    if str(q["question_uid"]) in results_by_uid
+                ]
+                save_results(
+                    output_json,
+                    metadata=metadata,
+                    sampling_stats=sampling_stats,
+                    results=ordered_rows,
+                )
+                print(f"checkpoint: {len(ordered_rows)}/{len(selected)} results saved")
+
+        if workers == 1:
+            for idx, question, resolution in api_work:
+                _store_result(
+                    run_api_question(
+                        args=args,
+                        client_factory=client_factory,
+                        idx=idx,
+                        total=len(selected),
+                        question=question,
+                        resolution=resolution,
+                    )
+                )
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = [
+                    executor.submit(
+                        run_api_question,
+                        args=args,
+                        client_factory=client_factory,
+                        idx=idx,
+                        total=len(selected),
+                        question=question,
+                        resolution=resolution,
+                    )
+                    for idx, question, resolution in api_work
+                ]
+                for future in as_completed(futures):
+                    _store_result(future.result())
+
     results = [results_by_uid[str(q["question_uid"])] for q in selected]
-    metadata["api_calls_made"] = api_calls
+    metadata["api_calls_made"] = api_call_count
     return results, metadata, sampling_stats
 
 
@@ -869,7 +960,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Sample questions by type, run a VLM, and build an HTML report."
     )
     parser.add_argument("--root", action="append", default=None, help="Output root to scan for benchmark.json files")
-    parser.add_argument("--per_type", type=int, default=1, help="Questions sampled per type")
+    parser.add_argument("--per_type", type=int, default=100, help="Questions sampled per type")
     parser.add_argument("--scene_cap", type=int, default=3, help="Max questions per scene within each type before relaxation")
     parser.add_argument("--seed", type=int, default=20260529, help="Random seed for sampling")
     parser.add_argument("--scannet_image_root", action="append", default=None, help="ScanNet image root; can be repeated")
@@ -887,6 +978,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=60.0, help="Per-request API timeout in seconds")
     parser.add_argument("--retries", type=int, default=2, help="Retries per API call")
     parser.add_argument("--retry_delay", type=float, default=2.0, help="Initial retry delay in seconds")
+    parser.add_argument("--vlm_workers", type=int, default=1, help="Maximum number of concurrent VLM requests")
     parser.add_argument("--checkpoint_every", type=int, default=1, help="Save JSON every N processed questions")
     parser.add_argument("--output_json", default="output/type_sample_vlm_eval/results.json", help="Resumable JSON result path")
     parser.add_argument("--output_html", default="output/type_sample_vlm_eval/viewer.html", help="HTML report path")
@@ -907,6 +999,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--scene_cap must be positive")
     if args.checkpoint_every <= 0:
         parser.error("--checkpoint_every must be positive")
+    if args.vlm_workers <= 0:
+        parser.error("--vlm_workers must be positive")
     return args
 
 
