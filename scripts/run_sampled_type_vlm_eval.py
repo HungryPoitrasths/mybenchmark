@@ -79,6 +79,26 @@ QTYPE_ORDER = [
     "coordinate_rotation_allocentric",
 ]
 
+QTYPE_DISPLAY = {
+    "direction_agent": "L1_direction_agent",
+    "occlusion": "L1_occlusion",
+    "distance": "L1_distance",
+    "direction_object_centric": "L1_direction_object_centric",
+    "direction_allocentric": "L1_direction_allocentric",
+    "object_move_agent": "L2_object_move_agent",
+    "object_move_distance": "L2_object_move_distance",
+    "object_move_occlusion": "L2_object_move_occlusion",
+    "object_move_object_centric": "L2_object_move_object_centric",
+    "object_rotate_object_centric": "L2_object_rotate_object_centric",
+    "object_move_allocentric": "L2_object_move_allocentric",
+    "viewpoint_move": "L2_viewpoint_move",
+    "object_remove": "L2_object_remove",
+    "attachment_chain": "L3_attachment_chain",
+    "coordinate_rotation_agent": "L3_coordinate_rotation_agent",
+    "coordinate_rotation_object_centric": "L3_coordinate_rotation_object_centric",
+    "coordinate_rotation_allocentric": "L3_coordinate_rotation_allocentric",
+}
+
 
 @dataclass(frozen=True)
 class ImageResolution:
@@ -156,6 +176,10 @@ def _qtype_sort_key(qtype: str) -> tuple[int, str]:
         return (QTYPE_ORDER.index(qtype), qtype)
     except ValueError:
         return (len(QTYPE_ORDER), qtype)
+
+
+def _qtype_display(qtype: str) -> str:
+    return QTYPE_DISPLAY.get(qtype, qtype)
 
 
 def sample_questions(
@@ -587,7 +611,7 @@ def build_html(results: list[dict[str, Any]], *, title: str, html_image_max_px: 
     for qtype, stats in summary.items():
         summary_rows.append(
             "<tr>"
-            f"<td>{html.escape(qtype)}</td>"
+            f'<td class="qtype-cell">{html.escape(_qtype_display(qtype))}</td>'
             f"<td>{stats['correct']} / {stats['total']}</td>"
             f"<td>{_fmt_pct(stats['accuracy'])}</td>"
             f"<td>{stats['answered']}</td>"
@@ -611,7 +635,7 @@ def build_html(results: list[dict[str, Any]], *, title: str, html_image_max_px: 
             '<div class="content">'
             '<div class="meta">'
             f'<span>#{idx}</span>'
-            f'<span>{html.escape(str(row.get("type") or "unknown"))}</span>'
+            f'<span class="qtype">{html.escape(_qtype_display(str(row.get("type") or "unknown")))}</span>'
             f'<span>{html.escape(str(row.get("dataset") or ""))}</span>'
             f'<span>{html.escape(str(row.get("scene_id") or ""))} / {html.escape(str(row.get("image_name") or ""))}</span>'
             f'<span class="pill">{html.escape(status)}</span>'
@@ -687,6 +711,11 @@ h1 {{
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }}
+.summary-table .qtype-cell {{
+  color: var(--accent);
+  font-weight: 800;
+  font-family: "Trebuchet MS", sans-serif;
+}}
 main {{
   padding: 24px clamp(16px, 4vw, 48px) 48px;
 }}
@@ -742,6 +771,12 @@ main {{
   border: 1px solid var(--line);
   padding: 3px 7px;
   background: rgba(255,255,255,0.52);
+}}
+.meta .qtype {{
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 800;
 }}
 .pill {{
   color: var(--ink);
