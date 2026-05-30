@@ -30,7 +30,9 @@ import mimetypes
 import os
 import random
 import re
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -350,7 +352,10 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
-def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
+def make_client(api_provider: str, base_url: str, api_key: str, timeout: float, use_curl: bool = False):
+    if use_curl:
+        return CurlResponsesClient(base_url=base_url, api_key=api_key, timeout=timeout)
+
     if api_provider == "anthropic":
         from anthropic import Anthropic
 
@@ -361,20 +366,108 @@ def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
 
+class CurlResponsesClient:
+    """Send Responses-API requests through the system ``curl`` binary.
+
+    Some proxies sit behind a TLS layer that blocks Python's TLS stacks
+    (stdlib ssl / httpx / curl_cffi all fail the handshake) while the system
+    ``curl`` binary connects fine. This client shells out to ``curl`` to reach
+    the ``/responses`` endpoint, posting the JSON body via ``--data-binary``.
+    """
+
+    def __init__(self, *, base_url: str, api_key: str, timeout: float) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def responses_create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self.base_url}/responses"
+        body = json.dumps(payload, ensure_ascii=False)
+        tmp_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".json", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(body)
+                tmp_path = tmp.name
+            cmd = [
+                "curl",
+                "-s",
+                "-S",
+                "--fail-with-body",
+                "--max-time",
+                str(int(self.timeout)),
+                url,
+                "-H",
+                f"Authorization: Bearer {self.api_key}",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                f"@{tmp_path}",
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout + 30,
+            )
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise RuntimeError(f"curl exited {proc.returncode}: {detail[:500]}")
+        out = proc.stdout.strip()
+        if not out:
+            raise RuntimeError("curl returned an empty body")
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"non-JSON response: {out[:500]}") from exc
+
+
 class ThreadLocalOpenAIClientFactory:
-    def __init__(self, *, api_provider: str, base_url: str, api_key: str, timeout: float) -> None:
+    def __init__(self, *, api_provider: str, base_url: str, api_key: str, timeout: float, use_curl: bool = False) -> None:
         self.api_provider = api_provider
         self.base_url = base_url
         self.api_key = api_key
         self.timeout = timeout
+        self.use_curl = use_curl
         self.local = threading.local()
 
     def get_client(self) -> Any:
         client = getattr(self.local, "client", None)
         if client is None:
-            client = make_client(self.api_provider, self.base_url, self.api_key, self.timeout)
+            client = make_client(
+                self.api_provider, self.base_url, self.api_key, self.timeout, self.use_curl
+            )
             self.local.client = client
         return client
+
+
+def _extract_responses_text(data: dict[str, Any]) -> str:
+    """Extract assistant text from a Responses-API JSON payload."""
+    err = data.get("error")
+    if err:
+        raise RuntimeError(f"api_error: {err}")
+    direct = data.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    chunks: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        for content in item.get("content") or []:
+            if not isinstance(content, dict):
+                continue
+            text = content.get("text")
+            if text:
+                chunks.append(str(text))
+    return "\n".join(chunks).strip()
 
 
 def call_model(
@@ -387,30 +480,45 @@ def call_model(
     max_tokens: int,
     temperature: float,
     api_image_max_px: int,
+    send_temperature: bool = True,
 ) -> str:
     b64, mime = _encode_image(image_path, api_image_max_px)
     data_url = f"data:{mime};base64,{b64}"
     if api_provider == "openai_responses":
-        response = client.responses.create(
-            model=model,
-            input=[
-                {
-                    "role": "system",
-                    "content": [
-                        {"type": "input_text", "text": SYSTEM_PROMPT},
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_image", "image_url": data_url},
-                        {"type": "input_text", "text": prompt},
-                    ],
-                },
-            ],
-            max_output_tokens=max_tokens,
-            temperature=temperature,
-        )
+        input_messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": SYSTEM_PROMPT},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_image", "image_url": data_url},
+                    {"type": "input_text", "text": prompt},
+                ],
+            },
+        ]
+        if isinstance(client, CurlResponsesClient):
+            payload: dict[str, Any] = {
+                "model": model,
+                "input": input_messages,
+                "max_output_tokens": max_tokens,
+            }
+            if send_temperature:
+                payload["temperature"] = temperature
+            data = client.responses_create(payload)
+            return _extract_responses_text(data)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "input": input_messages,
+            "max_output_tokens": max_tokens,
+        }
+        if send_temperature:
+            kwargs["temperature"] = temperature
+        response = client.responses.create(**kwargs)
         output_text = getattr(response, "output_text", None)
         if output_text:
             return str(output_text).strip()
@@ -876,6 +984,192 @@ pre {{
 """
 
 
+def _result_dedupe_key(row: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return (row.get("scene_id"), row.get("image_name"), row.get("question"))
+
+
+def dedupe_results_by_frame_question(
+    results: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    seen: set[tuple[Any, Any, Any]] = set()
+    filtered: list[dict[str, Any]] = []
+    dropped = 0
+    for row in results:
+        key = _result_dedupe_key(row)
+        if key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        filtered.append(row)
+    return filtered, dropped
+
+
+def _summary_rows_html(summary: dict[str, Any]) -> str:
+    rows: list[str] = []
+    for qtype, stats in summary.items():
+        rows.append(
+            "<tr>"
+            f'<td class="qtype-cell">{html.escape(_qtype_display(qtype))}</td>'
+            f"<td>{stats['correct']} / {stats['total']}</td>"
+            f"<td>{_fmt_pct(stats['accuracy'])}</td>"
+            f"<td>{stats['answered']}</td>"
+            f"<td>{stats['missing_images']}</td>"
+            f"<td>{stats['errors']}</td>"
+            "</tr>"
+        )
+    return "".join(rows)
+
+
+def _ensure_postprocess_css(text: str) -> str:
+    if ".summary-table .qtype-cell" not in text:
+        text = text.replace(
+            '.summary-table th {\n'
+            '  color: var(--muted);\n'
+            '  font-family: "Trebuchet MS", sans-serif;\n'
+            '  text-transform: uppercase;\n'
+            '  letter-spacing: 0.03em;\n'
+            '}\n',
+            '.summary-table th {\n'
+            '  color: var(--muted);\n'
+            '  font-family: "Trebuchet MS", sans-serif;\n'
+            '  text-transform: uppercase;\n'
+            '  letter-spacing: 0.03em;\n'
+            '}\n'
+            '.summary-table .qtype-cell {\n'
+            '  color: var(--accent);\n'
+            '  font-weight: 800;\n'
+            '  font-family: "Trebuchet MS", sans-serif;\n'
+            '}\n',
+        )
+    if ".meta .qtype" not in text:
+        text = text.replace(
+            ".meta span {\n"
+            "  border: 1px solid var(--line);\n"
+            "  padding: 3px 7px;\n"
+            "  background: rgba(255,255,255,0.52);\n"
+            "}\n",
+            ".meta span {\n"
+            "  border: 1px solid var(--line);\n"
+            "  padding: 3px 7px;\n"
+            "  background: rgba(255,255,255,0.52);\n"
+            "}\n"
+            ".meta .qtype {\n"
+            "  color: #ffffff;\n"
+            "  background: var(--accent);\n"
+            "  border-color: var(--accent);\n"
+            "  font-weight: 800;\n"
+            "}\n",
+        )
+    return text
+
+
+def postprocess_existing_html(
+    *,
+    html_path: Path,
+    json_path: Path,
+) -> dict[str, int]:
+    with json_path.open(encoding="utf-8") as f:
+        payload = json.load(f)
+    rows = payload.get("results", payload) if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise ValueError(f"Unsupported result JSON structure: {json_path}")
+
+    filtered, json_dropped = dedupe_results_by_frame_question(rows)
+    summary = summarize_results(filtered)["by_type"]
+
+    if isinstance(payload, dict):
+        payload["results"] = filtered
+        payload["summary"] = {"by_type": summary}
+        metadata = payload.setdefault("metadata", {})
+        metadata["result_dedupe_rule"] = "scene_id + image_name + question"
+        metadata["result_dedupe_dropped_count"] = json_dropped
+        json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    else:
+        json_path.write_text(
+            json.dumps(filtered, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    text = html_path.read_text(encoding="utf-8")
+    article_re = re.compile(r'<article class="card ([^"]+)">.*?</article>', re.S)
+    meta_re = re.compile(
+        r'<div class="meta"><span>#(\d+)</span>'
+        r'<span(?: class="qtype")?>([^<]+)</span>'
+        r"<span>[^<]*</span>"
+        r"<span>([^<]+) / ([^<]+)</span>"
+        r'<span class="pill">[^<]+</span></div>'
+    )
+    h2_re = re.compile(r"<h2>(.*?)</h2>", re.S)
+
+    raw_by_display = {display: raw for raw, display in QTYPE_DISPLAY.items()}
+    seen_html: set[tuple[str, str, str]] = set()
+    kept_articles: list[str] = []
+    html_dropped = 0
+    for article_match in article_re.finditer(text):
+        article = article_match.group(0)
+        meta_match = meta_re.search(article)
+        h2_match = h2_re.search(article)
+        if not meta_match or not h2_match:
+            kept_articles.append(article)
+            continue
+
+        qtype_text = html.unescape(meta_match.group(2))
+        raw_type = raw_by_display.get(qtype_text, qtype_text)
+        scene_id = html.unescape(meta_match.group(3))
+        image_name = html.unescape(meta_match.group(4))
+        question = html.unescape(re.sub(r"<.*?>", "", h2_match.group(1)))
+        dedupe_key = (scene_id, image_name, question)
+        if dedupe_key in seen_html:
+            html_dropped += 1
+            continue
+        seen_html.add(dedupe_key)
+
+        display_type = _qtype_display(raw_type)
+        next_idx = len(kept_articles) + 1
+        article = re.sub(
+            r'(<div class="meta"><span>#)\d+(</span>)'
+            r'<span(?: class="qtype")?>[^<]+</span>',
+            (
+                rf"\g<1>{next_idx}\g<2>"
+                f'<span class="qtype">{html.escape(display_type)}</span>'
+            ),
+            article,
+            count=1,
+        )
+        kept_articles.append(article)
+
+    first_article = article_re.search(text)
+    last_article: re.Match[str] | None = None
+    for last_article in article_re.finditer(text):
+        pass
+    if first_article and last_article:
+        text = (
+            text[: first_article.start()]
+            + "\n".join(kept_articles)
+            + text[last_article.end() :]
+        )
+
+    text = re.sub(
+        r"<tbody>\s*.*?\s*</tbody>",
+        f"<tbody>\n      {_summary_rows_html(summary)}\n    </tbody>",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    text = _ensure_postprocess_css(text)
+    html_path.write_text(text, encoding="utf-8")
+
+    return {
+        "json_kept": len(filtered),
+        "json_dropped": json_dropped,
+        "html_kept": len(kept_articles),
+        "html_dropped": html_dropped,
+    }
+
+
 def run_api_question(
     *,
     args: argparse.Namespace,
@@ -904,6 +1198,7 @@ def run_api_question(
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 api_image_max_px=args.api_image_max_px,
+                send_temperature=not args.no_temperature,
             )
             print(f"[{idx}/{total}] done", flush=True)
             break
@@ -975,6 +1270,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             base_url=args.base_url,
             api_key=api_key,
             timeout=args.timeout,
+            use_curl=args.use_curl,
         )
 
     api_call_count = 0
@@ -1119,6 +1415,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--title", default="Sampled VLM Spatial QA Evaluation", help="HTML report title")
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
+    parser.add_argument(
+        "--use_curl",
+        action="store_true",
+        help="Send openai_responses requests via the system curl binary (bypasses Python TLS stacks that some proxies block)",
+    )
+    parser.add_argument(
+        "--no_temperature",
+        action="store_true",
+        help="Do not send the temperature parameter (use for reasoning models that reject non-default temperature)",
+    )
+    parser.add_argument(
+        "--postprocess_existing_html",
+        action="store_true",
+        help="Deduplicate and relabel an existing embedded HTML report without rebuilding images",
+    )
     args = parser.parse_args(argv)
 
     if args.root is None:
@@ -1135,11 +1446,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--checkpoint_every must be positive")
     if args.vlm_workers <= 0:
         parser.error("--vlm_workers must be positive")
+    if args.use_curl and args.api_provider != "openai_responses":
+        parser.error("--use_curl currently supports only --api_provider openai_responses")
     return args
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.postprocess_existing_html:
+        stats = postprocess_existing_html(
+            html_path=Path(args.output_html),
+            json_path=Path(args.output_json),
+        )
+        print(f"json kept       : {stats['json_kept']}")
+        print(f"json dropped    : {stats['json_dropped']}")
+        print(f"html kept       : {stats['html_kept']}")
+        print(f"html dropped    : {stats['html_dropped']}")
+        print(f"json output     : {args.output_json}")
+        print(f"html output     : {args.output_html}")
+        return
+
     results, metadata, sampling_stats = evaluate(args)
 
     output_json = Path(args.output_json)
