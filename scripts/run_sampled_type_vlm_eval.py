@@ -125,6 +125,16 @@ def _question_uid(question: dict[str, Any]) -> str:
     )
 
 
+def _question_dedupe_key(question: dict[str, Any]) -> str:
+    return _json_key(
+        {
+            "scene_id": question.get("scene_id"),
+            "image_name": question.get("image_name"),
+            "question": question.get("question"),
+        }
+    )
+
+
 def _load_benchmark(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8") as f:
         data = json.load(f)
@@ -156,10 +166,11 @@ def load_questions(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, A
                 item["_source_benchmark"] = str(benchmark_path)
                 uid = _question_uid(item)
                 item["question_uid"] = uid
-                if uid in seen:
+                dedupe_key = _question_dedupe_key(item)
+                if dedupe_key in seen:
                     duplicate_count += 1
                     continue
-                seen.add(uid)
+                seen.add(dedupe_key)
                 questions.append(item)
 
     metadata = {
@@ -167,6 +178,7 @@ def load_questions(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, A
         "source_file_count": len(source_files),
         "deduped_question_count": len(questions),
         "duplicate_question_count": duplicate_count,
+        "dedupe_rule": "scene_id + image_name + question",
     }
     return questions, metadata
 
