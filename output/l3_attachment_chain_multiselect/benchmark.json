@@ -1,0 +1,574 @@
+{
+  "questions": [
+    {
+      "question_uid": "7c4bf65bce2037c0e113fa3a1561e8259a54a083",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/0-9L3/benchmark.json",
+      "scene_id": "27dd4da69e",
+      "image_name": "frame_023450.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1283__27dd4da69e__frame_023450.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1283__27dd4da69e__frame_023450.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the counter is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the oven",
+        "the clothes dryer",
+        "the cereal box"
+      ],
+      "correct_value": "the oven; the cereal box",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the oven",
+        "the cereal box"
+      ]
+    },
+    {
+      "question_uid": "a743b08333a8fe8db1711dec29f4e97b84bcd051",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19L3/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_010470.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1293__5942004064__frame_010470.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1293__5942004064__frame_010470.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the shower rug",
+        "the faucet",
+        "the sink"
+      ],
+      "correct_value": "the faucet; the sink",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the faucet",
+        "the sink"
+      ]
+    },
+    {
+      "question_uid": "322eb8f54548eabcb2f5615822ea10a52c8e4a04",
+      "dataset": "scannet",
+      "source_benchmark": "output/pilot/50-79/benchmark.json",
+      "scene_id": "scene0207_02",
+      "image_name": "933.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1295__scene0207_02__933.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1295__scene0207_02__933.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the cabinets were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the counter",
+        "the sink",
+        "the trash can"
+      ],
+      "correct_value": "the counter; the sink",
+      "_dataset": "scannet",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "B"
+      ],
+      "correct_values": [
+        "the counter",
+        "the sink"
+      ]
+    },
+    {
+      "question_uid": "9ab9abe4489f849de53b3232d8aff9422fc20377",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/0-9L3/benchmark.json",
+      "scene_id": "27dd4da69e",
+      "image_name": "frame_000540.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1280__27dd4da69e__frame_000540.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1280__27dd4da69e__frame_000540.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the counter were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the oven",
+        "the moka pot",
+        "the flour bag"
+      ],
+      "correct_value": "the oven; the flour bag",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the oven",
+        "the flour bag"
+      ]
+    },
+    {
+      "question_uid": "dcccd3e182f3222bedbe26e087e2c06247099fb4",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/0-9L3/benchmark.json",
+      "scene_id": "0d2ee665be",
+      "image_name": "frame_001510.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1279__0d2ee665be__frame_001510.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1279__0d2ee665be__frame_001510.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the table is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the bluetooth speaker",
+        "the desk lamp",
+        "the bottle"
+      ],
+      "correct_value": "the desk lamp; the bottle",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the desk lamp",
+        "the bottle"
+      ]
+    },
+    {
+      "question_uid": "09c5d54580dea5103c31c7ba764f4f6345d2cbf8",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_000910.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1285__5942004064__frame_000910.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1285__5942004064__frame_000910.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "If the cabinet were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the sink",
+        "the faucet",
+        "the bathtub"
+      ],
+      "correct_value": "the sink; the faucet",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "B"
+      ],
+      "correct_values": [
+        "the sink",
+        "the faucet"
+      ]
+    },
+    {
+      "question_uid": "4c82df77dff33b2d1ea80b20a2d8226eb50b9903",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19L3/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_001990.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1287__5942004064__frame_001990.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1287__5942004064__frame_001990.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the cabinet were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the sink",
+        "the bathtub",
+        "the faucet"
+      ],
+      "correct_value": "the sink; the faucet",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the sink",
+        "the faucet"
+      ]
+    },
+    {
+      "question_uid": "aac444ea0da8a6adb87b6ae0aab724cfe9acd5ad",
+      "dataset": "scannet",
+      "source_benchmark": "output/pilot/50L3/benchmark.json",
+      "scene_id": "scene0207_02",
+      "image_name": "933.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1296__scene0207_02__933.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1296__scene0207_02__933.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "If the cabinets were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the sink",
+        "the counter",
+        "the trash can"
+      ],
+      "correct_value": "the sink; the counter",
+      "_dataset": "scannet",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "B"
+      ],
+      "correct_values": [
+        "the sink",
+        "the counter"
+      ]
+    },
+    {
+      "question_uid": "6d6a5152c556574e966a3ade42b0bdc3aaffa8ea",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19L3/benchmark.json",
+      "scene_id": "3db0a1c8f3",
+      "image_name": "frame_006910.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1284__3db0a1c8f3__frame_006910.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1284__3db0a1c8f3__frame_006910.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the counter were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the stove",
+        "the oven",
+        "the pan"
+      ],
+      "correct_value": "the stove; the pan",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the stove",
+        "the pan"
+      ]
+    },
+    {
+      "question_uid": "febf109ea4e3f56433102e49a0ce513fc053aa46",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/0-9L3/benchmark.json",
+      "scene_id": "27dd4da69e",
+      "image_name": "frame_005890.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1281__27dd4da69e__frame_005890.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1281__27dd4da69e__frame_005890.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the counter is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the cereal box",
+        "the bar stool",
+        "the oven"
+      ],
+      "correct_value": "the cereal box; the oven",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the cereal box",
+        "the oven"
+      ]
+    },
+    {
+      "question_uid": "9344895f2e91a0015c96e9771fb3295432246636",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/40-49/benchmark.json",
+      "scene_id": "f3d64c30f8",
+      "image_name": "frame_002710.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1294__f3d64c30f8__frame_002710.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1294__f3d64c30f8__frame_002710.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the french press",
+        "the cup",
+        "the microwave"
+      ],
+      "correct_value": "the cup; the microwave",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the cup",
+        "the microwave"
+      ]
+    },
+    {
+      "question_uid": "bdb073d2a7e6978be168a77524f7d25356e7e2e7",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/0-9L3/benchmark.json",
+      "scene_id": "0d2ee665be",
+      "image_name": "frame_001200.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1278__0d2ee665be__frame_001200.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1278__0d2ee665be__frame_001200.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the table were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the desk lamp",
+        "the bottle",
+        "the chair"
+      ],
+      "correct_value": "the desk lamp; the bottle",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "B"
+      ],
+      "correct_values": [
+        "the desk lamp",
+        "the bottle"
+      ]
+    },
+    {
+      "question_uid": "205a4ca0b307cf08f93a9743a14107efb93f167d",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_001990.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1288__5942004064__frame_001990.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1288__5942004064__frame_001990.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the sink",
+        "the bathtub",
+        "the soap bottle"
+      ],
+      "correct_value": "the sink; the soap bottle",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the sink",
+        "the soap bottle"
+      ]
+    },
+    {
+      "question_uid": "f50fc134465d1e82e71735b4a3c027e94aede48c",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19L3/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_001990.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1289__5942004064__frame_001990.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1289__5942004064__frame_001990.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "If the cabinet were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the sink",
+        "the bathtub",
+        "the soap bottle"
+      ],
+      "correct_value": "the sink; the soap bottle",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "C"
+      ],
+      "correct_values": [
+        "the sink",
+        "the soap bottle"
+      ]
+    },
+    {
+      "question_uid": "36f03e23b85d80bc8286eb4bb1979a936d419298",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19L3/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_010440.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1291__5942004064__frame_010440.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1291__5942004064__frame_010440.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the cabinet were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the shower rug",
+        "the soap bottle",
+        "the sink"
+      ],
+      "correct_value": "the soap bottle; the sink",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the soap bottle",
+        "the sink"
+      ]
+    },
+    {
+      "question_uid": "2ba6454e79c9a8abf56316fabee0f7c3cbe40951",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_010440.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1292__5942004064__frame_010440.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1292__5942004064__frame_010440.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "If the cabinet were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the shower rug",
+        "the faucet",
+        "the sink"
+      ],
+      "correct_value": "the faucet; the sink",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the faucet",
+        "the sink"
+      ]
+    },
+    {
+      "question_uid": "d09224b8226cad658ac94a4d665f922c60322859",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_002020.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1290__5942004064__frame_002020.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1290__5942004064__frame_002020.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Suppose the cabinet were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the shower rug",
+        "the faucet",
+        "the sink"
+      ],
+      "correct_value": "the faucet; the sink",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the faucet",
+        "the sink"
+      ]
+    },
+    {
+      "question_uid": "6d6a3c526890cfa3fece19d733bc10fa80621563",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/10-19L3/benchmark.json",
+      "scene_id": "5942004064",
+      "image_name": "frame_000910.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1286__5942004064__frame_000910.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1286__5942004064__frame_000910.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the faucet",
+        "the sink",
+        "the bathtub"
+      ],
+      "correct_value": "the faucet; the sink",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "A",
+        "B"
+      ],
+      "correct_values": [
+        "the faucet",
+        "the sink"
+      ]
+    },
+    {
+      "question_uid": "37c29535b5757bc89b29fed2edc7ab80f3724390",
+      "dataset": "scannetpp",
+      "source_benchmark": "output/scannetpp_polit/0-9L3/benchmark.json",
+      "scene_id": "27dd4da69e",
+      "image_name": "frame_005890.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1282__27dd4da69e__frame_005890.jpg",
+      "checked_image_paths": [
+        "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\l3_attachment_chain_multiselect\\images\\q_1282__27dd4da69e__frame_005890.jpg"
+      ],
+      "level": "L3",
+      "type": "attachment_chain",
+      "question": "If the counter were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+      "options": [
+        "the bar stool",
+        "the tray",
+        "the oven"
+      ],
+      "correct_value": "the tray; the oven",
+      "_dataset": "scannetpp",
+      "multi_select": true,
+      "answer": [
+        "B",
+        "C"
+      ],
+      "correct_values": [
+        "the tray",
+        "the oven"
+      ]
+    }
+  ]
+}
