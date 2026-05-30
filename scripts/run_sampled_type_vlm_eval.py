@@ -30,9 +30,7 @@ import mimetypes
 import os
 import random
 import re
-import subprocess
 import sys
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -422,10 +420,7 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
-def make_client(api_provider: str, base_url: str, api_key: str, timeout: float, use_curl: bool = False):
-    if use_curl:
-        return CurlResponsesClient(base_url=base_url, api_key=api_key, timeout=timeout)
-
+def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
     if api_provider == "anthropic":
         from anthropic import Anthropic
 
@@ -436,109 +431,20 @@ def make_client(api_provider: str, base_url: str, api_key: str, timeout: float, 
     return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
 
 
-class CurlResponsesClient:
-    """Send Responses-API requests through the system ``curl`` binary.
-
-    Some proxies sit behind a TLS layer that blocks Python's TLS stacks
-    (stdlib ssl / httpx / curl_cffi all fail the handshake) while the system
-    ``curl`` binary connects fine. This client shells out to ``curl`` to reach
-    the ``/responses`` endpoint, posting the JSON body via ``--data-binary``.
-    """
-
-    def __init__(self, *, base_url: str, api_key: str, timeout: float) -> None:
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.timeout = timeout
-
-    def responses_create(self, payload: dict[str, Any]) -> dict[str, Any]:
-        url = f"{self.base_url}/responses"
-        body = json.dumps(payload, ensure_ascii=False)
-        tmp_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                "w", suffix=".json", delete=False, encoding="utf-8"
-            ) as tmp:
-                tmp.write(body)
-                tmp_path = tmp.name
-            cmd = [
-                "curl",
-                "-s",
-                "-S",
-                "--http1.1",
-                "--fail-with-body",
-                "--max-time",
-                str(int(self.timeout)),
-                url,
-                "-H",
-                f"Authorization: Bearer {self.api_key}",
-                "-H",
-                "Content-Type: application/json",
-                "--data-binary",
-                f"@{tmp_path}",
-            ]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout + 30,
-            )
-        finally:
-            if tmp_path:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-
-        if proc.returncode != 0:
-            detail = (proc.stderr or proc.stdout or "").strip()
-            raise RuntimeError(f"curl exited {proc.returncode}: {detail[:500]}")
-        out = proc.stdout.strip()
-        if not out:
-            raise RuntimeError("curl returned an empty body")
-        try:
-            return json.loads(out)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"non-JSON response: {out[:500]}") from exc
-
-
 class ThreadLocalOpenAIClientFactory:
-    def __init__(self, *, api_provider: str, base_url: str, api_key: str, timeout: float, use_curl: bool = False) -> None:
+    def __init__(self, *, api_provider: str, base_url: str, api_key: str, timeout: float) -> None:
         self.api_provider = api_provider
         self.base_url = base_url
         self.api_key = api_key
         self.timeout = timeout
-        self.use_curl = use_curl
         self.local = threading.local()
 
     def get_client(self) -> Any:
         client = getattr(self.local, "client", None)
         if client is None:
-            client = make_client(
-                self.api_provider, self.base_url, self.api_key, self.timeout, self.use_curl
-            )
+            client = make_client(self.api_provider, self.base_url, self.api_key, self.timeout)
             self.local.client = client
         return client
-
-
-def _extract_responses_text(data: dict[str, Any]) -> str:
-    """Extract assistant text from a Responses-API JSON payload."""
-    err = data.get("error")
-    if err:
-        raise RuntimeError(f"api_error: {err}")
-    direct = data.get("output_text")
-    if isinstance(direct, str) and direct.strip():
-        return direct.strip()
-    chunks: list[str] = []
-    for item in data.get("output") or []:
-        if not isinstance(item, dict) or item.get("type") != "message":
-            continue
-        for content in item.get("content") or []:
-            if not isinstance(content, dict):
-                continue
-            text = content.get("text")
-            if text:
-                chunks.append(str(text))
-    return "\n".join(chunks).strip()
 
 
 def call_model(
@@ -551,45 +457,30 @@ def call_model(
     max_tokens: int,
     temperature: float,
     api_image_max_px: int,
-    send_temperature: bool = True,
 ) -> str:
     b64, mime = _encode_image(image_path, api_image_max_px)
     data_url = f"data:{mime};base64,{b64}"
     if api_provider == "openai_responses":
-        input_messages = [
-            {
-                "role": "system",
-                "content": [
-                    {"type": "input_text", "text": SYSTEM_PROMPT},
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_image", "image_url": data_url},
-                    {"type": "input_text", "text": prompt},
-                ],
-            },
-        ]
-        if isinstance(client, CurlResponsesClient):
-            payload: dict[str, Any] = {
-                "model": model,
-                "input": input_messages,
-                "max_output_tokens": max_tokens,
-            }
-            if send_temperature:
-                payload["temperature"] = temperature
-            data = client.responses_create(payload)
-            return _extract_responses_text(data)
-
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "input": input_messages,
-            "max_output_tokens": max_tokens,
-        }
-        if send_temperature:
-            kwargs["temperature"] = temperature
-        response = client.responses.create(**kwargs)
+        response = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "input_text", "text": SYSTEM_PROMPT},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_image", "image_url": data_url},
+                        {"type": "input_text", "text": prompt},
+                    ],
+                },
+            ],
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+        )
         output_text = getattr(response, "output_text", None)
         if output_text:
             return str(output_text).strip()
@@ -1300,7 +1191,6 @@ def run_api_question(
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 api_image_max_px=args.api_image_max_px,
-                send_temperature=not args.no_temperature,
             )
             print(f"[{idx}/{total}] done", flush=True)
             break
@@ -1372,7 +1262,6 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             base_url=args.base_url,
             api_key=api_key,
             timeout=args.timeout,
-            use_curl=args.use_curl,
         )
 
     api_call_count = 0
@@ -1518,16 +1407,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
     parser.add_argument(
-        "--use_curl",
-        action="store_true",
-        help="Send openai_responses requests via the system curl binary (bypasses Python TLS stacks that some proxies block)",
-    )
-    parser.add_argument(
-        "--no_temperature",
-        action="store_true",
-        help="Do not send the temperature parameter (use for reasoning models that reject non-default temperature)",
-    )
-    parser.add_argument(
         "--postprocess_existing_html",
         action="store_true",
         help="Deduplicate and relabel an existing embedded HTML report without rebuilding images",
@@ -1548,8 +1427,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--checkpoint_every must be positive")
     if args.vlm_workers <= 0:
         parser.error("--vlm_workers must be positive")
-    if args.use_curl and args.api_provider != "openai_responses":
-        parser.error("--use_curl currently supports only --api_provider openai_responses")
     return args
 
 
