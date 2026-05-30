@@ -52,10 +52,11 @@ SYSTEM_PROMPT = (
 )
 
 PROMPT_SUFFIX = (
-    "Think through the visual evidence concisely, then give the final choice.\n"
-    "Return exactly this format:\n"
-    "Reasoning: <brief reasoning>\n"
-    "Answer: <single letter>"
+    "Choose exactly one option letter, then provide your full reasoning.\n"
+    "Keep the whole response within the maximum output token limit.\n"
+    "Return this format:\n"
+    "Answer: <single letter>\n"
+    "Reasoning: <full reasoning>"
 )
 
 QTYPE_ORDER = [
@@ -934,7 +935,12 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     for idx, question in enumerate(selected, 1):
         uid = str(question["question_uid"])
         cached = existing.get(uid)
-        if cached and not args.force and cached.get("raw_response") is not None:
+        if (
+            cached
+            and not args.force
+            and cached.get("raw_response") is not None
+            and cached.get("prediction") is not None
+        ):
             results_by_uid[uid] = cached
             continue
 
@@ -1051,7 +1057,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or provider defaults")
     parser.add_argument("--api_key_env", default=None, help="Environment variable for API key")
-    parser.add_argument("--max_tokens", type=int, default=512, help="Maximum model output tokens")
+    parser.add_argument("--max_tokens", type=int, default=1024, help="Maximum model output tokens")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
     parser.add_argument("--api_image_max_px", type=int, default=1280, help="Resize longest image side for API; 0 disables")
     parser.add_argument("--html_image_max_px", type=int, default=720, help="Resize longest image side embedded in HTML; 0 disables")
