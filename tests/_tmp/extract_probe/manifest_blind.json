@@ -1,0 +1,868 @@
+{
+  "source_html": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\10\\meshray1010.html",
+  "question_count": 29,
+  "frame_count": 6,
+  "frames": [
+    {
+      "frame_index": 1,
+      "scene_id": "scene0000_00",
+      "image_name": "1791.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__1791.jpg",
+      "question_ids": [
+        2,
+        18
+      ]
+    },
+    {
+      "frame_index": 2,
+      "scene_id": "scene0000_00",
+      "image_name": "1812.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__1812.jpg",
+      "question_ids": [
+        3,
+        16
+      ]
+    },
+    {
+      "frame_index": 3,
+      "scene_id": "scene0000_00",
+      "image_name": "4380.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__4380.jpg",
+      "question_ids": [
+        19
+      ]
+    },
+    {
+      "frame_index": 4,
+      "scene_id": "scene0000_00",
+      "image_name": "726.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__726.jpg",
+      "question_ids": [
+        7,
+        21
+      ]
+    },
+    {
+      "frame_index": 5,
+      "scene_id": "scene0000_00",
+      "image_name": "762.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__762.jpg",
+      "question_ids": [
+        5,
+        9,
+        17,
+        25
+      ]
+    },
+    {
+      "frame_index": 6,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question_ids": [
+        1,
+        4,
+        6,
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        20,
+        22,
+        23,
+        24,
+        26,
+        27,
+        28,
+        29
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "viewer_index": 1,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "From the current viewpoint, which best describes the night stand: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not visible"
+        },
+        {
+          "letter": "B",
+          "text": "not occluded"
+        },
+        {
+          "letter": "C",
+          "text": "occluded"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 2,
+      "scene_id": "scene0000_00",
+      "image_name": "1791.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__1791.jpg",
+      "question": "From the current viewpoint, which best describes the counter: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not visible"
+        },
+        {
+          "letter": "C",
+          "text": "not occluded"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 3,
+      "scene_id": "scene0000_00",
+      "image_name": "1812.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__1812.jpg",
+      "question": "In the current image, is the cabinet unoccluded, occluded by another object, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not visible"
+        },
+        {
+          "letter": "B",
+          "text": "not occluded"
+        },
+        {
+          "letter": "C",
+          "text": "occluded"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 4,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "What is the occlusion status of the pillow in the current view? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not visible"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 5,
+      "scene_id": "scene0000_00",
+      "image_name": "762.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__762.jpg",
+      "question": "What is the occlusion status of the bed in the current view? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not visible"
+        },
+        {
+          "letter": "C",
+          "text": "not occluded"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 6,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "In the current image, is the curtain unoccluded, occluded by another object, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not occluded"
+        },
+        {
+          "letter": "B",
+          "text": "occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not visible"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 7,
+      "scene_id": "scene0000_00",
+      "image_name": "726.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__726.jpg",
+      "question": "What is the occlusion status of the stool in the current view? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not visible"
+        },
+        {
+          "letter": "B",
+          "text": "occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not occluded"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_occlusion"
+      ]
+    },
+    {
+      "viewer_index": 8,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "What is the approximate shortest distance between the pillow and the night stand, measured from their closest points?",
+      "options": [
+        {
+          "letter": "A",
+          "text": "very close (<1.0m)"
+        },
+        {
+          "letter": "B",
+          "text": "far (>3.3m)"
+        },
+        {
+          "letter": "C",
+          "text": "close (1.0-2.0m)"
+        },
+        {
+          "letter": "D",
+          "text": "moderate (2.0-3.3m)"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_distance"
+      ]
+    },
+    {
+      "viewer_index": 9,
+      "scene_id": "scene0000_00",
+      "image_name": "762.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__762.jpg",
+      "question": "Measured from the closest points of each object, what is the approximate shortest distance between the trash can and the bed?",
+      "options": [
+        {
+          "letter": "A",
+          "text": "close (1.0-2.0m)"
+        },
+        {
+          "letter": "B",
+          "text": "very close (<1.0m)"
+        },
+        {
+          "letter": "C",
+          "text": "far (>3.3m)"
+        },
+        {
+          "letter": "D",
+          "text": "moderate (2.0-3.3m)"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_distance"
+      ]
+    },
+    {
+      "viewer_index": 10,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Measured from the closest points of each object, what is the approximate shortest distance between the pillow and the laundry basket?",
+      "options": [
+        {
+          "letter": "A",
+          "text": "moderate (2.0-3.3m)"
+        },
+        {
+          "letter": "B",
+          "text": "far (>3.3m)"
+        },
+        {
+          "letter": "C",
+          "text": "close (1.0-2.0m)"
+        },
+        {
+          "letter": "D",
+          "text": "very close (<1.0m)"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_distance"
+      ]
+    },
+    {
+      "viewer_index": 11,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Imagine you are the night stand and facing toward the laundry basket. From your perspective, in which direction is the pillow? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "left"
+        },
+        {
+          "letter": "B",
+          "text": "below"
+        },
+        {
+          "letter": "C",
+          "text": "right"
+        },
+        {
+          "letter": "D",
+          "text": "back-right"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_direction_object_centric"
+      ]
+    },
+    {
+      "viewer_index": 12,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Imagine you are the night stand and facing toward the pillow. From your perspective, in which direction is the laundry basket? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "back-left"
+        },
+        {
+          "letter": "B",
+          "text": "right"
+        },
+        {
+          "letter": "C",
+          "text": "left"
+        },
+        {
+          "letter": "D",
+          "text": "front-left"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_direction_object_centric"
+      ]
+    },
+    {
+      "viewer_index": 13,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "The camera is facing south in this scene. On the room's floor plan, in which cardinal direction is the pillow from the night stand? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "southeast"
+        },
+        {
+          "letter": "B",
+          "text": "south"
+        },
+        {
+          "letter": "C",
+          "text": "west"
+        },
+        {
+          "letter": "D",
+          "text": "north"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_direction_allocentric"
+      ]
+    },
+    {
+      "viewer_index": 14,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "The camera is facing south in this scene. On the room's floor plan, in which cardinal direction is the laundry basket from the night stand? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "south"
+        },
+        {
+          "letter": "B",
+          "text": "north"
+        },
+        {
+          "letter": "C",
+          "text": "southeast"
+        },
+        {
+          "letter": "D",
+          "text": "southwest"
+        }
+      ],
+      "badges": [
+        "L1",
+        "L1_direction_allocentric"
+      ]
+    },
+    {
+      "viewer_index": 15,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "From the camera's perspective, if the bed is moved backward (toward the camera) by 3.0m, which best describes the pillow: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not visible"
+        },
+        {
+          "letter": "C",
+          "text": "occluded"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_object_move_occlusion",
+        "with-attachment"
+      ]
+    },
+    {
+      "viewer_index": 16,
+      "scene_id": "scene0000_00",
+      "image_name": "1812.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__1812.jpg",
+      "question": "If the camera shifts right by 3m with no change in intrinsics or orientation, is the cabinet not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not occluded"
+        },
+        {
+          "letter": "B",
+          "text": "occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not visible"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 17,
+      "scene_id": "scene0000_00",
+      "image_name": "762.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__762.jpg",
+      "question": "After the camera moves right by 2m without changing its viewing direction, which best describes the bed: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not occluded"
+        },
+        {
+          "letter": "B",
+          "text": "occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not visible"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 18,
+      "scene_id": "scene0000_00",
+      "image_name": "1791.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__1791.jpg",
+      "question": "If the camera shifts right by 3m with no change in intrinsics or orientation, is the counter not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not visible"
+        },
+        {
+          "letter": "C",
+          "text": "not occluded"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 19,
+      "scene_id": "scene0000_00",
+      "image_name": "4380.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__4380.jpg",
+      "question": "After the camera moves right by 2m without changing its viewing direction, which best describes the counter: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not visible"
+        },
+        {
+          "letter": "C",
+          "text": "occluded"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 20,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "After the camera moves right by 2m without changing its viewing direction, which best describes the night stand: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not visible"
+        },
+        {
+          "letter": "B",
+          "text": "occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not occluded"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 21,
+      "scene_id": "scene0000_00",
+      "image_name": "726.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__726.jpg",
+      "question": "After the camera moves right by 3m without changing its viewing direction, which best describes the night stand: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "not occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not visible"
+        },
+        {
+          "letter": "C",
+          "text": "occluded"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 22,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "If the camera shifts right by 3m with no change in intrinsics or orientation, is the pillow not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+      "options": [
+        {
+          "letter": "A",
+          "text": "occluded"
+        },
+        {
+          "letter": "B",
+          "text": "not occluded"
+        },
+        {
+          "letter": "C",
+          "text": "not visible"
+        }
+      ],
+      "badges": [
+        "L2",
+        "L2_viewpoint_move"
+      ]
+    },
+    {
+      "viewer_index": 23,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Imagine the room was originally built rotated 90 degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of the pillow from the night stand? (Use the night stand as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "back"
+        },
+        {
+          "letter": "B",
+          "text": "back-right"
+        },
+        {
+          "letter": "C",
+          "text": "right"
+        },
+        {
+          "letter": "D",
+          "text": "front-left"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_agent"
+      ]
+    },
+    {
+      "viewer_index": 24,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "If the room layout had been rotated 90 degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would the laundry basket be relative to the night stand? (Use the night stand as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "back"
+        },
+        {
+          "letter": "B",
+          "text": "right"
+        },
+        {
+          "letter": "C",
+          "text": "left"
+        },
+        {
+          "letter": "D",
+          "text": "front-left"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_agent"
+      ]
+    },
+    {
+      "viewer_index": 25,
+      "scene_id": "scene0000_00",
+      "image_name": "762.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__762.jpg",
+      "question": "If the room layout had been rotated 90 degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would the trash can be relative to the bed? (Use the bed as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "right"
+        },
+        {
+          "letter": "B",
+          "text": "left"
+        },
+        {
+          "letter": "C",
+          "text": "back-left"
+        },
+        {
+          "letter": "D",
+          "text": "back"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_agent"
+      ]
+    },
+    {
+      "viewer_index": 26,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is the pillow relative to the laundry basket? (Use the laundry basket as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "front"
+        },
+        {
+          "letter": "B",
+          "text": "back"
+        },
+        {
+          "letter": "C",
+          "text": "back-right"
+        },
+        {
+          "letter": "D",
+          "text": "right"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_agent"
+      ]
+    },
+    {
+      "viewer_index": 27,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Suppose this room had originally been oriented 180 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the night stand at its rotated position and faced toward the pillow's rotated position, in which direction would the laundry basket be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "front"
+        },
+        {
+          "letter": "B",
+          "text": "left"
+        },
+        {
+          "letter": "C",
+          "text": "right"
+        },
+        {
+          "letter": "D",
+          "text": "back"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_object_centric"
+      ]
+    },
+    {
+      "viewer_index": 28,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Imagine all furniture is rotated 90 degrees clockwise around the room center (viewed from above). The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the laundry basket from the night stand? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "southwest"
+        },
+        {
+          "letter": "B",
+          "text": "east"
+        },
+        {
+          "letter": "C",
+          "text": "northwest"
+        },
+        {
+          "letter": "D",
+          "text": "north"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_allocentric"
+      ]
+    },
+    {
+      "viewer_index": 29,
+      "scene_id": "scene0000_00",
+      "image_name": "939.jpg",
+      "image_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\tests\\_tmp\\extract_probe\\images\\scene0000_00__939.jpg",
+      "question": "Imagine all furniture is rotated 90 degrees clockwise around the room center (viewed from above). The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the pillow from the night stand? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+      "options": [
+        {
+          "letter": "A",
+          "text": "south"
+        },
+        {
+          "letter": "B",
+          "text": "northwest"
+        },
+        {
+          "letter": "C",
+          "text": "southwest"
+        },
+        {
+          "letter": "D",
+          "text": "north"
+        }
+      ],
+      "badges": [
+        "L3",
+        "L3_coordinate_rotation_allocentric"
+      ]
+    }
+  ]
+}

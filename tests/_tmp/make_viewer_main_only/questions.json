@@ -1,0 +1,1 @@
+{"questions": [{"type": "direction_agent", "scene_id": "scene0000_00", "image_name": "000.jpg", "question": "Where is the lamp relative to the desk?", "options": ["left", "right", "front"], "answer": "A", "correct_value": "left", "obj_a_label": "desk", "obj_b_label": "lamp"}]}

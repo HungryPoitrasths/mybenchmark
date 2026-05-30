@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>question presence manual review</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:#f0f2f5;margin:0;padding:20px}
+h1{text-align:center;color:#333;margin-bottom:4px}
+.stats{text-align:center;color:#666;font-size:14px;margin-bottom:24px}
+.summary{max-width:1100px;margin:0 auto 24px;background:#fff;border-radius:10px;
+          box-shadow:0 2px 6px rgba(0,0,0,.12);padding:18px 20px}
+.summary h2{margin:0 0 12px;color:#111;font-size:18px}
+.summary-block{color:#374151;font-size:14px;line-height:1.7}
+.summary-line{margin:2px 0}
+.summary-section{margin-top:10px}
+.summary-section:first-child{margin-top:0}
+.summary-other{margin-top:12px;color:#6b7280}
+.card{display:flex;background:#fff;border-radius:10px;
+       box-shadow:0 2px 6px rgba(0,0,0,.12);margin-bottom:18px;overflow:hidden}
+.img-wrap{flex:0 0 auto;width:480px;background:#222;display:flex;
+           align-items:center;justify-content:center}
+.img-wrap img{width:480px;display:block}
+.no-img{width:480px;height:200px;display:flex;align-items:center;
+         justify-content:center;color:#999;font-size:13px}
+.body{padding:18px 20px;flex:1;min-width:0}
+.meta{font-size:12px;color:#888;margin-bottom:10px}
+.badge{display:inline-block;padding:2px 9px;border-radius:12px;
+        font-weight:bold;font-size:11px;margin-right:6px}
+.L1{background:#dbeafe;color:#1d4ed8}
+.L2{background:#fce7f3;color:#9d174d}
+.L3{background:#ede9fe;color:#5b21b6}
+.extra{background:#f3f4f6;color:#374151}
+.attachment{background:#d1fae5;color:#065f46}
+.unchanged{background:#fef3c7;color:#92400e}
+.review{background:#fee2e2;color:#991b1b}
+.qtext{font-size:15px;font-weight:600;color:#111;margin:0 0 14px}
+.opt{padding:7px 12px;margin:4px 0;border-radius:6px;font-size:14px;
+      background:#f8f9fa;border:1px solid #e5e7eb}
+.opt.correct{background:#dcfce7;border-color:#86efac;font-weight:700}
+.review-notes{margin-top:14px;padding:12px 14px;border-radius:8px;background:#fff7ed;
+              border:1px solid #fed7aa}
+.review-block + .review-block{margin-top:10px}
+.review-title{font-size:12px;font-weight:700;color:#9a3412;margin-bottom:6px;
+              text-transform:uppercase;letter-spacing:.04em}
+.review-line{font-size:13px;color:#7c2d12;line-height:1.5}
+.footer{margin-top:14px;font-size:11px;color:#aaa}
+.idx{float:right;color:#ccc;font-size:12px}
+</style>
+</head>
+<body>
+<h1>question presence manual review</h1>
+<div class="stats">1 questions &nbsp;&middot;&nbsp; L1: 1</div>
+<div class="summary">
+  <h2>Task Summary</h2>
+  <div class="summary-block"><div class="summary-section"><div class="summary-line"><strong>L1 静态感知</strong></div><div class="summary-line">L1_direction_agent: 1</div><div class="summary-line">L1_occlusion: 0</div><div class="summary-line">L1_distance: 0</div><div class="summary-line">L1_direction_object_centric: 0</div><div class="summary-line">L1_direction_allocentric: 0</div></div><div class="summary-section"><div class="summary-line"><strong>L2 干预题</strong></div><div class="summary-line">L2_object_move_all: with_attachment=0, without_attachment=0</div><div class="summary-line">L2_object_move_agent: with_attachment=0, without_attachment=0</div><div class="summary-line">L2_object_move_distance: with_attachment=0, without_attachment=0</div><div class="summary-line">L2_object_move_occlusion: with_attachment=0, without_attachment=0</div><div class="summary-line">L2_object_rotate_object_centric: with_attachment=0, without_attachment=0</div><div class="summary-line">L2_object_move_allocentric: with_attachment=0, without_attachment=0</div><div class="summary-line">L2_viewpoint_move: 0</div><div class="summary-line">L2_object_remove: 0</div></div><div class="summary-section"><div class="summary-line"><strong>L3 多跳 / 反事实</strong></div><div class="summary-line">L3_attachment_chain: 0</div><div class="summary-line">L3_coordinate_rotation_agent: 0</div><div class="summary-line">L3_coordinate_rotation_object_centric: 0</div><div class="summary-line">L3_coordinate_rotation_allocentric: 0</div></div></div>
+</div>
+<div class="card">
+  <div class="img-wrap"><div class="no-img">image not found</div></div>
+  <div class="body">
+    <div class="meta">
+      <span class="badge L1">L1</span>
+      <span class="badge" style="background:#f3f4f6;color:#374151">L1_direction_agent</span>
+      <span class="badge extra review">manual-review</span>
+      <span class="idx">#1</span>
+    </div>
+    <p class="qtext">Where is the lamp relative to the chair?</p>
+    <div class="opt correct">A.&nbsp; left</div>
+    <div class="opt">B.&nbsp; right</div>
+    <div class="opt">C.&nbsp; front</div>
+    <div class="opt">D.&nbsp; behind</div>
+    
+    <div class="review-notes"><div class="review-block"><div class="review-title">Manual Review</div><div class="review-line">VLM answered B (right) but gold answer is A (left)</div></div><div class="review-block"><div class="review-title">VLM Review</div><div class="review-line">decision: pass</div><div class="review-line">lamp: present (visible)</div><div class="review-line">chair: present (visible)</div></div></div>
+    <div class="footer">scene0000_00 &nbsp;/&nbsp; 000123.jpg</div>
+  </div>
+</div>
+</body>
+</html>

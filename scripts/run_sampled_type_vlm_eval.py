@@ -61,6 +61,15 @@ PROMPT_SUFFIX = (
     "Reasoning: <full reasoning>"
 )
 
+MULTI_SELECT_PROMPT_SUFFIX = (
+    "Choose all correct option letters, then provide your full reasoning.\n"
+    "Use a comma-separated list of letters if more than one option is correct.\n"
+    "Keep the whole response within the maximum output token limit.\n"
+    "Return this format:\n"
+    "Answer: <letter(s)>\n"
+    "Reasoning: <full reasoning>"
+)
+
 QTYPE_ORDER = [
     "direction_agent",
     "occlusion",
@@ -160,9 +169,13 @@ def load_questions(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, A
     for root in roots:
         for benchmark_path in sorted(root.rglob("benchmark.json")):
             source_files.append(str(benchmark_path))
-            dataset = _infer_dataset(root, benchmark_path)
             for q in _load_benchmark(benchmark_path):
                 item = dict(q)
+                dataset = str(
+                    item.get("_dataset")
+                    or item.get("dataset")
+                    or _infer_dataset(root, benchmark_path)
+                )
                 item["_dataset"] = dataset
                 item["_source_root"] = str(root)
                 item["_source_benchmark"] = str(benchmark_path)
@@ -255,7 +268,8 @@ def build_prompt(question: dict[str, Any]) -> str:
     options = question.get("options") or []
     for idx, option in enumerate(options):
         parts.append(f"{chr(65 + idx)}) {option}")
-    parts.extend(["", PROMPT_SUFFIX])
+    suffix = MULTI_SELECT_PROMPT_SUFFIX if is_multi_select_question(question) else PROMPT_SUFFIX
+    parts.extend(["", suffix])
     return "\n".join(parts)
 
 
@@ -264,6 +278,42 @@ def allowed_letters(question: dict[str, Any]) -> str:
     if n_options <= 0:
         return "ABCD"
     return "".join(chr(65 + idx) for idx in range(min(n_options, 26)))
+
+
+def is_multi_select_question(question: dict[str, Any]) -> bool:
+    return bool(question.get("multi_select")) or isinstance(question.get("answer"), list)
+
+
+def _ordered_unique_letters(values: list[str], letters: str) -> list[str]:
+    seen = {value.upper() for value in values if value and value.upper() in letters.upper()}
+    return [letter for letter in letters.upper() if letter in seen]
+
+
+def parse_answers(raw: str | None, letters: str) -> list[str]:
+    if not raw:
+        return []
+    allowed = re.escape(letters.upper())
+    upper = raw.strip().upper()
+    answer_line_patterns = [
+        rf"(?:FINAL\s+)?ANSWER\s*[:锛歖]\s*([^\r\n]+)",
+        rf"(?:CHOICES?|OPTIONS?)\s*[:锛歖]?\s*([^\r\n]+)",
+    ]
+    candidates: list[str] = []
+    for pattern in answer_line_patterns:
+        match = re.search(pattern, upper)
+        if match:
+            candidates.append(match.group(1))
+            break
+    candidates.append(upper)
+
+    for candidate in candidates:
+        tokens = re.findall(rf"(?<![A-Z0-9])([{allowed}])(?![A-Z0-9])", candidate)
+        if tokens:
+            return _ordered_unique_letters(tokens, letters)
+        compact = re.sub(r"[\s,;/&+|，、.\-]+", "", candidate)
+        if compact and re.fullmatch(rf"[{allowed}]+", compact):
+            return _ordered_unique_letters(list(compact), letters)
+    return []
 
 
 def parse_answer(raw: str | None, letters: str) -> str | None:
@@ -286,6 +336,18 @@ def parse_answer(raw: str | None, letters: str) -> str | None:
 
     m = re.search(rf"\b([{allowed}])\b", upper)
     return m.group(1) if m else None
+
+
+def normalize_answer_letters(value: Any, letters: str, *, multi_select: bool) -> list[str]:
+    if isinstance(value, list):
+        return _ordered_unique_letters([str(item).strip().upper() for item in value], letters)
+    text = str(value or "").strip()
+    if not text:
+        return []
+    if multi_select:
+        return parse_answers(text, letters)
+    parsed = parse_answer(text, letters)
+    return [parsed] if parsed else []
 
 
 def _mime_for_path(path: Path) -> str:
@@ -313,12 +375,20 @@ def resolve_image(
     scannetpp_roots: list[Path],
     scannetpp_sensor: str,
 ) -> ImageResolution:
+    explicit_image_path = str(question.get("image_path") or "").strip()
+    if explicit_image_path:
+        explicit = Path(explicit_image_path)
+        if explicit.exists():
+            return ImageResolution(explicit, (str(explicit),))
+
     dataset = str(question.get("_dataset") or "scannet")
     scene = str(question.get("scene_id") or "")
     image_name = str(question.get("image_name") or "")
     roots = scannetpp_roots if dataset == "scannetpp" else scannet_roots
 
     candidates: list[Path] = []
+    if explicit_image_path:
+        candidates.append(Path(explicit_image_path))
     for root in roots:
         if dataset == "scannetpp":
             if scannetpp_sensor == "iphone":
@@ -394,6 +464,7 @@ class CurlResponsesClient:
                 "curl",
                 "-s",
                 "-S",
+                "--http1.1",
                 "--fail-with-body",
                 "--max-time",
                 str(int(self.timeout)),
@@ -621,10 +692,21 @@ def result_from_question(
     error: str | None,
 ) -> dict[str, Any]:
     letters = allowed_letters(question)
-    prediction = parse_answer(raw_response, letters)
-    gt_answer = str(question.get("answer") or "").strip().upper()
-    correct = bool(prediction and gt_answer and prediction == gt_answer)
-    return {
+    multi_select = is_multi_select_question(question)
+    gt_answers = normalize_answer_letters(
+        question.get("answer"),
+        letters,
+        multi_select=multi_select,
+    )
+    predictions = parse_answers(raw_response, letters) if multi_select else []
+    prediction = ",".join(predictions) if multi_select else parse_answer(raw_response, letters)
+    gt_answer = ",".join(gt_answers) if multi_select else (gt_answers[0] if gt_answers else "")
+    if multi_select:
+        correct = bool(predictions and gt_answers and set(predictions) == set(gt_answers))
+    else:
+        correct = bool(prediction and gt_answer and prediction == gt_answer)
+
+    row = {
         "question_uid": question.get("question_uid"),
         "dataset": question.get("_dataset"),
         "source_benchmark": question.get("_source_benchmark"),
@@ -643,6 +725,13 @@ def result_from_question(
         "correct": correct,
         "error": error,
     }
+    if multi_select:
+        row["multi_select"] = True
+        row["gt_answers"] = gt_answers
+        row["predictions"] = predictions
+        if question.get("correct_values") is not None:
+            row["correct_values"] = question.get("correct_values")
+    return row
 
 
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
@@ -683,15 +772,28 @@ def _fmt_pct(value: float | None) -> str:
 
 
 def _option_html(row: dict[str, Any]) -> str:
-    gt = str(row.get("gt_answer") or "")
-    pred = str(row.get("prediction") or "")
+    letters = "".join(chr(65 + idx) for idx, _ in enumerate(row.get("options") or []))
+    gt_letters = set(
+        normalize_answer_letters(
+            row.get("gt_answers") if row.get("gt_answers") is not None else row.get("gt_answer"),
+            letters,
+            multi_select=bool(row.get("multi_select")),
+        )
+    )
+    pred_letters = set(
+        normalize_answer_letters(
+            row.get("predictions") if row.get("predictions") is not None else row.get("prediction"),
+            letters,
+            multi_select=bool(row.get("multi_select")),
+        )
+    )
     chunks: list[str] = []
     for idx, option in enumerate(row.get("options") or []):
         letter = chr(65 + idx)
         classes = ["option"]
-        if letter == gt:
+        if letter in gt_letters:
             classes.append("gold")
-        if letter == pred and pred != gt:
+        if letter in pred_letters and letter not in gt_letters:
             classes.append("predicted")
         chunks.append(
             f'<div class="{" ".join(classes)}">'

@@ -1,0 +1,60 @@
+{
+  "name": "CausalSpatial-Bench question presence review",
+  "model": "fake-vlm",
+  "answer_review_model": "fake-vlm",
+  "reviewed_question_count": 1,
+  "manual_review_count": 1,
+  "answer_review_question_count": 1,
+  "answer_mismatch_count": 1,
+  "questions": [
+    {
+      "scene_id": "scene0000_00",
+      "image_name": "000123.jpg",
+      "question": "Where is the lamp relative to the chair?",
+      "answer": "A",
+      "options": [
+        "left",
+        "right",
+        "front",
+        "behind"
+      ],
+      "type": "direction_agent",
+      "level": "L1",
+      "mentioned_objects": [
+        {
+          "label": "lamp"
+        },
+        {
+          "label": "chair"
+        }
+      ],
+      "benchmark_index": 0,
+      "question_presence_review": {
+        "decision": "pass",
+        "flagged_labels": [],
+        "object_reviews": [
+          {
+            "label": "lamp",
+            "status": "present",
+            "reason": "visible"
+          },
+          {
+            "label": "chair",
+            "status": "present",
+            "reason": "visible"
+          }
+        ]
+      },
+      "question_answer_review": {
+        "decision": "manual_review",
+        "predicted_answer": "B",
+        "gold_answer": "A",
+        "predicted_option": "right",
+        "gold_option": "left",
+        "reason": "model answered B but gold answer is A",
+        "raw_response": "B"
+      },
+      "manual_review_reason": "VLM answered B (right) but gold answer is A (left)"
+    }
+  ]
+}
