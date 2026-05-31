@@ -5486,6 +5486,13 @@ def main():
         help="After benchmark generation, review L1 occlusion visibility plus non-self L2 attachment pairs and export flagged samples for manual review",
     )
     parser.add_argument(
+        "--skip_question_vlm_check",
+        "--skip_vlm_check",
+        dest="skip_question_vlm_check",
+        action="store_true",
+        help="Skip the post-generation VLM question presence/attachment-pair review",
+    )
+    parser.add_argument(
         "--question_presence_review_workers",
         type=int,
         default=8,
@@ -5577,6 +5584,8 @@ def main():
         parser.error("--max_questions_per_scene_type must be >= 0")
     if int(args.max_occlusion_objects) < 0:
         parser.error("--max_occlusion_objects must be >= 0")
+    if args.skip_question_vlm_check:
+        args.question_presence_review = False
 
     _set_pipeline_random_seed()
 
