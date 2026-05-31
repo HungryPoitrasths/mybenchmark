@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pilot study script for CausalSpatial-Bench.
+"""Pilot study script for PSR-Bench.
 
 Processes a small set of scenes (default 30), generates questions, and
 prints summary statistics to validate the pipeline before full-scale run.
@@ -32,7 +32,7 @@ logger = logging.getLogger("pilot_study")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CausalSpatial-Bench pilot study")
+    parser = argparse.ArgumentParser(description="PSR-Bench pilot study")
     parser.add_argument(
         "--data_root", type=str,
         default=os.getenv("SCANNET_PATH", "/home/lihongxing/datasets/ScanNet/data/scans"),

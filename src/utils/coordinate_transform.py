@@ -1,4 +1,4 @@
-"""Coordinate transformation utilities for CausalSpatial-Bench."""
+"""Coordinate transformation utilities for PSR-Bench."""
 
 from __future__ import annotations
 

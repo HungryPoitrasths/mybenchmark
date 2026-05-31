@@ -611,7 +611,7 @@ def run_single_frame_trace(
     audits_dir.mkdir(parents=True, exist_ok=True)
     image_path = scene_dir / "color" / image_name
     trace_doc: dict[str, Any] = {
-        "name": "CausalSpatial-Bench single-frame trace",
+        "name": "PSR-Bench single-frame trace",
         "version": "1.0",
         "status": "running",
         "stop_reason": None,

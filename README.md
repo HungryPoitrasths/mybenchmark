@@ -1,6 +1,6 @@
-# CausalSpatial-Bench
+# Predictive Spatial Reasoning Benchmark
 
-**CausalSpatial-Bench** 是首个评测视觉语言模型（VLM）*因果与反事实空间推理*能力的 benchmark。现有空间 benchmark 只测静态感知（"物体 A 在哪里？"），本 benchmark 测*干预推理*：给定图像和一段空间操作描述，新的空间关系是什么?
+**Predictive Spatial Reasoning Benchmark** 是首个评测视觉语言模型（VLM）*因果与反事实空间推理*能力的 benchmark。现有空间 benchmark 只测静态感知（"物体 A 在哪里？"），本 benchmark 测*干预推理*：给定图像和一段空间操作描述，新的空间关系是什么?
 
 ---
 
@@ -8,7 +8,7 @@
 
 现有 benchmark（VSI-Bench、MindCube、MMSI-Bench）衡量的是空间**感知**——直接从图像中读取关系。没有 benchmark 衡量空间**推断**——推理因果干预后关系如何变化。这一差距至关重要：模型可以从图像中记住"左/右"，却无法回答"如果我移动桌子，台灯最终在哪里？"
 
-CausalSpatial-Bench 通过三层题目层级解决这一问题：
+Predictive Spatial Reasoning Benchmark 通过三层题目层级解决这一问题：
 
 | 层级 | 任务 | 示例 |
 |------|------|------|
@@ -99,7 +99,7 @@ output/benchmark.json
 ## 项目结构
 
 ```
-CausalSpatial-Bench/
+Predictive-Spatial-Reasoning-Benchmark/
 ├── src/
 │   ├── scene_parser.py          # Stage 1：PLY + 标注文件 → 带 3D AABB 的物体列表
 │   ├── support_graph.py         # Stage 2：几何支撑检测（A 放在 B 上）
@@ -136,7 +136,7 @@ CausalSpatial-Bench/
 ```bash
 # 克隆仓库
 git clone <repo-url>
-cd CausalSpatial-Bench
+cd Predictive-Spatial-Reasoning-Benchmark
 
 # 安装 Python 依赖（需要 Python >= 3.10）
 pip install -r requirements.txt
@@ -263,7 +263,7 @@ python evaluation/evaluate.py \
 输出示例：
 ```
 ============================================================
-CAUSAL-SPATIAL BENCH EVALUATION REPORT
+PREDICTIVE SPATIAL REASONING BENCHMARK EVALUATION REPORT
 ============================================================
 
 Overall accuracy: 52.3% (1413/2703)
@@ -373,7 +373,7 @@ table → [lamp_base → lamp_shade]
 | MindCube | 合成 | 部分 | 否 | 3,000 |
 | MMSI-Bench | 混合 | 否 | 否 | 4,000 |
 | CausalSpatial（arxiv 2601.13304） | 合成 | 是 | 否 | ~2,000 |
-| **CausalSpatial-Bench（本工作）** | **真实（ScanNet RGB-D）** | **是** | **是** | **~2,700** |
+| **Predictive Spatial Reasoning Benchmark（本工作）** | **真实（ScanNet RGB-D）** | **是** | **是** | **~2,700** |
 
 与同期工作 CausalSpatial（2601.13304）的核心差异：
 - **真实场景** vs. 合成：ScanNet RGB-D 扫描 vs. 程序化生成
@@ -384,11 +384,11 @@ table → [lamp_base → lamp_shade]
 
 ## 引用
 
-> *CausalSpatial-Bench: A Benchmark for Causal and Counterfactual Spatial Reasoning in Vision-Language Models.* （撰写中，目标投稿 NeurIPS 2026）
+> *Predictive Spatial Reasoning Benchmark: A Benchmark for Predictive and Counterfactual Spatial Reasoning in Vision-Language Models.* （撰写中，目标投稿 NeurIPS 2026）
 
 ```bibtex
-@article{causalspatial2026,
-  title   = {CausalSpatial-Bench: A Benchmark for Causal and Counterfactual Spatial Reasoning in Vision-Language Models},
+@article{predictivespatial2026,
+  title   = {Predictive Spatial Reasoning Benchmark: A Benchmark for Predictive and Counterfactual Spatial Reasoning in Vision-Language Models},
   year    = {2026},
   note    = {In preparation}
 }

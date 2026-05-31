@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-click pipeline runner for CausalSpatial-Bench.
+"""One-click pipeline runner for PSR-Bench.
 
 Usage:
     python scripts/run_pipeline.py --data_root data/scannet/scans \\
@@ -2676,7 +2676,7 @@ def _run_question_presence_review(
         viewer_image_root = Path("output") / "scannetpp_iphone_frames"
     if not review_questions:
         review_payload = {
-            "name": "CausalSpatial-Bench question presence review",
+            "name": "PSR-Bench question presence review",
             "model": vlm_model,
             "reviewed_question_count": 0,
             "manual_review_count": 0,
@@ -2686,7 +2686,7 @@ def _run_question_presence_review(
             "questions": [],
         }
         flagged_payload = dict(review_payload)
-        flagged_payload["name"] = "CausalSpatial-Bench question presence review (flagged)"
+        flagged_payload["name"] = "PSR-Bench question presence review (flagged)"
         with open(review_json_path, "w", encoding="utf-8") as f:
             json.dump(review_payload, f, indent=2, ensure_ascii=False)
         with open(flagged_json_path, "w", encoding="utf-8") as f:
@@ -2784,7 +2784,7 @@ def _run_question_presence_review(
     ]
 
     review_payload = {
-        "name": "CausalSpatial-Bench question presence review",
+        "name": "PSR-Bench question presence review",
         "model": model_name,
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
@@ -2794,7 +2794,7 @@ def _run_question_presence_review(
         "questions": reviewed_questions,
     }
     flagged_payload = {
-        "name": "CausalSpatial-Bench question presence review (flagged)",
+        "name": "PSR-Bench question presence review (flagged)",
         "model": model_name,
         "reviewed_question_count": len(reviewed_questions),
         "manual_review_count": len(flagged_questions),
@@ -3935,7 +3935,7 @@ def _reconcile_pipeline_completed_scenes(
 
 def _build_benchmark_payload(questions: list[dict[str, object]]) -> dict[str, object]:
     return {
-        "name": "CausalSpatial-Bench",
+        "name": "PSR-Bench",
         "version": "1.0",
         "statistics": compute_statistics(questions),
         "questions": questions,
@@ -4244,7 +4244,7 @@ def run_pipeline(
     max_occlusion_objects: int | None = 20,
     max_move_sources: int | None = None,
 ):
-    """Execute the full CausalSpatial-Bench data generation pipeline."""
+    """Execute the full PSR-Bench data generation pipeline."""
     _set_pipeline_random_seed()
 
     if referability_cache is None:
@@ -5382,7 +5382,7 @@ def run_pipeline(
                 json.dump(record, f, indent=2, ensure_ascii=False)
 
     benchmark = {
-        "name":       "CausalSpatial-Bench",
+        "name":       "PSR-Bench",
         "version":    "1.0",
         "statistics": compute_statistics(final_questions),
         "questions":  final_questions,
@@ -5413,7 +5413,7 @@ def run_pipeline(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="CausalSpatial-Bench data generation pipeline"
+        description="PSR-Bench data generation pipeline"
     )
     parser.add_argument(
         "--data_root", type=str,

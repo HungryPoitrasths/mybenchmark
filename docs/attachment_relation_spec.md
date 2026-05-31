@@ -4,7 +4,7 @@
 
 Draft v1.
 
-This document defines a migration path from the current `support_graph` to a more general `attachment_graph` for intervention propagation in CausalSpatial-Bench.
+This document defines a migration path from the current `support_graph` to a more general `attachment_graph` for intervention propagation in PSR-Bench.
 
 
 ## 1. Motivation

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VLM inference script for CausalSpatial-Bench.
+"""VLM inference script for PSR-Bench.
 
 Sends each benchmark question (image + MCQ text) to a VLM and saves
 predictions in the format expected by evaluation/evaluate.py.
@@ -310,7 +310,7 @@ def _save(predictions: list[dict], path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run a VLM on CausalSpatial-Bench and save predictions."
+        description="Run a VLM on PSR-Bench and save predictions."
     )
     parser.add_argument("--benchmark",   required=True,
                         help="Path to benchmark.json")

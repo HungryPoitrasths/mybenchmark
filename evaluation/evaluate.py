@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluation script for CausalSpatial-Bench.
+"""Evaluation script for PSR-Bench.
 
 Computes accuracy metrics for model predictions against ground-truth answers,
 broken down by level and question type.
@@ -133,7 +133,7 @@ def compute_accuracy(
 def print_report(results: dict):
     """Pretty-print the evaluation report."""
     print("\n" + "=" * 60)
-    print("CAUSAL-SPATIAL BENCH EVALUATION REPORT")
+    print("PREDICTIVE SPATIAL REASONING BENCHMARK EVALUATION REPORT")
     print("=" * 60)
     print(f"\nOverall accuracy: {results['overall_accuracy']:.1%} "
           f"({results['overall_correct']}/{results['overall_total']})")
@@ -159,7 +159,7 @@ def print_report(results: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CausalSpatial-Bench evaluation")
+    parser = argparse.ArgumentParser(description="PSR-Bench evaluation")
     parser.add_argument("--benchmark", type=str, required=True,
                         help="Path to benchmark.json")
     parser.add_argument("--predictions", type=str, required=True,

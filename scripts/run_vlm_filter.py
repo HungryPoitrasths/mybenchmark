@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VLM-based question quality filter for CausalSpatial-Bench.
+"""VLM-based question quality filter for PSR-Bench.
 
 For each question, asks Qwen2.5-VL-72B whether every object mentioned in the
 question is clearly visible in the image.  Questions where any object is not
