@@ -276,11 +276,17 @@ def rerun_type(
                 row["result"] = "parse_fail"
         if delay:
             time.sleep(delay)
-        if n % 10 == 0 or n == len(target_ids):
-            print(
-                f"    {type_name}: {n}/{len(target_ids)} "
-                f"(new_correct={new_correct} parse_fail={parse_fail} err={api_errors})"
-            )
+        if err is not None:
+            api_state = "API_FAIL"
+            trunc_state = "-"
+        else:
+            api_state = "API_OK"
+            trunc_state = "TRUNCATED" if row["rerun_result"] == "parse_fail" else "complete"
+        print(
+            f"    {type_name}: {n}/{len(target_ids)} id={qid} "
+            f"{api_state} {trunc_state}",
+            flush=True,
+        )
 
     # write output
     out_dir.mkdir(parents=True, exist_ok=True)
