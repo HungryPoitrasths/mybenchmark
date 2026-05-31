@@ -52,20 +52,20 @@ SYSTEM_PROMPT = (
 )
 
 PROMPT_SUFFIX = (
-    "Choose exactly one option letter, then provide your full reasoning.\n"
-    "Keep the whole response within the maximum output token limit.\n"
+    "First work through your full reasoning, then give your final choice as the LAST line.\n"
+    "Keep your reasoning concise so the final Answer line is not truncated.\n"
     "Return this format:\n"
-    "Answer: <single letter>\n"
-    "Reasoning: <full reasoning>"
+    "Reasoning: <full reasoning>\n"
+    "Answer: <single letter>"
 )
 
 MULTI_SELECT_PROMPT_SUFFIX = (
-    "Choose all correct option letters, then provide your full reasoning.\n"
-    "Use a comma-separated list of letters if more than one option is correct.\n"
-    "Keep the whole response within the maximum output token limit.\n"
+    "First work through your full reasoning, then give your final choice as the LAST line.\n"
+    "If more than one option is correct, list all letters comma-separated.\n"
+    "Keep your reasoning concise so the final Answer line is not truncated.\n"
     "Return this format:\n"
-    "Answer: <letter(s)>\n"
-    "Reasoning: <full reasoning>"
+    "Reasoning: <full reasoning>\n"
+    "Answer: <letter(s)>"
 )
 
 QTYPE_ORDER = [
@@ -332,8 +332,7 @@ def parse_answer(raw: str | None, letters: str) -> str | None:
         if m:
             return m.group(1)
 
-    m = re.search(rf"\b([{allowed}])\b", upper)
-    return m.group(1) if m else None
+    return None
 
 
 def normalize_answer_letters(value: Any, letters: str, *, multi_select: bool) -> list[str]:
@@ -1264,14 +1263,24 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             timeout=args.timeout,
         )
 
+    only_types: set[str] | None = (
+        {t.strip() for t in args.only_type.split(",") if t.strip()}
+        if args.only_type
+        else None
+    )
+
     api_call_count = 0
     api_work: list[tuple[int, dict[str, Any], ImageResolution]] = []
     for idx, question in enumerate(selected, 1):
         uid = str(question["question_uid"])
+        qtype = str(question.get("type") or "")
         cached = existing.get(uid)
+        # Non-targeted types always use cache (ignore --force).
+        # Targeted types (or all types when --only_type is absent) respect --force.
+        is_targeted = only_types is None or qtype in only_types
         if (
             cached
-            and not args.force
+            and (not args.force or not is_targeted)
             and cached.get("raw_response") is not None
             and cached.get("prediction") is not None
         ):
@@ -1391,7 +1400,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or provider defaults")
     parser.add_argument("--api_key_env", default=None, help="Environment variable for API key")
-    parser.add_argument("--max_tokens", type=int, default=1024, help="Maximum model output tokens")
+    parser.add_argument("--max_tokens", type=int, default=3072, help="Maximum model output tokens")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
     parser.add_argument("--api_image_max_px", type=int, default=1280, help="Resize longest image side for API; 0 disables")
     parser.add_argument("--html_image_max_px", type=int, default=720, help="Resize longest image side embedded in HTML; 0 disables")
@@ -1406,6 +1415,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--title", default="Sampled VLM Spatial QA Evaluation", help="HTML report title")
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
+    parser.add_argument(
+        "--only_type",
+        default=None,
+        help=(
+            "Comma-separated question type(s) to re-run (e.g. coordinate_rotation_object_centric). "
+            "Questions of other types are loaded from cache unchanged. "
+            "Implies --force for the targeted type(s) only."
+        ),
+    )
     parser.add_argument(
         "--postprocess_existing_html",
         action="store_true",

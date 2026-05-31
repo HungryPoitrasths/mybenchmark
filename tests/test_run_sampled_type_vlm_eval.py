@@ -62,7 +62,7 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("Choose all correct option letters", prompt)
+        self.assertIn("list all letters comma-separated", prompt)
         self.assertIn("Answer: <letter(s)>", prompt)
 
     def test_parse_answers_accepts_common_multi_select_formats(self) -> None:
