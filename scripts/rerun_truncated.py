@@ -31,6 +31,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,7 @@ STRICT_SUFFIX = (
 )
 
 DEFAULT_EVAL_DIR = "output/type_sample_vlm_eval"
+COMPLETED_RERUN_RESULTS = {"correct", "wrong"}
 
 
 def build_prompt(question_text: str, options: list[dict[str, Any]]) -> str:
@@ -171,6 +173,44 @@ def call_with_retries(
             delay *= 2
 
 
+def call_until_parsed(
+    client: Any,
+    *,
+    model: str,
+    image_b64: str,
+    prompt: str,
+    letters: str,
+    max_tokens: int,
+    temperature: float,
+    retries: int,
+    retry_delay: float,
+) -> tuple[str | None, str | None, str | None, int]:
+    """Return (raw_response, error, parsed_letter, parse_attempts)."""
+    raw: str | None = None
+    err: str | None = None
+    pred: str | None = None
+    parse_attempts = 0
+    for parse_attempts in range(1, max(1, retries + 1) + 1):
+        raw, err = call_with_retries(
+            client,
+            model=model,
+            image_b64=image_b64,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
+        if err is not None:
+            return raw, err, None, parse_attempts
+        pred = parse_answer_strict(raw, letters)
+        if pred is not None:
+            return raw, None, pred, parse_attempts
+        if parse_attempts <= retries:
+            time.sleep(retry_delay)
+    return raw, None, None, parse_attempts
+
+
 
 def load_truncated_map(eval_dir: Path, explicit: Path | None) -> dict[str, list[int]]:
     """Return {type_name: [question_id, ...]} of truncated questions."""
@@ -194,6 +234,68 @@ def gold_letter_of(row: dict[str, Any]) -> str:
     return ""
 
 
+def is_completed_rerun(row: dict[str, Any]) -> bool:
+    return row.get("rerun_result") in COMPLETED_RERUN_RESULTS
+
+
+def output_path_for_type(
+    *,
+    type_name: str,
+    eval_dir: Path,
+    out_dir: Path,
+    inplace: bool,
+) -> Path:
+    return (eval_dir if inplace else out_dir) / f"{type_name}.json"
+
+
+def write_rows_checkpoint(
+    *,
+    rows: list[dict[str, Any]],
+    dst: Path,
+    inplace: bool,
+    src: Path,
+    original_source_text: str,
+) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if inplace:
+        bak = src.with_suffix(".json.bak")
+        if not bak.exists():
+            bak.write_text(original_source_text, encoding="utf-8")
+    tmp = dst.with_name(f"{dst.name}.tmp")
+    tmp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(dst)
+
+
+def merge_resume_rows(
+    *,
+    source_rows: list[dict[str, Any]],
+    resume_path: Path,
+) -> tuple[list[dict[str, Any]], int]:
+    if not resume_path.exists():
+        return source_rows, 0
+
+    resumed_rows = json.loads(resume_path.read_text(encoding="utf-8"))
+    resumed_by_id = {
+        int(row["id"]): row
+        for row in resumed_rows
+        if isinstance(row, dict) and "id" in row
+    }
+    merged = []
+    restored = 0
+    for row in source_rows:
+        if "id" not in row:
+            merged.append(row)
+            continue
+        resumed = resumed_by_id.get(int(row["id"]))
+        if resumed is not None:
+            merged.append(resumed)
+            if is_completed_rerun(resumed) or resumed.get("rerun_result") == "error":
+                restored += 1
+        else:
+            merged.append(row)
+    return merged, restored
+
+
 def rerun_type(
     *,
     type_name: str,
@@ -207,6 +309,9 @@ def rerun_type(
     retries: int,
     retry_delay: float,
     delay: float,
+    workers: int,
+    checkpoint_every: int,
+    resume: bool,
     inplace: bool,
 ) -> dict[str, Any]:
     src = eval_dir / f"{type_name}.json"
@@ -214,7 +319,22 @@ def rerun_type(
         print(f"  !! {type_name}: source json missing ({src}), skipped")
         return {"type": type_name, "skipped": True}
 
-    rows = json.loads(src.read_text(encoding="utf-8"))
+    original_source_text = src.read_text(encoding="utf-8")
+    source_rows = json.loads(original_source_text)
+    original_by_id = {int(r["id"]): r for r in source_rows if "id" in r}
+    dst = output_path_for_type(
+        type_name=type_name,
+        eval_dir=eval_dir,
+        out_dir=out_dir,
+        inplace=inplace,
+    )
+    rows = source_rows
+    restored = 0
+    if resume:
+        rows, restored = merge_resume_rows(source_rows=source_rows, resume_path=dst)
+        if restored:
+            print(f"  .. {type_name}: resumed {restored} prior attempted row(s) from {dst}")
+
     by_id = {int(r["id"]): r for r in rows if "id" in r}
     target_ids = [i for i in ids if i in by_id]
     missing = [i for i in ids if i not in by_id]
@@ -222,83 +342,158 @@ def rerun_type(
         print(f"  !! {type_name}: {len(missing)} ids not found in json: {missing[:8]}...")
 
     old_correct_on_targets = sum(
-        1 for i in target_ids if by_id[i].get("result") == "correct"
+        1
+        for i in target_ids
+        if original_by_id.get(i, {}).get(
+            "orig_result", original_by_id.get(i, {}).get("result")
+        )
+        == "correct"
     )
 
-    new_correct = 0
-    parse_fail = 0
-    api_errors = 0
-    for n, qid in enumerate(target_ids, 1):
+    pending_ids = target_ids
+    if resume:
+        pending_ids = [qid for qid in target_ids if not is_completed_rerun(by_id[qid])]
+    skipped_completed = len(target_ids) - len(pending_ids)
+    if skipped_completed:
+        print(f"  .. {type_name}: skipping {skipped_completed} completed row(s)")
+
+    def _run_one(qid: int) -> dict[str, Any]:
         row = by_id[qid]
         options = row.get("options") or []
         letters = allowed_letters(options)
         prompt = build_prompt(row.get("question") or "", options)
-        raw, err = call_with_retries(
+        raw, err, pred, parse_attempts = call_until_parsed(
             client,
             model=model,
             image_b64=row["image_base64"],
             prompt=prompt,
+            letters=letters,
             max_tokens=max_tokens,
             temperature=temperature,
             retries=retries,
             retry_delay=retry_delay,
         )
+        if delay:
+            time.sleep(delay)
         gold = gold_letter_of(row)
+        return {
+            "qid": qid,
+            "raw": raw,
+            "error": err,
+            "pred": pred,
+            "gold": gold,
+            "parse_attempts": parse_attempts,
+        }
+
+    def _apply_result(result: dict[str, Any]) -> tuple[str, str]:
+        row = by_id[int(result["qid"])]
+        err = result["error"]
+        pred = result["pred"]
+        row["rerun_parse_attempts"] = result.get("parse_attempts")
         if err is not None:
-            api_errors += 1
             row["rerun_error"] = err
             row["rerun_model_letter"] = None
             row["rerun_raw_response"] = None
             row["rerun_result"] = "error"
+            return "API_FAIL", "-"
+
+        row["rerun_raw_response"] = result["raw"]
+        row["rerun_error"] = None
+        if pred is None:
+            row["rerun_model_letter"] = None
+            row["rerun_result"] = "parse_fail"
         else:
-            pred = parse_answer_strict(raw, letters)
-            row["rerun_raw_response"] = raw
-            row["rerun_error"] = None
-            if pred is None:
-                parse_fail += 1
-                row["rerun_model_letter"] = None
-                row["rerun_result"] = "parse_fail"
-            else:
-                row["rerun_model_letter"] = pred
-                ok = bool(gold) and pred == gold
-                row["rerun_result"] = "correct" if ok else "wrong"
-                if ok:
-                    new_correct += 1
-            # Promote rerun result into the canonical fields so downstream
-            # viewers/metrics pick up the corrected answer. Keep originals.
-            row.setdefault("orig_model_letter", row.get("model_letter"))
-            row.setdefault("orig_result", row.get("result"))
-            if pred is not None:
-                row["model_letter"] = pred
-                row["result"] = row["rerun_result"]
-            else:
-                row["model_letter"] = None
-                row["result"] = "parse_fail"
-        if delay:
-            time.sleep(delay)
-        if err is not None:
-            api_state = "API_FAIL"
-            trunc_state = "-"
+            row["rerun_model_letter"] = pred
+            ok = bool(result["gold"]) and pred == result["gold"]
+            row["rerun_result"] = "correct" if ok else "wrong"
+
+        # Promote rerun result into the canonical fields so downstream
+        # viewers/metrics pick up the corrected answer. Keep originals.
+        original_row = original_by_id.get(int(result["qid"]), {})
+        row.setdefault("orig_model_letter", original_row.get("model_letter"))
+        row.setdefault("orig_result", original_row.get("result"))
+        if pred is not None:
+            row["model_letter"] = pred
+            row["result"] = row["rerun_result"]
         else:
-            api_state = "API_OK"
-            trunc_state = "TRUNCATED" if row["rerun_result"] == "parse_fail" else "complete"
+            row["model_letter"] = None
+            row["result"] = "parse_fail"
+        trunc_state = "TRUNCATED" if row["rerun_result"] == "parse_fail" else "complete"
+        return "API_OK", trunc_state
+
+    processed_now = 0
+    worker_count = max(1, int(workers))
+    if pending_ids:
         print(
-            f"    {type_name}: {n}/{len(target_ids)} id={qid} "
-            f"{api_state} {trunc_state}",
+            f"  .. {type_name}: running {len(pending_ids)} request(s) "
+            f"with workers={worker_count}",
             flush=True,
         )
 
-    # write output
-    out_dir.mkdir(parents=True, exist_ok=True)
-    if inplace:
-        bak = src.with_suffix(".json.bak")
-        if not bak.exists():
-            bak.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
-        dst = src
-    else:
-        dst = out_dir / f"{type_name}.json"
-    dst.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    if worker_count == 1:
+        result_iter = (_run_one(qid) for qid in pending_ids)
+        for result in result_iter:
+            processed_now += 1
+            api_state, trunc_state = _apply_result(result)
+            if checkpoint_every and processed_now % checkpoint_every == 0:
+                write_rows_checkpoint(
+                    rows=rows,
+                    dst=dst,
+                    inplace=inplace,
+                    src=src,
+                    original_source_text=original_source_text,
+                )
+            qid = int(result["qid"])
+            done = skipped_completed + processed_now
+            retry_note = (
+                f" attempts={result['parse_attempts']}"
+                if int(result.get("parse_attempts") or 1) > 1
+                else ""
+            )
+            print(
+                f"    {type_name}: {done}/{len(target_ids)} id={qid} "
+                f"{api_state} {trunc_state}{retry_note}",
+                flush=True,
+            )
+    elif pending_ids:
+        with ThreadPoolExecutor(max_workers=min(worker_count, len(pending_ids))) as pool:
+            futures = {pool.submit(_run_one, qid): qid for qid in pending_ids}
+            for future in as_completed(futures):
+                processed_now += 1
+                result = future.result()
+                api_state, trunc_state = _apply_result(result)
+                if checkpoint_every and processed_now % checkpoint_every == 0:
+                    write_rows_checkpoint(
+                        rows=rows,
+                        dst=dst,
+                        inplace=inplace,
+                        src=src,
+                        original_source_text=original_source_text,
+                    )
+                qid = int(result["qid"])
+                done = skipped_completed + processed_now
+                retry_note = (
+                    f" attempts={result['parse_attempts']}"
+                    if int(result.get("parse_attempts") or 1) > 1
+                    else ""
+                )
+                print(
+                    f"    {type_name}: {done}/{len(target_ids)} id={qid} "
+                    f"{api_state} {trunc_state}{retry_note}",
+                    flush=True,
+                )
 
+    write_rows_checkpoint(
+        rows=rows,
+        dst=dst,
+        inplace=inplace,
+        src=src,
+        original_source_text=original_source_text,
+    )
+
+    new_correct = sum(1 for i in target_ids if by_id[i].get("rerun_result") == "correct")
+    parse_fail = sum(1 for i in target_ids if by_id[i].get("rerun_result") == "parse_fail")
+    api_errors = sum(1 for i in target_ids if by_id[i].get("rerun_result") == "error")
     n_t = len(target_ids)
     summary = {
         "type": type_name,
@@ -307,12 +502,15 @@ def rerun_type(
         "new_correct": new_correct,
         "parse_fail": parse_fail,
         "api_errors": api_errors,
+        "skipped_completed": skipped_completed,
+        "processed_now": processed_now,
         "output": str(dst),
     }
     print(
         f"  == {type_name}: targets={n_t} "
         f"old_correct={old_correct_on_targets} -> new_correct={new_correct} "
-        f"(parse_fail={parse_fail}, err={api_errors}) -> {dst.name}"
+        f"(parse_fail={parse_fail}, err={api_errors}, resumed={skipped_completed}) "
+        f"-> {dst.name}"
     )
     return summary
 
@@ -332,6 +530,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Where to write reran <TYPE>.json (default: <eval_dir>/rerun)")
     p.add_argument("--inplace", action="store_true",
                    help="Overwrite the original <TYPE>.json (writes a .json.bak first)")
+    p.add_argument("--resume", action="store_true",
+                   help="Load existing output and skip rows with completed rerun_result")
     # model / API config — defaults match the original eval metadata
     p.add_argument("--model", default="qwen3.5-flash")
     p.add_argument("--base_url", default="https://www.packyapi.com/v1")
@@ -344,11 +544,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--retries", type=int, default=3)
     p.add_argument("--retry_delay", type=float, default=2.0)
     p.add_argument("--delay", type=float, default=0.2)
+    p.add_argument("--workers", "--vlm_workers", dest="workers", type=int, default=1,
+                   help="Maximum number of concurrent VLM requests")
+    p.add_argument("--checkpoint_every", type=int, default=1,
+                   help="Write output every N completed requests (0 = final write only)")
     p.add_argument("--limit", type=int, default=0,
                    help="Debug: cap number of questions per type (0 = no cap)")
     p.add_argument("--dry_run", action="store_true",
                    help="List what would be re-run, make no API calls")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.workers <= 0:
+        p.error("--workers must be positive")
+    if args.checkpoint_every < 0:
+        p.error("--checkpoint_every must be non-negative")
+    return args
 
 
 def resolve_api_key(args: argparse.Namespace) -> str:
@@ -389,6 +598,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  {k:42s} {len(trunc_map[k])}")
     print(f"model           : {args.model} @ {args.base_url}")
     print(f"max_tokens      : {args.max_tokens}  temperature: {args.temperature}")
+    print(f"workers         : {args.workers}")
+    print(f"resume          : {args.resume}")
+    print(f"checkpoint_every: {args.checkpoint_every}")
     print(f"output          : {'IN-PLACE (.bak kept)' if args.inplace else out_dir}")
 
     if args.dry_run:
@@ -414,6 +626,9 @@ def main(argv: list[str] | None = None) -> None:
                 retries=args.retries,
                 retry_delay=args.retry_delay,
                 delay=args.delay,
+                workers=args.workers,
+                checkpoint_every=args.checkpoint_every,
+                resume=args.resume,
                 inplace=args.inplace,
             )
         )
@@ -425,6 +640,9 @@ def main(argv: list[str] | None = None) -> None:
         "max_tokens": args.max_tokens,
         "temperature": args.temperature,
         "inplace": args.inplace,
+        "resume": args.resume,
+        "workers": args.workers,
+        "checkpoint_every": args.checkpoint_every,
         "per_type": summaries,
     }
     report_path = (out_dir if not args.inplace else eval_dir) / "_rerun_report.json"
@@ -432,36 +650,38 @@ def main(argv: list[str] | None = None) -> None:
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n================ RERUN SUMMARY ================")
-    print(f"{'type':42s} {'targets':>8s} {'old✓':>5s} {'new✓':>5s} {'pfail':>6s} {'err':>4s}")
-    tot = {"t": 0, "o": 0, "n": 0, "p": 0, "e": 0}
+    print(
+        f"{'type':42s} {'targets':>8s} {'old_ok':>6s} {'new_ok':>6s} "
+        f"{'pfail':>6s} {'err':>4s} {'skip':>5s} {'done':>5s}"
+    )
+    tot = {"t": 0, "o": 0, "n": 0, "p": 0, "e": 0, "s": 0, "d": 0}
     for s in summaries:
         if s.get("skipped"):
             continue
         print(
             f"{s['type']:42s} {s['truncated_targets']:8d} "
-            f"{s['old_correct_on_targets']:5d} {s['new_correct']:5d} "
-            f"{s['parse_fail']:6d} {s['api_errors']:4d}"
+            f"{s['old_correct_on_targets']:6d} {s['new_correct']:6d} "
+            f"{s['parse_fail']:6d} {s['api_errors']:4d} "
+            f"{s.get('skipped_completed', 0):5d} {s.get('processed_now', 0):5d}"
         )
         tot["t"] += s["truncated_targets"]
         tot["o"] += s["old_correct_on_targets"]
         tot["n"] += s["new_correct"]
         tot["p"] += s["parse_fail"]
         tot["e"] += s["api_errors"]
+        tot["s"] += s.get("skipped_completed", 0)
+        tot["d"] += s.get("processed_now", 0)
     print("-" * 74)
     print(
-        f"{'TOTAL':42s} {tot['t']:8d} {tot['o']:5d} {tot['n']:5d} "
-        f"{tot['p']:6d} {tot['e']:4d}"
+        f"{'TOTAL':42s} {tot['t']:8d} {tot['o']:6d} {tot['n']:6d} "
+        f"{tot['p']:6d} {tot['e']:4d} {tot['s']:5d} {tot['d']:5d}"
     )
     print(f"\nreport written  : {report_path}")
     print(
-        "note: 'old✓' = how many of these truncated rows were scored correct "
-        "before (mostly lucky 'A' hits); 'new✓' = correct after re-run."
+        "note: old_ok = how many of these truncated rows were scored correct "
+        "before (mostly lucky 'A' hits); new_ok = correct after re-run."
     )
 
 
 if __name__ == "__main__":
     main(sys.argv[1:])
-
-
-
-
