@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -39,24 +40,56 @@ def main() -> None:
     parser.add_argument("--scannet_root", required=True, help="dir of ScanNet scene subdirs")
     parser.add_argument("--scannetpp_root", required=True, help="dir of ScanNet++ scene subdirs")
     parser.add_argument("--dropped_out", default="output/occlusion_dropped_ids.json")
+    parser.add_argument(
+        "--progress_every",
+        type=int,
+        default=10,
+        help="print progress every N occlusion questions (default: 10)",
+    )
+    parser.add_argument(
+        "--heartbeat_seconds",
+        type=float,
+        default=30.0,
+        help="print heartbeat if no progress log for this many seconds (default: 30)",
+    )
     args = parser.parse_args()
 
     questions = _load_questions(Path(args.subset))
     occlusion_questions = [
         q for q in questions if q.get("type") == "object_move_occlusion"
     ]
+    total = len(occlusion_questions)
+    unique_scenes = len({str(q.get("scene_id")) for q in occlusion_questions})
+    print(
+        f"[start] object_move_occlusion={total}, unique_scenes={unique_scenes}, "
+        f"progress_every={max(args.progress_every, 1)}, heartbeat_seconds={max(args.heartbeat_seconds, 1.0):.1f}",
+        flush=True,
+    )
 
     cache: dict[str, tuple[dict[int, dict[str, Any]], Any, dict[str, Any]]] = {}
     kept: list[str] = []
     dropped: list[str] = []
     errors: list[tuple[str | None, str, str, str]] = []
     proxy_partial_ids: set[str] = set()
+    loaded_scene_count = 0
+    progress_every = max(args.progress_every, 1)
+    heartbeat_seconds = max(args.heartbeat_seconds, 1.0)
+    started_at = time.perf_counter()
+    last_log_at = started_at
 
-    for q in occlusion_questions:
+    for idx, q in enumerate(occlusion_questions, start=1):
         scene_id = str(q.get("scene_id"))
         image_name = str(q.get("image_name"))
         trace_qid = q.get("trace_question_id")
         target_obj_id = q.get("target_obj_id")
+        if time.perf_counter() - last_log_at >= heartbeat_seconds:
+            elapsed = time.perf_counter() - started_at
+            print(
+                f"[heartbeat] {idx-1}/{total} done, loaded_scenes={loaded_scene_count}, "
+                f"kept={len(kept)}, dropped={len(dropped)}, errors={len(errors)}, elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+            last_log_at = time.perf_counter()
         if not isinstance(trace_qid, str):
             trace_qid = None
         try:
@@ -80,6 +113,10 @@ def main() -> None:
             dataset, sensor = classify(scene_id)
             root = Path(args.scannet_root if dataset == "scannet" else args.scannetpp_root)
             if scene_id not in cache:
+                print(
+                    f"[load] scene {scene_id} ({dataset}{', sensor=' + sensor if sensor else ''})",
+                    flush=True,
+                )
                 if dataset == "scannet":
                     data_source = make_data_source(dataset, root / scene_id)
                 else:
@@ -92,6 +129,7 @@ def main() -> None:
                     if isinstance(obj, dict) and "id" in obj
                 }
                 cache[scene_id] = (obj_by_id, data_source.load_intrinsics(), data_source.load_poses())
+                loaded_scene_count += 1
 
             obj_by_id, intrinsics, poses = cache[scene_id]
             target_obj = obj_by_id.get(target_obj_id_int)
@@ -112,6 +150,16 @@ def main() -> None:
                 dropped.append(trace_qid)
         except Exception as exc:  # pragma: no cover - defensive reporting path
             errors.append((trace_qid, scene_id, image_name, repr(exc)))
+
+        if idx % progress_every == 0 or idx == total:
+            elapsed = time.perf_counter() - started_at
+            print(
+                f"[progress] {idx}/{total} done ({idx / max(total, 1) * 100:.1f}%), "
+                f"loaded_scenes={loaded_scene_count}, kept={len(kept)}, dropped={len(dropped)}, "
+                f"errors={len(errors)}, elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+            last_log_at = time.perf_counter()
 
     dropped_set = set(dropped)
     error_qids = {qid for (qid, _, _, _) in errors if qid is not None}
