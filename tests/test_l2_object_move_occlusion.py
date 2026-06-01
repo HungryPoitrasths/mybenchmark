@@ -5,6 +5,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.qa_generator import (
+    _bbox_fully_in_frame,
     _counterfactual_occlusion_backend,
     _find_object_move_occlusion_changes,
     _make_l1_occlusion_metrics,
@@ -84,6 +85,57 @@ def make_l1_metrics(status: str):
 
 
 class L2ObjectMoveOcclusionTests(unittest.TestCase):
+    def test_bbox_fully_in_frame_accepts_all_corners_in_frame(self) -> None:
+        obj = make_object(1, "box", (0.0, 0.0, 2.0))
+
+        self.assertTrue(
+            _bbox_fully_in_frame(obj, make_camera_pose(), make_camera_intrinsics())
+        )
+
+    def test_bbox_fully_in_frame_rejects_bbox_straddling_image_edge(self) -> None:
+        obj = {
+            "id": 1,
+            "label": "box",
+            "center": [1.6, 0.0, 2.0],
+            "bbox_min": [1.5, -0.1, 1.9],
+            "bbox_max": [1.7, 0.1, 2.1],
+        }
+
+        self.assertFalse(
+            _bbox_fully_in_frame(obj, make_camera_pose(), make_camera_intrinsics())
+        )
+
+    def test_bbox_fully_in_frame_rejects_bbox_partly_behind_camera(self) -> None:
+        obj = {
+            "id": 1,
+            "label": "box",
+            "center": [0.0, 0.0, 0.05],
+            "bbox_min": [-0.01, -0.01, -0.05],
+            "bbox_max": [0.01, 0.01, 0.15],
+        }
+
+        self.assertFalse(
+            _bbox_fully_in_frame(obj, make_camera_pose(), make_camera_intrinsics())
+        )
+
+    def test_bbox_fully_in_frame_uses_distorted_projection(self) -> None:
+        obj = make_object(1, "box", (0.0, 0.0, 2.0))
+        intrinsics = CameraIntrinsics(
+            width=320,
+            height=240,
+            fx=200.0,
+            fy=200.0,
+            cx=160.0,
+            cy=120.0,
+            distortion_model="OPENCV_FISHEYE",
+            distortion_params=np.array(
+                [-0.0313, -0.0037, -0.0024, -7.6e-7],
+                dtype=np.float64,
+            ),
+        )
+
+        self.assertTrue(_bbox_fully_in_frame(obj, make_camera_pose(), intrinsics))
+
     def test_counterfactual_occlusion_backend_rejects_unsupported_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "legacy_backend"):
             _counterfactual_occlusion_backend(
@@ -389,6 +441,80 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertNotIn("attachment", question["question"].lower())
         self.assertIn("blocked by another object", question["question"])
         self.assertIn("does not count as occlusion", question["question"])
+
+    def test_generate_l2_object_move_skips_occlusion_when_target_bbox_not_fully_in_frame(self) -> None:
+        sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
+        cushion = {
+            "id": 2,
+            "label": "cushion",
+            "center": [1.6, 0.0, 2.0],
+            "bbox_min": [1.5, -0.1, 1.9],
+            "bbox_max": [1.7, 0.1, 2.1],
+        }
+        objects = [sofa, cushion]
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=objects,
+            moved_ids={1, 2},
+        )
+        trace_events: list[dict] = []
+
+        with (
+            patch(
+                "src.qa_generator._select_object_move_state",
+                return_value=selected_state,
+            ),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                return_value=[],
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                return_value=(make_l1_metrics("not occluded"), "mesh_ray"),
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
+                return_value=(make_l1_metrics("not visible"), "mesh_ray"),
+            ) as moved_visibility_mock,
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ),
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                attachment_referable_object_ids=[1],
+                attachment_query_objects=[cushion],
+                trace_recorder=trace_events.append,
+                trace_detail="full",
+                enabled_l2_object_move_types={"object_move_occlusion"},
+            )
+
+        self.assertFalse(any(q.get("type") == "object_move_occlusion" for q in questions))
+        moved_visibility_mock.assert_not_called()
+        self.assertTrue(
+            any(
+                event.get("event") == "generator_candidate"
+                and event.get("candidate_kind") == "object_move_occlusion_target"
+                and event.get("candidate_key") == "1:2"
+                and event.get("reason_code") == "occlusion_target_not_fully_in_frame"
+                for event in trace_events
+            )
+        )
 
     def test_generate_l2_object_move_skips_unchanged_attachment_occlusion_state(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))

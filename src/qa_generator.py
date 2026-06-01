@@ -56,7 +56,6 @@ from .referability_checks import (
 from .virtual_ops import (
     MOVEMENT_CANDIDATES,
     apply_movement,
-    apply_viewpoint_change,
     apply_removal,
     apply_coordinate_rotation,
     compute_room_bounds,
@@ -215,6 +214,9 @@ OBJECT_RELATIVE_DIRECTION_NOTE = (
 ALLOCENTRIC_DIRECTION_NOTE = (
     "For horizontal cardinal directions, compare the objects' 3D bounding-box "
     "centers projected onto the floor plan."
+)
+ATTACHMENT_CHAIN_MULTI_SELECT_NOTE = (
+    "This is a multiple-select question; choose all options that apply."
 )
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.5
@@ -983,6 +985,19 @@ def _apply_attachment_surface_text_overrides(
             rendered_options.append(rendered_option)
         updated["options"] = rendered_options
 
+    correct_values = updated.get("correct_values")
+    if isinstance(correct_values, list):
+        rendered_correct_values: list[Any] = []
+        for value in correct_values:
+            if not isinstance(value, str):
+                rendered_correct_values.append(value)
+                continue
+            rendered_value = value
+            for old_label, new_label in deduped_replacements:
+                rendered_value = _replace_attachment_surface_text(rendered_value, old_label, new_label)
+            rendered_correct_values.append(rendered_value)
+        updated["correct_values"] = rendered_correct_values
+
     return updated
 
 
@@ -1230,11 +1245,6 @@ def _default_templates() -> dict:
         "L2_object_move_occlusion": [
             f"From the camera's perspective, imagine moving {{obj_a}} {{direction_with_camera_hint}} by {{distance}}. After this change, what is the occlusion status of {{obj_b}}? {OCCLUSION_DEFINITION_NOTE}",
             f"From the camera's perspective, if {{obj_a}} is moved {{direction_with_camera_hint}} by {{distance}}, which best describes {{obj_b}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
-        ],
-        "L2_viewpoint_move": [
-            f"If the camera translates {{direction_with_camera_hint}} by {{distance}} while keeping its intrinsics and orientation unchanged, what is the occlusion status of {{obj_a}}? {OCCLUSION_DEFINITION_NOTE}",
-            f"After the camera moves {{direction_with_camera_hint}} by {{distance}} without changing its viewing direction, which best describes {{obj_a}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
-            f"If the camera shifts {{direction_with_camera_hint}} by {{distance}} with no change in intrinsics or orientation, is {{obj_a}} not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
         ],
         "L2_object_remove": [
             f"If {{obj_a}} were removed from the scene, what would be the occlusion status of {{obj_b}} from the current viewpoint? {OCCLUSION_DEFINITION_NOTE}",
@@ -1711,6 +1721,42 @@ def _quick_moved_bbox_projection(
         & (uv[:, 1] < float(color_intrinsics.height))
     )
     return float(projected_area), float(np.count_nonzero(in_frame) / len(corners))
+
+
+def _bbox_fully_in_frame(
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> bool:
+    """True iff all 8 corners of obj's AABB project inside the image frame.
+
+    Used to guarantee the model can see the target's full spatial extent before
+    asking an object_move occlusion question. Corners behind the camera or
+    outside the image bounds both fail. Handles distorted intrinsics via
+    project_to_image.
+    """
+    try:
+        bbox_min = np.asarray(obj["bbox_min"], dtype=np.float64)
+        bbox_max = np.asarray(obj["bbox_max"], dtype=np.float64)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if bbox_min.shape != (3,) or bbox_max.shape != (3,):
+        return False
+    if not (np.all(np.isfinite(bbox_min)) and np.all(np.isfinite(bbox_max))):
+        return False
+
+    corners = np.array([
+        [bbox_min[0], bbox_min[1], bbox_min[2]],
+        [bbox_max[0], bbox_min[1], bbox_min[2]],
+        [bbox_min[0], bbox_max[1], bbox_min[2]],
+        [bbox_max[0], bbox_max[1], bbox_min[2]],
+        [bbox_min[0], bbox_min[1], bbox_max[2]],
+        [bbox_max[0], bbox_min[1], bbox_max[2]],
+        [bbox_min[0], bbox_max[1], bbox_max[2]],
+        [bbox_max[0], bbox_max[1], bbox_max[2]],
+    ], dtype=np.float64)
+    records = _project_sample_point_records(corners, camera_pose, color_intrinsics)
+    return len(records) == 8 and all(bool(rec["in_frame"]) for rec in records)
 
 
 def _in_frame_surface_sample_subset(
@@ -5861,10 +5907,16 @@ def generate_l2_object_move(
                 str,
                 _L1OcclusionMetrics,
             ] | None = None
+            occlusion_target_in_frame = (
+                occlusion_enabled
+                and color_intrinsics is not None
+                and _bbox_fully_in_frame(query_obj, camera_pose, color_intrinsics)
+            )
             if (
                 occlusion_enabled
                 and compare_backend is not None
                 and move_source_id in occlusion_allowed_ids
+                and occlusion_target_in_frame
             ):
                 occlusion_unchanged_fallback: tuple[
                     _SelectedObjectMoveState,
@@ -5901,6 +5953,28 @@ def generate_l2_object_move(
                     if occlusion_state is None and occlusion_unchanged_fallback is not None:
                         occlusion_state = occlusion_unchanged_fallback[0]
                         occlusion_visibility = occlusion_unchanged_fallback[1]
+            elif (
+                occlusion_enabled
+                and compare_backend is not None
+                and move_source_id in occlusion_allowed_ids
+                and not occlusion_target_in_frame
+            ):
+                _emit_generator_candidate(
+                    trace_recorder,
+                    trace_detail=trace_detail,
+                    generator="generate_l2_object_move",
+                    candidate_kind="object_move_occlusion_target",
+                    candidate_key=_candidate_key(move_source_id, query_obj_id),
+                    object_ids=[move_source_id, query_obj_id],
+                    status="skipped",
+                    reason_code="occlusion_target_not_fully_in_frame",
+                    reason_detail=(
+                        "target object's bbox is not fully inside the image frame in the "
+                        "original scene, so its full extent is not visible; the occlusion "
+                        "outcome after moving would be underdetermined from the input image"
+                    ),
+                    evidence={"target_obj_id": query_obj_id},
+                )
 
             if occlusion_state is not None and occlusion_visibility is not None:
                 (
@@ -6086,343 +6160,6 @@ def generate_l2_object_move(
             with open(_log_path, "a", encoding="utf-8") as _f:
                 _f.write(_json.dumps(_debug_log, default=str) + "\n")
     return result
-
-
-def generate_l2_viewpoint_move(
-    objects: list[dict],
-    camera_pose: CameraPose,
-    color_intrinsics: CameraIntrinsics | None,
-    depth_image,
-    depth_intrinsics,
-    occlusion_backend: str,
-    ray_caster,
-    instance_mesh_data: InstanceMeshData | None,
-    templates: dict,
-    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
-    trace_detail: str = "light",
-    generator_progress_log_seconds: float = 15.0,
-    slow_generator_warn_seconds: float = 60.0,
-    max_questions: int | None = None,
-) -> list[dict]:
-    """Generate L2.2 viewpoint-movement questions.
-
-    Compares target-object visibility before/after moving the observer.
-    """
-    questions: list[dict] = []
-    if max_questions is not None:
-        max_questions = max(int(max_questions), 0)
-        if max_questions <= 0:
-            _emit_generator_summary(
-                trace_recorder,
-                "generate_l2_viewpoint_move",
-                generated_count=0,
-                candidate_count=0,
-                generated_candidate_count=0,
-                skipped_candidate_count=0,
-                reason_counts={"budget_exhausted": 1},
-                details={"occlusion_mode": "l1_style"},
-            )
-            return questions
-    if color_intrinsics is None:
-        _emit_generator_summary(
-            trace_recorder,
-            "generate_l2_viewpoint_move",
-            generated_count=0,
-            candidate_count=0,
-            generated_candidate_count=0,
-            skipped_candidate_count=0,
-            reason_counts={"missing_color_intrinsics": 1},
-            details={"occlusion_mode": "l1_style"},
-        )
-        return questions
-    tpl_list = templates.get("L2_viewpoint_move", _default_templates()["L2_viewpoint_move"])
-    compare_backend = _counterfactual_occlusion_backend(
-        occlusion_backend, ray_caster, instance_mesh_data,
-    )
-    scene_context = _build_modified_scene(ray_caster, instance_mesh_data, set())
-    reason_counts: Counter[str] = Counter()
-    candidate_count = int(len(objects) * 4 * 3)
-    generated_candidate_count = 0
-    processed_candidate_count = 0
-    generator_started_at = time.perf_counter()
-    last_progress_logged_at = generator_started_at
-    slow_warning_emitted = False
-    original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
-    default_missing_visibility = (
-        None,
-        "mesh_ray",
-        "missing_original_visibility",
-        _make_l1_occlusion_metrics(0.0, 0.0, 1.0, 0, 0, 0, "mesh_ray"),
-    )
-
-    def _budget_reached() -> bool:
-        return max_questions is not None and len(questions) >= max_questions
-
-    def _original_visibility_for_obj(
-        obj: dict,
-    ) -> tuple[str | None, str, str, _L1OcclusionMetrics]:
-        obj_id = int(obj["id"])
-        if obj_id in original_visibility:
-            return original_visibility[obj_id]
-        metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
-            obj=obj,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            depth_image=depth_image,
-            depth_intrinsics=depth_intrinsics,
-            occlusion_backend=compare_backend,
-            ray_caster=ray_caster,
-            instance_mesh_data=instance_mesh_data,
-            modified_scene=scene_context,
-        )
-        status, reason_code, reason_detail = _resolve_counterfactual_l1_visibility_status(metrics)
-        del reason_detail
-        original_visibility[obj_id] = (status, source_used, reason_code, metrics)
-        return original_visibility[obj_id]
-
-    for direction, prompt_direction in (
-        ("right", "right"),
-        ("left", "left"),
-        ("forward", "forward"),
-        ("back", "backward"),
-    ):
-        for dist in (1.0, 2.0, 3.0):
-            new_pose = apply_viewpoint_change(camera_pose, direction, dist)
-            for obj in objects:
-                if _budget_reached():
-                    _emit_generator_summary(
-                        trace_recorder,
-                        "generate_l2_viewpoint_move",
-                        generated_count=len(questions),
-                        candidate_count=candidate_count,
-                        generated_candidate_count=generated_candidate_count,
-                        skipped_candidate_count=max(candidate_count - generated_candidate_count, 0),
-                        reason_counts=dict(reason_counts),
-                        details={
-                            "compare_backend": compare_backend,
-                            "occlusion_mode": "l1_style",
-                            "budget_exhausted": True,
-                        },
-                    )
-                    return questions
-                processed_candidate_count += 1
-                progress_context = {
-                    "object_id": int(obj["id"]),
-                    "direction": prompt_direction,
-                    "distance_m": f"{dist:.1f}",
-                }
-                candidate_key = _candidate_key(direction, f"{dist:.1f}", obj["id"])
-                object_ids = [int(obj["id"])]
-                try:
-                    old_status, old_source, old_reason_code, old_metrics = _original_visibility_for_obj(obj)
-                    if old_status is None:
-                        old_status, old_source, old_reason_code, old_metrics = original_visibility.get(
-                            int(obj["id"]),
-                            default_missing_visibility,
-                        )
-                    if old_status is None:
-                        reason_counts["original_visibility_unresolved"] += 1
-                        _emit_generator_candidate(
-                            trace_recorder,
-                            trace_detail=trace_detail,
-                            generator="generate_l2_viewpoint_move",
-                            candidate_kind="viewpoint_target",
-                            candidate_key=candidate_key,
-                            object_ids=object_ids,
-                            status="skipped",
-                            reason_code="original_visibility_unresolved",
-                            reason_detail=f"original visibility could not be resolved: {old_reason_code}",
-                            evidence={
-                                "camera_translation": prompt_direction,
-                                "distance_m": float(dist),
-                                "original_source": old_source,
-                                "original_resolution": old_reason_code,
-                                "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                            },
-                        )
-                        continue
-
-                    new_metrics, new_source = _compute_l1_style_visibility_metrics_for_static_target(
-                        obj=obj,
-                        camera_pose=new_pose,
-                        color_intrinsics=color_intrinsics,
-                        depth_image=None,
-                        depth_intrinsics=None,
-                        occlusion_backend=compare_backend,
-                        ray_caster=ray_caster,
-                        instance_mesh_data=instance_mesh_data,
-                        modified_scene=scene_context,
-                    )
-                    new_status, new_reason_code, new_reason_detail = _resolve_counterfactual_l1_visibility_status(new_metrics)
-                    if new_status is None:
-                        reason_counts["counterfactual_visibility_unresolved"] += 1
-                        _emit_generator_candidate(
-                            trace_recorder,
-                            trace_detail=trace_detail,
-                            generator="generate_l2_viewpoint_move",
-                            candidate_kind="viewpoint_target",
-                            candidate_key=candidate_key,
-                            object_ids=object_ids,
-                            status="skipped",
-                            reason_code="counterfactual_visibility_unresolved",
-                            reason_detail=f"counterfactual visibility could not be resolved: {new_reason_detail}",
-                            evidence={
-                                "camera_translation": prompt_direction,
-                                "distance_m": float(dist),
-                                "original_status": old_status,
-                                "original_source": old_source,
-                                "new_source": new_source,
-                                "new_resolution": new_reason_code,
-                                "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                                "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
-                            },
-                        )
-                        continue
-
-                    if old_status == new_status:
-                        reason_counts["visibility_unchanged"] += 1
-                        _emit_generator_candidate(
-                            trace_recorder,
-                            trace_detail=trace_detail,
-                            generator="generate_l2_viewpoint_move",
-                            candidate_kind="viewpoint_target",
-                            candidate_key=candidate_key,
-                            object_ids=object_ids,
-                            status="skipped",
-                            reason_code="visibility_unchanged",
-                            reason_detail="camera motion does not change the L1-style occlusion state of the target",
-                            evidence={
-                                "camera_translation": prompt_direction,
-                                "distance_m": float(dist),
-                                "original_status": old_status,
-                                "new_status": new_status,
-                                "original_source": old_source,
-                                "new_source": new_source,
-                                "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                                "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
-                            },
-                        )
-                        continue
-
-                    if not _is_l2_occlusion_state_transition(old_status, new_status):
-                        reason_counts["visibility_transition_rule_failed"] += 1
-                        _emit_generator_candidate(
-                            trace_recorder,
-                            trace_detail=trace_detail,
-                            generator="generate_l2_viewpoint_move",
-                            candidate_kind="viewpoint_target",
-                            candidate_key=candidate_key,
-                            object_ids=object_ids,
-                            status="skipped",
-                            reason_code="requires_visibility_state_change",
-                            reason_detail=(
-                                "L2 viewpoint occlusion questions require the target to be visible "
-                                "before the move and change to another valid L1-style occlusion state"
-                            ),
-                            evidence={
-                                "camera_translation": prompt_direction,
-                                "distance_m": float(dist),
-                                "original_status": old_status,
-                                "new_status": new_status,
-                                "original_source": old_source,
-                                "new_source": new_source,
-                                "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                                "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
-                            },
-                        )
-                        continue
-
-                    tpl = random.choice(tpl_list)
-                    question_text = tpl.format(
-                        direction=prompt_direction,
-                        direction_with_camera_hint=_direction_with_camera_hint(
-                            prompt_direction,
-                            moving_subject="camera",
-                        ),
-                        distance=f"{dist:.0f}m",
-                        obj_a=_the(obj["label"]),
-                    )
-                    question_text = _with_occlusion_definition(question_text)
-                    options, answer = generate_options(
-                        new_status,
-                        L1_OCCLUSION_STATES,
-                        n_options=3,
-                    )
-                    questions.append({
-                        "level": "L2",
-                        "type": "viewpoint_move",
-                        "question": question_text,
-                        "options": options,
-                        "answer": answer,
-                        "correct_value": new_status,
-                        "obj_a_id": obj["id"],
-                        "obj_a_label": obj["label"],
-                        "old_visibility": old_status,
-                        "new_visibility": new_status,
-                        "old_visibility_source": old_source,
-                        "new_visibility_source": new_source,
-                        "old_visibility_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                        "new_visibility_metrics": _l1_occlusion_metrics_payload(new_metrics),
-                        "camera_motion_model": "translate_only",
-                        "camera_intrinsics_unchanged": True,
-                        "camera_orientation_unchanged": True,
-                        "mentioned_objects": [
-                            _mention("target", obj["label"], obj["id"]),
-                        ],
-                        "relation_unchanged": False,
-                    })
-                    generated_candidate_count += 1
-                    reason_counts["generated"] += 1
-                    _emit_generator_candidate(
-                        trace_recorder,
-                        trace_detail=trace_detail,
-                        generator="generate_l2_viewpoint_move",
-                        candidate_kind="viewpoint_target",
-                        candidate_key=candidate_key,
-                        object_ids=object_ids,
-                        status="generated",
-                        reason_code="generated",
-                        reason_detail="camera motion changes the target's L1-style occlusion state",
-                        evidence={
-                            "camera_translation": prompt_direction,
-                            "distance_m": float(dist),
-                            "original_status": old_status,
-                            "new_status": new_status,
-                            "original_source": old_source,
-                            "new_source": new_source,
-                            "original_metrics": _l1_occlusion_metrics_payload(old_metrics),
-                            "new_metrics": _l1_occlusion_metrics_payload(new_metrics),
-                        },
-                        question_preview=_question_preview_payload(questions[-1]),
-                    )
-                finally:
-                    last_progress_logged_at, slow_warning_emitted = _maybe_log_generator_progress(
-                        generator="generate_l2_viewpoint_move",
-                        started_at=generator_started_at,
-                        last_logged_at=last_progress_logged_at,
-                        slow_warning_emitted=slow_warning_emitted,
-                        processed_count=processed_candidate_count,
-                        total_count=candidate_count,
-                        generated_count=len(questions),
-                        progress_log_seconds=generator_progress_log_seconds,
-                        slow_warn_seconds=slow_generator_warn_seconds,
-                        context=progress_context,
-                    )
-
-    _emit_generator_summary(
-        trace_recorder,
-        "generate_l2_viewpoint_move",
-        generated_count=len(questions),
-        candidate_count=candidate_count,
-        generated_candidate_count=generated_candidate_count,
-        skipped_candidate_count=max(candidate_count - generated_candidate_count, 0),
-        reason_counts=dict(reason_counts),
-        details={
-            "compare_backend": compare_backend,
-            "occlusion_mode": "l1_style",
-        },
-    )
-    return questions
 
 
 def generate_l2_object_remove(
@@ -7523,11 +7260,12 @@ def generate_l3_attachment_chain(
     The question does NOT state which objects are on which; the model must
     infer the full chain from the image.
 
-    Options:
-      - "{B}"               (1-hop child only  — wrong, misses C)
-      - "{C}"               (2-hop grandchild only — wrong, misses B)
-      - "Both {B} and {C}" (correct — full chain)
-      - "{D}"               (non-chain neighbour — wrong)
+    This is a MULTIPLE-SELECT question. Options (in shuffled order):
+      - "{B}"   (1-hop child      — a correct selection)
+      - "{C}"   (2-hop grandchild — a correct selection)
+      - "{D}"   (non-chain neighbour — wrong, must NOT be selected)
+    Both {B} and {C} are correct; selecting only one is the typical 1-hop
+    failure, and selecting {D} is the distractor failure.
     """
     questions: list[dict] = []
     obj_map = {o["id"]: o for o in objects}
@@ -7578,23 +7316,28 @@ def generate_l3_attachment_chain(
 
                 tpl = random.choice(tpl_list)
                 question_text = tpl.format(obj_a=_the(grandparent["label"]))
+                question_text = f"{question_text} {ATTACHMENT_CHAIN_MULTI_SELECT_NOTE}"
 
-                opt_parent    = _the(parent["label"])
+                opt_parent     = _the(parent["label"])
                 opt_grandchild = _the(grandchild["label"])
-                opt_both      = f"Both {_the(parent['label'])} and {_the(grandchild['label'])}"
-                opt_neighbor  = _the(neighbor["label"])
+                opt_neighbor   = _the(neighbor["label"])
 
-                options = [opt_parent, opt_grandchild, opt_both, opt_neighbor]
+                options = [opt_parent, opt_grandchild, opt_neighbor]
                 random.shuffle(options)
-                answer_letter = chr(65 + options.index(opt_both))
+                correct_values = [opt_parent, opt_grandchild]
+                answer_letters = sorted(
+                    chr(65 + options.index(value)) for value in correct_values
+                )
 
                 questions.append(_annotate_attachment_trace_reason({
                     "level": "L3",
                     "type": "attachment_chain",
                     "question": question_text,
                     "options": options,
-                    "answer": answer_letter,
-                    "correct_value": opt_both,
+                    "multi_select": True,
+                    "answer": answer_letters,
+                    "correct_values": correct_values,
+                    "correct_value": "; ".join(correct_values),
                     "chain_depth": 2,
                     "grandparent_id": grandparent_id,
                     "grandparent_label": grandparent["label"],
@@ -9704,40 +9447,6 @@ def generate_all_questions(
             if question.get("_trace_source") == "generate_l2_object_move"
         ),
         details={"audit_mode": "summary_only"},
-    )
-    _emit_generator_context(
-        trace_recorder,
-        "generate_l2_viewpoint_move",
-        {
-            "question_object_count": len(objects_uniq),
-            "candidate_motion_count": 12,
-            "occlusion_backend": occlusion_backend,
-            "occlusion_mode": "l1_style",
-        },
-    )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_viewpoint_move",
-            lambda: _register_generated_questions(
-                "generate_l2_viewpoint_move",
-                generate_l2_viewpoint_move(
-                objects_uniq,
-                camera_pose,
-                color_intrinsics,
-                depth_image,
-                depth_intrinsics,
-                occlusion_backend,
-                ray_caster,
-                instance_mesh_data,
-                templates,
-                trace_recorder=trace_recorder,
-                trace_detail=trace_detail,
-                generator_progress_log_seconds=generator_progress_log_seconds,
-                slow_generator_warn_seconds=slow_generator_warn_seconds,
-                max_questions=_question_type_budget("viewpoint_move"),
-            ),
-        ),
-    )
     )
     _emit_generator_context(
         trace_recorder,
