@@ -52,19 +52,19 @@ SYSTEM_PROMPT = (
 )
 
 PROMPT_SUFFIX = (
-    "First work through your full reasoning, then give your final choice as the LAST line.\n"
-    "Keep your reasoning concise so the final Answer line is not truncated.\n"
+    "Work through your reasoning briefly, then give your final choice as the LAST line.\n"
+    "Keep your reasoning as short as possible (a few sentences at most) so the final Answer line is not truncated.\n"
     "Return this format:\n"
-    "Reasoning: <full reasoning>\n"
+    "Reasoning: <brief reasoning>\n"
     "Answer: <single letter>"
 )
 
 MULTI_SELECT_PROMPT_SUFFIX = (
-    "First work through your full reasoning, then give your final choice as the LAST line.\n"
+    "Work through your reasoning briefly, then give your final choice as the LAST line.\n"
     "If more than one option is correct, list all letters comma-separated.\n"
-    "Keep your reasoning concise so the final Answer line is not truncated.\n"
+    "Keep your reasoning as short as possible (a few sentences at most) so the final Answer line is not truncated.\n"
     "Return this format:\n"
-    "Reasoning: <full reasoning>\n"
+    "Reasoning: <brief reasoning>\n"
     "Answer: <letter(s)>"
 )
 
