@@ -2954,6 +2954,20 @@ def _support_chain_graph_has_two_hop_chain(
     )
 
 
+def _attachment_graph_has_two_hop_chain(
+    attachment_graph: dict[int, list[int]] | dict[str, list[int]],
+) -> bool:
+    graph = {
+        int(parent_id): [int(child_id) for child_id in (child_ids or [])]
+        for parent_id, child_ids in (attachment_graph or {}).items()
+    }
+    return any(
+        graph.get(int(child_id))
+        for child_ids in graph.values()
+        for child_id in child_ids
+    )
+
+
 def _frame_has_l3_attachment_chain(
     frame: dict[str, object],
     referability_entry: dict[str, object] | None,
@@ -4265,6 +4279,7 @@ def run_pipeline(
     if dataset not in ("scannet", "scannetpp"):
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
     l3_attachment_chain_only = only_question_types == ["L3_attachment_chain"]
+    l3_attachment_move_only = only_question_types == ["L3_attachment_move"]
 
     meta_dir = output_dir / "scene_metadata"
     questions_dir = output_dir / "questions"
@@ -4537,6 +4552,15 @@ def run_pipeline(
                 scene_questions=scene_questions,
                 frame_count=0,
                 pipeline_outcome="no_two_hop_attachment_chain",
+            )
+            continue
+        if l3_attachment_move_only and not _attachment_graph_has_two_hop_chain(attachment_graph):
+            logger.info("Scene %s has no two-hop attachment graph for attachment_move; skipping", scene_id)
+            _persist_completed_scene(
+                scene_id,
+                scene_questions=scene_questions,
+                frame_count=0,
+                pipeline_outcome="no_two_hop_attachment_move_chain",
             )
             continue
 
@@ -5553,7 +5577,7 @@ def main():
             "L1_direction_agent, L2_object_move_agent, L2_object_move_distance, "
             "L2_object_move_object_centric, L2_object_rotate_object_centric, "
             "L2_object_move_allocentric, L2_object_remove, "
-            "L3_attachment_chain, L3_coordinate_rotation_agent, L3_coordinate_rotation_object_centric, "
+            "L3_attachment_chain, L3_attachment_move, L3_coordinate_rotation_agent, L3_coordinate_rotation_object_centric, "
             "L3_coordinate_rotation_allocentric. When omitted, all types are generated."
         ),
     )
