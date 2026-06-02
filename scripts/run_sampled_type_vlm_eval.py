@@ -515,6 +515,16 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
+def _is_reasoning_chat_model(model: str) -> bool:
+    """GPT-5 / o-series chat models reject `max_tokens` and non-default `temperature`.
+
+    They require `max_completion_tokens` and only support the default temperature (1),
+    so callers must omit `temperature` and rename the token-budget parameter.
+    """
+    name = (model or "").lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
     if api_provider == "anthropic":
         from anthropic import Anthropic
@@ -617,9 +627,9 @@ def call_model(
         ]
         return "\n".join(chunks).strip()
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
+    chat_kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
@@ -632,9 +642,15 @@ def call_model(
                 ],
             },
         ],
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
+    }
+    if _is_reasoning_chat_model(model):
+        # GPT-5 / o-series: use max_completion_tokens and only the default temperature.
+        chat_kwargs["max_completion_tokens"] = max_tokens
+    else:
+        chat_kwargs["max_tokens"] = max_tokens
+        chat_kwargs["temperature"] = temperature
+
+    response = client.chat.completions.create(**chat_kwargs)
     return (response.choices[0].message.content or "").strip()
 
 
