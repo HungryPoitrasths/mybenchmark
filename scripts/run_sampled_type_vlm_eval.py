@@ -651,7 +651,13 @@ def call_model(
         chat_kwargs["temperature"] = temperature
 
     response = client.chat.completions.create(**chat_kwargs)
-    return (response.choices[0].message.content or "").strip()
+    choices = getattr(response, "choices", None)
+    if not choices:
+        # Some OpenAI-compatible proxies return a bare string / error payload with a
+        # 200 status instead of a chat-completion object; surface it instead of an
+        # opaque AttributeError so the retry/error path logs what came back.
+        raise RuntimeError(f"unexpected API response (no choices): {response!r:.500}")
+    return (choices[0].message.content or "").strip()
 
 
 def load_existing_results(path: Path) -> dict[str, dict[str, Any]]:
