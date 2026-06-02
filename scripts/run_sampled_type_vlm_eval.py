@@ -235,6 +235,57 @@ def load_questions(roots: list[Path], subset_path: Path | None) -> tuple[list[di
     return _load_questions_from_roots(roots)
 
 
+def load_fixed_questions(benchmark_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    with benchmark_path.open(encoding="utf-8") as f:
+        data = json.load(f)
+
+    if isinstance(data, dict):
+        raw_questions = data.get("questions", [])
+        metadata = dict(data.get("metadata", {}))
+        sampling_stats = dict(data.get("sampling_stats", {}))
+    elif isinstance(data, list):
+        raw_questions = data
+        metadata = {}
+        sampling_stats = {}
+    else:
+        raise ValueError(f"Unsupported benchmark structure: {benchmark_path}")
+
+    if not isinstance(raw_questions, list):
+        raise ValueError(f"Unsupported benchmark structure: {benchmark_path}")
+
+    questions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    duplicate_count = 0
+    for q in raw_questions:
+        if not isinstance(q, dict):
+            continue
+        item = dict(q)
+        item["_dataset"] = str(item.get("_dataset") or item.get("dataset") or "unknown")
+        item["_source_root"] = str(benchmark_path.parent)
+        item["_source_benchmark"] = str(benchmark_path)
+        uid = _question_uid(item)
+        item["question_uid"] = uid
+        dedupe_key = _question_dedupe_key(item)
+        if dedupe_key in seen:
+            duplicate_count += 1
+            continue
+        seen.add(dedupe_key)
+        questions.append(item)
+
+    metadata.update(
+        {
+            "source_files": [str(benchmark_path)],
+            "source_file_count": 1,
+            "deduped_question_count": len(questions),
+            "duplicate_question_count": duplicate_count,
+            "dedupe_rule": "scene_id + image_name + question",
+            "input_mode": "benchmark_file",
+            "benchmark_file": str(benchmark_path),
+        }
+    )
+    return questions, metadata, sampling_stats
+
+
 def _qtype_sort_key(qtype: str) -> tuple[int, str]:
     try:
         return (QTYPE_ORDER.index(qtype), qtype)
@@ -1263,15 +1314,20 @@ def run_api_question(
 
 
 def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    roots = [Path(root) for root in args.root]
-    subset_path = Path(args.subset) if args.subset else None
-    all_questions, metadata = load_questions(roots, subset_path)
-    selected, sampling_stats = sample_questions(
-        all_questions,
-        per_type=args.per_type,
-        scene_cap=args.scene_cap,
-        seed=args.seed,
-    )
+    if args.benchmark_file:
+        benchmark_path = Path(args.benchmark_file)
+        selected, metadata, sampling_stats = load_fixed_questions(benchmark_path)
+        all_questions = selected
+    else:
+        roots = [Path(root) for root in args.root]
+        subset_path = Path(args.subset) if args.subset else None
+        all_questions, metadata = load_questions(roots, subset_path)
+        selected, sampling_stats = sample_questions(
+            all_questions,
+            per_type=args.per_type,
+            scene_cap=args.scene_cap,
+            seed=args.seed,
+        )
 
     metadata.update(
         {
@@ -1430,6 +1486,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Sample questions by type, run a VLM, and build an HTML report."
     )
     parser.add_argument("--root", action="append", default=None, help="Output root to scan for benchmark.json files")
+    parser.add_argument("--benchmark_file", default=None, help="Fixed benchmark JSON to evaluate directly; skips runtime sampling")
     parser.add_argument("--subset", default=None, help="Benchmark subset JSON to sample from; overrides --root when set")
     parser.add_argument("--per_type", type=int, default=50, help="Questions sampled per type")
     parser.add_argument("--scene_cap", type=int, default=3, help="Max questions per scene within each type before relaxation")
@@ -1480,8 +1537,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     if args.root is None:
         args.root = ["output/pilot", "output/scannetpp_polit"]
-    if args.subset is None:
-        args.subset = "output/benchmark_subset.json"
     if args.scannet_image_root is None:
         args.scannet_image_root = ["data/scannet"]
     if args.scannetpp_image_root is None:
@@ -1494,6 +1549,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--checkpoint_every must be positive")
     if args.vlm_workers <= 0:
         parser.error("--vlm_workers must be positive")
+    if args.benchmark_file:
+        benchmark_path = Path(args.benchmark_file)
+        if not benchmark_path.exists():
+            parser.error(f"--benchmark_file not found: {args.benchmark_file}")
     if args.subset:
         subset_path = Path(args.subset)
         if not subset_path.exists():
