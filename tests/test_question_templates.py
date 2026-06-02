@@ -309,6 +309,48 @@ class QuestionTemplateTests(unittest.TestCase):
             )
             self.assertNotIn("L2_object_rotate_object_centric", normalized)
 
+    def test_default_l3_attachment_move_templates_include_required_placeholders(self) -> None:
+        templates = _default_templates()
+
+        for key in (
+            "L3_attachment_move_agent",
+            "L3_attachment_move_object_centric",
+            "L3_attachment_move_allocentric",
+        ):
+            self.assertIn(key, templates)
+            self.assertTrue(templates[key])
+
+        agent_tpl = templates["L3_attachment_move_agent"][0]
+        self.assertIn("camera coordinate frame", agent_tpl)
+        self.assertIn("{obj_root}", agent_tpl)
+        self.assertIn("{obj_query}", agent_tpl)
+        self.assertIn("{obj_ref}", agent_tpl)
+        self.assertIn("{direction_with_camera_hint}", agent_tpl)
+        self.assertIn("{distance}", agent_tpl)
+        self.assertNotIn("{obj_c}", agent_tpl)
+        agent_tpl.format(
+            obj_root="the table",
+            obj_query="the cup",
+            obj_ref="the lamp",
+            direction_with_camera_hint="left",
+            distance="1.0m",
+        )
+
+        object_centric_tpl = templates["L3_attachment_move_object_centric"][0]
+        self.assertIn("{obj_root}", object_centric_tpl)
+        self.assertIn("{obj_query}", object_centric_tpl)
+        self.assertIn("{obj_ref}", object_centric_tpl)
+        self.assertIn("{direction}", object_centric_tpl)
+        self.assertIn("{distance}", object_centric_tpl)
+
+        allocentric_tpl = templates["L3_attachment_move_allocentric"][0]
+        self.assertIn("{obj_root}", allocentric_tpl)
+        self.assertIn("{obj_query}", allocentric_tpl)
+        self.assertIn("{obj_ref}", allocentric_tpl)
+        self.assertIn("{direction}", allocentric_tpl)
+        self.assertIn("{distance}", allocentric_tpl)
+        self.assertIn("{camera_cardinal}", allocentric_tpl)
+
     def test_direction_with_camera_hint_uses_subject_specific_forward_backward_wording(self) -> None:
         self.assertEqual(
             _direction_with_camera_hint("forward"),

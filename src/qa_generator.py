@@ -207,6 +207,13 @@ CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C = (
     "directions, compare the objects' 3D bounding-box centers projected onto "
     "the floor plane; above/below use the vertical spatial rule.)"
 )
+CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_REF = (
+    "(Use {obj_ref} as the reference origin and align the axes with the camera "
+    "coordinate frame: front means farther from the camera, back means toward "
+    "the camera, and left/right follow the image left/right. For horizontal "
+    "directions, compare the objects' 3D bounding-box centers projected onto "
+    "the floor plane; above/below use the vertical spatial rule.)"
+)
 OBJECT_RELATIVE_DIRECTION_NOTE = (
     "For horizontal directions, compare the objects' 3D bounding-box centers "
     "projected onto the floor plane; above/below use the vertical spatial rule."
@@ -1274,8 +1281,8 @@ def _default_templates() -> dict:
             "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?",
         ],
         "L3_attachment_move_agent": [
-            f"Suppose {{obj_root}} is moved {{direction_with_camera_hint}} by {{distance}}. After this change, from the camera's perspective, what is the position of {{obj_query}} relative to {{obj_ref}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C}",
-            f"If {{obj_root}} were shifted {{direction_with_camera_hint}} by {{distance}}, from the camera's perspective where would {{obj_query}} be relative to {{obj_ref}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C}",
+            f"Suppose {{obj_root}} is moved {{direction_with_camera_hint}} by {{distance}}. After this change, from the camera's perspective, what is the position of {{obj_query}} relative to {{obj_ref}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_REF}",
+            f"If {{obj_root}} were shifted {{direction_with_camera_hint}} by {{distance}}, from the camera's perspective where would {{obj_query}} be relative to {{obj_ref}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_REF}",
         ],
         "L3_attachment_move_object_centric": [
             f"Imagine you are {{obj_query}} and initially facing the camera. If {{obj_root}} were shifted {{direction}} by {{distance}}, from your perspective in which horizontal direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
@@ -7612,6 +7619,9 @@ def generate_l3_attachment_move(
                                         answer = chr(65 + options.index(new_dir))
 
                                 question_text = tpl.format(
+                                    obj_a=_the(root_obj["label"]),
+                                    obj_b=_the(query_obj["label"]),
+                                    obj_c=_the(ref["label"]),
                                     obj_root=_the(root_obj["label"]),
                                     obj_query=_the(query_obj["label"]),
                                     obj_ref=_the(ref["label"]),
