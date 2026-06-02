@@ -1273,6 +1273,18 @@ def _default_templates() -> dict:
             "If {obj_a} were relocated elsewhere in the room, which of the following objects would also change position?",
             "Imagine {obj_a} is moved to a new spot. Which of the following objects would also be displaced as a result?",
         ],
+        "L3_attachment_move_agent": [
+            f"Suppose {{obj_root}} is moved {{direction_with_camera_hint}} by {{distance}}. After this change, from the camera's perspective, what is the position of {{obj_query}} relative to {{obj_ref}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C}",
+            f"If {{obj_root}} were shifted {{direction_with_camera_hint}} by {{distance}}, from the camera's perspective where would {{obj_query}} be relative to {{obj_ref}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C}",
+        ],
+        "L3_attachment_move_object_centric": [
+            f"Imagine you are {{obj_query}} and initially facing the camera. If {{obj_root}} were shifted {{direction}} by {{distance}}, from your perspective in which horizontal direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"If {{obj_root}} is moved {{direction}} by {{distance}}, then from {{obj_query}}'s perspective (initially facing the camera), where is {{obj_ref}} in horizontal direction terms? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+        ],
+        "L3_attachment_move_allocentric": [
+            f"If {{obj_root}} is moved {{distance}} to the {{direction}}, and the camera faces {{camera_cardinal}}, on the floor plan in which cardinal direction is {{obj_query}} from {{obj_ref}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
+            f"After moving {{obj_root}} {{distance}} to the {{direction}}, with camera facing {{camera_cardinal}}, what is the cardinal direction of {{obj_query}} from {{obj_ref}} on the room layout? ({ALLOCENTRIC_DIRECTION_NOTE})",
+        ],
 
         # --- Ego-centric (rewritten — 方案B) ---
         "L3_coordinate_rotation_agent": [
@@ -7359,6 +7371,300 @@ def generate_l3_attachment_chain(
     return questions
 
 
+def generate_l3_attachment_move(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    attached_by: dict[int, int],
+    camera_pose: CameraPose,
+    templates: dict,
+    room_bounds: dict | None = None,
+    collision_objects: list[dict] | None = None,
+    movement_objects: list[dict] | None = None,
+    object_map: dict[int, dict] | None = None,
+    attachment_referable_object_ids: list[int] | None = None,
+    attachment_query_objects: list[dict] | None = None,
+    trace_recorder: Callable[[dict[str, Any]], None] | None = None,
+    trace_detail: str = "light",
+) -> list[dict]:
+    """Generate L3 attachment-move direction questions across three frames."""
+    _ = attached_by
+    _ = attachment_query_objects
+    referable_object_ids = {int(o["id"]) for o in objects}
+    attachment_referable_ids = (
+        _normalize_object_id_set(
+            attachment_referable_object_ids,
+            "attachment_referable_object_ids",
+        )
+        if attachment_referable_object_ids is not None
+        else set(referable_object_ids)
+    )
+    movement_scene_objects = _merge_scene_objects_by_id(
+        movement_objects if movement_objects is not None else objects,
+        collision_objects if collision_objects is not None else [],
+    )
+    obj_map = object_map if object_map is not None else {
+        int(o["id"]): o for o in movement_scene_objects
+    }
+    tpl_agent = templates.get(
+        "L3_attachment_move_agent",
+        _default_templates()["L3_attachment_move_agent"],
+    )
+    tpl_object_centric = templates.get(
+        "L3_attachment_move_object_centric",
+        _default_templates()["L3_attachment_move_object_centric"],
+    )
+    tpl_allocentric = templates.get(
+        "L3_attachment_move_allocentric",
+        _default_templates()["L3_attachment_move_allocentric"],
+    )
+    camera_center = np.asarray(camera_pose.position, dtype=float)
+    cam_cardinal = camera_cardinal_direction(camera_pose)
+    horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
+    allocentric_answer_pool = list(CARDINAL_DIRECTIONS_8)
+    questions_by_query: dict[int, list[dict[str, Any]]] = {}
+
+    for root_id, parent_ids in attachment_graph.items():
+        root_id = int(root_id)
+        root_obj = obj_map.get(root_id)
+        if root_obj is None:
+            continue
+        if root_obj.get("label", "").lower() in EXCLUDED_LABELS:
+            continue
+        if root_id not in attachment_referable_ids:
+            continue
+
+        valid_move_states: list[tuple[np.ndarray, dict[int, dict[str, Any]], set[int]]] = []
+        for delta, moved_objects, moved_ids in _iter_valid_object_move_states(
+            movement_scene_objects,
+            attachment_graph,
+            root_id,
+            room_bounds=room_bounds,
+            collision_objects=collision_objects,
+        ):
+            moved_map = {int(o["id"]): o for o in moved_objects}
+            valid_move_states.append(
+                (
+                    np.asarray(delta, dtype=np.float64),
+                    moved_map,
+                    set(int(obj_id) for obj_id in moved_ids),
+                )
+            )
+        if not valid_move_states:
+            continue
+
+        for parent_id in parent_ids:
+            parent_id = int(parent_id)
+            parent_obj = obj_map.get(parent_id)
+            if parent_obj is None:
+                continue
+
+            grandchild_ids = attachment_graph.get(parent_id) or []
+            if not grandchild_ids:
+                continue
+
+            for grandchild_id in grandchild_ids:
+                grandchild_id = int(grandchild_id)
+                grandchild_obj = obj_map.get(grandchild_id)
+                if grandchild_obj is None:
+                    continue
+
+                moved_chain_ids = set(get_attachment_chain_ids(root_id, attachment_graph)) | {root_id}
+                if parent_id not in moved_chain_ids or grandchild_id not in moved_chain_ids:
+                    continue
+
+                query_candidates = [
+                    ("parent", parent_obj),
+                    ("grandchild", grandchild_obj),
+                ]
+
+                for query_role, query_obj in query_candidates:
+                    query_obj_id = int(query_obj["id"])
+                    if query_obj_id not in moved_chain_ids:
+                        continue
+                    query_center = np.array(query_obj["center"], dtype=float)
+                    facing_offset = camera_center - query_center
+
+                    for ref in objects:
+                        ref_id = int(ref["id"])
+                        if ref_id in {root_id, parent_id, grandchild_id}:
+                            continue
+                        if _has_duplicate_labels_for_distinct_objects(
+                            root_obj,
+                            parent_obj,
+                            grandchild_obj,
+                            query_obj,
+                            ref,
+                        ):
+                            continue
+
+                        ref_center = np.array(ref["center"], dtype=float)
+                        selected_questions: list[dict[str, Any]] = []
+
+                        for frame in ("agent", "object_centric", "allocentric"):
+                            selected_question: dict[str, Any] | None = None
+
+                            for delta, moved_map, moved_ids in valid_move_states:
+                                if parent_id not in moved_ids or grandchild_id not in moved_ids:
+                                    continue
+                                moved_query = moved_map.get(query_obj_id)
+                                if moved_query is None:
+                                    continue
+                                moved_ref = moved_map.get(ref_id, ref)
+                                new_query_center = np.array(moved_query["center"], dtype=float)
+                                new_ref_center = np.array(moved_ref["center"], dtype=float)
+
+                                if frame == "agent":
+                                    old_dir, old_amb = primary_direction(
+                                        query_center,
+                                        ref_center,
+                                        camera_pose,
+                                        horizontal_only=True,
+                                    )
+                                    new_dir, new_amb = primary_direction(
+                                        new_query_center,
+                                        new_ref_center,
+                                        camera_pose,
+                                        horizontal_only=True,
+                                    )
+                                    answer_pool = horizontal_answer_pool
+                                elif frame == "object_centric":
+                                    if not _has_stable_object_centric_facing(query_center, camera_center):
+                                        continue
+                                    if not _has_stable_object_centric_facing(new_query_center, camera_center):
+                                        continue
+                                    old_dir, old_amb = primary_direction_object_centric(
+                                        query_center,
+                                        query_center + facing_offset,
+                                        ref_center,
+                                        horizontal_only=True,
+                                        anchor_hull_xy=_object_bottom_hull_xy(query_obj),
+                                        target_hull_xy=_object_bottom_hull_xy(ref),
+                                        anchor_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
+                                        anchor_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
+                                        target_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                                        target_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                                    )
+                                    new_dir, new_amb = primary_direction_object_centric(
+                                        new_query_center,
+                                        new_query_center + facing_offset,
+                                        new_ref_center,
+                                        horizontal_only=True,
+                                        anchor_hull_xy=_object_bottom_hull_xy(moved_query),
+                                        target_hull_xy=_object_bottom_hull_xy(moved_ref),
+                                        anchor_bbox_min=np.array(moved_query["bbox_min"], dtype=float),
+                                        anchor_bbox_max=np.array(moved_query["bbox_max"], dtype=float),
+                                        target_bbox_min=np.array(moved_ref["bbox_min"], dtype=float),
+                                        target_bbox_max=np.array(moved_ref["bbox_max"], dtype=float),
+                                    )
+                                    answer_pool = horizontal_answer_pool
+                                else:
+                                    old_dir, old_amb = primary_direction_allocentric(
+                                        query_center,
+                                        ref_center,
+                                        horizontal_only=True,
+                                        obj_a_hull_xy=_object_bottom_hull_xy(query_obj),
+                                        obj_b_hull_xy=_object_bottom_hull_xy(ref),
+                                        obj_a_bbox_min=np.array(query_obj["bbox_min"], dtype=float),
+                                        obj_a_bbox_max=np.array(query_obj["bbox_max"], dtype=float),
+                                        obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
+                                        obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
+                                    )
+                                    new_dir, new_amb = primary_direction_allocentric(
+                                        new_query_center,
+                                        new_ref_center,
+                                        horizontal_only=True,
+                                        obj_a_hull_xy=_object_bottom_hull_xy(moved_query),
+                                        obj_b_hull_xy=_object_bottom_hull_xy(moved_ref),
+                                        obj_a_bbox_min=np.array(moved_query["bbox_min"], dtype=float),
+                                        obj_a_bbox_max=np.array(moved_query["bbox_max"], dtype=float),
+                                        obj_b_bbox_min=np.array(moved_ref["bbox_min"], dtype=float),
+                                        obj_b_bbox_max=np.array(moved_ref["bbox_max"], dtype=float),
+                                    )
+                                    answer_pool = allocentric_answer_pool
+
+                                if old_dir not in answer_pool or new_dir not in answer_pool:
+                                    continue
+                                if old_amb > 0.7 or max(old_amb, new_amb) > 0.7:
+                                    continue
+                                if old_dir == new_dir:
+                                    continue
+
+                                if frame == "agent":
+                                    tpl = random.choice(tpl_agent)
+                                elif frame == "object_centric":
+                                    tpl = random.choice(tpl_object_centric)
+                                else:
+                                    tpl = random.choice(tpl_allocentric)
+                                direction_desc = _delta_to_description(delta, camera_pose)
+                                options, answer = generate_options(new_dir, answer_pool)
+                                if old_dir in answer_pool and old_dir not in options:
+                                    replace_idx = next(
+                                        (
+                                            idx for idx, opt in enumerate(options)
+                                            if opt != new_dir and opt != "None of the above"
+                                        ),
+                                        None,
+                                    )
+                                    if replace_idx is None and "None of the above" in options:
+                                        replace_idx = options.index("None of the above")
+                                    if replace_idx is not None:
+                                        options[replace_idx] = old_dir
+                                        answer = chr(65 + options.index(new_dir))
+
+                                question_text = tpl.format(
+                                    obj_root=_the(root_obj["label"]),
+                                    obj_query=_the(query_obj["label"]),
+                                    obj_ref=_the(ref["label"]),
+                                    direction=direction_desc,
+                                    direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
+                                    distance=f"{np.linalg.norm(delta):.1f}m",
+                                    camera_cardinal=cam_cardinal,
+                                )
+                                selected_question = {
+                                    "level": "L3",
+                                    "type": "attachment_move",
+                                    "reference_frame": frame,
+                                    "question": question_text,
+                                    "options": options,
+                                    "answer": answer,
+                                    "correct_value": new_dir,
+                                    "old_correct_value": old_dir,
+                                    "new_correct_value": new_dir,
+                                    "chain_depth": 2,
+                                    "root_id": root_id,
+                                    "root_label": root_obj["label"],
+                                    "parent_id": parent_id,
+                                    "parent_label": parent_obj["label"],
+                                    "grandchild_id": grandchild_id,
+                                    "grandchild_label": grandchild_obj["label"],
+                                    "query_obj_id": query_obj_id,
+                                    "query_obj_label": query_obj["label"],
+                                    "query_role": query_role,
+                                    "obj_ref_id": ref_id,
+                                    "obj_ref_label": ref["label"],
+                                    "attachment_remapped": True,
+                                    "delta": delta.tolist(),
+                                    "mentioned_objects": [
+                                        _mention("root", root_obj["label"], root_id),
+                                        _mention("parent", parent_obj["label"], parent_id),
+                                        _mention("grandchild", grandchild_obj["label"], grandchild_id),
+                                        _mention("reference_object", ref["label"], ref_id),
+                                    ],
+                                    "relation_unchanged": False,
+                                    "has_attachment_chain": True,
+                                }
+                                break
+
+                            if selected_question is not None:
+                                selected_questions.append(selected_question)
+
+                        if selected_questions:
+                            questions_by_query.setdefault(query_obj_id, []).extend(selected_questions)
+
+    result = [q for group in questions_by_query.values() for q in group]
+    return [_annotate_attachment_trace_reason(q) for q in result]
+
+
 def generate_l3_coordinate_rotation(
     objects: list[dict],
     camera_pose: CameraPose,
@@ -8477,6 +8783,9 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
     "L3_attachment_chain": [
         "generate_l3_attachment_chain",
     ],
+    "L3_attachment_move": [
+        "generate_l3_attachment_move",
+    ],
     "L3_coordinate_rotation_agent": [
         "generate_l3_coordinate_rotation",
     ],
@@ -8498,6 +8807,7 @@ _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
     "L2_object_move_allocentric": ("L2", "object_move_allocentric"),
     "L2_object_remove": ("L2", "object_remove"),
     "L3_attachment_chain": ("L3", "attachment_chain"),
+    "L3_attachment_move": ("L3", "attachment_move"),
     "L3_coordinate_rotation_agent": ("L3", "coordinate_rotation_agent"),
     "L3_coordinate_rotation_object_centric": ("L3", "coordinate_rotation_object_centric"),
     "L3_coordinate_rotation_allocentric": ("L3", "coordinate_rotation_allocentric"),
@@ -9641,6 +9951,47 @@ def generate_all_questions(
         generated_count=sum(
             1 for question in all_questions
             if question.get("_trace_source") == "generate_l3_attachment_chain"
+        ),
+        details={"audit_mode": "summary_only"},
+    )
+    _emit_generator_context(
+        trace_recorder,
+        "generate_l3_attachment_move",
+        {
+            "question_object_count": len(attachment_objects_uniq),
+            "attachment_graph_node_count": len(attachment_graph_uniq),
+            "movement_object_count": len(movement_objects),
+        },
+    )
+    all_questions.extend(
+        _run_question_step(
+            "generate_l3_attachment_move",
+            lambda: _register_generated_questions(
+                "generate_l3_attachment_move",
+                generate_l3_attachment_move(
+                    attachment_objects_uniq,
+                    attachment_graph_uniq,
+                    attached_by_uniq,
+                    camera_pose,
+                    templates,
+                    room_bounds=room_bounds,
+                    collision_objects=l2_collision_objects,
+                    movement_objects=movement_objects,
+                    object_map=movement_object_map,
+                    attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
+                ),
+            ),
+        )
+    )
+    _emit_generator_summary(
+        trace_recorder,
+        "generate_l3_attachment_move",
+        generated_count=sum(
+            1 for question in all_questions
+            if question.get("_trace_source") == "generate_l3_attachment_move"
         ),
         details={"audit_mode": "summary_only"},
     )
