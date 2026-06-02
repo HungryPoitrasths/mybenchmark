@@ -80,9 +80,9 @@ QTYPE_ORDER = [
     "object_move_object_centric",
     "object_rotate_object_centric",
     "object_move_allocentric",
-    "viewpoint_move",
     "object_remove",
     "attachment_chain",
+    "attachment_move",
     "coordinate_rotation_agent",
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
@@ -100,9 +100,9 @@ QTYPE_DISPLAY = {
     "object_move_object_centric": "L2_object_move_object_centric",
     "object_rotate_object_centric": "L2_object_rotate_object_centric",
     "object_move_allocentric": "L2_object_move_allocentric",
-    "viewpoint_move": "L2_viewpoint_move",
     "object_remove": "L2_object_remove",
     "attachment_chain": "L3_attachment_chain",
+    "attachment_move": "L3_attachment_move",
     "coordinate_rotation_agent": "L3_coordinate_rotation_agent",
     "coordinate_rotation_object_centric": "L3_coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric": "L3_coordinate_rotation_allocentric",
@@ -158,7 +158,7 @@ def _infer_dataset(root: Path, benchmark_path: Path) -> str:
     return "scannetpp" if "scannetpp" in text else "scannet"
 
 
-def load_questions(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _load_questions_from_roots(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     questions: list[dict[str, Any]] = []
     seen: set[str] = set()
     source_files: list[str] = []
@@ -192,8 +192,47 @@ def load_questions(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, A
         "deduped_question_count": len(questions),
         "duplicate_question_count": duplicate_count,
         "dedupe_rule": "scene_id + image_name + question",
+        "input_mode": "roots",
     }
     return questions, metadata
+
+
+def load_questions_from_subset(subset_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    questions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    duplicate_count = 0
+
+    for q in _load_benchmark(subset_path):
+        item = dict(q)
+        dataset = str(item.get("_dataset") or item.get("dataset") or "unknown")
+        item["_dataset"] = dataset
+        item["_source_root"] = str(subset_path.parent)
+        item["_source_benchmark"] = str(subset_path)
+        uid = _question_uid(item)
+        item["question_uid"] = uid
+        dedupe_key = _question_dedupe_key(item)
+        if dedupe_key in seen:
+            duplicate_count += 1
+            continue
+        seen.add(dedupe_key)
+        questions.append(item)
+
+    metadata = {
+        "source_files": [str(subset_path)],
+        "source_file_count": 1,
+        "deduped_question_count": len(questions),
+        "duplicate_question_count": duplicate_count,
+        "dedupe_rule": "scene_id + image_name + question",
+        "input_mode": "subset",
+        "subset_path": str(subset_path),
+    }
+    return questions, metadata
+
+
+def load_questions(roots: list[Path], subset_path: Path | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if subset_path is not None:
+        return load_questions_from_subset(subset_path)
+    return _load_questions_from_roots(roots)
 
 
 def _qtype_sort_key(qtype: str) -> tuple[int, str]:
@@ -228,27 +267,31 @@ def sample_questions(
         chosen: list[dict[str, Any]] = []
         chosen_uids: set[str] = set()
         per_scene: Counter[str] = Counter()
-        for q in group:
-            if len(chosen) >= per_type:
-                break
-            scene_id = str(q.get("scene_id") or "unknown")
-            if per_scene[scene_id] >= scene_cap:
-                continue
-            chosen.append(q)
-            chosen_uids.add(str(q["question_uid"]))
-            per_scene[scene_id] += 1
-
         relaxed_added = 0
-        if len(chosen) < per_type:
+        relaxed_cap = scene_cap
+        max_scene_count = max(
+            (Counter(str(q.get("scene_id") or "unknown") for q in group).values()),
+            default=0,
+        )
+        while len(chosen) < per_type and relaxed_cap <= max(1, max_scene_count):
+            before = len(chosen)
             for q in group:
                 if len(chosen) >= per_type:
                     break
+                scene_id = str(q.get("scene_id") or "unknown")
+                if per_scene[scene_id] >= relaxed_cap:
+                    continue
                 uid = str(q["question_uid"])
                 if uid in chosen_uids:
                     continue
                 chosen.append(q)
                 chosen_uids.add(uid)
-                relaxed_added += 1
+                per_scene[scene_id] += 1
+                if relaxed_cap > scene_cap:
+                    relaxed_added += 1
+            if len(chosen) == before:
+                break
+            relaxed_cap += 1
 
         sampled.extend(chosen)
         sampling_stats[qtype] = {
@@ -256,6 +299,8 @@ def sample_questions(
             "sampled": len(chosen),
             "relaxed_scene_cap_added": relaxed_added,
             "scene_count": len({str(q.get("scene_id") or "unknown") for q in chosen}),
+            "initial_scene_cap": scene_cap,
+            "final_scene_cap": max(scene_cap, relaxed_cap - 1),
         }
 
     return sampled, sampling_stats
@@ -1219,7 +1264,8 @@ def run_api_question(
 
 def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     roots = [Path(root) for root in args.root]
-    all_questions, metadata = load_questions(roots)
+    subset_path = Path(args.subset) if args.subset else None
+    all_questions, metadata = load_questions(roots, subset_path)
     selected, sampling_stats = sample_questions(
         all_questions,
         per_type=args.per_type,
@@ -1384,7 +1430,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Sample questions by type, run a VLM, and build an HTML report."
     )
     parser.add_argument("--root", action="append", default=None, help="Output root to scan for benchmark.json files")
-    parser.add_argument("--per_type", type=int, default=100, help="Questions sampled per type")
+    parser.add_argument("--subset", default=None, help="Benchmark subset JSON to sample from; overrides --root when set")
+    parser.add_argument("--per_type", type=int, default=50, help="Questions sampled per type")
     parser.add_argument("--scene_cap", type=int, default=3, help="Max questions per scene within each type before relaxation")
     parser.add_argument("--seed", type=int, default=20260529, help="Random seed for sampling")
     parser.add_argument("--scannet_image_root", action="append", default=None, help="ScanNet image root; can be repeated")
@@ -1433,6 +1480,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     if args.root is None:
         args.root = ["output/pilot", "output/scannetpp_polit"]
+    if args.subset is None:
+        args.subset = "output/benchmark_subset.json"
     if args.scannet_image_root is None:
         args.scannet_image_root = ["data/scannet"]
     if args.scannetpp_image_root is None:
@@ -1445,6 +1494,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--checkpoint_every must be positive")
     if args.vlm_workers <= 0:
         parser.error("--vlm_workers must be positive")
+    if args.subset:
+        subset_path = Path(args.subset)
+        if not subset_path.exists():
+            parser.error(f"--subset not found: {args.subset}")
     return args
 
 
