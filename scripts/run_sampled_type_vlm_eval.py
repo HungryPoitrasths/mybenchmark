@@ -650,14 +650,21 @@ def call_model(
         chat_kwargs["max_tokens"] = max_tokens
         chat_kwargs["temperature"] = temperature
 
-    response = client.chat.completions.create(**chat_kwargs)
-    choices = getattr(response, "choices", None)
-    if not choices:
-        # Some OpenAI-compatible proxies return a bare string / error payload with a
-        # 200 status instead of a chat-completion object; surface it instead of an
-        # opaque AttributeError so the retry/error path logs what came back.
-        raise RuntimeError(f"unexpected API response (no choices): {response!r:.500}")
-    return (choices[0].message.content or "").strip()
+    # Stream explicitly: some OpenAI-compatible proxies always reply with SSE chunks
+    # for certain models, which the SDK cannot parse in non-streaming mode (it returns
+    # the raw text instead). Streaming handles both behaviours uniformly.
+    chat_kwargs["stream"] = True
+    stream = client.chat.completions.create(**chat_kwargs)
+    parts: list[str] = []
+    for chunk in stream:
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+        delta = getattr(choices[0], "delta", None)
+        content = getattr(delta, "content", None) if delta is not None else None
+        if content:
+            parts.append(str(content))
+    return "".join(parts).strip()
 
 
 def load_existing_results(path: Path) -> dict[str, dict[str, Any]]:
