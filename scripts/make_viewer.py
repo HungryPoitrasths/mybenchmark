@@ -1213,12 +1213,26 @@ def _build_summary_html(displayed_questions: list[dict]) -> str:
 
 
 def _infer_dataset(question: dict) -> str:
-    """Infer dataset from question metadata, defaulting to 'scannet'."""
-    return str(
-        question.get("_dataset")
-        or question.get("dataset")
-        or "scannet"
-    )
+    """Infer dataset from question metadata, falling back to scene_id pattern.
+
+    Priority:
+    1. ``_dataset`` / ``dataset`` field (set during pipeline generation)
+    2. scene_id pattern: ``sceneXXXX_XX`` → scannet, hex hash → scannetpp
+    3. default: scannet
+    """
+    explicit = str(question.get("_dataset") or question.get("dataset") or "")
+    if explicit and explicit != "unknown":
+        return explicit
+
+    scene_id = str(question.get("scene_id", ""))
+    # ScanNet scenes: scene0670_01, scene0046_02, ...
+    if scene_id.startswith("scene") and "_" in scene_id:
+        return "scannet"
+    # ScanNet++ scenes: hex hashes like f3d64c30f8, 0d2ee665be, ...
+    if scene_id and len(scene_id) >= 8:
+        return "scannetpp"
+
+    return "scannet"
 
 
 def _resolve_image_path(
