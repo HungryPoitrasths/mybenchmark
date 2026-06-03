@@ -2674,6 +2674,8 @@ def _run_question_presence_review(
     viewer_image_root = data_root
     if dataset == "scannetpp" and scannetpp_sensor == "iphone":
         viewer_image_root = Path("output") / "scannetpp_iphone_frames"
+    scannet_roots = [viewer_image_root] if dataset == "scannet" else []
+    scannetpp_roots = [viewer_image_root] if dataset == "scannetpp" else []
     if not review_questions:
         review_payload = {
             "name": "PSR-Bench question presence review",
@@ -2694,8 +2696,8 @@ def _run_question_presence_review(
         flagged_html_path.write_text(
             build_viewer_html(
                 [],
-                viewer_image_root,
-                dataset=dataset,
+                scannet_roots,
+                scannetpp_roots,
                 scannetpp_sensor=scannetpp_sensor,
                 title="question presence manual review",
                 include_referability_audit=False,
@@ -2811,8 +2813,8 @@ def _run_question_presence_review(
 
     flagged_html = build_viewer_html(
         flagged_questions,
-        viewer_image_root,
-        dataset=dataset,
+        scannet_roots,
+        scannetpp_roots,
         scannetpp_sensor=scannetpp_sensor,
         title="question presence manual review",
         include_referability_audit=False,
@@ -4016,7 +4018,7 @@ def _canonical_scene_question_type(question: dict) -> str:
     return str(question.get("type", "")).strip().lower()
 
 
-_SCENE_TYPE_CAP_LIMITED_TYPES = {"occlusion", "viewpoint_move"}
+_SCENE_TYPE_CAP_LIMITED_TYPES = {"occlusion"}
 
 
 def _apply_scene_type_cap(
@@ -5585,7 +5587,7 @@ def main():
         "--max_questions_per_scene_type",
         type=int,
         default=5,
-        help="Maximum kept questions per scene for L1 occlusion and L2 viewpoint_move only; these two generators also receive the remaining budget for early stop. Other question types are uncapped. Use 0 to disable.",
+        help="Maximum kept L1 occlusion questions per scene; the occlusion generator also receives the remaining budget for early stop. Other question types are uncapped. Use 0 to disable.",
     )
     parser.add_argument(
         "--max_occlusion_objects",

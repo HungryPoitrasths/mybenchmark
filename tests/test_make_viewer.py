@@ -67,7 +67,6 @@ class MakeViewerTests(unittest.TestCase):
             {"type": "object_move_distance", "attachment_remapped": False},
             {"type": "object_move_object_centric", "attachment_remapped": True},
             {"type": "object_move_allocentric", "attachment_remapped": True},
-            {"type": "viewpoint_move"},
             {"type": "attachment_type"},
         ]
 
@@ -86,16 +85,16 @@ class MakeViewerTests(unittest.TestCase):
     def test_qtypes_filter_still_works_without_attachment_only(self) -> None:
         questions = [
             {"type": "object_move_agent", "attachment_remapped": True},
-            {"type": "viewpoint_move"},
+            {"type": "object_remove"},
             {"type": "attachment_type"},
         ]
 
         filtered = select_viewer_source_questions(
             questions,
-            requested_qtypes={"viewpoint_move"},
+            requested_qtypes={"object_remove"},
         )
 
-        self.assertEqual(filtered, [{"type": "viewpoint_move"}])
+        self.assertEqual(filtered, [{"type": "object_remove"}])
 
     def test_qtypes_filter_distinguishes_move_and_rotate_object_centric(self) -> None:
         questions = [
@@ -227,7 +226,7 @@ class MakeViewerTests(unittest.TestCase):
             ),
         ]
 
-        html_text = build_viewer_html(questions, Path("."))
+        html_text = build_viewer_html(questions, [Path(".")], [])
 
         self.assertIn("L2_object_move_distance: with_attachment=0, without_attachment=4", html_text)
         self.assertIn("keep 1", html_text)
@@ -249,7 +248,7 @@ class MakeViewerTests(unittest.TestCase):
             ),
         ]
 
-        html_text = build_viewer_html(questions, Path("."), apply_filters=True)
+        html_text = build_viewer_html(questions, [Path(".")], [], apply_filters=True)
 
         self.assertIn("L2_object_move_distance: with_attachment=0, without_attachment=0", html_text)
         self.assertNotIn("keep 1", html_text)
@@ -275,7 +274,8 @@ class MakeViewerTests(unittest.TestCase):
 
         html_text = build_viewer_html(
             questions,
-            Path("."),
+            [Path(".")],
+            [],
             include_attachment_unchanged=False,
         )
 
@@ -315,7 +315,7 @@ class MakeViewerTests(unittest.TestCase):
             }
         ]
 
-        html_text = build_viewer_html(questions, Path("."))
+        html_text = build_viewer_html(questions, [Path(".")], [])
 
         self.assertIn('<meta charset="UTF-8">', html_text)
         self.assertIn("生成后审核", html_text)
@@ -616,7 +616,7 @@ class MakeViewerTests(unittest.TestCase):
         image_root.mkdir(exist_ok=True)
         output_path = root / "viewer.html"
 
-        expected_html = build_viewer_html(questions, image_root)
+        expected_html = build_viewer_html(questions, [image_root], [])
         run_make_viewer_cli(
             [
                 "make_viewer.py",
@@ -699,8 +699,8 @@ class MakeViewerTests(unittest.TestCase):
         with mock.patch("scripts.make_viewer.img_to_b64", side_effect=fake_img_to_b64):
             html_text = build_viewer_html(
                 questions,
-                Path("output/scannetpp_iphone_frames"),
-                dataset="scannetpp",
+                [],
+                [Path("output/scannetpp_iphone_frames")],
                 scannetpp_sensor="iphone",
             )
 
@@ -728,8 +728,8 @@ class MakeViewerTests(unittest.TestCase):
         with mock.patch("scripts.make_viewer.img_to_b64", side_effect=fake_img_to_b64):
             build_viewer_html(
                 questions,
-                Path("/home/sujinyue/datasets/scannetpp"),
-                dataset="scannetpp",
+                [],
+                [Path("/home/sujinyue/datasets/scannetpp")],
                 scannetpp_sensor="dslr",
             )
 
@@ -757,7 +757,8 @@ class MakeViewerTests(unittest.TestCase):
                     "obj_b_label": "lamp",
                 }
             ],
-            Path("."),
+            [Path(".")],
+            [],
         )
 
         self.assertIn("Full text should stay hidden", html_text)
@@ -835,7 +836,7 @@ class MakeViewerTests(unittest.TestCase):
             },
         ]
 
-        html_text = build_simple_viewer_html(questions, Path("."))
+        html_text = build_simple_viewer_html(questions, [Path(".")], [])
 
         assert_simple_field(self, html_text, "target", "chair")
         assert_simple_field(self, html_text, "visibility", "occluded")
@@ -865,7 +866,8 @@ class MakeViewerTests(unittest.TestCase):
                     ],
                 }
             ],
-            Path("."),
+            [Path(".")],
+            [],
         )
 
         assert_simple_field(self, html_text, "anchor", "lamp")
@@ -886,7 +888,8 @@ class MakeViewerTests(unittest.TestCase):
                     "new_correct_value": "right",
                 }
             ],
-            Path("."),
+            [Path(".")],
+            [],
         )
 
         self.assertIn("image not found", html_text)

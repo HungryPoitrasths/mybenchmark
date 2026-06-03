@@ -5,31 +5,39 @@ Each question is shown next to its source image.
 The output is a single HTML file with base64-embedded images - no server
 required, just open it in any browser.
 
+Dataset is inferred per-question from the ``_dataset`` / ``dataset`` field,
+so a single viewer can display mixed ScanNet + ScanNet++ questions.
+
 Usage:
-    python scripts/make_viewer.py \
-        --questions output/pilot/human_validation_sample.json \
-        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
+    # ScanNet only (backward-compatible)
+    python scripts/make_viewer.py \\
+        --questions output/pilot/human_validation_sample.json \\
+        --image_root /home/lihongxing/datasets/ScanNet/data/scans \\
         --output output/pilot/viewer.html
 
-    python scripts/make_viewer.py \
-        --questions output/pilot_depth/benchmark.json \
-        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
-        --output output/pilot_depth/attachment_viewer.html \
-        --attachment_only
-
-    python scripts/make_viewer.py \
-        --questions output/pilot_meshray/benchmark.json \
-        --image_root /home/lihongxing/datasets/ScanNet/data/scans \
-        --output output/pilot_meshray/attachment_viewer.html \
-        --attachment_only
-
-    python scripts/make_viewer.py \
-        --questions output/scannetpp/benchmark.json \
-        --image_root /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames \
-        --dataset scannetpp \
-        --scannetpp_sensor iphone \
-        --output output/scannetpp/viewer.html \
+    # ScanNet++ only
+    python scripts/make_viewer.py \\
+        --questions output/scannetpp/benchmark.json \\
+        --scannetpp_image_root /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames \\
+        --scannetpp_sensor iphone \\
+        --output output/scannetpp/viewer.html \\
         --simple_output output/scannetpp/viewer_simple.html
+
+    # Mixed ScanNet + ScanNet++ (dual roots)
+    python scripts/make_viewer.py \\
+        --questions output/fixed_type_eval_50scene.json \\
+        --scannet_image_root /home/lihongxing/datasets/ScanNet/data/scans \\
+        --scannetpp_image_root /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames \\
+        --scannetpp_sensor iphone \\
+        --output output/bench.html \\
+        --simple_output output/bench_simple.html
+
+    # Attachment-only viewers
+    python scripts/make_viewer.py \\
+        --questions output/pilot_meshray/benchmark.json \\
+        --image_root /home/lihongxing/datasets/ScanNet/data/scans \\
+        --output output/pilot_meshray/attachment_viewer.html \\
+        --attachment_only
 
 """
 
@@ -71,7 +79,6 @@ SUMMARY_GROUPS = [
             ("object_move_object_centric", "L2_object_move_object_centric"),
             ("object_rotate_object_centric", "L2_object_rotate_object_centric"),
             ("object_move_allocentric", "L2_object_move_allocentric"),
-            ("viewpoint_move", "L2_viewpoint_move"),
             ("object_remove", "L2_object_remove"),
         ],
     ),
@@ -79,6 +86,7 @@ SUMMARY_GROUPS = [
         "L3 多跳 / 反事实",
         [
             ("attachment_chain", "L3_attachment_chain"),
+            ("attachment_move", "L3_attachment_move"),
             ("coordinate_rotation_agent", "L3_coordinate_rotation_agent"),
             (
                 "coordinate_rotation_object_centric",
@@ -126,9 +134,9 @@ VIEWER_QTYPE_ORDER = [
     "object_move_object_centric",
     "object_rotate_object_centric",
     "object_move_allocentric",
-    "viewpoint_move",
     "object_remove",
     "attachment_chain",
+    "attachment_move",
     "coordinate_rotation_agent",
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
@@ -221,13 +229,6 @@ SIMPLE_VIEWER_FIELD_SPECS: dict[
             ("new_direction", ("new_direction", "new_correct_value", "correct_value")),
         ],
     },
-    "viewpoint_move": {
-        "objects": [("target", ("obj_a_label",))],
-        "relations": [
-            ("old_visibility", ("old_visibility", "old_correct_value")),
-            ("new_visibility", ("new_visibility", "new_correct_value", "correct_value")),
-        ],
-    },
     "object_remove": {
         "objects": [
             ("removed", ("removed_obj_label",)),
@@ -274,6 +275,21 @@ SIMPLE_VIEWER_FIELD_SPECS: dict[
         "relations": [
             ("chain_depth", ("chain_depth",)),
             ("displaced", ("correct_value",)),
+        ],
+    },
+    "attachment_move": {
+        "objects": [
+            ("root", ("root_label",)),
+            ("parent", ("parent_label",)),
+            ("grandchild", ("grandchild_label",)),
+            ("query", ("query_obj_label",)),
+            ("reference", ("obj_ref_label",)),
+        ],
+        "relations": [
+            ("reference_frame", ("reference_frame",)),
+            ("query_role", ("query_role",)),
+            ("old_direction", ("old_correct_value",)),
+            ("new_direction", ("new_correct_value", "correct_value")),
         ],
     },
     "coordinate_rotation_agent": {
@@ -565,7 +581,7 @@ def _apply_global_object_move_ratio_filter(questions: list[dict]) -> list[dict]:
 
 def is_attachment_viewer_question(question: dict) -> bool:
     qtype = _canonical_qtype(str(question.get("type", "")).strip())
-    if qtype == "attachment_chain":
+    if qtype in {"attachment_chain", "attachment_move"}:
         return True
     return qtype in OBJECT_MOVE_TYPES and bool(question.get("attachment_remapped", False))
 
@@ -1196,24 +1212,67 @@ def _build_summary_html(displayed_questions: list[dict]) -> str:
     )
 
 
+def _infer_dataset(question: dict) -> str:
+    """Infer dataset from question metadata, defaulting to 'scannet'."""
+    return str(
+        question.get("_dataset")
+        or question.get("dataset")
+        or "scannet"
+    )
+
+
 def _resolve_image_path(
     question: dict,
-    image_root: Path,
-    dataset: str = "scannet",
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
     scannetpp_sensor: str = "iphone",
 ) -> Path:
+    """Resolve an image path for a question, trying multiple roots and path layouts.
+
+    Returns the first existing path found, or the first candidate as a fallback
+    (the caller handles missing files via img_to_b64).
+    """
+    dataset = _infer_dataset(question)
     scene = str(question.get("scene_id", ""))
     frame = str(question.get("image_name", ""))
-    if dataset == "scannetpp":
-        if scannetpp_sensor == "iphone":
-            return image_root / scene / frame
-        elif scannetpp_sensor == "dslr":
-            return image_root / scene / "dslr" / "resized_images" / frame
+    roots = scannetpp_roots if dataset == "scannetpp" else scannet_roots
+
+    candidates: list[Path] = []
+    for root in roots:
+        if dataset == "scannetpp":
+            if scannetpp_sensor == "iphone":
+                candidates.append(root / scene / frame)
+            elif scannetpp_sensor == "dslr":
+                candidates.append(root / scene / "dslr" / "resized_images" / frame)
+            else:
+                raise ValueError(
+                    f"scannetpp_sensor must be 'iphone' or 'dslr', got {scannetpp_sensor!r}"
+                )
+            # Also try alternative layouts as fallbacks
+            candidates.extend([
+                root / scene / frame,
+                root / scene / "dslr" / "resized_images" / frame,
+                root / scene / "iphone" / "rgb" / frame,
+            ])
         else:
-            raise ValueError(
-                f"scannetpp_sensor must be 'iphone' or 'dslr', got {scannetpp_sensor!r}"
-            )
-    return image_root / scene / "color" / frame
+            candidates.extend([
+                root / scene / "color" / frame,
+                root / scene / frame,
+            ])
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+
+    for candidate in unique:
+        if candidate.exists():
+            return candidate
+    return unique[0] if unique else Path(".")
 
 
 def _new_image_stats() -> dict[str, object]:
@@ -1246,13 +1305,13 @@ def _record_image_result(
 
 def _build_image_html(
     question: dict,
-    image_root: Path,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
     max_width: int,
-    dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
     image_stats: dict[str, object] | None = None,
 ) -> str:
-    img_path = _resolve_image_path(question, image_root, dataset, scannetpp_sensor)
+    img_path = _resolve_image_path(question, scannet_roots, scannetpp_roots, scannetpp_sensor)
     b64 = img_to_b64(img_path, max_width)
     if b64:
         _record_image_result(image_stats, img_path, embedded=True)
@@ -1261,26 +1320,26 @@ def _build_image_html(
     return '<div class="no-img">image not found</div>'
 
 
-def _warn_if_scannetpp_iphone_root_looks_raw(image_root: Path) -> None:
+def _warn_if_scannetpp_iphone_root_looks_raw(roots: list[Path]) -> None:
     """Warn when an iPhone viewer root looks like raw ScanNet++ data."""
-    if (
-        (image_root / "iphone").is_dir()
-        and (image_root / "scans").is_dir()
-        and not any(image_root.glob("frame_*.jpg"))
-    ):
-        print(
-            "Warning: --image_root looks like a raw ScanNet++ scene directory. "
-            "For --dataset scannetpp --scannetpp_sensor iphone, pass the extracted "
-            "frame root, e.g. /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
-        )
+    for root in roots:
+        if (
+            (root / "iphone").is_dir()
+            and (root / "scans").is_dir()
+            and not any(root.glob("frame_*.jpg"))
+        ):
+            print(
+                "Warning: --scannetpp_image_root looks like a raw ScanNet++ scene directory. "
+                "For scannetpp iPhone images, pass the extracted frame root, e.g. "
+                "/home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
+            )
 
 
 def _print_image_stats(
     image_stats: dict[str, object],
     *,
     label: str,
-    image_root: Path,
-    dataset: str,
+    scannetpp_roots: list[Path],
     scannetpp_sensor: str,
 ) -> None:
     total = int(image_stats.get("total", 0))
@@ -1290,11 +1349,11 @@ def _print_image_stats(
     if missing <= 0:
         return
 
-    if dataset == "scannetpp" and scannetpp_sensor == "iphone":
-        _warn_if_scannetpp_iphone_root_looks_raw(image_root)
+    if scannetpp_sensor == "iphone":
+        _warn_if_scannetpp_iphone_root_looks_raw(scannetpp_roots)
         print(
             "ScanNet++ iPhone image path format: "
-            "<image_root>/<scene_id>/<image_name>"
+            "<scannetpp_image_root>/<scene_id>/<image_name>"
         )
 
     missing_paths = image_stats.get("missing_paths", [])
@@ -1406,13 +1465,13 @@ def _render_simple_section(title: str, items: list[tuple[str, str]]) -> str:
 
 def _build_full_viewer_html_from_displayed_questions(
     displayed_questions: list[dict],
-    image_root: Path,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
     *,
     max_width: int = 480,
     title: str = "predictive spatial reasoning benchmark",
     include_referability_audit: bool = False,
     edited_html_filename: str = "viewer_edited.html",
-    dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
     image_stats: dict[str, object] | None = None,
 ) -> str:
@@ -1425,9 +1484,9 @@ def _build_full_viewer_html_from_displayed_questions(
             CARD.format(
                 img=_build_image_html(
                     question,
-                    image_root,
+                    scannet_roots,
+                    scannetpp_roots,
                     max_width,
-                    dataset=dataset,
                     scannetpp_sensor=scannetpp_sensor,
                     image_stats=image_stats,
                 ),
@@ -1453,12 +1512,12 @@ def _build_full_viewer_html_from_displayed_questions(
 
 def _build_simple_viewer_html_from_displayed_questions(
     displayed_questions: list[dict],
-    image_root: Path,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
     *,
     max_width: int = 480,
     title: str = "predictive spatial reasoning benchmark (simple review)",
     edited_html_filename: str = "viewer_edited.html",
-    dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
     image_stats: dict[str, object] | None = None,
 ) -> str:
@@ -1472,9 +1531,9 @@ def _build_simple_viewer_html_from_displayed_questions(
             SIMPLE_CARD.format(
                 img=_build_image_html(
                     question,
-                    image_root,
+                    scannet_roots,
+                    scannetpp_roots,
                     max_width,
-                    dataset=dataset,
                     scannetpp_sensor=scannetpp_sensor,
                     image_stats=image_stats,
                 ),
@@ -1502,7 +1561,8 @@ def _build_simple_viewer_html_from_displayed_questions(
 
 def build_viewer_html(
     questions: list[dict],
-    image_root: Path,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
     *,
     max_width: int = 480,
     shuffle_seed: int = 42,
@@ -1513,7 +1573,6 @@ def build_viewer_html(
     include_referability_audit: bool = False,
     apply_filters: bool = False,
     edited_html_filename: str = "viewer_edited.html",
-    dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
@@ -1526,19 +1585,20 @@ def build_viewer_html(
     )
     return _build_full_viewer_html_from_displayed_questions(
         displayed_questions,
-        image_root,
+        scannet_roots,
+        scannetpp_roots,
         max_width=max_width,
         title=title,
         include_referability_audit=include_referability_audit,
         edited_html_filename=edited_html_filename,
-        dataset=dataset,
         scannetpp_sensor=scannetpp_sensor,
     )
 
 
 def build_simple_viewer_html(
     questions: list[dict],
-    image_root: Path,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
     *,
     max_width: int = 480,
     shuffle_seed: int = 42,
@@ -1548,7 +1608,6 @@ def build_simple_viewer_html(
     include_attachment_unchanged: bool = True,
     apply_filters: bool = False,
     edited_html_filename: str = "viewer_edited.html",
-    dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
 ) -> str:
     displayed_questions = prepare_viewer_questions(
@@ -1561,11 +1620,11 @@ def build_simple_viewer_html(
     )
     return _build_simple_viewer_html_from_displayed_questions(
         displayed_questions,
-        image_root,
+        scannet_roots,
+        scannetpp_roots,
         max_width=max_width,
         title=title,
         edited_html_filename=edited_html_filename,
-        dataset=dataset,
         scannetpp_sensor=scannetpp_sensor,
     )
 
@@ -1584,11 +1643,26 @@ def main():
     )
     parser.add_argument(
         "--image_root",
-        required=True,
+        default=None,
         help=(
-            "Image root. For ScanNet, pass the scans root containing scene/color. "
-            "For ScanNet++ iPhone, pass the extracted frame root, e.g. "
-            "/home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
+            "Deprecated single image root. Use --scannet_image_root / --scannetpp_image_root "
+            "instead. When neither new flag is provided, this is used as the ScanNet root."
+        ),
+    )
+    parser.add_argument(
+        "--scannet_image_root",
+        action="append",
+        default=None,
+        help="ScanNet image root (scans directory containing scene/color). May be repeated.",
+    )
+    parser.add_argument(
+        "--scannetpp_image_root",
+        action="append",
+        default=None,
+        help=(
+            "ScanNet++ image root. May be repeated. "
+            "For iPhone: <root>/<scene_id>/<image_name>. "
+            "For DSLR: <root>/<scene_id>/dslr/resized_images/<image_name>."
         ),
     )
     parser.add_argument("--output", default="viewer.html")
@@ -1610,7 +1684,7 @@ def main():
     parser.add_argument(
         "--attachment_only",
         action="store_true",
-        help="Keep only attachment-related questions: attachment_chain and attached object_move_* items",
+        help="Keep only attachment-related questions: attachment_chain, attachment_move, and attached object_move_* items",
     )
     parser.add_argument(
         "--include_attachment_unchanged",
@@ -1648,17 +1722,42 @@ def main():
         help="Apply legacy attachment-based auto-trimming after explicit viewer filters",
     )
     parser.add_argument(
-        "--dataset", type=str, choices=("scannet", "scannetpp"), default="scannet",
-        help="Dataset format (scannet or scannetpp)",
+        "--dataset", type=str, choices=("scannet", "scannetpp"), default=None,
+        help="Deprecated. Dataset is now inferred per-question from the _dataset / dataset field.",
     )
     parser.add_argument(
         "--scannetpp_sensor", type=str, choices=("iphone", "dslr"), default="iphone",
-        help="Sensor to use when dataset=scannetpp",
+        help="Sensor to use when resolving scannetpp image paths",
     )
     args = parser.parse_args()
 
     if Image is None:
         sys.exit("Pillow is required: pip install Pillow")
+
+    # Resolve image roots. New --scannet_image_root / --scannetpp_image_root take
+    # precedence. Fall back to --image_root as scannet root for backward compat.
+    scannet_roots: list[Path] = (
+        [Path(p) for p in args.scannet_image_root]
+        if args.scannet_image_root
+        else [Path(args.image_root)] if args.image_root else []
+    )
+    scannetpp_roots: list[Path] = (
+        [Path(p) for p in args.scannetpp_image_root]
+        if args.scannetpp_image_root
+        else []
+    )
+
+    if not scannet_roots and not scannetpp_roots:
+        parser.error(
+            "At least one of --scannet_image_root, --scannetpp_image_root, "
+            "or --image_root is required."
+        )
+
+    if args.dataset is not None:
+        print(
+            "Note: --dataset is deprecated and ignored. "
+            "Dataset is inferred per-question from the _dataset / dataset field."
+        )
 
     with open(args.questions, encoding="utf-8") as f:
         data = json.load(f)
@@ -1672,7 +1771,6 @@ def main():
         requested_qtypes.update(
             qtype.strip() for qtype in args.qtypes.split(",") if qtype.strip()
         )
-    image_root = Path(args.image_root)
     displayed_questions = prepare_viewer_questions(
         questions,
         requested_qtypes=requested_qtypes,
@@ -1684,7 +1782,8 @@ def main():
     full_image_stats = _new_image_stats()
     html_text = _build_full_viewer_html_from_displayed_questions(
         displayed_questions,
-        image_root,
+        scannet_roots,
+        scannetpp_roots,
         max_width=args.max_width,
         include_referability_audit=args.include_referability_audit,
         edited_html_filename=(
@@ -1692,7 +1791,6 @@ def main():
             if args.edited_output
             else _default_edited_html_filename(args.output)
         ),
-        dataset=args.dataset,
         scannetpp_sensor=args.scannetpp_sensor,
         image_stats=full_image_stats,
     )
@@ -1705,8 +1803,7 @@ def main():
     _print_image_stats(
         full_image_stats,
         label="Full viewer",
-        image_root=image_root,
-        dataset=args.dataset,
+        scannetpp_roots=scannetpp_roots,
         scannetpp_sensor=args.scannetpp_sensor,
     )
 
@@ -1714,7 +1811,8 @@ def main():
         simple_image_stats = _new_image_stats()
         simple_html = _build_simple_viewer_html_from_displayed_questions(
             displayed_questions,
-            image_root,
+            scannet_roots,
+            scannetpp_roots,
             max_width=args.max_width,
             edited_html_filename=(
                 args.edited_output
@@ -1723,7 +1821,6 @@ def main():
                     args.simple_output if args.simple_output else args.output
                 )
             ),
-            dataset=args.dataset,
             scannetpp_sensor=args.scannetpp_sensor,
             image_stats=simple_image_stats,
         )
@@ -1735,8 +1832,7 @@ def main():
         _print_image_stats(
             simple_image_stats,
             label="Simple viewer",
-            image_root=image_root,
-            dataset=args.dataset,
+            scannetpp_roots=scannetpp_roots,
             scannetpp_sensor=args.scannetpp_sensor,
         )
 
