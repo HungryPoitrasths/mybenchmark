@@ -5615,6 +5615,8 @@ def generate_l2_object_move(
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
+        if not has_attachment_chain:
+            continue
         selected_state = None
         if enable_agent or enable_occlusion:
             _occlusion_for_this_source = (
@@ -5666,7 +5668,10 @@ def generate_l2_object_move(
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
+            and int(candidate_obj["id"]) != move_source_id
         ]
+        if not query_objects:
+            continue
         priority_query_ids = {
             int(child_id)
             for child_id in attachment_priority_children_by_parent.get(move_source_id, set())
@@ -6647,10 +6652,15 @@ def generate_l2_object_rotate_object_centric(
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
+        if not has_attachment_chain:
+            continue
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
+            and int(candidate_obj["id"]) != move_source_id
         ]
+        if not query_objects:
+            continue
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
@@ -6893,9 +6903,12 @@ def generate_l2_object_move_object_centric(
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
         has_attachment_chain = attachment_remapped
+        if not has_attachment_chain:
+            continue
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
+            and int(candidate_obj["id"]) != move_source_id
         ]
         if not query_objects:
             continue
@@ -7115,6 +7128,9 @@ def generate_l2_object_move_allocentric(
             continue
         moved_ids = set(get_attachment_chain_ids(move_source_id, attachment_graph)) | {move_source_id}
         attachment_remapped = len(moved_ids) > 1
+        has_attachment_chain = attachment_remapped
+        if not has_attachment_chain:
+            continue
 
         selected_state = _select_object_move_state(
             movement_scene_objects,
@@ -7135,7 +7151,10 @@ def generate_l2_object_move_allocentric(
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in moved_ids
+            and int(candidate_obj["id"]) != move_source_id
         ]
+        if not query_objects:
+            continue
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
@@ -7230,6 +7249,7 @@ def generate_l2_object_move_allocentric(
                     "query_obj_id": query_obj_id,
                     "query_obj_label": query_obj["label"],
                     "attachment_remapped": attachment_remapped,
+                    "has_attachment_chain": has_attachment_chain,
                     "obj_ref_id": ref["id"],
                     "obj_ref_label": ref["label"],
                     "mentioned_objects": [
@@ -8975,6 +8995,13 @@ def generate_all_questions(
             return None
         return normalized_question_type_budgets.get(_canonical_budget_type(question_type))
 
+    def _question_type_budget_available(question_type: str) -> bool:
+        budget = _question_type_budget(question_type)
+        return budget is None or budget > 0
+
+    def _any_question_type_budget_available(*question_types: str) -> bool:
+        return any(_question_type_budget_available(question_type) for question_type in question_types)
+
     trace_counter = 0
     original_objects = list(objects)
     enrich_objects_with_distance_geometry(objects, instance_mesh_data)
@@ -9621,30 +9648,34 @@ def generate_all_questions(
             "referable_object_count": len(referable_set),
         },
     )
-    l1_occ_qs = _run_question_step(
-        "generate_l1_occlusion_questions",
-        lambda: _register_generated_questions(
+    l1_occ_qs = (
+        _run_question_step(
             "generate_l1_occlusion_questions",
-            generate_l1_occlusion_questions(
-                objects=l1_occlusion_subjects,
-                camera_pose=camera_pose,
-                color_intrinsics=color_intrinsics,
-                depth_image=depth_image,
-                depth_intrinsics=depth_intrinsics,
-                occlusion_backend=occlusion_backend,
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
-                templates=templates,
-                label_statuses=label_statuses,
-                label_counts=label_counts,
-                referable_object_ids=referable_object_ids,
-                out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
-                out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
-                generator_progress_log_seconds=generator_progress_log_seconds,
-                slow_generator_warn_seconds=slow_generator_warn_seconds,
-                max_questions=_question_type_budget("occlusion"),
+            lambda: _register_generated_questions(
+                "generate_l1_occlusion_questions",
+                generate_l1_occlusion_questions(
+                    objects=l1_occlusion_subjects,
+                    camera_pose=camera_pose,
+                    color_intrinsics=color_intrinsics,
+                    depth_image=depth_image,
+                    depth_intrinsics=depth_intrinsics,
+                    occlusion_backend=occlusion_backend,
+                    ray_caster=ray_caster,
+                    instance_mesh_data=instance_mesh_data,
+                    templates=templates,
+                    label_statuses=label_statuses,
+                    label_counts=label_counts,
+                    referable_object_ids=referable_object_ids,
+                    out_of_frame_not_visible_labels=out_of_frame_not_visible_labels,
+                    out_of_frame_label_to_object_ids=out_of_frame_label_to_object_ids,
+                    generator_progress_log_seconds=generator_progress_log_seconds,
+                    slow_generator_warn_seconds=slow_generator_warn_seconds,
+                    max_questions=_question_type_budget("occlusion"),
+                ),
             ),
-        ),
+        )
+        if _question_type_budget_available("occlusion")
+        else []
     )
 
     # L1 new reference frames
@@ -9728,37 +9759,38 @@ def generate_all_questions(
             "occlusion_backend": occlusion_backend,
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_move",
-            lambda: _register_generated_questions(
+    if _any_question_type_budget_available("object_move_agent", "object_move_distance", "object_move_occlusion"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_move",
-                generate_l2_object_move(
-                    objects_uniq,
-                    attachment_graph_uniq,
-                    attached_by_uniq,
-                    camera_pose,
-                    templates,
-                    room_bounds=room_bounds,
-                    collision_objects=l2_collision_objects,
-                    movement_objects=movement_objects,
-                    object_map=movement_object_map,
-                    color_intrinsics=color_intrinsics,
-                    occlusion_backend=occlusion_backend,
-                    ray_caster=ray_caster,
-                    instance_mesh_data=instance_mesh_data,
-                    attachment_referable_object_ids=sorted(attachment_referable_set),
-                    attachment_query_objects=attachment_query_objects_uniq,
-                    attachment_priority_pairs=attachment_priority_pairs,
-                    trace_recorder=trace_recorder,
-                    trace_detail=trace_detail,
-                    enabled_l2_object_move_types=enabled_l2_object_move_types,
-                    max_occlusion_objects=max_occlusion_objects,
-                    max_move_sources=max_move_sources,
+                lambda: _register_generated_questions(
+                    "generate_l2_object_move",
+                    generate_l2_object_move(
+                        objects_uniq,
+                        attachment_graph_uniq,
+                        attached_by_uniq,
+                        camera_pose,
+                        templates,
+                        room_bounds=room_bounds,
+                        collision_objects=l2_collision_objects,
+                        movement_objects=movement_objects,
+                        object_map=movement_object_map,
+                        color_intrinsics=color_intrinsics,
+                        occlusion_backend=occlusion_backend,
+                        ray_caster=ray_caster,
+                        instance_mesh_data=instance_mesh_data,
+                        attachment_referable_object_ids=sorted(attachment_referable_set),
+                        attachment_query_objects=attachment_query_objects_uniq,
+                        attachment_priority_pairs=attachment_priority_pairs,
+                        trace_recorder=trace_recorder,
+                        trace_detail=trace_detail,
+                        enabled_l2_object_move_types=enabled_l2_object_move_types,
+                        max_occlusion_objects=max_occlusion_objects,
+                        max_move_sources=max_move_sources,
+                    ),
                 ),
-            ),
+            )
         )
-    )
     _emit_generator_summary(
         trace_recorder,
         "generate_l2_object_move",
@@ -9779,31 +9811,32 @@ def generate_all_questions(
             "occlusion_mode": "l1_style",
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_remove",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("object_remove"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_remove",
-                generate_l2_object_remove(
-                objects_uniq,
-                attachment_graph_uniq,
-                camera_pose,
-                color_intrinsics,
-                depth_image,
-                depth_intrinsics,
-                occlusion_backend,
-                ray_caster,
-                instance_mesh_data,
-                templates,
-                attachment_query_objects=attachment_query_objects_uniq,
-                trace_recorder=trace_recorder,
-                trace_detail=trace_detail,
-                generator_progress_log_seconds=generator_progress_log_seconds,
-                slow_generator_warn_seconds=slow_generator_warn_seconds,
+                lambda: _register_generated_questions(
+                    "generate_l2_object_remove",
+                    generate_l2_object_remove(
+                    objects_uniq,
+                    attachment_graph_uniq,
+                    camera_pose,
+                    color_intrinsics,
+                    depth_image,
+                    depth_intrinsics,
+                    occlusion_backend,
+                    ray_caster,
+                    instance_mesh_data,
+                    templates,
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
+                    generator_progress_log_seconds=generator_progress_log_seconds,
+                    slow_generator_warn_seconds=slow_generator_warn_seconds,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     # L2 - new reference frames
     _emit_generator_context(
         trace_recorder,
@@ -9815,29 +9848,30 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_move_object_centric",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("object_move_object_centric"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_move_object_centric",
-                generate_l2_object_move_object_centric(
-                objects_uniq,
-                attachment_graph_uniq,
-                attached_by_uniq,
-                camera_pose,
-                templates,
-                room_bounds=room_bounds,
-                collision_objects=l2_collision_objects,
-                movement_objects=movement_objects,
-                object_map=movement_object_map,
-                attachment_referable_object_ids=sorted(attachment_referable_set),
-                attachment_query_objects=attachment_query_objects_uniq,
-                trace_recorder=trace_recorder,
-                trace_detail=trace_detail,
+                lambda: _register_generated_questions(
+                    "generate_l2_object_move_object_centric",
+                    generate_l2_object_move_object_centric(
+                    objects_uniq,
+                    attachment_graph_uniq,
+                    attached_by_uniq,
+                    camera_pose,
+                    templates,
+                    room_bounds=room_bounds,
+                    collision_objects=l2_collision_objects,
+                    movement_objects=movement_objects,
+                    object_map=movement_object_map,
+                    attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l2_object_move_object_centric",
@@ -9857,29 +9891,30 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_rotate_object_centric",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("object_rotate_object_centric"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_rotate_object_centric",
-                generate_l2_object_rotate_object_centric(
-                objects_uniq,
-                attachment_graph_uniq,
-                attached_by_uniq,
-                camera_pose,
-                templates,
-                room_bounds=room_bounds,
-                collision_objects=l2_collision_objects,
-                movement_objects=movement_objects,
-                object_map=movement_object_map,
-                attachment_referable_object_ids=sorted(attachment_referable_set),
-                attachment_query_objects=attachment_query_objects_uniq,
-                trace_recorder=trace_recorder,
-                trace_detail=trace_detail,
+                lambda: _register_generated_questions(
+                    "generate_l2_object_rotate_object_centric",
+                    generate_l2_object_rotate_object_centric(
+                    objects_uniq,
+                    attachment_graph_uniq,
+                    attached_by_uniq,
+                    camera_pose,
+                    templates,
+                    room_bounds=room_bounds,
+                    collision_objects=l2_collision_objects,
+                    movement_objects=movement_objects,
+                    object_map=movement_object_map,
+                    attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l2_object_rotate_object_centric",
@@ -9899,29 +9934,30 @@ def generate_all_questions(
             "attachment_graph_node_count": len(attachment_graph_uniq),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l2_object_move_allocentric",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("object_move_allocentric"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l2_object_move_allocentric",
-                generate_l2_object_move_allocentric(
-                objects_uniq,
-                attachment_graph_uniq,
-                attached_by_uniq,
-                camera_pose,
-                templates,
-                room_bounds=room_bounds,
-                collision_objects=l2_collision_objects,
-                movement_objects=movement_objects,
-                object_map=movement_object_map,
-                attachment_referable_object_ids=sorted(attachment_referable_set),
-                attachment_query_objects=attachment_query_objects_uniq,
-                trace_recorder=trace_recorder,
-                trace_detail=trace_detail,
+                lambda: _register_generated_questions(
+                    "generate_l2_object_move_allocentric",
+                    generate_l2_object_move_allocentric(
+                    objects_uniq,
+                    attachment_graph_uniq,
+                    attached_by_uniq,
+                    camera_pose,
+                    templates,
+                    room_bounds=room_bounds,
+                    collision_objects=l2_collision_objects,
+                    movement_objects=movement_objects,
+                    object_map=movement_object_map,
+                    attachment_referable_object_ids=sorted(attachment_referable_set),
+                    attachment_query_objects=attachment_query_objects_uniq,
+                    trace_recorder=trace_recorder,
+                    trace_detail=trace_detail,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l2_object_move_allocentric",
@@ -9940,21 +9976,22 @@ def generate_all_questions(
             "support_chain_node_count": len(attachment_support_chain_graph),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_attachment_chain",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("attachment_chain"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_attachment_chain",
-                generate_l3_attachment_chain(
-                attachment_objects_uniq,
-                attachment_support_chain_graph,
-                attachment_support_chain_by,
-                camera_pose,
-                templates,
+                lambda: _register_generated_questions(
+                    "generate_l3_attachment_chain",
+                    generate_l3_attachment_chain(
+                    attachment_objects_uniq,
+                    attachment_support_chain_graph,
+                    attachment_support_chain_by,
+                    camera_pose,
+                    templates,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l3_attachment_chain",
@@ -9973,29 +10010,30 @@ def generate_all_questions(
             "movement_object_count": len(movement_objects),
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_attachment_move",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("attachment_move"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_attachment_move",
-                generate_l3_attachment_move(
-                    attachment_objects_uniq,
-                    attachment_graph_uniq,
-                    attached_by_uniq,
-                    camera_pose,
-                    templates,
-                    room_bounds=room_bounds,
-                    collision_objects=l2_collision_objects,
-                    movement_objects=movement_objects,
-                    object_map=movement_object_map,
-                    attachment_referable_object_ids=sorted(attachment_referable_set),
-                    attachment_query_objects=attachment_query_objects_uniq,
-                    trace_recorder=trace_recorder,
-                    trace_detail=trace_detail,
+                lambda: _register_generated_questions(
+                    "generate_l3_attachment_move",
+                    generate_l3_attachment_move(
+                        attachment_objects_uniq,
+                        attachment_graph_uniq,
+                        attached_by_uniq,
+                        camera_pose,
+                        templates,
+                        room_bounds=room_bounds,
+                        collision_objects=l2_collision_objects,
+                        movement_objects=movement_objects,
+                        object_map=movement_object_map,
+                        attachment_referable_object_ids=sorted(attachment_referable_set),
+                        attachment_query_objects=attachment_query_objects_uniq,
+                        trace_recorder=trace_recorder,
+                        trace_detail=trace_detail,
+                    ),
                 ),
-            ),
+            )
         )
-    )
     _emit_generator_summary(
         trace_recorder,
         "generate_l3_attachment_move",
@@ -10014,15 +10052,16 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_coordinate_rotation",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("coordinate_rotation_agent"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_coordinate_rotation",
-                generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
-        ),
-    )
-    )
+                lambda: _register_generated_questions(
+                    "generate_l3_coordinate_rotation",
+                    generate_l3_coordinate_rotation(objects_uniq, camera_pose, templates),
+            ),
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l3_coordinate_rotation",
@@ -10040,19 +10079,20 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_coordinate_rotation_object_centric",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("coordinate_rotation_object_centric"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_coordinate_rotation_object_centric",
-                generate_l3_coordinate_rotation_object_centric(
-                objects_uniq,
-                camera_pose,
-                templates,
+                lambda: _register_generated_questions(
+                    "generate_l3_coordinate_rotation_object_centric",
+                    generate_l3_coordinate_rotation_object_centric(
+                    objects_uniq,
+                    camera_pose,
+                    templates,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l3_coordinate_rotation_object_centric",
@@ -10070,19 +10110,20 @@ def generate_all_questions(
             "rotation_angles": [90, 180, 270],
         },
     )
-    all_questions.extend(
-        _run_question_step(
-            "generate_l3_coordinate_rotation_allocentric",
-            lambda: _register_generated_questions(
+    if _question_type_budget_available("coordinate_rotation_allocentric"):
+        all_questions.extend(
+            _run_question_step(
                 "generate_l3_coordinate_rotation_allocentric",
-                generate_l3_coordinate_rotation_allocentric(
-                objects_uniq,
-                camera_pose,
-                templates,
+                lambda: _register_generated_questions(
+                    "generate_l3_coordinate_rotation_allocentric",
+                    generate_l3_coordinate_rotation_allocentric(
+                    objects_uniq,
+                    camera_pose,
+                    templates,
+                ),
             ),
-        ),
-    )
-    )
+        )
+        )
     _emit_generator_summary(
         trace_recorder,
         "generate_l3_coordinate_rotation_allocentric",

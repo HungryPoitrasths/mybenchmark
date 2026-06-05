@@ -4018,51 +4018,258 @@ def _canonical_scene_question_type(question: dict) -> str:
     return str(question.get("type", "")).strip().lower()
 
 
-_SCENE_TYPE_CAP_LIMITED_TYPES = {"occlusion"}
+_ALL_CANONICAL_QUESTION_TYPES = {
+    "direction_agent",
+    "occlusion",
+    "distance",
+    "direction_object_centric",
+    "direction_allocentric",
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_occlusion",
+    "object_move_object_centric",
+    "object_rotate_object_centric",
+    "object_move_allocentric",
+    "object_remove",
+    "attachment_chain",
+    "attachment_move",
+    "coordinate_rotation_agent",
+    "coordinate_rotation_object_centric",
+    "coordinate_rotation_allocentric",
+}
+_PUBLIC_TO_CANONICAL_QUESTION_TYPES = {
+    "L1_direction_agent": "direction_agent",
+    "L2_object_move_agent": "object_move_agent",
+    "L2_object_move_distance": "object_move_distance",
+    "L2_object_move_object_centric": "object_move_object_centric",
+    "L2_object_rotate_object_centric": "object_rotate_object_centric",
+    "L2_object_move_allocentric": "object_move_allocentric",
+    "L2_object_remove": "object_remove",
+    "L3_attachment_chain": "attachment_chain",
+    "L3_attachment_move": "attachment_move",
+    "L3_coordinate_rotation_agent": "coordinate_rotation_agent",
+    "L3_coordinate_rotation_object_centric": "coordinate_rotation_object_centric",
+    "L3_coordinate_rotation_allocentric": "coordinate_rotation_allocentric",
+}
+_ATTACHMENT_ONLY_L2_PUBLIC_TYPES = {
+    "L2_object_move_agent",
+    "L2_object_move_distance",
+    "L2_object_move_object_centric",
+    "L2_object_rotate_object_centric",
+    "L2_object_move_allocentric",
+}
+_QUESTION_CAP_OBJECT_ID_FIELDS = [
+    "query_obj_id",
+    "obj_a_id",
+    "target_obj_id",
+    "obj_target_id",
+    "removed_obj_id",
+    "obj_ref_id",
+    "obj_face_id",
+    "moved_obj_id",
+    "parent_id",
+    "root_id",
+    "grandchild_id",
+    "grandparent_id",
+    "neighbor_id",
+    "obj_b_id",
+]
+_PAIR_KEY_FIELDS_BY_TYPE: dict[str, tuple[str, str]] = {
+    "direction_agent": ("obj_a_id", "obj_b_id"),
+    "distance": ("obj_a_id", "obj_b_id"),
+    "direction_allocentric": ("obj_a_id", "obj_b_id"),
+    "coordinate_rotation_agent": ("obj_a_id", "obj_b_id"),
+    "coordinate_rotation_allocentric": ("obj_a_id", "obj_b_id"),
+    "direction_object_centric": ("obj_ref_id", "obj_target_id"),
+    "coordinate_rotation_object_centric": ("obj_ref_id", "obj_target_id"),
+    "object_move_agent": ("moved_obj_id", "query_obj_id"),
+    "object_move_distance": ("moved_obj_id", "query_obj_id"),
+    "object_move_occlusion": ("moved_obj_id", "query_obj_id"),
+    "object_move_object_centric": ("moved_obj_id", "query_obj_id"),
+    "object_rotate_object_centric": ("moved_obj_id", "query_obj_id"),
+    "object_move_allocentric": ("moved_obj_id", "query_obj_id"),
+    "object_remove": ("removed_obj_id", "obj_b_id"),
+    "attachment_chain": ("grandparent_id", "grandchild_id"),
+    "attachment_move": ("root_id", "query_obj_id"),
+}
 
 
-def _apply_scene_type_cap(
+def _question_cap_object_id(question: dict) -> str:
+    for field in _QUESTION_CAP_OBJECT_ID_FIELDS:
+        value = question.get(field)
+        if value is not None:
+            return str(value)
+    trace_question_id = question.get("trace_question_id")
+    if trace_question_id is not None:
+        return f"trace:{trace_question_id}"
+    return f"question:{question.get('question', '')}"
+
+
+def _question_pair_key(question: dict) -> tuple[str, str] | None:
+    canonical_type = _canonical_scene_question_type(question)
+    field_pair = _PAIR_KEY_FIELDS_BY_TYPE.get(canonical_type)
+    if field_pair is not None:
+        left = question.get(field_pair[0])
+        right = question.get(field_pair[1])
+        if left is not None and right is not None:
+            pair = tuple(sorted((str(left), str(right))))
+            if pair[0] != pair[1]:
+                return pair
+
+    unique_ids: list[str] = []
+    for field in _QUESTION_CAP_OBJECT_ID_FIELDS:
+        value = question.get(field)
+        if value is None:
+            continue
+        text = str(value)
+        if text not in unique_ids:
+            unique_ids.append(text)
+        if len(unique_ids) > 2:
+            break
+    if len(unique_ids) == 2:
+        pair = tuple(sorted(unique_ids))
+        if pair[0] != pair[1]:
+            return pair
+    return None
+
+
+def _only_l2_attachment_types_requested(only_question_types: list[str] | None) -> bool:
+    return bool(only_question_types) and all(
+        str(question_type) in _ATTACHMENT_ONLY_L2_PUBLIC_TYPES
+        for question_type in only_question_types
+    )
+
+
+def _frame_has_attachment_pair(
+    frame: dict[str, object],
+    referability_entry: dict[str, object] | None,
+    attachment_graph: dict[int, list[int]] | dict[str, list[int]],
+) -> bool:
+    if int(frame.get("attachment_referable_pair_count", 0) or 0) > 0:
+        return True
+
+    if referability_entry is not None:
+        visible_ids = set(_normalize_object_ids(frame.get("visible_object_ids")))
+        if not visible_ids:
+            visible_ids = set(
+                _normalize_object_ids((referability_entry or {}).get("candidate_visible_object_ids"))
+            )
+        for pair in (referability_entry.get("attachment_referable_pairs") or []):
+            if not isinstance(pair, dict):
+                continue
+            parent_id = pair.get("parent_id")
+            child_id = pair.get("child_id")
+            try:
+                parent_id = int(parent_id)
+                child_id = int(child_id)
+            except (TypeError, ValueError):
+                continue
+            if not visible_ids or (parent_id in visible_ids and child_id in visible_ids):
+                return True
+
+    graph = {
+        int(parent_id): [int(child_id) for child_id in (child_ids or [])]
+        for parent_id, child_ids in (attachment_graph or {}).items()
+    }
+    return any(child_ids for child_ids in graph.values())
+
+
+def _apply_incremental_question_caps(
     questions: list[dict],
     *,
-    max_questions_per_scene_type: int,
-    type_counts: Counter[str] | None = None,
+    scene_type_cap: int,
+    frame_type_cap: int,
+    frame_type_object_cap: int,
+    scene_type_counts: Counter[str] | None = None,
+    frame_type_counts: Counter[tuple[str, str]] | None = None,
+    frame_type_object_counts: Counter[tuple[str, str, str]] | None = None,
+    pair_counts: Counter[tuple[str, str]] | None = None,
 ) -> list[dict]:
-    if max_questions_per_scene_type <= 0:
-        if type_counts is not None:
-            type_counts.update(
-                _canonical_scene_question_type(question)
-                for question in questions
-                if _canonical_scene_question_type(question) in _SCENE_TYPE_CAP_LIMITED_TYPES
-            )
-        return list(questions)
-
-    counts = type_counts if type_counts is not None else Counter()
     kept: list[dict] = []
+    scene_counts = scene_type_counts if scene_type_counts is not None else Counter()
+    frame_counts = frame_type_counts if frame_type_counts is not None else Counter()
+    frame_object_counts = (
+        frame_type_object_counts if frame_type_object_counts is not None else Counter()
+    )
+    pair_counter = pair_counts if pair_counts is not None else Counter()
+
     for question in questions:
         canonical_type = _canonical_scene_question_type(question)
         if not canonical_type:
             kept.append(question)
             continue
-        if canonical_type not in _SCENE_TYPE_CAP_LIMITED_TYPES:
-            kept.append(question)
+        image_name = str(question.get("image_name", "")).strip()
+        object_id = _question_cap_object_id(question)
+        pair_key = _question_pair_key(question)
+        frame_key = (image_name, canonical_type)
+        frame_object_key = (image_name, canonical_type, object_id)
+        if scene_type_cap > 0 and scene_counts[canonical_type] >= scene_type_cap:
             continue
-        if counts[canonical_type] >= max_questions_per_scene_type:
+        if frame_type_cap > 0 and frame_counts[frame_key] >= frame_type_cap:
+            continue
+        if (
+            frame_type_object_cap > 0
+            and frame_object_counts[frame_object_key] >= frame_type_object_cap
+        ):
+            continue
+        if pair_key is not None and pair_counter[pair_key] >= 1:
             continue
         kept.append(question)
-        counts[canonical_type] += 1
+        scene_counts[canonical_type] += 1
+        frame_counts[frame_key] += 1
+        frame_object_counts[frame_object_key] += 1
+        if pair_key is not None:
+            pair_counter[pair_key] += 1
     return kept
+
+
+def _scene_question_target_types(only_question_types: list[str] | None) -> set[str]:
+    if not only_question_types:
+        return set(_ALL_CANONICAL_QUESTION_TYPES)
+    target_types = {
+        canonical_type
+        for question_type in only_question_types
+        for canonical_type in [_PUBLIC_TO_CANONICAL_QUESTION_TYPES.get(str(question_type))]
+        if canonical_type
+    }
+    return target_types or set(_ALL_CANONICAL_QUESTION_TYPES)
+
+
+def _apply_scene_type_cap(
+    questions: list[dict],
+    *,
+    scene_type_cap: int,
+    frame_type_cap: int = 0,
+    frame_type_object_cap: int = 0,
+    type_counts: Counter[str] | None = None,
+    frame_type_counts: Counter[tuple[str, str]] | None = None,
+    frame_type_object_counts: Counter[tuple[str, str, str]] | None = None,
+    pair_counts: Counter[tuple[str, str]] | None = None,
+) -> list[dict]:
+    return _apply_incremental_question_caps(
+        questions,
+        scene_type_cap=scene_type_cap,
+        frame_type_cap=frame_type_cap,
+        frame_type_object_cap=frame_type_object_cap,
+        scene_type_counts=type_counts,
+        frame_type_counts=frame_type_counts,
+        frame_type_object_counts=frame_type_object_counts,
+        pair_counts=pair_counts,
+    )
 
 
 def _remaining_scene_type_budgets(
     type_counts: Counter[str],
     *,
-    max_questions_per_scene_type: int,
+    scene_type_cap: int,
+    allowed_types: set[str] | None = None,
 ) -> dict[str, int] | None:
-    if max_questions_per_scene_type <= 0:
+    if scene_type_cap <= 0:
         return None
+    target_types = set(allowed_types) if allowed_types else set(_ALL_CANONICAL_QUESTION_TYPES)
     return {
-        question_type: max(max_questions_per_scene_type - int(type_counts[question_type]), 0)
-        for question_type in sorted(_SCENE_TYPE_CAP_LIMITED_TYPES)
+        question_type: max(scene_type_cap - int(type_counts[question_type]), 0)
+        for question_type in sorted(target_types)
     }
 
 
@@ -4087,7 +4294,9 @@ def _load_cached_scene_questions(
     raw_questions_dir: Path,
     *,
     scene_ids: list[str],
-    max_questions_per_scene_type: int,
+    scene_type_cap: int,
+    frame_type_cap: int,
+    frame_type_object_cap: int,
     referability_cache: dict | None = None,
 ) -> tuple[list[dict], int]:
     all_questions: list[dict] = []
@@ -4124,7 +4333,9 @@ def _load_cached_scene_questions(
         scene_questions = _deduplicate_scene_questions(scene_questions)
         scene_questions = _apply_scene_type_cap(
             scene_questions,
-            max_questions_per_scene_type=max_questions_per_scene_type,
+            scene_type_cap=scene_type_cap,
+            frame_type_cap=frame_type_cap,
+            frame_type_object_cap=frame_type_object_cap,
         )
         if attachment_surface_text_by_scene_image:
             for idx, question in enumerate(scene_questions):
@@ -4157,14 +4368,18 @@ def _rebuild_pipeline_outputs(
     vlm_url: str | None,
     vlm_model: str | None,
     question_presence_review_workers: int,
-    max_questions_per_scene_type: int,
+    scene_type_cap: int,
+    frame_type_cap: int,
+    frame_type_object_cap: int,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
 ) -> list[dict]:
     all_questions, raw_question_count = _load_cached_scene_questions(
         raw_questions_dir,
         scene_ids=scene_ids,
-        max_questions_per_scene_type=max_questions_per_scene_type,
+        scene_type_cap=scene_type_cap,
+        frame_type_cap=frame_type_cap,
+        frame_type_object_cap=frame_type_object_cap,
         referability_cache=referability_cache,
     )
 
@@ -4256,7 +4471,10 @@ def run_pipeline(
     resume: bool = False,
     reset: int | None = None,
     only_question_types: list[str] | None = None,
-    max_questions_per_scene_type: int = 5,
+    scene_type_cap: int = 8,
+    frame_type_cap: int = 2,
+    frame_type_object_cap: int = 1,
+    max_questions_per_scene_type: int | None = None,
     max_occlusion_objects: int | None = 20,
     max_move_sources: int | None = None,
 ):
@@ -4271,9 +4489,17 @@ def run_pipeline(
         raise ValueError("reset must be >= 1")
     if reset is not None and not resume:
         raise ValueError("reset requires resume=True")
-    max_questions_per_scene_type = int(max_questions_per_scene_type)
-    if max_questions_per_scene_type < 0:
-        raise ValueError("max_questions_per_scene_type must be >= 0")
+    if max_questions_per_scene_type is not None:
+        scene_type_cap = int(max_questions_per_scene_type)
+    scene_type_cap = int(scene_type_cap)
+    frame_type_cap = int(frame_type_cap)
+    frame_type_object_cap = int(frame_type_object_cap)
+    if scene_type_cap < 0:
+        raise ValueError("scene_type_cap must be >= 0")
+    if frame_type_cap < 0:
+        raise ValueError("frame_type_cap must be >= 0")
+    if frame_type_object_cap < 0:
+        raise ValueError("frame_type_object_cap must be >= 0")
     if max_occlusion_objects is not None:
         max_occlusion_objects = int(max_occlusion_objects)
         if max_occlusion_objects < 0:
@@ -4282,6 +4508,8 @@ def run_pipeline(
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
     l3_attachment_chain_only = only_question_types == ["L3_attachment_chain"]
     l3_attachment_move_only = only_question_types == ["L3_attachment_move"]
+    target_scene_question_types = _scene_question_target_types(only_question_types)
+    attachment_only_l2_mode = _only_l2_attachment_types_requested(only_question_types)
 
     meta_dir = output_dir / "scene_metadata"
     questions_dir = output_dir / "questions"
@@ -4478,7 +4706,9 @@ def run_pipeline(
         scene_questions = _deduplicate_scene_questions(scene_questions)
         scene_questions = _apply_scene_type_cap(
             scene_questions,
-            max_questions_per_scene_type=max_questions_per_scene_type,
+            scene_type_cap=scene_type_cap,
+            frame_type_cap=frame_type_cap,
+            frame_type_object_cap=frame_type_object_cap,
         )
         _write_json_file(raw_question_path, scene_questions)
         _mark_pipeline_scene_completed(
@@ -4500,6 +4730,7 @@ def run_pipeline(
     for scene_index, scene_dir in pending_scene_entries:
         scene_id = scene_dir.name
         scene_question_type_counts: Counter[str] = Counter()
+        scene_pair_counts: Counter[tuple[str, str]] = Counter()
         logger.info(
             "=== Processing scene %s (%d/%d) ===",
             scene_id,
@@ -4576,6 +4807,48 @@ def run_pipeline(
 
         scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
         frames = _frames_from_referability_cache(scene_frames)
+        if attachment_only_l2_mode:
+            attachment_frames: list[dict[str, object]] = []
+            skipped_attachment_frames: list[dict[str, object]] = []
+            for frame in frames:
+                image_name = str(frame.get("image_name", "")).strip()
+                referability_entry = scene_frames.get(image_name)
+                if _frame_has_attachment_pair(frame, referability_entry, attachment_graph):
+                    attachment_frames.append(frame)
+                else:
+                    skipped_attachment_frames.append(frame)
+            if write_frame_debug:
+                for frame in skipped_attachment_frames:
+                    image_name = str(frame.get("image_name", "")).strip()
+                    selector_visible_ids = _normalize_object_ids(frame.get("visible_object_ids"))
+                    frame_attachment_rows = _filter_frame_attachment_rows(
+                        scene_attachment_rows,
+                        set(selector_visible_ids),
+                    )
+                    scene_frame_debug_entries.append(
+                        _build_frame_debug_entry(
+                            image_name=image_name,
+                            scene_objects=scene["objects"],
+                            objects_by_id=objects_by_id,
+                            selector_visible_ids=selector_visible_ids,
+                            pipeline_visible_ids=selector_visible_ids,
+                            occlusion_eligible_object_ids=[],
+                            pipeline_referable_object_ids=[],
+                            pipeline_attachment_referable_object_ids=_normalize_object_ids(
+                                (scene_frames.get(image_name) or {}).get("attachment_referable_object_ids")
+                            ),
+                            referability_entry=scene_frames.get(image_name),
+                            frame_attachment_rows=frame_attachment_rows,
+                            pipeline_skip_reason="no_attachment_pair_for_attachment_only_l2",
+                        )
+                    )
+            logger.info(
+                "Attachment-only L2 mode kept %d/%d frame candidates for %s",
+                len(attachment_frames),
+                len(frames),
+                scene_id,
+            )
+            frames = attachment_frames
         if l3_attachment_chain_only:
             l3_frames: list[dict[str, object]] = []
             skipped_l3_frames: list[dict[str, object]] = []
@@ -4730,6 +5003,21 @@ def run_pipeline(
             color_intrinsics = None
 
         for frame_index, frame in enumerate(frames, start=1):
+            if scene_type_cap > 0:
+                remaining_scene_type_budgets = _remaining_scene_type_budgets(
+                    scene_question_type_counts,
+                    scene_type_cap=scene_type_cap,
+                    allowed_types=target_scene_question_types,
+                )
+                if remaining_scene_type_budgets is not None and all(
+                    budget <= 0 for budget in remaining_scene_type_budgets.values()
+                ):
+                    logger.info(
+                        "Scene %s reached all active per-type caps after %d frame(s); stopping early",
+                        scene_id,
+                        frame_index - 1,
+                    )
+                    break
             image_name = frame["image_name"]
             selector_visible_ids = _normalize_object_ids(frame.get("visible_object_ids"))
             visible_ids = list(selector_visible_ids)
@@ -4822,7 +5110,7 @@ def run_pipeline(
                                     frame_attachment_rows=frame_attachment_rows,
                                     pipeline_skip_reason="missing_pose",
                                 )
-                            )
+                    )
                     frame_status = "skipped"
                     frame_skip_reason = "missing_pose"
                     continue
@@ -4937,11 +5225,43 @@ def run_pipeline(
                     frame_skip_reason = "no_referable_objects_or_l1_candidates"
                     continue
 
+                if attachment_only_l2_mode and not _frame_has_attachment_pair(
+                    frame,
+                    referability_entry,
+                    attachment_graph,
+                ):
+                    if write_frame_debug:
+                        with _timed_frame_phase(frame_ctx, "frame_debug_assembly"):
+                            frame_attachment_rows = _filter_frame_attachment_rows(
+                                scene_attachment_rows,
+                                set(selector_visible_ids) | set(int(obj_id) for obj_id in visible_ids),
+                            )
+                            scene_frame_debug_entries.append(
+                                _build_frame_debug_entry(
+                                    image_name=image_name,
+                                    scene_objects=scene["objects"],
+                                    objects_by_id=objects_by_id,
+                                    selector_visible_ids=selector_visible_ids,
+                                    pipeline_visible_ids=list(visible_ids),
+                                    occlusion_eligible_object_ids=occlusion_eligible_ids,
+                                    pipeline_referable_object_ids=referable_ids,
+                                    pipeline_attachment_referable_object_ids=attachment_referable_ids,
+                                    referability_entry=referability_entry,
+                                    frame_attachment_rows=frame_attachment_rows,
+                                    referable_occlusion_veto=referable_occlusion_veto,
+                                    pipeline_skip_reason="no_attachment_pair_for_attachment_only_l2",
+                                )
+                            )
+                    frame_status = "skipped"
+                    frame_skip_reason = "no_attachment_pair_for_attachment_only_l2"
+                    continue
+
                 with _timed_frame_phase(frame_ctx, "generate_all_questions"):
                     try:
                         question_type_budgets = _remaining_scene_type_budgets(
                             scene_question_type_counts,
-                            max_questions_per_scene_type=max_questions_per_scene_type,
+                            scene_type_cap=scene_type_cap,
+                            allowed_types=target_scene_question_types,
                         )
                         questions = _call_generate_all_questions_compat(
                             objects=scene["objects"],
@@ -5003,10 +5323,17 @@ def run_pipeline(
                         frame_referable_ids=referable_ids or [],
                         attachment_frame_referable_ids=attachment_referable_ids or [],
                     )
+                    frame_question_type_counts: Counter[tuple[str, str]] = Counter()
+                    frame_question_type_object_counts: Counter[tuple[str, str, str]] = Counter()
                     kept_questions = _apply_scene_type_cap(
                         kept_questions,
-                        max_questions_per_scene_type=max_questions_per_scene_type,
+                        scene_type_cap=scene_type_cap,
+                        frame_type_cap=frame_type_cap,
+                        frame_type_object_cap=frame_type_object_cap,
                         type_counts=scene_question_type_counts,
+                        frame_type_counts=frame_question_type_counts,
+                        frame_type_object_counts=frame_question_type_object_counts,
+                        pair_counts=scene_pair_counts,
                     )
                 frame_kept_count = len(kept_questions)
                 scene_questions.extend(kept_questions)
@@ -5091,7 +5418,9 @@ def run_pipeline(
         vlm_url=vlm_url,
         vlm_model=vlm_model,
         question_presence_review_workers=question_presence_review_workers,
-        max_questions_per_scene_type=max_questions_per_scene_type,
+        scene_type_cap=scene_type_cap,
+        frame_type_cap=frame_type_cap,
+        frame_type_object_cap=frame_type_object_cap,
         dataset=dataset,
         scannetpp_sensor=scannetpp_sensor,
     )
@@ -5584,10 +5913,28 @@ def main():
         ),
     )
     parser.add_argument(
+        "--scene_type_cap",
+        type=int,
+        default=8,
+        help="Maximum kept questions per (dataset, scene, type). Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--frame_type_cap",
+        type=int,
+        default=2,
+        help="Maximum kept questions per (dataset, scene, frame, type). Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--frame_type_object_cap",
+        type=int,
+        default=1,
+        help="Maximum kept questions per (dataset, scene, frame, type, obj). Use 0 to disable.",
+    )
+    parser.add_argument(
         "--max_questions_per_scene_type",
         type=int,
-        default=5,
-        help="Maximum kept L1 occlusion questions per scene; the occlusion generator also receives the remaining budget for early stop. Other question types are uncapped. Use 0 to disable.",
+        default=None,
+        help="Deprecated alias for --scene_type_cap. When provided, overrides --scene_type_cap.",
     )
     parser.add_argument(
         "--max_occlusion_objects",
@@ -5606,8 +5953,14 @@ def main():
         parser.error("--reset must be >= 1")
     if args.reset is not None and not args.resume:
         parser.error("--reset requires --resume")
-    if int(args.max_questions_per_scene_type) < 0:
+    if args.max_questions_per_scene_type is not None and int(args.max_questions_per_scene_type) < 0:
         parser.error("--max_questions_per_scene_type must be >= 0")
+    if int(args.scene_type_cap) < 0:
+        parser.error("--scene_type_cap must be >= 0")
+    if int(args.frame_type_cap) < 0:
+        parser.error("--frame_type_cap must be >= 0")
+    if int(args.frame_type_object_cap) < 0:
+        parser.error("--frame_type_object_cap must be >= 0")
     if int(args.max_occlusion_objects) < 0:
         parser.error("--max_occlusion_objects must be >= 0")
     if args.skip_question_vlm_check:
@@ -5648,6 +6001,9 @@ def main():
         resume=args.resume,
         reset=args.reset,
         only_question_types=args.only_question_types,
+        scene_type_cap=args.scene_type_cap,
+        frame_type_cap=args.frame_type_cap,
+        frame_type_object_cap=args.frame_type_object_cap,
         max_questions_per_scene_type=args.max_questions_per_scene_type,
         max_occlusion_objects=(None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects)),
         max_move_sources=(None if int(args.max_move_sources) == 0 else int(args.max_move_sources)),
