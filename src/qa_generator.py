@@ -8947,6 +8947,12 @@ def generate_all_questions(
             "attachment_priority_pairs",
         )
     )
+    if only_question_types is not None:
+        only_question_types = [
+            str(question_type).strip()
+            for question_type in only_question_types
+            if str(question_type).strip()
+        ] or None
     attachment_edge_input = len(attachment_edges)
 
     # Resolve --only_question_types whitelist

@@ -4140,6 +4140,18 @@ def _only_l2_attachment_types_requested(only_question_types: list[str] | None) -
     )
 
 
+def _normalize_only_question_types(only_question_types: list[str] | None) -> list[str] | None:
+    if only_question_types is None:
+        return None
+    normalized: list[str] = []
+    for question_type in only_question_types:
+        text = str(question_type).strip()
+        if not text:
+            continue
+        normalized.append(text)
+    return normalized or None
+
+
 def _frame_has_attachment_pair(
     frame: dict[str, object],
     referability_entry: dict[str, object] | None,
@@ -4480,6 +4492,7 @@ def run_pipeline(
 ):
     """Execute the full PSR-Bench data generation pipeline."""
     _set_pipeline_random_seed()
+    only_question_types = _normalize_only_question_types(only_question_types)
 
     if referability_cache is None:
         raise ValueError(
