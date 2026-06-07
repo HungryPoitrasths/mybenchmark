@@ -166,6 +166,27 @@ def _attachment_eligible(question: dict[str, Any]) -> bool:
     return bool(question.get("has_attachment_chain")) and bool(question.get("attachment_remapped"))
 
 
+def _coerce_object_id(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _invalid_self_attachment_query(question: dict[str, Any]) -> bool:
+    if str(question.get("level") or "") != "L2":
+        return False
+    if not str(question.get("type") or "").startswith("object_move"):
+        return False
+    if not bool(question.get("attachment_remapped", False)):
+        return False
+    moved_obj_id = _coerce_object_id(question.get("moved_obj_id"))
+    query_obj_id = _coerce_object_id(question.get("query_obj_id"))
+    return moved_obj_id is not None and moved_obj_id == query_obj_id
+
+
 def _object_key(question: dict[str, Any]) -> str:
     return _json_key(
         {
@@ -322,12 +343,18 @@ def sample_questions(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     by_level_type: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
     prefilter_counts: Counter[tuple[str, str]] = Counter()
+    validation_filter_counts: Counter[tuple[str, str]] = Counter()
+    validation_pass_counts: Counter[tuple[str, str]] = Counter()
     postfilter_counts: Counter[tuple[str, str]] = Counter()
 
     for question in questions:
         level = str(question["level"])
         qtype = str(question["type"])
         prefilter_counts[(level, qtype)] += 1
+        if _invalid_self_attachment_query(question):
+            validation_filter_counts[(level, qtype)] += 1
+            continue
+        validation_pass_counts[(level, qtype)] += 1
         if qtype in ATTACHMENT_REQUIRED_TYPES and not _attachment_eligible(question):
             continue
         postfilter_counts[(level, qtype)] += 1
@@ -339,6 +366,28 @@ def sample_questions(
         "frame_cap_per_type": frame_cap,
         "scene_cap_per_type": scene_cap,
         "attachment_required_types": sorted(ATTACHMENT_REQUIRED_TYPES),
+        "validation_filters": {
+            "invalid_self_attachment_query": {
+                "total": int(sum(validation_filter_counts.values())),
+                "by_level_type": {
+                    level: {
+                        qtype: int(count)
+                        for qtype, count in sorted(
+                            (
+                                (qtype, value)
+                                for (counter_level, qtype), value in validation_filter_counts.items()
+                                if counter_level == level
+                            ),
+                            key=lambda item: _qtype_sort_key(item[0]),
+                        )
+                    }
+                    for level in sorted(
+                        {counter_level for counter_level, _qtype in validation_filter_counts},
+                        key=_level_sort_key,
+                    )
+                },
+            }
+        },
         "levels": {},
     }
 
@@ -354,6 +403,8 @@ def sample_questions(
             pools_by_type[qtype] = pool
             type_stats[qtype] = {
                 "available_raw": prefilter_counts[(level, qtype)],
+                "filtered_invalid_self_attachment_query": validation_filter_counts[(level, qtype)],
+                "available_after_validation_filter": validation_pass_counts[(level, qtype)],
                 "available_after_attachment_filter": postfilter_counts[(level, qtype)],
                 **pool_stats,
             }
