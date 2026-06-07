@@ -1295,19 +1295,19 @@ def _default_templates() -> dict:
 
         # --- Ego-centric (rewritten — 方案B) ---
         "L3_coordinate_rotation_agent": [
-            f"Suppose this room had originally been designed with its orientation rotated {{angle}} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. Observed from the original camera position and viewing direction (unchanged), in which direction is {{obj_a}} relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
-            f"If the room layout had been rotated {{angle}} degrees clockwise around the room center (top-down view) from the start, with all relative object positions preserved and camera position and orientation unchanged, from the camera's perspective, where would {{obj_a}} be relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
-            f"Imagine the room was originally built rotated {{angle}} degrees clockwise around the room center (as seen from above). With all inter-object relationships intact and the camera at its original pose, from the camera's perspective, what is the direction of {{obj_a}} from {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"Suppose this room had originally been designed with its orientation rotated {{angle}} degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is {{obj_a}} relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"If the room layout had been rotated {{angle}} degrees clockwise about the camera (top-down view) from the start, with every object keeping its position relative to the others and camera position and orientation unchanged, from the camera's perspective, where would {{obj_a}} be relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"Imagine the room was originally built rotated {{angle}} degrees clockwise about the camera (as seen from above). With every object keeping its position relative to the others and the camera at its original pose, from the camera's perspective, what is the direction of {{obj_a}} from {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
         ],
 
         # --- Object-centric ---
         "L3_coordinate_rotation_object_centric": [
-            f"Suppose this room had originally been oriented {{angle}} degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were {{obj_ref}} at its rotated position and kept facing the same horizontal direction that originally pointed from {{obj_ref}} toward {{obj_face}}, in which direction would {{obj_target}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"Suppose this room had originally been oriented {{angle}} degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. If you were {{obj_ref}} at its rotated position and kept facing the same horizontal direction that originally pointed from {{obj_ref}} toward {{obj_face}}, in which direction would {{obj_target}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
         "L3_coordinate_rotation_allocentric": [
-            f"Imagine all furniture is rotated {{angle}} degrees clockwise around the room center (viewed from above). The camera, facing {{camera_cardinal}}, remains in place. On the floor plan, in which cardinal direction is {{obj_a}} from {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
+            f"Imagine all furniture is rotated {{angle}} degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing {{camera_cardinal}}, remains in place. On the floor plan, in which cardinal direction is {{obj_a}} from {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
         ],
     }
 

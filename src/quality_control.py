@@ -70,6 +70,17 @@ def _object_id_signature(q: dict[str, Any]) -> tuple:
     )
 
 
+def _rotation_angle_key(q: dict[str, Any]) -> int | str:
+    """Distinguishing counterfactual rotation angle, or "" when not applicable."""
+    angle = q.get("rotation_angle")
+    if angle is None or angle == "":
+        return ""
+    try:
+        return int(angle) % 360
+    except (TypeError, ValueError):
+        return str(angle)
+
+
 def _stable_id_sort_key(value: int | str) -> tuple[int, int | str]:
     if isinstance(value, int):
         return (0, value)
@@ -121,9 +132,14 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
         q.get("image_name"),
         qtype,
     )
+    # rotation_angle legitimately distinguishes otherwise-identical
+    # coordinate-rotation questions (same scene/frame/type/objects, different
+    # counterfactual angle -> different answer). Without it the 90/180/270
+    # variants collapse to one, skewing the answer distribution.
+    variant = (_rotation_angle_key(q),)
     object_signature = _object_id_signature(q)
     if object_signature:
-        return base + ("ids", object_signature)
+        return base + ("ids", object_signature) + variant
 
     primary_label = _label_key(
         q.get("obj_a_label")
@@ -136,7 +152,7 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
         _label_key(q.get("obj_c_label")),
         _label_key(q.get("obj_ref_label")),
     )
-    return base + (primary_label, *secondary_labels)
+    return base + (primary_label, *secondary_labels) + variant
 
 
 def _question_preview(question_text: Any, limit: int = 160) -> str:
@@ -153,6 +169,9 @@ def _near_duplicate_signature(q: dict[str, Any]) -> dict[str, Any]:
         "image_name": q.get("image_name"),
         "type": qtype,
     }
+    rotation_angle = _rotation_angle_key(q)
+    if rotation_angle != "":
+        signature["rotation_angle"] = rotation_angle
     object_signature = _object_id_signature(q)
     if object_signature:
         signature["mode"] = "object_ids"
@@ -602,11 +621,17 @@ def balance_answer_distribution(
     from collections import defaultdict
 
     groups: dict[tuple, list[dict]] = defaultdict(list)
+    multi_select: list[dict] = []
     for q in questions:
+        # Multi-select questions carry a list-valued "answer" and cannot be
+        # re-shuffled by single-letter frequency; pass them through untouched.
+        if q.get("multi_select") or isinstance(q.get("answer"), list):
+            multi_select.append(q)
+            continue
         key = (q.get("level", ""), q.get("type", ""))
         groups[key].append(q)
 
-    balanced: list[dict] = []
+    balanced: list[dict] = list(multi_select)
     for key, group in groups.items():
         group_copy: list[dict] = []
         for q in group:
@@ -683,7 +708,15 @@ def compute_statistics(questions: list[dict]) -> dict[str, Any]:
 
     # Answer distribution per level
     for level in ("L1", "L2", "L3"):
-        level_qs = [q for q in questions if q.get("level") == level]
+        # Multi-select questions have list-valued answers; exclude them from the
+        # single-letter distribution.
+        level_qs = [
+            q
+            for q in questions
+            if q.get("level") == level
+            and not q.get("multi_select")
+            and not isinstance(q.get("answer"), list)
+        ]
         if level_qs:
             ans_dist = Counter(q["answer"] for q in level_qs)
             total = len(level_qs)
