@@ -9,6 +9,7 @@ import json
 import random
 import sys
 import zlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,12 @@ def _read_json(path: Path) -> Any:
         return json.load(f)
 
 
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
 def _benchmark_questions(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         questions = payload.get("questions", [])
@@ -126,6 +133,24 @@ def _is_target_question(question: dict[str, Any]) -> bool:
     moved_obj_id = _coerce_int(question.get("moved_obj_id"))
     query_obj_id = _coerce_int(question.get("query_obj_id"))
     return moved_obj_id is not None and query_obj_id is not None and moved_obj_id == query_obj_id
+
+
+def _resume_source_key(question: dict[str, Any]) -> str:
+    return _json_key(
+        {
+            "trace_question_id": question.get("trace_question_id"),
+            "scene_id": question.get("scene_id"),
+            "image_name": question.get("image_name"),
+            "level": question.get("level"),
+            "type": question.get("type"),
+            "moved_obj_id": question.get("moved_obj_id"),
+            "invalid_query_obj_id": question.get("original_invalid_query_obj_id", question.get("query_obj_id")),
+            "attachment_child_id": question.get("attachment_child_id"),
+            "obj_c_id": question.get("obj_c_id"),
+            "obj_ref_id": question.get("obj_ref_id"),
+            "question": question.get("original_invalid_question", question.get("question")),
+        }
+    )
 
 
 def _infer_dataset(question: dict[str, Any]) -> str | None:
@@ -284,6 +309,8 @@ def _copy_common_updates(
     result["attachment_child_id"] = child_id
     result["child_query_recomputed"] = True
     result["original_invalid_query_obj_id"] = original.get("query_obj_id")
+    result["original_invalid_question"] = original.get("question")
+    result["resume_source_key"] = _resume_source_key(original)
     result.pop("question_referability_audit", None)
     result["question_uid"] = _question_uid(result)
     if seed is not None:
@@ -616,7 +643,212 @@ def _skip_entry(question: dict[str, Any], reason: str) -> dict[str, Any]:
         "query_obj_id": question.get("query_obj_id"),
         "attachment_child_id": question.get("attachment_child_id"),
         "skip_reason": reason,
+        "resume_source_key": _resume_source_key(question),
     }
+
+
+def _make_processed_entry(
+    question: dict[str, Any],
+    *,
+    status: str,
+    skip_reason: str | None = None,
+) -> dict[str, Any]:
+    entry = {
+        "scene_id": question.get("scene_id"),
+        "image_name": question.get("image_name"),
+        "type": question.get("type"),
+        "trace_question_id": question.get("trace_question_id"),
+        "moved_obj_id": question.get("moved_obj_id"),
+        "query_obj_id": question.get("query_obj_id"),
+        "attachment_child_id": question.get("attachment_child_id"),
+        "resume_source_key": _resume_source_key(question),
+        "status": status,
+    }
+    if skip_reason is not None:
+        entry["skip_reason"] = skip_reason
+    return entry
+
+
+def _build_resume_maps(
+    resume_output_payload: dict[str, Any] | None,
+    resume_report: dict[str, Any] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    resumed_question_by_key: dict[str, dict[str, Any]] = {}
+    resumed_processed_by_key: dict[str, dict[str, Any]] = {}
+
+    if resume_output_payload is not None:
+        for question in _benchmark_questions(resume_output_payload):
+            key = str(question.get("resume_source_key") or _resume_source_key(question))
+            resumed_question_by_key[key] = question
+            if bool(question.get("child_query_recomputed")):
+                resumed_processed_by_key.setdefault(
+                    key,
+                    _make_processed_entry(question, status="fixed"),
+                )
+
+    if isinstance(resume_report, dict):
+        processed = resume_report.get("processed", [])
+        if isinstance(processed, list):
+            for entry in processed:
+                if not isinstance(entry, dict):
+                    continue
+                key = str(entry.get("resume_source_key") or "")
+                if not key:
+                    continue
+                resumed_processed_by_key[key] = dict(entry)
+    return resumed_question_by_key, resumed_processed_by_key
+
+
+def _summarize_target_scenes(questions: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str]] = []
+    for question in questions:
+        if not _is_target_question(question):
+            continue
+        dataset = _infer_dataset(question)
+        scene_id = str(question.get("scene_id", "")).strip()
+        if dataset is None or not scene_id:
+            continue
+        key = (dataset, scene_id)
+        if key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    return ordered
+
+
+def _build_output_payload(
+    payload: dict[str, Any],
+    output_questions: list[dict[str, Any]],
+    remaining_questions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    output_payload = dict(payload)
+    if remaining_questions:
+        output_payload["questions"] = list(output_questions) + [copy.deepcopy(question) for question in remaining_questions]
+    else:
+        output_payload["questions"] = list(output_questions)
+    return output_payload
+
+
+def _build_report(
+    *,
+    target_count: int,
+    fixed_count: int,
+    skipped: list[dict[str, Any]],
+    processed: list[dict[str, Any]],
+    restored_count: int,
+) -> dict[str, Any]:
+    return {
+        "target_count": target_count,
+        "fixed_count": fixed_count,
+        "skipped_count": len(skipped),
+        "processed_count": len(processed),
+        "restored_count": restored_count,
+        "remaining_count": max(target_count - len(processed), 0),
+        "skipped": skipped,
+        "processed": processed,
+    }
+
+
+def _finalize_metadata(
+    fixed_payload: dict[str, Any],
+    report: dict[str, Any],
+    *,
+    input_path: Path,
+    output_path: Path,
+    report_path: Path,
+    scannet_root: Path | None,
+    scannetpp_root: Path | None,
+    scannetpp_sensor: str,
+    resume: bool,
+    checkpoint_every: int,
+    progress_every: int,
+) -> dict[str, Any]:
+    metadata = dict(fixed_payload.get("metadata", {}))
+    postprocess = dict(metadata.get("postprocess", {})) if isinstance(metadata.get("postprocess"), dict) else {}
+    postprocess["self_attachment_child_recompute"] = {
+        "input_path": str(input_path),
+        "output_path": str(output_path),
+        "report_path": str(report_path),
+        "scannet_root": str(scannet_root) if scannet_root is not None else None,
+        "scannetpp_root": str(scannetpp_root) if scannetpp_root is not None else None,
+        "scannetpp_sensor": scannetpp_sensor,
+        "resume": resume,
+        "checkpoint_every": checkpoint_every,
+        "progress_every": progress_every,
+        "target_count": report["target_count"],
+        "fixed_count": report["fixed_count"],
+        "skipped_count": report["skipped_count"],
+        "processed_count": report["processed_count"],
+        "restored_count": report["restored_count"],
+        "remaining_count": report["remaining_count"],
+    }
+    metadata["postprocess"] = postprocess
+    fixed_payload["metadata"] = metadata
+    return fixed_payload
+
+
+def _write_checkpoint_files(
+    *,
+    payload: dict[str, Any],
+    report: dict[str, Any],
+    input_path: Path,
+    output_path: Path,
+    report_path: Path,
+    scannet_root: Path | None,
+    scannetpp_root: Path | None,
+    scannetpp_sensor: str,
+    resume: bool,
+    checkpoint_every: int,
+    progress_every: int,
+) -> None:
+    output_payload = _finalize_metadata(
+        copy.deepcopy(payload),
+        copy.deepcopy(report),
+        input_path=input_path,
+        output_path=output_path,
+        report_path=report_path,
+        scannet_root=scannet_root,
+        scannetpp_root=scannetpp_root,
+        scannetpp_sensor=scannetpp_sensor,
+        resume=resume,
+        checkpoint_every=checkpoint_every,
+        progress_every=progress_every,
+    )
+    _write_json(output_path, output_payload)
+    _write_json(report_path, report)
+
+
+def _maybe_log_and_checkpoint(
+    *,
+    payload: dict[str, Any],
+    questions: list[dict[str, Any]],
+    output_questions: list[dict[str, Any]],
+    index: int,
+    total_targets: int,
+    fixed_count: int,
+    skipped: list[dict[str, Any]],
+    processed: list[dict[str, Any]],
+    restored_count: int,
+    progress_every: int,
+    checkpoint_every: int,
+    log: Callable[[str], None] | None,
+    checkpoint_callback: Callable[[dict[str, Any], dict[str, Any]], None] | None,
+    log_message: str,
+) -> None:
+    processed_count = len(processed)
+    if log is not None and (processed_count % max(progress_every, 1) == 0 or processed_count == total_targets):
+        log(log_message)
+    if checkpoint_callback is not None and checkpoint_every > 0 and processed_count % checkpoint_every == 0:
+        checkpoint_callback(
+            _build_output_payload(payload, output_questions, questions[index + 1 :]),
+            _build_report(
+                target_count=total_targets,
+                fixed_count=fixed_count,
+                skipped=skipped,
+                processed=processed,
+                restored_count=restored_count,
+            ),
+        )
 
 
 def recompute_attachment_child_queries(
@@ -625,32 +857,109 @@ def recompute_attachment_child_queries(
     scannet_root: Path | None,
     scannetpp_root: Path | None,
     scannetpp_sensor: str = "iphone",
+    resume_output_payload: dict[str, Any] | None = None,
+    resume_report: dict[str, Any] | None = None,
+    progress_every: int = 10,
+    checkpoint_every: int = 0,
+    log: Callable[[str], None] | None = None,
+    checkpoint_callback: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     questions = _benchmark_questions(payload)
     templates = _load_templates()
     seed = _coerce_seed(payload.get("metadata", {}).get("seed"))
     scene_cache: dict[tuple[str, str], dict[str, Any]] = {}
+    resumed_question_by_key, resumed_processed_by_key = _build_resume_maps(resume_output_payload, resume_report)
+    target_scene_keys = _summarize_target_scenes(questions)
+    scene_index_lookup = {key: idx + 1 for idx, key in enumerate(target_scene_keys)}
+    total_targets = sum(1 for question in questions if _is_target_question(question))
 
     output_questions: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    processed: list[dict[str, Any]] = []
     target_count = 0
     fixed_count = 0
+    restored_count = 0
 
-    for question in questions:
+    if log is not None:
+        log(
+            f"[start] total_questions={len(questions)} target_questions={total_targets} "
+            f"target_scenes={len(target_scene_keys)} resume_loaded={len(resumed_processed_by_key)}"
+        )
+
+    for index, question in enumerate(questions):
         if not _is_target_question(question):
             output_questions.append(question)
             continue
 
         target_count += 1
+        processed_count = len(processed)
+        resume_key = _resume_source_key(question)
+        resumed_entry = resumed_processed_by_key.get(resume_key)
+        if resumed_entry is not None:
+            resumed_question = resumed_question_by_key.get(resume_key, question)
+            output_questions.append(copy.deepcopy(resumed_question))
+            processed.append(copy.deepcopy(resumed_entry))
+            if str(resumed_entry.get("status")) == "fixed":
+                fixed_count += 1
+            else:
+                skipped.append(_skip_entry(question, str(resumed_entry.get("skip_reason") or SKIP_SCENE_LOAD_FAILED)))
+            restored_count += 1
+            _maybe_log_and_checkpoint(
+                payload=payload,
+                questions=questions,
+                output_questions=output_questions,
+                index=index,
+                total_targets=total_targets,
+                fixed_count=fixed_count,
+                skipped=skipped,
+                processed=processed,
+                restored_count=restored_count,
+                progress_every=progress_every,
+                checkpoint_every=checkpoint_every,
+                log=log,
+                checkpoint_callback=checkpoint_callback,
+                log_message=(
+                    f"[progress] {len(processed)}/{total_targets} targets done "
+                    f"(fixed={fixed_count}, skipped={len(skipped)}, restored={restored_count}) "
+                    f"resume scene={question.get('scene_id')} image={question.get('image_name')} type={question.get('type')}"
+                ),
+            )
+            continue
+
         dataset = _infer_dataset(question)
         if dataset is None:
             output_questions.append(question)
-            skipped.append(_skip_entry(question, SKIP_MISSING_SCENE_ROOT))
+            skip_item = _skip_entry(question, SKIP_MISSING_SCENE_ROOT)
+            skipped.append(skip_item)
+            processed.append(_make_processed_entry(question, status="skipped", skip_reason=SKIP_MISSING_SCENE_ROOT))
+            _maybe_log_and_checkpoint(
+                payload=payload,
+                questions=questions,
+                output_questions=output_questions,
+                index=index,
+                total_targets=total_targets,
+                fixed_count=fixed_count,
+                skipped=skipped,
+                processed=processed,
+                restored_count=restored_count,
+                progress_every=progress_every,
+                checkpoint_every=checkpoint_every,
+                log=log,
+                checkpoint_callback=checkpoint_callback,
+                log_message=(
+                    f"[progress] {len(processed)}/{total_targets} targets done "
+                    f"(fixed={fixed_count}, skipped={len(skipped)}, restored={restored_count}) "
+                    f"scene={question.get('scene_id')} image={question.get('image_name')} type={question.get('type')}"
+                ),
+            )
             continue
         scene_id = str(question.get("scene_id", "")).strip()
         image_name = str(question.get("image_name", "")).strip()
         cache_key = (dataset, scene_id)
         if cache_key not in scene_cache:
+            if log is not None:
+                scene_idx = scene_index_lookup.get(cache_key, len(scene_cache) + 1)
+                log(f"[scene {scene_idx}/{len(target_scene_keys)}] loading {dataset}:{scene_id}")
             try:
                 scene_cache[cache_key] = _load_scene_context(
                     dataset=dataset,
@@ -659,50 +968,147 @@ def recompute_attachment_child_queries(
                     scannetpp_root=scannetpp_root,
                     scannetpp_sensor=scannetpp_sensor,
                 )
+                if log is not None:
+                    ctx = scene_cache[cache_key]
+                    log(
+                        f"[scene {scene_idx}/{len(target_scene_keys)}] loaded {dataset}:{scene_id} "
+                        f"objects={len(ctx['objects'])} poses={len(ctx['poses'])}"
+                    )
             except FileNotFoundError as exc:
                 reason = str(exc)
                 if reason == SKIP_MISSING_SCENE_ROOT:
                     output_questions.append(question)
                     skipped.append(_skip_entry(question, SKIP_MISSING_SCENE_ROOT))
+                    processed.append(_make_processed_entry(question, status="skipped", skip_reason=SKIP_MISSING_SCENE_ROOT))
+                    _maybe_log_and_checkpoint(
+                        payload=payload,
+                        questions=questions,
+                        output_questions=output_questions,
+                        index=index,
+                        total_targets=total_targets,
+                        fixed_count=fixed_count,
+                        skipped=skipped,
+                        processed=processed,
+                        restored_count=restored_count,
+                        progress_every=progress_every,
+                        checkpoint_every=checkpoint_every,
+                        log=log,
+                        checkpoint_callback=checkpoint_callback,
+                        log_message=(
+                            f"[progress] {len(processed)}/{total_targets} targets done "
+                            f"(fixed={fixed_count}, skipped={len(skipped)}, restored={restored_count}) "
+                            f"scene={scene_id} image={image_name} type={question.get('type')}"
+                        ),
+                    )
                     continue
                 output_questions.append(question)
                 skipped.append(_skip_entry(question, SKIP_SCENE_NOT_FOUND))
+                processed.append(_make_processed_entry(question, status="skipped", skip_reason=SKIP_SCENE_NOT_FOUND))
+                if log is not None:
+                    log(f"[scene {scene_idx}/{len(target_scene_keys)}] missing {dataset}:{scene_id}")
+                _maybe_log_and_checkpoint(
+                    payload=payload,
+                    questions=questions,
+                    output_questions=output_questions,
+                    index=index,
+                    total_targets=total_targets,
+                    fixed_count=fixed_count,
+                    skipped=skipped,
+                    processed=processed,
+                    restored_count=restored_count,
+                    progress_every=progress_every,
+                    checkpoint_every=checkpoint_every,
+                    log=log,
+                    checkpoint_callback=checkpoint_callback,
+                    log_message=(
+                        f"[progress] {len(processed)}/{total_targets} targets done "
+                        f"(fixed={fixed_count}, skipped={len(skipped)}, restored={restored_count}) "
+                        f"scene={scene_id} image={image_name} type={question.get('type')}"
+                    ),
+                )
                 continue
             except Exception:
                 output_questions.append(question)
                 skipped.append(_skip_entry(question, SKIP_SCENE_LOAD_FAILED))
+                processed.append(_make_processed_entry(question, status="skipped", skip_reason=SKIP_SCENE_LOAD_FAILED))
+                if log is not None:
+                    log(f"[scene {scene_idx}/{len(target_scene_keys)}] failed {dataset}:{scene_id}")
+                _maybe_log_and_checkpoint(
+                    payload=payload,
+                    questions=questions,
+                    output_questions=output_questions,
+                    index=index,
+                    total_targets=total_targets,
+                    fixed_count=fixed_count,
+                    skipped=skipped,
+                    processed=processed,
+                    restored_count=restored_count,
+                    progress_every=progress_every,
+                    checkpoint_every=checkpoint_every,
+                    log=log,
+                    checkpoint_callback=checkpoint_callback,
+                    log_message=(
+                        f"[progress] {len(processed)}/{total_targets} targets done "
+                        f"(fixed={fixed_count}, skipped={len(skipped)}, restored={restored_count}) "
+                        f"scene={scene_id} image={image_name} type={question.get('type')}"
+                    ),
+                )
                 continue
         ctx = scene_cache[cache_key]
         camera_pose = ctx["poses"].get(image_name)
         if camera_pose is None:
             output_questions.append(question)
             skipped.append(_skip_entry(question, SKIP_POSE_MISSING))
-            continue
+            processed.append(_make_processed_entry(question, status="skipped", skip_reason=SKIP_POSE_MISSING))
+        else:
+            question_with_pose = dict(question)
+            question_with_pose["_camera_pose"] = camera_pose
+            recomputed, reason = _recompute_question_for_child_query(
+                question=question_with_pose,
+                ctx=ctx,
+                templates=templates,
+                seed=seed,
+            )
+            if recomputed is None:
+                output_questions.append(question)
+                skip_reason = reason or SKIP_SCENE_LOAD_FAILED
+                skipped.append(_skip_entry(question, skip_reason))
+                processed.append(_make_processed_entry(question, status="skipped", skip_reason=skip_reason))
+            else:
+                recomputed.pop("_camera_pose", None)
+                output_questions.append(recomputed)
+                fixed_count += 1
+                processed.append(_make_processed_entry(question, status="fixed"))
 
-        question_with_pose = dict(question)
-        question_with_pose["_camera_pose"] = camera_pose
-        recomputed, reason = _recompute_question_for_child_query(
-            question=question_with_pose,
-            ctx=ctx,
-            templates=templates,
-            seed=seed,
+        _maybe_log_and_checkpoint(
+            payload=payload,
+            questions=questions,
+            output_questions=output_questions,
+            index=index,
+            total_targets=total_targets,
+            fixed_count=fixed_count,
+            skipped=skipped,
+            processed=processed,
+            restored_count=restored_count,
+            progress_every=progress_every,
+            checkpoint_every=checkpoint_every,
+            log=log,
+            checkpoint_callback=checkpoint_callback,
+            log_message=(
+                f"[progress] {len(processed)}/{total_targets} targets done "
+                f"(fixed={fixed_count}, skipped={len(skipped)}, restored={restored_count}) "
+                f"scene={scene_id} image={image_name} type={question.get('type')}"
+            ),
         )
-        if recomputed is None:
-            output_questions.append(question)
-            skipped.append(_skip_entry(question, reason or SKIP_SCENE_LOAD_FAILED))
-            continue
-        recomputed.pop("_camera_pose", None)
-        output_questions.append(recomputed)
-        fixed_count += 1
 
-    output_payload = dict(payload)
-    output_payload["questions"] = output_questions
-    report = {
-        "target_count": target_count,
-        "fixed_count": fixed_count,
-        "skipped_count": len(skipped),
-        "skipped": skipped,
-    }
+    output_payload = _build_output_payload(payload, output_questions)
+    report = _build_report(
+        target_count=target_count,
+        fixed_count=fixed_count,
+        skipped=skipped,
+        processed=processed,
+        restored_count=restored_count,
+    )
     return output_payload, report
 
 
@@ -724,6 +1130,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scannet-root", type=Path, default=DEFAULT_SCANNET_ROOT)
     parser.add_argument("--scannetpp-root", type=Path, default=DEFAULT_SCANNETPP_ROOT)
     parser.add_argument("--scannetpp-sensor", choices=("iphone", "dslr"), default="iphone")
+    parser.add_argument("--resume", action="store_true", help="Resume from existing output/report if present")
+    parser.add_argument("--progress-every", type=int, default=10, help="Print progress every N target questions")
+    parser.add_argument("--checkpoint-every", type=int, default=10, help="Write output/report every N processed target questions; 0 disables mid-run checkpoints")
     return parser.parse_args()
 
 
@@ -731,41 +1140,76 @@ def main() -> None:
     args = parse_args()
     payload_data = _read_json(Path(args.input))
     payload = payload_data if isinstance(payload_data, dict) else {"questions": _benchmark_questions(payload_data)}
+    output_path = Path(args.output)
+    report_path = Path(args.report)
+
+    resume_output_payload: dict[str, Any] | None = None
+    resume_report: dict[str, Any] | None = None
+    if args.resume:
+        if output_path.exists():
+            loaded_output = _read_json(output_path)
+            if isinstance(loaded_output, dict):
+                resume_output_payload = loaded_output
+        if report_path.exists():
+            loaded_report = _read_json(report_path)
+            if isinstance(loaded_report, dict):
+                resume_report = loaded_report
+
+    def _log(message: str) -> None:
+        print(message, flush=True)
+
+    def _checkpoint(output_payload: dict[str, Any], report: dict[str, Any]) -> None:
+        _write_checkpoint_files(
+            payload=output_payload,
+            report=report,
+            input_path=Path(args.input),
+            output_path=output_path,
+            report_path=report_path,
+            scannet_root=args.scannet_root,
+            scannetpp_root=args.scannetpp_root,
+            scannetpp_sensor=args.scannetpp_sensor,
+            resume=bool(args.resume),
+            checkpoint_every=max(args.checkpoint_every, 0),
+            progress_every=max(args.progress_every, 1),
+        )
+        _log(
+            f"[checkpoint] processed={report['processed_count']}/{report['target_count']} "
+            f"fixed={report['fixed_count']} skipped={report['skipped_count']} "
+            f"remaining={report['remaining_count']}"
+        )
+
     fixed_payload, report = recompute_attachment_child_queries(
         payload,
         scannet_root=args.scannet_root,
         scannetpp_root=args.scannetpp_root,
         scannetpp_sensor=args.scannetpp_sensor,
+        resume_output_payload=resume_output_payload,
+        resume_report=resume_report,
+        progress_every=max(args.progress_every, 1),
+        checkpoint_every=max(args.checkpoint_every, 0),
+        log=_log,
+        checkpoint_callback=_checkpoint,
     )
-
-    metadata = dict(fixed_payload.get("metadata", {}))
-    postprocess = dict(metadata.get("postprocess", {})) if isinstance(metadata.get("postprocess"), dict) else {}
-    postprocess["self_attachment_child_recompute"] = {
-        "input_path": str(args.input),
-        "output_path": str(args.output),
-        "report_path": str(args.report),
-        "scannet_root": str(args.scannet_root),
-        "scannetpp_root": str(args.scannetpp_root),
-        "scannetpp_sensor": args.scannetpp_sensor,
-        "target_count": report["target_count"],
-        "fixed_count": report["fixed_count"],
-        "skipped_count": report["skipped_count"],
-    }
-    metadata["postprocess"] = postprocess
-    fixed_payload["metadata"] = metadata
-
-    output_path = Path(args.output)
-    report_path = Path(args.report)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(fixed_payload, f, ensure_ascii=False, indent=2)
-    with report_path.open("w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    final_payload = _finalize_metadata(
+        fixed_payload,
+        report,
+        input_path=Path(args.input),
+        output_path=output_path,
+        report_path=report_path,
+        scannet_root=args.scannet_root,
+        scannetpp_root=args.scannetpp_root,
+        scannetpp_sensor=args.scannetpp_sensor,
+        resume=bool(args.resume),
+        checkpoint_every=max(args.checkpoint_every, 0),
+        progress_every=max(args.progress_every, 1),
+    )
+    _write_json(output_path, final_payload)
+    _write_json(report_path, report)
 
     print(f"target questions: {report['target_count']}")
     print(f"fixed questions : {report['fixed_count']}")
     print(f"skipped questions: {report['skipped_count']}")
+    print(f"restored questions: {report['restored_count']}")
     print(f"output json     : {output_path}")
     print(f"report json     : {report_path}")
 
