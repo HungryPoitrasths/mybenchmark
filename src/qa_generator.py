@@ -8295,11 +8295,26 @@ def _emit_generator_candidate(
 
 def _question_uses_attachment_referability(question: dict[str, Any]) -> bool:
     question_type = str(question.get("type", "")).strip().lower()
-    return (
-        question_type == "attachment_chain"
-        or question_type.startswith("attachment")
-        or bool(question.get("attachment_remapped", False))
-    )
+    if question_type == "attachment_chain" or question_type.startswith("attachment"):
+        return True
+    # ``attachment_remapped`` only means the move dragged attached children along
+    # (``len(moved_ids) > 1``). That is still a plain object_move question when the
+    # queried object is the moved object itself. It genuinely exercises the support
+    # relation only when the query object is a dragged-along child (moved != query).
+    if not bool(question.get("attachment_remapped", False)):
+        return False
+
+    def _as_int(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    moved_obj_id = _as_int(question.get("moved_obj_id"))
+    query_obj_id = _as_int(question.get("query_obj_id"))
+    return moved_obj_id is not None and query_obj_id is not None and moved_obj_id != query_obj_id
 
 
 MIXED_ATTACHMENT_OBJECT_MOVE_TYPES = {

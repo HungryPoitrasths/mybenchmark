@@ -1494,11 +1494,17 @@ def _iter_question_referability_mentions(
 
 def _question_uses_attachment_referability(question: dict[str, object]) -> bool:
     question_type = str(question.get("type", "")).strip().lower()
-    return (
-        question_type == "attachment_chain"
-        or question_type.startswith("attachment")
-        or bool(question.get("attachment_remapped", False))
-    )
+    if question_type == "attachment_chain" or question_type.startswith("attachment"):
+        return True
+    # ``attachment_remapped`` only means the move dragged attached children along
+    # (``len(moved_ids) > 1``). That is still a plain object_move question when the
+    # queried object is the moved object itself. It genuinely exercises the support
+    # relation only when the query object is a dragged-along child (moved != query).
+    if not bool(question.get("attachment_remapped", False)):
+        return False
+    moved_obj_id = _coerce_object_id(question.get("moved_obj_id"))
+    query_obj_id = _coerce_object_id(question.get("query_obj_id"))
+    return moved_obj_id is not None and query_obj_id is not None and moved_obj_id != query_obj_id
 
 
 MIXED_ATTACHMENT_OBJECT_MOVE_TYPES = {
