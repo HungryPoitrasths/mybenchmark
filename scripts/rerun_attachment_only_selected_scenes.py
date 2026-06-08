@@ -31,15 +31,7 @@ from scripts.run_vlm_referability import (
 
 SCENE_BATCH_BY_ID: dict[str, str] = {
     "09c1414f1b": "0-9",
-    "0d2ee665be": "0-9",
     "27dd4da69e": "0-9",
-    "3864514494": "0-9",
-    "5ee7c22ba0": "20-29",
-    "6115eddb86": "20-29",
-    "a980334473": "30-39",
-    "bcd2436daf": "30-39",
-    "f3685d06a9": "40-49",
-    "f3d64c30f8": "40-49",
 }
 
 
