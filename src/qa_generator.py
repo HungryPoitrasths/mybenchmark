@@ -8919,6 +8919,9 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
     "L2_object_move_distance": [
         "generate_l2_object_move",
     ],
+    "L2_object_move_occlusion": [
+        "generate_l2_object_move",
+    ],
     "L2_object_move_object_centric": [
         "generate_l2_object_move_object_centric",
     ],
@@ -8953,6 +8956,7 @@ _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
     "L1_direction_agent": ("L1", "direction_agent"),
     "L2_object_move_agent": ("L2", "object_move_agent"),
     "L2_object_move_distance": ("L2", "object_move_distance"),
+    "L2_object_move_occlusion": ("L2", "object_move_occlusion"),
     "L2_object_move_object_centric": ("L2", "object_move_object_centric"),
     "L2_object_rotate_object_centric": ("L2", "object_rotate_object_centric"),
     "L2_object_move_allocentric": ("L2", "object_move_allocentric"),
@@ -8968,6 +8972,7 @@ _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
 _L2_OBJECT_MOVE_QUESTION_TYPE_TO_INTERNAL: dict[str, str] = {
     "L2_object_move_agent": "object_move_agent",
     "L2_object_move_distance": "object_move_distance",
+    "L2_object_move_occlusion": "object_move_occlusion",
 }
 """Internal subtypes enabled inside generate_l2_object_move by public filters."""
 
