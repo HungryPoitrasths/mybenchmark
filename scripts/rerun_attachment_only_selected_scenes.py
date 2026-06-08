@@ -202,6 +202,18 @@ def _copy_seed_sidecar(source_sidecar: Path, per_scene_output_file: Path) -> Non
     shutil.copy2(source_sidecar, dest_dir / source_sidecar.name)
 
 
+def _clean_scene_output_dir(scene_output_dir: Path) -> None:
+    """Remove stale per-scene rerun outputs so the scene is reprocessed.
+
+    run_vlm_referability skips scenes already marked complete in
+    scene_status.json, which would otherwise leave a previous (failed) run's
+    cache in place and re-trigger the same verification error. Wiping the
+    directory forces a clean rerun; the seed sidecar is copied back afterwards.
+    """
+    if scene_output_dir.exists():
+        shutil.rmtree(scene_output_dir)
+
+
 def _run_single_scene(
     *,
     repo_root: Path,
@@ -435,6 +447,7 @@ def main() -> None:
         scene_dir = Path(info["scene_dir"])
         scene_output_dir = output_root / scene_id
         per_scene_output_file = scene_output_dir / f"{scene_id}.json"
+        _clean_scene_output_dir(scene_output_dir)
         _copy_seed_sidecar(Path(info["sidecar_path"]), per_scene_output_file)
         _run_single_scene(
             repo_root=repo_root,
