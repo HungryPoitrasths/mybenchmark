@@ -1352,7 +1352,7 @@ def _warn_if_scannetpp_iphone_root_looks_raw(roots: list[Path]) -> None:
             and not any(root.glob("frame_*.jpg"))
         ):
             print(
-                "Warning: --scannetpp_image_root looks like a raw ScanNet++ scene directory. "
+                "Warning: --scannetpp_image_root looks like a raw ScanNet++ dataset root. "
                 "For scannetpp iPhone images, pass the extracted frame root, e.g. "
                 "/home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
             )
@@ -1376,7 +1376,8 @@ def _print_image_stats(
         _warn_if_scannetpp_iphone_root_looks_raw(scannetpp_roots)
         print(
             "ScanNet++ iPhone image path format: "
-            "<scannetpp_image_root>/<scene_id>/<image_name>"
+            "<scannetpp_image_root>/<scene_id>/<image_name> "
+            "(scannetpp_image_root should be the extracted frame root, not the raw dataset root)"
         )
 
     missing_paths = image_stats.get("missing_paths", [])
@@ -1684,7 +1685,9 @@ def main():
         default=None,
         help=(
             "ScanNet++ image root. May be repeated. "
-            "For iPhone: <root>/<scene_id>/<image_name>. "
+            "For iPhone, pass the extracted frame root, e.g. "
+            "output/scannetpp_iphone_frames, with layout "
+            "<root>/<scene_id>/<image_name>. "
             "For DSLR: <root>/<scene_id>/dslr/resized_images/<image_name>."
         ),
     )

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Rebuild bench viewer HTML files with embedded images from dataset roots."""
+"""Rebuild bench viewer HTML files with embedded images from dataset roots.
+
+For ScanNet++ iPhone viewers, pass the extracted frame root
+(``output/scannetpp_iphone_frames``-style), not the raw dataset root.
+"""
 
 from __future__ import annotations
 
@@ -39,13 +43,35 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         choices=("scannet", "scannetpp"),
         default=None,
-        help="Dataset for the next --data_root entry. Repeat for mixed datasets.",
+        help=(
+            "Deprecated pairing for --data_root. Prefer --scannet_image_root and "
+            "--scannetpp_frame_root."
+        ),
     )
     parser.add_argument(
         "--data_root",
         action="append",
         default=None,
-        help="Image/data root paired by position with --dataset. Repeat once per dataset entry.",
+        help=(
+            "Deprecated root paired by position with --dataset. For "
+            "ScanNet++ iPhone, use --scannetpp_frame_root instead of the raw "
+            "dataset root."
+        ),
+    )
+    parser.add_argument(
+        "--scannet_image_root",
+        action="append",
+        default=None,
+        help="ScanNet image root (for example /path/to/scans). May be repeated.",
+    )
+    parser.add_argument(
+        "--scannetpp_frame_root",
+        action="append",
+        default=None,
+        help=(
+            "ScanNet++ extracted iPhone frame root (for example "
+            "/path/to/output/scannetpp_iphone_frames). May be repeated."
+        ),
     )
     parser.add_argument(
         "--scannetpp_sensor",
@@ -82,9 +108,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     args = parser.parse_args(argv)
 
-    if not args.dataset or not args.data_root:
-        parser.error("At least one --dataset/--data_root pair is required.")
-    if len(args.dataset) != len(args.data_root):
+    has_explicit_roots = bool(args.scannet_image_root or args.scannetpp_frame_root)
+    has_legacy_pairs = bool(args.dataset or args.data_root)
+    if not has_explicit_roots and not has_legacy_pairs:
+        parser.error(
+            "Provide at least one of --scannet_image_root, --scannetpp_frame_root, "
+            "or a legacy --dataset/--data_root pair."
+        )
+    if has_legacy_pairs and (not args.dataset or not args.data_root):
+        parser.error("--dataset and --data_root must be provided together.")
+    if args.dataset and args.data_root and len(args.dataset) != len(args.data_root):
         parser.error("--dataset and --data_root must be provided the same number of times.")
 
     return args
@@ -107,14 +140,20 @@ def main(argv: list[str] | None = None) -> None:
 
     questions = _load_questions(questions_path)
 
-    scannet_roots: list[Path] = []
-    scannetpp_roots: list[Path] = []
-    for dataset, data_root in zip(args.dataset, args.data_root):
+    scannet_roots: list[Path] = [Path(path) for path in (args.scannet_image_root or [])]
+    scannetpp_roots: list[Path] = [Path(path) for path in (args.scannetpp_frame_root or [])]
+
+    for dataset, data_root in zip(args.dataset or [], args.data_root or []):
         root_path = Path(data_root)
         if dataset == "scannet":
             scannet_roots.append(root_path)
         else:
             scannetpp_roots.append(root_path)
+            print(
+                "Warning: legacy --dataset scannetpp --data_root is treated as a "
+                "ScanNet++ frame root for viewer images. Pass the extracted frame "
+                "directory, not the raw dataset root."
+            )
 
     if not scannet_roots and not scannetpp_roots:
         raise ValueError("No dataset roots were resolved.")
