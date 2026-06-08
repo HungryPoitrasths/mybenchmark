@@ -1271,8 +1271,11 @@ def _resolve_image_path(
             # Also try alternative layouts as fallbacks
             candidates.extend([
                 root / scene / frame,
+                root / "scans" / scene / frame,
                 root / scene / "dslr" / "resized_images" / frame,
                 root / scene / "iphone" / "rgb" / frame,
+                root / "scans" / scene / "dslr" / "resized_images" / frame,
+                root / "scans" / scene / "iphone" / "rgb" / frame,
             ])
         else:
             candidates.extend([
