@@ -54,7 +54,16 @@ def _parse_args() -> argparse.Namespace:
         "--data_root",
         type=Path,
         required=True,
-        help="ScanNet++ dataset root containing scene directories.",
+        help="ScanNet++ raw dataset root containing scene directories.",
+    )
+    parser.add_argument(
+        "--scannetpp_frame_root",
+        type=Path,
+        default=None,
+        help=(
+            "Root directory for extracted ScanNet++ iPhone frames. "
+            "Passed through to run_vlm_referability."
+        ),
     )
     parser.add_argument(
         "--source_root",
@@ -201,6 +210,7 @@ def _run_single_scene(
     vlm_workers: int,
     frame_clarity_batch_size: int,
     sensor: str,
+    scannetpp_frame_root: Path | None,
     vlm_url: str | None,
 ) -> None:
     command = [
@@ -225,6 +235,8 @@ def _run_single_scene(
         "--vlm_model",
         model_name,
     ]
+    if scannetpp_frame_root is not None:
+        command.extend(["--scannetpp_frame_root", str(scannetpp_frame_root)])
     if vlm_url:
         command.extend(["--vlm_url", vlm_url])
     subprocess.run(command, cwd=repo_root, check=True)
@@ -415,6 +427,9 @@ def main() -> None:
             vlm_workers=int(args.vlm_workers),
             frame_clarity_batch_size=int(args.frame_clarity_batch_size),
             sensor=str(args.sensor),
+            scannetpp_frame_root=(
+                None if args.scannetpp_frame_root is None else args.scannetpp_frame_root.resolve()
+            ),
             vlm_url=args.vlm_url,
         )
         completed_batch_path = _load_completed_scene_batch_file(scene_output_dir, scene_id)

@@ -8577,6 +8577,16 @@ def main():
         "--scannetpp_sensor", type=str, choices=("iphone", "dslr"), default="iphone",
         help="Sensor to use when dataset=scannetpp",
     )
+    parser.add_argument(
+        "--scannetpp_frame_root",
+        type=str,
+        default=None,
+        help=(
+            "Root directory for extracted ScanNet++ iPhone frames "
+            "(for example /path/to/output/scannetpp_iphone_frames). "
+            "Only used when --dataset scannetpp --scannetpp_sensor iphone."
+        ),
+    )
     args = parser.parse_args()
     _reset_vlm_call_failure_count()
     if args.reset is not None and int(args.reset) <= 0:
@@ -8900,7 +8910,11 @@ def main():
         data_source = None
         if args.dataset == "scannetpp":
             from src.datasets.scannetpp import ScanNetPPDataSource
-            data_source = ScanNetPPDataSource(scene_dir, sensor=args.scannetpp_sensor)
+            data_source = ScanNetPPDataSource(
+                scene_dir,
+                sensor=args.scannetpp_sensor,
+                frame_root=args.scannetpp_frame_root,
+            )
         scene_index = scene_index_by_id.get(scene_id, scene_position + 1)
         if scene_number_range is not None:
             logger.info(
