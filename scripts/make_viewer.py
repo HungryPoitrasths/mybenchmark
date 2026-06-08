@@ -18,7 +18,7 @@ Usage:
     # ScanNet++ only
     python scripts/make_viewer.py \\
         --questions output/scannetpp/benchmark.json \\
-        --scannetpp_image_root /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames \\
+        --scannetpp_image_root output/scannetpp_iphone_frames \\
         --scannetpp_sensor iphone \\
         --output output/scannetpp/viewer.html \\
         --simple_output output/scannetpp/viewer_simple.html
@@ -27,7 +27,7 @@ Usage:
     python scripts/make_viewer.py \\
         --questions output/fixed_type_eval_50scene.json \\
         --scannet_image_root /home/lihongxing/datasets/ScanNet/data/scans \\
-        --scannetpp_image_root /home/sujinyue/mybenchmark/output/scannetpp_iphone_frames \\
+        --scannetpp_image_root output/scannetpp_iphone_frames \\
         --scannetpp_sensor iphone \\
         --output output/bench.html \\
         --simple_output output/bench_simple.html
@@ -1354,7 +1354,7 @@ def _warn_if_scannetpp_iphone_root_looks_raw(roots: list[Path]) -> None:
             print(
                 "Warning: --scannetpp_image_root looks like a raw ScanNet++ dataset root. "
                 "For scannetpp iPhone images, pass the extracted frame root, e.g. "
-                "/home/sujinyue/mybenchmark/output/scannetpp_iphone_frames."
+                "output/scannetpp_iphone_frames."
             )
 
 

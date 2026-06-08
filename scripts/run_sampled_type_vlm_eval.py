@@ -6,6 +6,12 @@ up to N questions per question type, evaluates them through an OpenAI-compatible
 vision API, and writes both a resumable JSON result file and a self-contained
 HTML viewer.
 
+This script is an API client only: it does not load model weights from a local
+filesystem path. If you moved local model files (for example from
+``/home/sujinyue/mybenchmark/models`` to ``/home/sujinyue/models``), update the
+model server behind ``--base_url`` instead; this script only needs the served
+``--model`` name.
+
 Example:
     python scripts/run_sampled_type_vlm_eval.py \
         --root output/pilot \
@@ -1523,8 +1529,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannet_image_root", action="append", default=None, help="ScanNet image root; can be repeated")
     parser.add_argument("--scannetpp_image_root", action="append", default=None, help="ScanNet++ image root; can be repeated")
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone", help="ScanNet++ image layout, matching scripts/make_viewer.py")
-    parser.add_argument("--base_url", "--vlm_url", dest="base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL")
-    parser.add_argument("--model", "--vlm_model", dest="model", default="qwen3.5-flash", help="Model name")
+    parser.add_argument("--base_url", "--vlm_url", dest="base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL for the VLM server")
+    parser.add_argument("--model", "--vlm_model", dest="model", default="qwen3.5-flash", help="Served model name exposed by the VLM endpoint")
     parser.add_argument(
         "--api_provider",
         choices=("openai_chat", "openai_responses", "anthropic"),
