@@ -1,0 +1,2768 @@
+{
+  "target_types": [
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_object_centric",
+    "object_rotate_object_centric"
+  ],
+  "target_counts": {
+    "object_move_agent": 182,
+    "object_move_distance": 182,
+    "object_move_object_centric": 182,
+    "object_rotate_object_centric": 116
+  },
+  "inserted_counts": {
+    "object_move_agent": 182,
+    "object_move_distance": 182,
+    "object_move_object_centric": 182,
+    "object_rotate_object_centric": 69
+  },
+  "dropped_counts": {
+    "object_move_agent": 0,
+    "object_move_distance": 0,
+    "object_move_object_centric": 0,
+    "object_rotate_object_centric": 47
+  },
+  "sampling": {
+    "object_move_agent": {
+      "candidate_count": 901,
+      "selected_count": 182,
+      "target_count": 182,
+      "insufficient": false,
+      "skipped_due_to_caps": {
+        "object": 155,
+        "frame": 44,
+        "scene": 195
+      },
+      "changed_count": 182
+    },
+    "object_move_distance": {
+      "candidate_count": 811,
+      "selected_count": 182,
+      "target_count": 182,
+      "insufficient": false,
+      "skipped_due_to_caps": {
+        "object": 133,
+        "frame": 43,
+        "scene": 189
+      },
+      "changed_count": 182
+    },
+    "object_move_object_centric": {
+      "candidate_count": 526,
+      "selected_count": 182,
+      "target_count": 182,
+      "insufficient": false,
+      "skipped_due_to_caps": {
+        "object": 101,
+        "frame": 23,
+        "scene": 126
+      },
+      "changed_count": 182
+    },
+    "object_rotate_object_centric": {
+      "candidate_count": 166,
+      "selected_count": 69,
+      "target_count": 116,
+      "insufficient": true,
+      "changed_count": 65,
+      "relaxation_additions": {
+        "strict": 57,
+        "relax_frame": 2,
+        "relax_frame_scene": 10
+      }
+    }
+  },
+  "resampled_total": 615,
+  "validation": {
+    "original_type_counts": {
+      "direction_agent": 234,
+      "occlusion": 233,
+      "distance": 233,
+      "direction_object_centric": 233,
+      "direction_allocentric": 233,
+      "object_move_agent": 182,
+      "object_move_distance": 182,
+      "object_move_occlusion": 182,
+      "object_move_object_centric": 182,
+      "object_rotate_object_centric": 116,
+      "object_move_allocentric": 182,
+      "object_remove": 140,
+      "attachment_chain": 13,
+      "attachment_move": 10,
+      "coordinate_rotation_agent": 381,
+      "coordinate_rotation_object_centric": 381,
+      "coordinate_rotation_allocentric": 381
+    },
+    "updated_type_counts": {
+      "direction_agent": 234,
+      "occlusion": 233,
+      "distance": 233,
+      "direction_object_centric": 233,
+      "direction_allocentric": 233,
+      "object_move_agent": 182,
+      "object_move_distance": 182,
+      "object_move_occlusion": 182,
+      "object_move_object_centric": 182,
+      "object_rotate_object_centric": 69,
+      "object_move_allocentric": 182,
+      "object_remove": 140,
+      "attachment_chain": 13,
+      "attachment_move": 10,
+      "coordinate_rotation_agent": 381,
+      "coordinate_rotation_object_centric": 381,
+      "coordinate_rotation_allocentric": 381
+    },
+    "remaining_invalid_count": 0,
+    "remaining_invalid_by_type": {},
+    "target_validity_failure_count": 0,
+    "target_validity_failures_sample": [],
+    "scene_type_ratio_stats": [
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_01",
+        "type": "object_move_agent",
+        "count": 6,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_01",
+        "type": "object_move_distance",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_01",
+        "type": "object_move_object_centric",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_01",
+        "type": "object_rotate_object_centric",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.8,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_02",
+        "type": "object_move_agent",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_02",
+        "type": "object_move_distance",
+        "count": 7,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_02",
+        "type": "object_move_object_centric",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0025_02",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_01",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_01",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_02",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_02",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_02",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0046_02",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0050_01",
+        "type": "object_move_agent",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0050_01",
+        "type": "object_move_distance",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0050_01",
+        "type": "object_move_object_centric",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0050_01",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0063_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0063_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0144_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0144_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0144_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0144_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0144_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_00",
+        "type": "object_move_agent",
+        "count": 6,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_00",
+        "type": "object_move_distance",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_00",
+        "type": "object_move_object_centric",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_00",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_01",
+        "type": "object_move_agent",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_01",
+        "type": "object_move_distance",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_01",
+        "type": "object_move_object_centric",
+        "count": 7,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_02",
+        "type": "object_move_agent",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_02",
+        "type": "object_move_distance",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_02",
+        "type": "object_move_object_centric",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0207_02",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0257_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0257_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0257_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0257_00",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0277_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0277_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0277_01",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0329_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0329_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0329_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0329_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0329_01",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_00",
+        "type": "object_move_agent",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_00",
+        "type": "object_move_distance",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_00",
+        "type": "object_move_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_00",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_01",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0353_01",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_01",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_01",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_02",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_02",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0356_02",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_01",
+        "type": "object_move_agent",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_01",
+        "type": "object_move_distance",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_01",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_02",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_02",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0378_02",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0414_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_02",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_02",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_02",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_02",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_03",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_03",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0435_03",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_00",
+        "type": "object_move_agent",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_00",
+        "type": "object_move_distance",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_00",
+        "type": "object_move_object_centric",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_01",
+        "type": "object_move_agent",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_01",
+        "type": "object_move_distance",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_01",
+        "type": "object_move_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_02",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_02",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_02",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_03",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_03",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0474_03",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0518_00",
+        "type": "object_move_agent",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0518_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0518_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0565_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0565_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0565_00",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0580_01",
+        "type": "object_move_agent",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0580_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0580_01",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0583_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0583_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0583_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0583_01",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0583_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0583_01",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0591_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0591_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0591_01",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0593_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0593_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0593_00",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_00",
+        "type": "object_move_agent",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_00",
+        "type": "object_move_distance",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_00",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_01",
+        "type": "object_move_agent",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_01",
+        "type": "object_move_distance",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_01",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_02",
+        "type": "object_move_agent",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_02",
+        "type": "object_move_distance",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_02",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0606_02",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0608_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0608_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0608_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0643_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0643_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0645_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0645_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0645_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0645_00",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0645_01",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0645_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0648_00",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0648_00",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0648_00",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0648_01",
+        "type": "object_move_agent",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0648_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0648_01",
+        "type": "object_move_object_centric",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_00",
+        "type": "object_move_agent",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_00",
+        "type": "object_move_distance",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_00",
+        "type": "object_move_object_centric",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_00",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_01",
+        "type": "object_move_agent",
+        "count": 6,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_01",
+        "type": "object_move_distance",
+        "count": 6,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0653_01",
+        "type": "object_move_object_centric",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0658_00",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0658_00",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0658_00",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0663_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0663_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0663_02",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0663_02",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0664_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_01",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_01",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_01",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_02",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_02",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_02",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_03",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_03",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0695_03",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0696_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0696_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0696_01",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0696_02",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0696_02",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0696_02",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0704_01",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannet",
+        "scene_id": "scene0704_01",
+        "type": "object_move_distance",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "09c1414f1b",
+        "type": "object_move_agent",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "09c1414f1b",
+        "type": "object_move_distance",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "09c1414f1b",
+        "type": "object_move_object_centric",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "09c1414f1b",
+        "type": "object_rotate_object_centric",
+        "count": 9,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "0d2ee665be",
+        "type": "object_move_agent",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "0d2ee665be",
+        "type": "object_move_distance",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "0d2ee665be",
+        "type": "object_move_object_centric",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "0d2ee665be",
+        "type": "object_rotate_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "25f3b7a318",
+        "type": "object_move_agent",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "25f3b7a318",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "27dd4da69e",
+        "type": "object_move_agent",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "27dd4da69e",
+        "type": "object_move_distance",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "27dd4da69e",
+        "type": "object_move_object_centric",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "27dd4da69e",
+        "type": "object_rotate_object_centric",
+        "count": 17,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "38d58a7a31",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "38d58a7a31",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "38d58a7a31",
+        "type": "object_move_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3db0a1c8f3",
+        "type": "object_move_agent",
+        "count": 7,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3db0a1c8f3",
+        "type": "object_move_distance",
+        "count": 7,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3db0a1c8f3",
+        "type": "object_move_object_centric",
+        "count": 7,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3db0a1c8f3",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3e8bba0176",
+        "type": "object_move_agent",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3e8bba0176",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3e8bba0176",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "3e8bba0176",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "45b0dac5e3",
+        "type": "object_move_distance",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "45b0dac5e3",
+        "type": "object_move_object_centric",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "578511c8a9",
+        "type": "object_move_distance",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "578511c8a9",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "578511c8a9",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": false
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "5942004064",
+        "type": "object_move_distance",
+        "count": 5,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "5942004064",
+        "type": "object_move_object_centric",
+        "count": 8,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "5942004064",
+        "type": "object_rotate_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "5eb31827b7",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "5eb31827b7",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "5ee7c22ba0",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "6115eddb86",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "a8bf42d646",
+        "type": "object_move_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "a8bf42d646",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.5,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": false
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "ac48a9b736",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "ac48a9b736",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": false
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "bcd2436daf",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "c49a8c6cff",
+        "type": "object_move_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "c49a8c6cff",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "c4c04e6d6c",
+        "type": "object_move_object_centric",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "c50d2d1d42",
+        "type": "object_move_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "c5439f4607",
+        "type": "object_move_object_centric",
+        "count": 4,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "c5439f4607",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "f3d64c30f8",
+        "type": "object_rotate_object_centric",
+        "count": 3,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "fb5a96b1a2",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 1.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": true
+      }
+    ],
+    "scene_type_ratio_failures": [
+      {
+        "dataset": "scannetpp",
+        "scene_id": "578511c8a9",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": false
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "a8bf42d646",
+        "type": "object_rotate_object_centric",
+        "count": 2,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.5,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": false
+      },
+      {
+        "dataset": "scannetpp",
+        "scene_id": "ac48a9b736",
+        "type": "object_rotate_object_centric",
+        "count": 1,
+        "with_attachment_ratio": 1.0,
+        "answer_changed_ratio": 0.0,
+        "meets_with_attachment_rule": true,
+        "meets_answer_changed_rule": false
+      }
+    ],
+    "strict_object_cap_violations": [],
+    "strict_frame_cap_violations": [],
+    "strict_scene_cap_violations": [],
+    "rotate_object_cap_violations": [],
+    "rotate_frame_over_2": [
+      {
+        "key": [
+          "scannetpp",
+          "27dd4da69e",
+          "frame_000330.jpg",
+          "object_rotate_object_centric"
+        ],
+        "count": 3
+      },
+      {
+        "key": [
+          "scannetpp",
+          "27dd4da69e",
+          "frame_023450.jpg",
+          "object_rotate_object_centric"
+        ],
+        "count": 4
+      },
+      {
+        "key": [
+          "scannetpp",
+          "5942004064",
+          "frame_010440.jpg",
+          "object_rotate_object_centric"
+        ],
+        "count": 3
+      },
+      {
+        "key": [
+          "scannetpp",
+          "f3d64c30f8",
+          "frame_002710.jpg",
+          "object_rotate_object_centric"
+        ],
+        "count": 3
+      }
+    ],
+    "rotate_scene_over_8": [
+      {
+        "key": [
+          "scannetpp",
+          "09c1414f1b",
+          "object_rotate_object_centric"
+        ],
+        "count": 9
+      },
+      {
+        "key": [
+          "scannetpp",
+          "27dd4da69e",
+          "object_rotate_object_centric"
+        ],
+        "count": 17
+      }
+    ]
+  },
+  "missing_image_frame_count": 104,
+  "missing_image_frames_sample": [
+    [
+      "09c1414f1b",
+      "frame_000780.jpg"
+    ],
+    [
+      "09c1414f1b",
+      "frame_000900.jpg"
+    ],
+    [
+      "09c1414f1b",
+      "frame_001950.jpg"
+    ],
+    [
+      "09c1414f1b",
+      "frame_007450.jpg"
+    ],
+    [
+      "09c1414f1b",
+      "frame_007480.jpg"
+    ],
+    [
+      "09c1414f1b",
+      "frame_007570.jpg"
+    ],
+    [
+      "25f3b7a318",
+      "frame_000300.jpg"
+    ],
+    [
+      "25f3b7a318",
+      "frame_000360.jpg"
+    ],
+    [
+      "27dd4da69e",
+      "frame_000270.jpg"
+    ],
+    [
+      "27dd4da69e",
+      "frame_000300.jpg"
+    ],
+    [
+      "27dd4da69e",
+      "frame_024200.jpg"
+    ],
+    [
+      "3db0a1c8f3",
+      "frame_011660.jpg"
+    ],
+    [
+      "578511c8a9",
+      "frame_001920.jpg"
+    ],
+    [
+      "5942004064",
+      "frame_007490.jpg"
+    ],
+    [
+      "a8bf42d646",
+      "frame_007850.jpg"
+    ],
+    [
+      "c5439f4607",
+      "frame_005380.jpg"
+    ],
+    [
+      "cc5237fd77",
+      "frame_002950.jpg"
+    ],
+    [
+      "cc5237fd77",
+      "frame_006670.jpg"
+    ],
+    [
+      "f9f95681fd",
+      "frame_001740.jpg"
+    ],
+    [
+      "f9f95681fd",
+      "frame_001830.jpg"
+    ],
+    [
+      "f9f95681fd",
+      "frame_005680.jpg"
+    ],
+    [
+      "scene0011_00",
+      "642.jpg"
+    ],
+    [
+      "scene0011_01",
+      "1554.jpg"
+    ],
+    [
+      "scene0025_02",
+      "564.jpg"
+    ],
+    [
+      "scene0046_00",
+      "1389.jpg"
+    ],
+    [
+      "scene0046_00",
+      "663.jpg"
+    ],
+    [
+      "scene0046_00",
+      "765.jpg"
+    ],
+    [
+      "scene0050_02",
+      "2370.jpg"
+    ],
+    [
+      "scene0050_02",
+      "2550.jpg"
+    ],
+    [
+      "scene0050_02",
+      "2778.jpg"
+    ],
+    [
+      "scene0050_02",
+      "339.jpg"
+    ],
+    [
+      "scene0063_00",
+      "3.jpg"
+    ],
+    [
+      "scene0064_00",
+      "99.jpg"
+    ],
+    [
+      "scene0084_01",
+      "303.jpg"
+    ],
+    [
+      "scene0131_02",
+      "69.jpg"
+    ],
+    [
+      "scene0203_00",
+      "66.jpg"
+    ],
+    [
+      "scene0207_00",
+      "1209.jpg"
+    ],
+    [
+      "scene0207_00",
+      "1458.jpg"
+    ],
+    [
+      "scene0207_00",
+      "723.jpg"
+    ],
+    [
+      "scene0207_01",
+      "579.jpg"
+    ],
+    [
+      "scene0207_02",
+      "2460.jpg"
+    ],
+    [
+      "scene0207_02",
+      "561.jpg"
+    ],
+    [
+      "scene0222_00",
+      "102.jpg"
+    ],
+    [
+      "scene0222_00",
+      "642.jpg"
+    ],
+    [
+      "scene0222_01",
+      "255.jpg"
+    ],
+    [
+      "scene0231_00",
+      "12.jpg"
+    ],
+    [
+      "scene0257_00",
+      "279.jpg"
+    ],
+    [
+      "scene0304_00",
+      "1764.jpg"
+    ],
+    [
+      "scene0304_00",
+      "207.jpg"
+    ],
+    [
+      "scene0314_00",
+      "789.jpg"
+    ]
+  ]
+}
