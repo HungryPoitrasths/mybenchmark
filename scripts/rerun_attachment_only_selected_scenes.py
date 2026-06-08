@@ -118,6 +118,16 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only validate source inputs and print the planned rerun mapping.",
     )
+    parser.add_argument(
+        "--allow_frame_expansion",
+        action="store_true",
+        help=(
+            "Allow the rerun to keep MORE frames than the source selection "
+            "(e.g. raising --max_frames). The source frame list must remain an "
+            "exact ordered prefix of the rerun list; the appended frames are kept. "
+            "Without this flag the rerun must reproduce the source list exactly."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -266,6 +276,7 @@ def _verify_rerun_scene(
     batch_cache_path: Path,
     expected_model_name: str,
     expected_old_frame_names: list[str],
+    allow_frame_expansion: bool = False,
 ) -> dict[str, Any]:
     batch_cache = _load_json(batch_cache_path)
     if str(batch_cache.get("version", "")).strip() != REFERABILITY_CACHE_VERSION:
@@ -297,7 +308,21 @@ def _verify_rerun_scene(
         raise RuntimeError(f"Scene {scene_id} rerun produced no final frames")
 
     new_frame_names = list(grouping_entry.get("final_cacheable_frame_image_names", []))
-    if new_frame_names != expected_old_frame_names:
+    if allow_frame_expansion:
+        prefix = new_frame_names[: len(expected_old_frame_names)]
+        if prefix != expected_old_frame_names:
+            raise RuntimeError(
+                f"Scene {scene_id} source frames are not an exact ordered prefix of "
+                f"the expanded rerun list.\n"
+                f"old={expected_old_frame_names}\n"
+                f"new_prefix={prefix}\nnew_full={new_frame_names}"
+            )
+        if len(new_frame_names) < len(expected_old_frame_names):
+            raise RuntimeError(
+                f"Scene {scene_id} expanded rerun dropped frames: "
+                f"old={len(expected_old_frame_names)} new={len(new_frame_names)}"
+            )
+    elif new_frame_names != expected_old_frame_names:
         raise RuntimeError(
             f"Scene {scene_id} final frame list changed.\n"
             f"old={expected_old_frame_names}\nnew={new_frame_names}"
@@ -438,6 +463,7 @@ def main() -> None:
             batch_cache_path=completed_batch_path,
             expected_model_name=source_model_name,
             expected_old_frame_names=list(info["old_frame_names"]),
+            allow_frame_expansion=bool(args.allow_frame_expansion),
         )
         rerun_sidecar_path = scene_output_dir / FRAME_CACHE_SIDECAR_DIR_NAME / f"{scene_id}.json"
         rerun_sidecar_doc = _load_json(rerun_sidecar_path)
