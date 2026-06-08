@@ -8528,6 +8528,15 @@ def main():
         help="Legacy compatibility flag; retained for older scripts but ignored by the current frame-usable VLM review path",
     )
     parser.add_argument(
+        "--attachment_only",
+        action="store_true",
+        help=(
+            "Select only attachment-qualified frames and never backfill empty "
+            "slots with non-attachment frames. Lets attachment selection use the "
+            "full --max_frames budget while keeping the final list attachment-only."
+        ),
+    )
+    parser.add_argument(
         "--scene_workers", type=int, default=1,
         help="Number of scenes to process concurrently",
     )
@@ -9581,7 +9590,7 @@ def main():
                 frame_clarity_batch_size=int(args.frame_clarity_batch_size),
                 non_attachment_referability_shortlist=int(args.non_attachment_referability_shortlist),
                 non_attachment_clarity_min_score=int(args.non_attachment_clarity_min_score),
-            ) if non_attachment_candidate_frames else []
+            ) if (non_attachment_candidate_frames and not bool(args.attachment_only)) else []
         except MeshRayRequiredError as exc:
             return _build_mesh_ray_failure_result(exc)
 

@@ -236,6 +236,7 @@ def _run_single_scene(
         sensor,
         "--vlm_model",
         model_name,
+        "--attachment_only",
     ]
     if scannetpp_frame_root is not None:
         command.extend(["--scannetpp_frame_root", str(scannetpp_frame_root)])
