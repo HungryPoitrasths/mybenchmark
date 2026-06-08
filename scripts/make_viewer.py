@@ -1220,9 +1220,15 @@ def _infer_dataset(question: dict) -> str:
     2. scene_id pattern: ``sceneXXXX_XX`` → scannet, hex hash → scannetpp
     3. default: scannet
     """
-    explicit = str(question.get("_dataset") or question.get("dataset") or "")
-    if explicit and explicit != "unknown":
+    explicit = str(question.get("_dataset") or question.get("dataset") or "").strip().lower()
+    if explicit in {"scannet", "scannetpp"}:
         return explicit
+
+    source_text = str(question.get("_source_benchmark") or "").strip().lower()
+    if "scannetpp" in source_text:
+        return "scannetpp"
+    if "pilot" in source_text:
+        return "scannet"
 
     scene_id = str(question.get("scene_id", ""))
     # ScanNet scenes: scene0670_01, scene0046_02, ...
