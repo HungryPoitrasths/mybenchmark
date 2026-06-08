@@ -5,6 +5,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.qa_generator import (
+    _bbox_has_min_in_frame_corners,
     _bbox_fully_in_frame,
     _counterfactual_occlusion_backend,
     _find_object_move_occlusion_changes,
@@ -135,6 +136,40 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         )
 
         self.assertTrue(_bbox_fully_in_frame(obj, make_camera_pose(), intrinsics))
+
+    def test_bbox_has_min_in_frame_corners_accepts_six_visible_corners(self) -> None:
+        obj = make_object(1, "box", (0.0, 0.0, 2.0))
+        projected_records = [
+            {"in_frame": True},
+            {"in_frame": True},
+            {"in_frame": True},
+            {"in_frame": True},
+            {"in_frame": True},
+            {"in_frame": True},
+            {"in_frame": False},
+            {"in_frame": False},
+        ]
+
+        with patch(
+            "src.qa_generator._project_sample_point_records",
+            return_value=projected_records,
+        ):
+            self.assertTrue(
+                _bbox_has_min_in_frame_corners(
+                    obj,
+                    make_camera_pose(),
+                    make_camera_intrinsics(),
+                    min_corners=6,
+                )
+            )
+            self.assertFalse(
+                _bbox_has_min_in_frame_corners(
+                    obj,
+                    make_camera_pose(),
+                    make_camera_intrinsics(),
+                    min_corners=7,
+                )
+            )
 
     def test_counterfactual_occlusion_backend_rejects_unsupported_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "legacy_backend"):
@@ -347,8 +382,8 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         ):
             questions = generate_l2_object_move(
                 objects=objects,
-                attachment_graph={},
-                attached_by={},
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
                 camera_pose=make_camera_pose(),
                 templates={},
                 movement_objects=objects,
@@ -379,25 +414,24 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         with (
             patch(
                 "src.qa_generator._select_object_move_state",
-                side_effect=[selected_state, None],
+                return_value=selected_state,
             ),
             patch(
                 "src.qa_generator.compute_all_relations",
                 return_value=[],
             ),
             patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
-                side_effect=[
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                ],
-            ),
-            patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
-                side_effect=[
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                    (make_l1_metrics("not visible"), "mesh_ray"),
-                ],
+                "src.qa_generator._query_visibility_for_object_move_state",
+                return_value=(
+                    "not occluded",
+                    "mesh_ray",
+                    "resolved_visibility",
+                    make_l1_metrics("not occluded"),
+                    "not visible",
+                    "mesh_ray",
+                    "resolved_visibility",
+                    make_l1_metrics("not visible"),
+                ),
             ),
             patch(
                 "src.qa_generator._generate_l2_distance_questions_for_object",
@@ -516,6 +550,91 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             )
         )
 
+    def test_generate_l2_object_move_skips_occlusion_when_target_moves_out_of_frame(self) -> None:
+        sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
+        cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
+        objects = [sofa, cushion]
+        moved_objects = [
+            sofa,
+            {
+                **cushion,
+                "center": [1.4, 0.0, 2.0],
+                "bbox_min": [1.3, -0.1, 1.9],
+                "bbox_max": [1.5, 0.1, 2.1],
+            },
+        ]
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=moved_objects,
+            moved_ids={1, 2},
+            changed_relations=[],
+            used_changed_delta=True,
+        )
+        trace_events: list[dict] = []
+
+        with (
+            patch(
+                "src.qa_generator._select_object_move_state",
+                return_value=selected_state,
+            ),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                return_value=[],
+            ),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ),
+            patch(
+                "src.qa_generator._bbox_has_min_in_frame_corners",
+                return_value=True,
+            ),
+            patch(
+                "src.qa_generator._bbox_in_frame_corner_count",
+                side_effect=[(5, 8)],
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                return_value=(make_l1_metrics("not occluded"), "mesh_ray"),
+            ),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
+                return_value=(make_l1_metrics("not visible"), "mesh_ray"),
+            ) as moved_visibility_mock,
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                trace_recorder=trace_events.append,
+                trace_detail="full",
+                enabled_l2_object_move_types={"object_move_occlusion"},
+            )
+
+        self.assertFalse(any(q.get("type") == "object_move_occlusion" for q in questions))
+        moved_visibility_mock.assert_not_called()
+        self.assertTrue(
+            any(
+                event.get("event") == "generator_candidate"
+                and event.get("candidate_kind") == "object_move_occlusion_target"
+                and event.get("candidate_key") == "1:2"
+                and event.get("reason_code") == "occlusion_target_not_enough_in_frame_after_move"
+                for event in trace_events
+            )
+        )
+
     def test_generate_l2_object_move_skips_unchanged_attachment_occlusion_state(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -580,30 +699,25 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             moved_objects=objects,
             moved_ids={1, 2},
         )
-        fallback_state = (np.array([1.0, 0.0, 0.0], dtype=np.float64), objects, {1, 2})
+        fallback_state = SimpleNamespace(
+            delta=np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            moved_objects=objects,
+            moved_ids={1, 2},
+            used_changed_delta=False,
+        )
 
         with (
             patch(
                 "src.qa_generator._select_object_move_state",
-                side_effect=[None, shared_state],
+                return_value=shared_state,
             ),
             patch(
-                "src.qa_generator._iter_valid_object_move_states",
-                side_effect=[
-                    [],
-                    [fallback_state],
-                ],
+                "src.qa_generator._iter_additional_object_move_states",
+                return_value=[fallback_state],
             ),
             patch(
                 "src.qa_generator.compute_all_relations",
                 return_value=[],
-            ),
-            patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
-                side_effect=[
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                ],
             ),
             patch(
                 "src.qa_generator._query_visibility_for_object_move_state",
@@ -672,22 +786,24 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         with (
             patch(
                 "src.qa_generator._select_object_move_state",
-                side_effect=[None, selected_state],
+                return_value=selected_state,
             ),
             patch(
                 "src.qa_generator.compute_all_relations",
                 return_value=[],
             ),
             patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
-                side_effect=[
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                    (make_l1_metrics("not occluded"), "mesh_ray"),
-                ],
-            ),
-            patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
-                return_value=(make_l1_metrics("occluded"), "mesh_ray"),
+                "src.qa_generator._query_visibility_for_object_move_state",
+                return_value=(
+                    "not occluded",
+                    "mesh_ray",
+                    "resolved_visibility",
+                    make_l1_metrics("not occluded"),
+                    "occluded",
+                    "mesh_ray",
+                    "resolved_visibility",
+                    make_l1_metrics("occluded"),
+                ),
             ),
             patch(
                 "src.qa_generator._generate_l2_distance_questions_for_object",
@@ -732,22 +848,24 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         with (
             patch(
                 "src.qa_generator._select_object_move_state",
-                side_effect=[None, selected_state],
+                return_value=selected_state,
             ),
             patch(
                 "src.qa_generator.compute_all_relations",
                 return_value=[],
             ),
             patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
-                side_effect=[
-                    (make_l1_metrics("occluded"), "mesh_ray"),
-                    (make_l1_metrics("occluded"), "mesh_ray"),
-                ],
-            ),
-            patch(
-                "src.qa_generator._compute_l1_style_visibility_metrics_for_moved_target",
-                return_value=(make_l1_metrics("not occluded"), "mesh_ray"),
+                "src.qa_generator._query_visibility_for_object_move_state",
+                return_value=(
+                    "occluded",
+                    "mesh_ray",
+                    "resolved_visibility",
+                    make_l1_metrics("occluded"),
+                    "not occluded",
+                    "mesh_ray",
+                    "resolved_visibility",
+                    make_l1_metrics("not occluded"),
+                ),
             ),
             patch(
                 "src.qa_generator._generate_l2_distance_questions_for_object",
@@ -783,27 +901,44 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         objects = [
             make_object(1, "box", (0.0, 0.0, 2.0)),
             make_object(2, "cup", (0.2, 0.0, 2.0)),
+            make_object(3, "shelf", (1.2, 0.0, 2.0)),
+            make_object(4, "book", (1.4, 0.0, 2.0)),
         ]
         base_relations = [
             {
                 "obj_a_id": 1,
                 "obj_b_id": 2,
                 "direction_b_rel_a": "right",
-            }
+            },
+            {
+                "obj_a_id": 3,
+                "obj_b_id": 4,
+                "direction_b_rel_a": "right",
+            },
         ]
         moved_relations_box = [
             {
                 "obj_a_id": 1,
                 "obj_b_id": 2,
                 "direction_b_rel_a": "front-right",
-            }
+            },
+            {
+                "obj_a_id": 3,
+                "obj_b_id": 4,
+                "direction_b_rel_a": "right",
+            },
         ]
         moved_relations_cup = [
             {
                 "obj_a_id": 1,
                 "obj_b_id": 2,
+                "direction_b_rel_a": "right",
+            },
+            {
+                "obj_a_id": 3,
+                "obj_b_id": 4,
                 "direction_b_rel_a": "front-right",
-            }
+            },
         ]
         changed = [
             {
@@ -852,8 +987,8 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         ):
             questions = generate_l2_object_move(
                 objects=objects,
-                attachment_graph={},
-                attached_by={2: 1},
+                attachment_graph={1: [2], 3: [4]},
+                attached_by={2: 1, 4: 3},
                 camera_pose=make_camera_pose(),
                 templates={
                     "L2_object_move_agent": [
@@ -869,6 +1004,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
                 occlusion_backend="mesh_ray",
                 ray_caster=object(),
                 instance_mesh_data=object(),
+                enabled_l2_object_move_types={"object_move_agent"},
             )
 
         self.assertEqual(mocked_helper.call_count, 2)
@@ -876,7 +1012,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             [tuple(q["delta"]) for q in questions if q.get("type") == "object_move_agent"],
             [(0.5, 0.0, 0.0), (1.0, 0.0, 0.0)],
         )
-        self.assertEqual([args.args[2] for args in mocked_helper.call_args_list], [1, 2])
+        self.assertEqual([args.args[2] for args in mocked_helper.call_args_list], [1, 3])
 
     def test_generate_l2_object_move_uses_relation_specific_agent_fallback_state(self) -> None:
         table = make_object(1, "table", (0.0, 0.0, 2.0))

@@ -1754,17 +1754,26 @@ def _bbox_fully_in_frame(
     outside the image bounds both fail. Handles distorted intrinsics via
     project_to_image.
     """
+    return _bbox_has_min_in_frame_corners(
+        obj,
+        camera_pose,
+        color_intrinsics,
+        min_corners=8,
+    )
+
+
+def _bbox_corner_points(obj: dict[str, Any]) -> np.ndarray | None:
     try:
         bbox_min = np.asarray(obj["bbox_min"], dtype=np.float64)
         bbox_max = np.asarray(obj["bbox_max"], dtype=np.float64)
     except (KeyError, TypeError, ValueError):
-        return False
+        return None
     if bbox_min.shape != (3,) or bbox_max.shape != (3,):
-        return False
+        return None
     if not (np.all(np.isfinite(bbox_min)) and np.all(np.isfinite(bbox_max))):
-        return False
+        return None
 
-    corners = np.array([
+    return np.array([
         [bbox_min[0], bbox_min[1], bbox_min[2]],
         [bbox_max[0], bbox_min[1], bbox_min[2]],
         [bbox_min[0], bbox_max[1], bbox_min[2]],
@@ -1774,8 +1783,33 @@ def _bbox_fully_in_frame(
         [bbox_min[0], bbox_max[1], bbox_max[2]],
         [bbox_max[0], bbox_max[1], bbox_max[2]],
     ], dtype=np.float64)
+
+
+def _bbox_in_frame_corner_count(
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> tuple[int, int]:
+    corners = _bbox_corner_points(obj)
+    if corners is None:
+        return 0, 8
     records = _project_sample_point_records(corners, camera_pose, color_intrinsics)
-    return len(records) == 8 and all(bool(rec["in_frame"]) for rec in records)
+    if len(records) != len(corners):
+        return 0, int(len(corners))
+    visible = sum(1 for rec in records if bool(rec["in_frame"]))
+    return int(visible), int(len(corners))
+
+
+def _bbox_has_min_in_frame_corners(
+    obj: dict[str, Any],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    *,
+    min_corners: int = 8,
+) -> bool:
+    visible, total = _bbox_in_frame_corner_count(obj, camera_pose, color_intrinsics)
+    required = max(0, min(int(min_corners), int(total)))
+    return visible >= required
 
 
 def _in_frame_surface_sample_subset(
@@ -5931,6 +5965,26 @@ def generate_l2_object_move(
                 str,
                 _L1OcclusionMetrics,
             ] | None = None
+            occlusion_counterfactual_min_in_frame_corners = 6
+            occlusion_counterfactual_corner_failures: list[dict[str, Any]] = []
+            moved_query_obj_id = int(query_obj["id"])
+
+            def _target_in_frame_for_state(
+                candidate_state: _SelectedObjectMoveState,
+            ) -> tuple[bool, int, int]:
+                moved_map = {int(obj["id"]): obj for obj in candidate_state.moved_objects}
+                candidate_target = moved_map.get(moved_query_obj_id, query_obj)
+                visible_corners, total_corners = _bbox_in_frame_corner_count(
+                    candidate_target,
+                    camera_pose,
+                    color_intrinsics,
+                )
+                return (
+                    visible_corners >= occlusion_counterfactual_min_in_frame_corners,
+                    visible_corners,
+                    total_corners,
+                )
+
             occlusion_target_in_frame = (
                 occlusion_enabled
                 and color_intrinsics is not None
@@ -5956,14 +6010,32 @@ def generate_l2_object_move(
                     ],
                 ] | None = None
                 if selected_state is not None:
-                    visibility = _visibility_for_state(query_obj, selected_state)
-                    if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
-                        occlusion_state = selected_state
-                        occlusion_visibility = visibility
-                    elif _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4]):
-                        occlusion_unchanged_fallback = (selected_state, visibility)
+                    target_ok, visible_corners, total_corners = _target_in_frame_for_state(selected_state)
+                    if target_ok:
+                        visibility = _visibility_for_state(query_obj, selected_state)
+                        if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
+                            occlusion_state = selected_state
+                            occlusion_visibility = visibility
+                        elif _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4]):
+                            occlusion_unchanged_fallback = (selected_state, visibility)
+                    else:
+                        occlusion_counterfactual_corner_failures.append({
+                            "delta": selected_state.delta.tolist(),
+                            "visible_corner_count": int(visible_corners),
+                            "total_corner_count": int(total_corners),
+                            "used_changed_delta": bool(selected_state.used_changed_delta),
+                        })
                 if occlusion_state is None:
                     for candidate_state in _fallback_states():
+                        target_ok, visible_corners, total_corners = _target_in_frame_for_state(candidate_state)
+                        if not target_ok:
+                            occlusion_counterfactual_corner_failures.append({
+                                "delta": candidate_state.delta.tolist(),
+                                "visible_corner_count": int(visible_corners),
+                                "total_corner_count": int(total_corners),
+                                "used_changed_delta": bool(candidate_state.used_changed_delta),
+                            })
+                            continue
                         visibility = _visibility_for_state(query_obj, candidate_state)
                         if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
                             occlusion_state = candidate_state
@@ -5977,6 +6049,36 @@ def generate_l2_object_move(
                     if occlusion_state is None and occlusion_unchanged_fallback is not None:
                         occlusion_state = occlusion_unchanged_fallback[0]
                         occlusion_visibility = occlusion_unchanged_fallback[1]
+                if (
+                    occlusion_state is None
+                    and occlusion_counterfactual_corner_failures
+                ):
+                    best_failure = max(
+                        occlusion_counterfactual_corner_failures,
+                        key=lambda item: (int(item["visible_corner_count"]), -abs(float(item["delta"][0])) - abs(float(item["delta"][1])) - abs(float(item["delta"][2]))),
+                    )
+                    _emit_generator_candidate(
+                        trace_recorder,
+                        trace_detail=trace_detail,
+                        generator="generate_l2_object_move",
+                        candidate_kind="object_move_occlusion_target",
+                        candidate_key=_candidate_key(move_source_id, query_obj_id),
+                        object_ids=[move_source_id, query_obj_id],
+                        status="skipped",
+                        reason_code="occlusion_target_not_enough_in_frame_after_move",
+                        reason_detail=(
+                            "counterfactual target object's bbox does not keep enough projected "
+                            "corners inside the image after movement for a reliable occlusion question"
+                        ),
+                        evidence={
+                            "target_obj_id": query_obj_id,
+                            "required_corner_count": occlusion_counterfactual_min_in_frame_corners,
+                            "visible_corner_count": int(best_failure["visible_corner_count"]),
+                            "total_corner_count": int(best_failure["total_corner_count"]),
+                            "delta": best_failure["delta"],
+                            "used_changed_delta": bool(best_failure["used_changed_delta"]),
+                        },
+                    )
             elif (
                 occlusion_enabled
                 and compare_backend is not None
@@ -5997,7 +6099,20 @@ def generate_l2_object_move(
                         "original scene, so its full extent is not visible; the occlusion "
                         "outcome after moving would be underdetermined from the input image"
                     ),
-                    evidence={"target_obj_id": query_obj_id},
+                    evidence={
+                        "target_obj_id": query_obj_id,
+                        "required_corner_count": 8,
+                        "visible_corner_count": _bbox_in_frame_corner_count(
+                            query_obj,
+                            camera_pose,
+                            color_intrinsics,
+                        )[0],
+                        "total_corner_count": _bbox_in_frame_corner_count(
+                            query_obj,
+                            camera_pose,
+                            color_intrinsics,
+                        )[1],
+                    },
                 )
 
             if occlusion_state is not None and occlusion_visibility is not None:
