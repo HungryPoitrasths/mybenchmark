@@ -1,0 +1,3946 @@
+{
+  "html_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\edited\\merged_1-3593.html",
+  "full_path": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\benchmark.json",
+  "loose_count": 574,
+  "groups_exported": 434,
+  "candidate_count": 5315,
+  "match_counts": {
+    "exact": 3017,
+    "loose": 574
+  },
+  "groups_by_type": {
+    "attachment_chain": 10,
+    "attachment_move": 1,
+    "coordinate_rotation_agent": 25,
+    "coordinate_rotation_allocentric": 15,
+    "coordinate_rotation_object_centric": 40,
+    "direction_agent": 5,
+    "direction_allocentric": 9,
+    "direction_object_centric": 30,
+    "distance": 2,
+    "object_move_agent": 93,
+    "object_move_allocentric": 24,
+    "object_move_distance": 82,
+    "object_move_object_centric": 60,
+    "object_move_occlusion": 2,
+    "object_remove": 2,
+    "object_rotate_object_centric": 33,
+    "occlusion": 1
+  },
+  "groups_by_level": {
+    "L1": 47,
+    "L2": 296,
+    "L3": 91
+  },
+  "output_dir": "C:\\Users\\65781\\Desktop\\讨论2\\PredictiveSpatial-Bench\\output\\edited\\loose_match_candidate_groups_split",
+  "groups_per_file": 1,
+  "file_count": 434,
+  "files": [
+    {
+      "file_index": 1,
+      "filename": "group_0001__html_q0057__d755b3d9d8__frame_003660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        57
+      ]
+    },
+    {
+      "file_index": 2,
+      "filename": "group_0002__html_q0067__5eb31827b7__frame_004920.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        67
+      ]
+    },
+    {
+      "file_index": 3,
+      "filename": "group_0003__html_q0070__d755b3d9d8__frame_008490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        70
+      ]
+    },
+    {
+      "file_index": 4,
+      "filename": "group_0004__html_q0085__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        85
+      ]
+    },
+    {
+      "file_index": 5,
+      "filename": "group_0005__html_q0168__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        168
+      ]
+    },
+    {
+      "file_index": 6,
+      "filename": "group_0006__html_q0329__acd95847c5__frame_004910.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        329
+      ]
+    },
+    {
+      "file_index": 7,
+      "filename": "group_0007__html_q0515__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        515
+      ]
+    },
+    {
+      "file_index": 8,
+      "filename": "group_0008__html_q0635__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        635
+      ]
+    },
+    {
+      "file_index": 9,
+      "filename": "group_0009__html_q0732__scene0653_00__342.jpg.html",
+      "group_count": 1,
+      "candidate_count": 11,
+      "viewer_indices": [
+        732
+      ]
+    },
+    {
+      "file_index": 10,
+      "filename": "group_0010__html_q0734__0d2ee665be__frame_000990.jpg.html",
+      "group_count": 1,
+      "candidate_count": 36,
+      "viewer_indices": [
+        734
+      ]
+    },
+    {
+      "file_index": 11,
+      "filename": "group_0011__html_q0739__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 53,
+      "viewer_indices": [
+        739
+      ]
+    },
+    {
+      "file_index": 12,
+      "filename": "group_0012__html_q0758__ac48a9b736__frame_010070.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        758
+      ]
+    },
+    {
+      "file_index": 13,
+      "filename": "group_0013__html_q0764__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 39,
+      "viewer_indices": [
+        764
+      ]
+    },
+    {
+      "file_index": 14,
+      "filename": "group_0014__html_q0773__cc5237fd77__frame_004810.jpg.html",
+      "group_count": 1,
+      "candidate_count": 19,
+      "viewer_indices": [
+        773
+      ]
+    },
+    {
+      "file_index": 15,
+      "filename": "group_0015__html_q0775__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 31,
+      "viewer_indices": [
+        775
+      ]
+    },
+    {
+      "file_index": 16,
+      "filename": "group_0016__html_q0776__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        776
+      ]
+    },
+    {
+      "file_index": 17,
+      "filename": "group_0017__html_q0783__0d2ee665be__frame_001510.jpg.html",
+      "group_count": 1,
+      "candidate_count": 15,
+      "viewer_indices": [
+        783
+      ]
+    },
+    {
+      "file_index": 18,
+      "filename": "group_0018__html_q0786__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 143,
+      "viewer_indices": [
+        786
+      ]
+    },
+    {
+      "file_index": 19,
+      "filename": "group_0019__html_q0791__c49a8c6cff__frame_000630.jpg.html",
+      "group_count": 1,
+      "candidate_count": 42,
+      "viewer_indices": [
+        791
+      ]
+    },
+    {
+      "file_index": 20,
+      "filename": "group_0020__html_q0794__acd95847c5__frame_010530.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        794
+      ]
+    },
+    {
+      "file_index": 21,
+      "filename": "group_0021__html_q0807__d755b3d9d8__frame_003600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        807
+      ]
+    },
+    {
+      "file_index": 22,
+      "filename": "group_0022__html_q0817__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        817
+      ]
+    },
+    {
+      "file_index": 23,
+      "filename": "group_0023__html_q0818__acd95847c5__frame_010650.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        818
+      ]
+    },
+    {
+      "file_index": 24,
+      "filename": "group_0024__html_q0824__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        824
+      ]
+    },
+    {
+      "file_index": 25,
+      "filename": "group_0025__html_q0825__d755b3d9d8__frame_003660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        825
+      ]
+    },
+    {
+      "file_index": 26,
+      "filename": "group_0026__html_q0838__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 20,
+      "viewer_indices": [
+        838
+      ]
+    },
+    {
+      "file_index": 27,
+      "filename": "group_0027__html_q0848__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        848
+      ]
+    },
+    {
+      "file_index": 28,
+      "filename": "group_0028__html_q0849__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        849
+      ]
+    },
+    {
+      "file_index": 29,
+      "filename": "group_0029__html_q0852__d755b3d9d8__frame_008490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 14,
+      "viewer_indices": [
+        852
+      ]
+    },
+    {
+      "file_index": 30,
+      "filename": "group_0030__html_q0853__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        853
+      ]
+    },
+    {
+      "file_index": 31,
+      "filename": "group_0031__html_q0865__d755b3d9d8__frame_003600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        865
+      ]
+    },
+    {
+      "file_index": 32,
+      "filename": "group_0032__html_q0868__d755b3d9d8__frame_003530.jpg.html",
+      "group_count": 1,
+      "candidate_count": 39,
+      "viewer_indices": [
+        868
+      ]
+    },
+    {
+      "file_index": 33,
+      "filename": "group_0033__html_q0873__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 31,
+      "viewer_indices": [
+        873
+      ]
+    },
+    {
+      "file_index": 34,
+      "filename": "group_0034__html_q0877__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        877
+      ]
+    },
+    {
+      "file_index": 35,
+      "filename": "group_0035__html_q0882__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 72,
+      "viewer_indices": [
+        882
+      ]
+    },
+    {
+      "file_index": 36,
+      "filename": "group_0036__html_q0885__scene0164_01__393.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        885
+      ]
+    },
+    {
+      "file_index": 37,
+      "filename": "group_0037__html_q0896__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        896
+      ]
+    },
+    {
+      "file_index": 38,
+      "filename": "group_0038__html_q0898__3db0a1c8f3__frame_007030.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        898
+      ]
+    },
+    {
+      "file_index": 39,
+      "filename": "group_0039__html_q0967__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        967
+      ]
+    },
+    {
+      "file_index": 40,
+      "filename": "group_0040__html_q1031__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        1031
+      ]
+    },
+    {
+      "file_index": 41,
+      "filename": "group_0041__html_q1042__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1042
+      ]
+    },
+    {
+      "file_index": 42,
+      "filename": "group_0042__html_q1078__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1078
+      ]
+    },
+    {
+      "file_index": 43,
+      "filename": "group_0043__html_q1081__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1081
+      ]
+    },
+    {
+      "file_index": 44,
+      "filename": "group_0044__html_q1090__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1090
+      ]
+    },
+    {
+      "file_index": 45,
+      "filename": "group_0045__html_q1106__d755b3d9d8__frame_003660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1106
+      ]
+    },
+    {
+      "file_index": 46,
+      "filename": "group_0046__html_q1113__d755b3d9d8__frame_003600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1113
+      ]
+    },
+    {
+      "file_index": 47,
+      "filename": "group_0047__html_q1140__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        1140
+      ]
+    },
+    {
+      "file_index": 48,
+      "filename": "group_0048__html_q1214__scene0645_01__600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1214
+      ]
+    },
+    {
+      "file_index": 49,
+      "filename": "group_0049__html_q1215__scene0648_01__2442.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1215
+      ]
+    },
+    {
+      "file_index": 50,
+      "filename": "group_0050__html_q1216__scene0474_01__300.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1216
+      ]
+    },
+    {
+      "file_index": 51,
+      "filename": "group_0051__html_q1217__scene0606_00__99.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1217
+      ]
+    },
+    {
+      "file_index": 52,
+      "filename": "group_0052__html_q1218__scene0025_00__1194.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1218
+      ]
+    },
+    {
+      "file_index": 53,
+      "filename": "group_0053__html_q1222__f3d64c30f8__frame_001050.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1222
+      ]
+    },
+    {
+      "file_index": 54,
+      "filename": "group_0054__html_q1224__scene0207_02__2433.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1224
+      ]
+    },
+    {
+      "file_index": 55,
+      "filename": "group_0055__html_q1228__0d2ee665be__frame_001110.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1228
+      ]
+    },
+    {
+      "file_index": 56,
+      "filename": "group_0056__html_q1230__scene0593_00__6.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1230
+      ]
+    },
+    {
+      "file_index": 57,
+      "filename": "group_0057__html_q1231__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1231
+      ]
+    },
+    {
+      "file_index": 58,
+      "filename": "group_0058__html_q1233__scene0356_02__57.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1233
+      ]
+    },
+    {
+      "file_index": 59,
+      "filename": "group_0059__html_q1235__fb5a96b1a2__frame_006700.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1235
+      ]
+    },
+    {
+      "file_index": 60,
+      "filename": "group_0060__html_q1236__scene0663_01__567.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1236
+      ]
+    },
+    {
+      "file_index": 61,
+      "filename": "group_0061__html_q1238__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1238
+      ]
+    },
+    {
+      "file_index": 62,
+      "filename": "group_0062__html_q1239__scene0353_00__885.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1239
+      ]
+    },
+    {
+      "file_index": 63,
+      "filename": "group_0063__html_q1241__scene0474_01__99.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1241
+      ]
+    },
+    {
+      "file_index": 64,
+      "filename": "group_0064__html_q1243__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1243
+      ]
+    },
+    {
+      "file_index": 65,
+      "filename": "group_0065__html_q1244__scene0435_03__1804.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1244
+      ]
+    },
+    {
+      "file_index": 66,
+      "filename": "group_0066__html_q1245__0d2ee665be__frame_000900.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1245
+      ]
+    },
+    {
+      "file_index": 67,
+      "filename": "group_0067__html_q1250__c49a8c6cff__frame_002680.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1250
+      ]
+    },
+    {
+      "file_index": 68,
+      "filename": "group_0068__html_q1253__0d2ee665be__frame_000990.jpg.html",
+      "group_count": 1,
+      "candidate_count": 20,
+      "viewer_indices": [
+        1253
+      ]
+    },
+    {
+      "file_index": 69,
+      "filename": "group_0069__html_q1254__scene0025_01__324.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1254
+      ]
+    },
+    {
+      "file_index": 70,
+      "filename": "group_0070__html_q1255__scene0696_01__282.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1255
+      ]
+    },
+    {
+      "file_index": 71,
+      "filename": "group_0071__html_q1257__5942004064__frame_007490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1257
+      ]
+    },
+    {
+      "file_index": 72,
+      "filename": "group_0072__html_q1261__scene0606_01__18.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1261
+      ]
+    },
+    {
+      "file_index": 73,
+      "filename": "group_0073__html_q1265__fb5a96b1a2__frame_006760.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1265
+      ]
+    },
+    {
+      "file_index": 74,
+      "filename": "group_0074__html_q1267__scene0474_03__1482.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1267
+      ]
+    },
+    {
+      "file_index": 75,
+      "filename": "group_0075__html_q1268__scene0435_00__2616.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1268
+      ]
+    },
+    {
+      "file_index": 76,
+      "filename": "group_0076__html_q1269__scene0025_02__561.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1269
+      ]
+    },
+    {
+      "file_index": 77,
+      "filename": "group_0077__html_q1270__scene0583_01__1511.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1270
+      ]
+    },
+    {
+      "file_index": 78,
+      "filename": "group_0078__html_q1272__3db0a1c8f3__frame_006910.jpg.html",
+      "group_count": 1,
+      "candidate_count": 12,
+      "viewer_indices": [
+        1272
+      ]
+    },
+    {
+      "file_index": 79,
+      "filename": "group_0079__html_q1273__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1273
+      ]
+    },
+    {
+      "file_index": 80,
+      "filename": "group_0080__html_q1274__scene0257_00__159.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1274
+      ]
+    },
+    {
+      "file_index": 81,
+      "filename": "group_0081__html_q1276__scene0046_00__0.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1276
+      ]
+    },
+    {
+      "file_index": 82,
+      "filename": "group_0082__html_q1277__45b0dac5e3__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1277
+      ]
+    },
+    {
+      "file_index": 83,
+      "filename": "group_0083__html_q1280__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1280
+      ]
+    },
+    {
+      "file_index": 84,
+      "filename": "group_0084__html_q1281__scene0353_01__1461.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1281
+      ]
+    },
+    {
+      "file_index": 85,
+      "filename": "group_0085__html_q1282__c49a8c6cff__frame_004420.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1282
+      ]
+    },
+    {
+      "file_index": 86,
+      "filename": "group_0086__html_q1283__scene0474_00__1569.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1283
+      ]
+    },
+    {
+      "file_index": 87,
+      "filename": "group_0087__html_q1286__a8bf42d646__frame_007520.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        1286
+      ]
+    },
+    {
+      "file_index": 88,
+      "filename": "group_0088__html_q1287__09c1414f1b__frame_000900.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1287
+      ]
+    },
+    {
+      "file_index": 89,
+      "filename": "group_0089__html_q1289__scene0696_02__579.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1289
+      ]
+    },
+    {
+      "file_index": 90,
+      "filename": "group_0090__html_q1290__scene0653_01__4536.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1290
+      ]
+    },
+    {
+      "file_index": 91,
+      "filename": "group_0091__html_q1294__scene0474_00__1359.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1294
+      ]
+    },
+    {
+      "file_index": 92,
+      "filename": "group_0092__html_q1295__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1295
+      ]
+    },
+    {
+      "file_index": 93,
+      "filename": "group_0093__html_q1298__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1298
+      ]
+    },
+    {
+      "file_index": 94,
+      "filename": "group_0094__html_q1299__f3d64c30f8__frame_001080.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1299
+      ]
+    },
+    {
+      "file_index": 95,
+      "filename": "group_0095__html_q1301__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1301
+      ]
+    },
+    {
+      "file_index": 96,
+      "filename": "group_0096__html_q1302__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1302
+      ]
+    },
+    {
+      "file_index": 97,
+      "filename": "group_0097__html_q1306__scene0356_01__3.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1306
+      ]
+    },
+    {
+      "file_index": 98,
+      "filename": "group_0098__html_q1308__09c1414f1b__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1308
+      ]
+    },
+    {
+      "file_index": 99,
+      "filename": "group_0099__html_q1310__scene0474_03__18.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1310
+      ]
+    },
+    {
+      "file_index": 100,
+      "filename": "group_0100__html_q1313__scene0658_00__75.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1313
+      ]
+    },
+    {
+      "file_index": 101,
+      "filename": "group_0101__html_q1316__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1316
+      ]
+    },
+    {
+      "file_index": 102,
+      "filename": "group_0102__html_q1317__scene0565_00__147.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1317
+      ]
+    },
+    {
+      "file_index": 103,
+      "filename": "group_0103__html_q1320__5942004064__frame_007490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1320
+      ]
+    },
+    {
+      "file_index": 104,
+      "filename": "group_0104__html_q1323__scene0643_00__1827.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1323
+      ]
+    },
+    {
+      "file_index": 105,
+      "filename": "group_0105__html_q1324__scene0653_00__1101.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1324
+      ]
+    },
+    {
+      "file_index": 106,
+      "filename": "group_0106__html_q1325__5942004064__frame_006660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1325
+      ]
+    },
+    {
+      "file_index": 107,
+      "filename": "group_0107__html_q1327__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1327
+      ]
+    },
+    {
+      "file_index": 108,
+      "filename": "group_0108__html_q1329__scene0653_01__627.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1329
+      ]
+    },
+    {
+      "file_index": 109,
+      "filename": "group_0109__html_q1330__scene0046_01__1083.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1330
+      ]
+    },
+    {
+      "file_index": 110,
+      "filename": "group_0110__html_q1333__scene0518_00__552.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1333
+      ]
+    },
+    {
+      "file_index": 111,
+      "filename": "group_0111__html_q1335__scene0593_00__2289.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1335
+      ]
+    },
+    {
+      "file_index": 112,
+      "filename": "group_0112__html_q1337__c49a8c6cff__frame_003880.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1337
+      ]
+    },
+    {
+      "file_index": 113,
+      "filename": "group_0113__html_q1340__scene0696_02__579.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1340
+      ]
+    },
+    {
+      "file_index": 114,
+      "filename": "group_0114__html_q1346__scene0435_02__1515.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1346
+      ]
+    },
+    {
+      "file_index": 115,
+      "filename": "group_0115__html_q1349__f3d64c30f8__frame_001050.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1349
+      ]
+    },
+    {
+      "file_index": 116,
+      "filename": "group_0116__html_q1350__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1350
+      ]
+    },
+    {
+      "file_index": 117,
+      "filename": "group_0117__html_q1352__scene0608_00__3301.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1352
+      ]
+    },
+    {
+      "file_index": 118,
+      "filename": "group_0118__html_q1356__45b0dac5e3__frame_002130.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1356
+      ]
+    },
+    {
+      "file_index": 119,
+      "filename": "group_0119__html_q1357__scene0025_01__1653.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1357
+      ]
+    },
+    {
+      "file_index": 120,
+      "filename": "group_0120__html_q1359__5f99900f09__frame_004700.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1359
+      ]
+    },
+    {
+      "file_index": 121,
+      "filename": "group_0121__html_q1362__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1362
+      ]
+    },
+    {
+      "file_index": 122,
+      "filename": "group_0122__html_q1363__c49a8c6cff__frame_004420.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1363
+      ]
+    },
+    {
+      "file_index": 123,
+      "filename": "group_0123__html_q1365__scene0329_00__1303.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1365
+      ]
+    },
+    {
+      "file_index": 124,
+      "filename": "group_0124__html_q1367__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1367
+      ]
+    },
+    {
+      "file_index": 125,
+      "filename": "group_0125__html_q1368__ac48a9b736__frame_007660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1368
+      ]
+    },
+    {
+      "file_index": 126,
+      "filename": "group_0126__html_q1370__5942004064__frame_008330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1370
+      ]
+    },
+    {
+      "file_index": 127,
+      "filename": "group_0127__html_q1371__f3d64c30f8__frame_001080.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1371
+      ]
+    },
+    {
+      "file_index": 128,
+      "filename": "group_0128__html_q1372__scene0653_00__1101.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1372
+      ]
+    },
+    {
+      "file_index": 129,
+      "filename": "group_0129__html_q1373__scene0207_02__0.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1373
+      ]
+    },
+    {
+      "file_index": 130,
+      "filename": "group_0130__html_q1375__f3d64c30f8__frame_002710.jpg.html",
+      "group_count": 1,
+      "candidate_count": 27,
+      "viewer_indices": [
+        1375
+      ]
+    },
+    {
+      "file_index": 131,
+      "filename": "group_0131__html_q1380__scene0025_02__1410.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1380
+      ]
+    },
+    {
+      "file_index": 132,
+      "filename": "group_0132__html_q1383__scene0695_02__909.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1383
+      ]
+    },
+    {
+      "file_index": 133,
+      "filename": "group_0133__html_q1384__scene0050_01__1023.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1384
+      ]
+    },
+    {
+      "file_index": 134,
+      "filename": "group_0134__html_q1385__scene0580_01__399.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1385
+      ]
+    },
+    {
+      "file_index": 135,
+      "filename": "group_0135__html_q1388__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1388
+      ]
+    },
+    {
+      "file_index": 136,
+      "filename": "group_0136__html_q1390__scene0645_00__774.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1390
+      ]
+    },
+    {
+      "file_index": 137,
+      "filename": "group_0137__html_q1391__0d2ee665be__frame_001110.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1391
+      ]
+    },
+    {
+      "file_index": 138,
+      "filename": "group_0138__html_q1394__0d2ee665be__frame_001200.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1394
+      ]
+    },
+    {
+      "file_index": 139,
+      "filename": "group_0139__html_q1395__5ee7c22ba0__frame_000450.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1395
+      ]
+    },
+    {
+      "file_index": 140,
+      "filename": "group_0140__html_q1402__6115eddb86__frame_007780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1402
+      ]
+    },
+    {
+      "file_index": 141,
+      "filename": "group_0141__html_q1460__5942004064__frame_006660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1460
+      ]
+    },
+    {
+      "file_index": 142,
+      "filename": "group_0142__html_q1463__scene0606_00__99.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1463
+      ]
+    },
+    {
+      "file_index": 143,
+      "filename": "group_0143__html_q1465__0d2ee665be__frame_001200.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1465
+      ]
+    },
+    {
+      "file_index": 144,
+      "filename": "group_0144__html_q1466__c49a8c6cff__frame_003880.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1466
+      ]
+    },
+    {
+      "file_index": 145,
+      "filename": "group_0145__html_q1467__0d2ee665be__frame_001110.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1467
+      ]
+    },
+    {
+      "file_index": 146,
+      "filename": "group_0146__html_q1469__scene0658_00__75.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1469
+      ]
+    },
+    {
+      "file_index": 147,
+      "filename": "group_0147__html_q1471__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1471
+      ]
+    },
+    {
+      "file_index": 148,
+      "filename": "group_0148__html_q1474__6115eddb86__frame_007780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1474
+      ]
+    },
+    {
+      "file_index": 149,
+      "filename": "group_0149__html_q1475__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1475
+      ]
+    },
+    {
+      "file_index": 150,
+      "filename": "group_0150__html_q1478__scene0257_00__159.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1478
+      ]
+    },
+    {
+      "file_index": 151,
+      "filename": "group_0151__html_q1481__scene0353_00__885.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1481
+      ]
+    },
+    {
+      "file_index": 152,
+      "filename": "group_0152__html_q1483__scene0608_00__3301.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1483
+      ]
+    },
+    {
+      "file_index": 153,
+      "filename": "group_0153__html_q1484__scene0606_01__18.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1484
+      ]
+    },
+    {
+      "file_index": 154,
+      "filename": "group_0154__html_q1485__5942004064__frame_009170.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1485
+      ]
+    },
+    {
+      "file_index": 155,
+      "filename": "group_0155__html_q1486__f3d64c30f8__frame_001080.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1486
+      ]
+    },
+    {
+      "file_index": 156,
+      "filename": "group_0156__html_q1487__scene0378_01__63.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1487
+      ]
+    },
+    {
+      "file_index": 157,
+      "filename": "group_0157__html_q1491__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1491
+      ]
+    },
+    {
+      "file_index": 158,
+      "filename": "group_0158__html_q1494__scene0653_01__4536.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1494
+      ]
+    },
+    {
+      "file_index": 159,
+      "filename": "group_0159__html_q1496__scene0046_00__0.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1496
+      ]
+    },
+    {
+      "file_index": 160,
+      "filename": "group_0160__html_q1498__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1498
+      ]
+    },
+    {
+      "file_index": 161,
+      "filename": "group_0161__html_q1499__scene0653_01__627.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1499
+      ]
+    },
+    {
+      "file_index": 162,
+      "filename": "group_0162__html_q1500__f3d64c30f8__frame_001050.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1500
+      ]
+    },
+    {
+      "file_index": 163,
+      "filename": "group_0163__html_q1503__scene0696_02__579.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1503
+      ]
+    },
+    {
+      "file_index": 164,
+      "filename": "group_0164__html_q1504__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 15,
+      "viewer_indices": [
+        1504
+      ]
+    },
+    {
+      "file_index": 165,
+      "filename": "group_0165__html_q1505__scene0207_02__2433.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1505
+      ]
+    },
+    {
+      "file_index": 166,
+      "filename": "group_0166__html_q1507__scene0663_02__837.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1507
+      ]
+    },
+    {
+      "file_index": 167,
+      "filename": "group_0167__html_q1509__scene0050_01__1023.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1509
+      ]
+    },
+    {
+      "file_index": 168,
+      "filename": "group_0168__html_q1510__scene0356_02__57.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1510
+      ]
+    },
+    {
+      "file_index": 169,
+      "filename": "group_0169__html_q1511__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1511
+      ]
+    },
+    {
+      "file_index": 170,
+      "filename": "group_0170__html_q1512__45b0dac5e3__frame_002130.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1512
+      ]
+    },
+    {
+      "file_index": 171,
+      "filename": "group_0171__html_q1513__scene0474_03__18.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1513
+      ]
+    },
+    {
+      "file_index": 172,
+      "filename": "group_0172__html_q1514__f3d64c30f8__frame_001050.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1514
+      ]
+    },
+    {
+      "file_index": 173,
+      "filename": "group_0173__html_q1516__scene0378_00__144.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1516
+      ]
+    },
+    {
+      "file_index": 174,
+      "filename": "group_0174__html_q1519__scene0645_00__774.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1519
+      ]
+    },
+    {
+      "file_index": 175,
+      "filename": "group_0175__html_q1522__scene0025_01__1653.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1522
+      ]
+    },
+    {
+      "file_index": 176,
+      "filename": "group_0176__html_q1523__5942004064__frame_006660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1523
+      ]
+    },
+    {
+      "file_index": 177,
+      "filename": "group_0177__html_q1524__scene0025_00__1194.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1524
+      ]
+    },
+    {
+      "file_index": 178,
+      "filename": "group_0178__html_q1525__scene0474_01__99.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1525
+      ]
+    },
+    {
+      "file_index": 179,
+      "filename": "group_0179__html_q1526__fb5a96b1a2__frame_006700.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1526
+      ]
+    },
+    {
+      "file_index": 180,
+      "filename": "group_0180__html_q1527__scene0591_01__807.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1527
+      ]
+    },
+    {
+      "file_index": 181,
+      "filename": "group_0181__html_q1528__scene0025_01__324.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1528
+      ]
+    },
+    {
+      "file_index": 182,
+      "filename": "group_0182__html_q1529__scene0329_01__426.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1529
+      ]
+    },
+    {
+      "file_index": 183,
+      "filename": "group_0183__html_q1536__scene0356_00__1308.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1536
+      ]
+    },
+    {
+      "file_index": 184,
+      "filename": "group_0184__html_q1537__f3d64c30f8__frame_001080.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1537
+      ]
+    },
+    {
+      "file_index": 185,
+      "filename": "group_0185__html_q1541__scene0653_00__1101.jpg.html",
+      "group_count": 1,
+      "candidate_count": 11,
+      "viewer_indices": [
+        1541
+      ]
+    },
+    {
+      "file_index": 186,
+      "filename": "group_0186__html_q1542__scene0593_00__2289.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1542
+      ]
+    },
+    {
+      "file_index": 187,
+      "filename": "group_0187__html_q1545__scene0353_01__1461.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1545
+      ]
+    },
+    {
+      "file_index": 188,
+      "filename": "group_0188__html_q1547__45b0dac5e3__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1547
+      ]
+    },
+    {
+      "file_index": 189,
+      "filename": "group_0189__html_q1550__fb5a96b1a2__frame_006700.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1550
+      ]
+    },
+    {
+      "file_index": 190,
+      "filename": "group_0190__html_q1552__scene0696_01__282.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1552
+      ]
+    },
+    {
+      "file_index": 191,
+      "filename": "group_0191__html_q1553__5942004064__frame_007490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1553
+      ]
+    },
+    {
+      "file_index": 192,
+      "filename": "group_0192__html_q1557__scene0356_01__3.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1557
+      ]
+    },
+    {
+      "file_index": 193,
+      "filename": "group_0193__html_q1558__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 14,
+      "viewer_indices": [
+        1558
+      ]
+    },
+    {
+      "file_index": 194,
+      "filename": "group_0194__html_q1561__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1561
+      ]
+    },
+    {
+      "file_index": 195,
+      "filename": "group_0195__html_q1562__3db0a1c8f3__frame_006910.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        1562
+      ]
+    },
+    {
+      "file_index": 196,
+      "filename": "group_0196__html_q1565__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1565
+      ]
+    },
+    {
+      "file_index": 197,
+      "filename": "group_0197__html_q1566__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        1566
+      ]
+    },
+    {
+      "file_index": 198,
+      "filename": "group_0198__html_q1571__scene0580_01__3757.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1571
+      ]
+    },
+    {
+      "file_index": 199,
+      "filename": "group_0199__html_q1577__09c1414f1b__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1577
+      ]
+    },
+    {
+      "file_index": 200,
+      "filename": "group_0200__html_q1579__scene0329_00__1303.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1579
+      ]
+    },
+    {
+      "file_index": 201,
+      "filename": "group_0201__html_q1580__scene0663_01__567.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1580
+      ]
+    },
+    {
+      "file_index": 202,
+      "filename": "group_0202__html_q1582__scene0565_00__147.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1582
+      ]
+    },
+    {
+      "file_index": 203,
+      "filename": "group_0203__html_q1593__c49a8c6cff__frame_002680.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1593
+      ]
+    },
+    {
+      "file_index": 204,
+      "filename": "group_0204__html_q1595__scene0643_00__1827.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1595
+      ]
+    },
+    {
+      "file_index": 205,
+      "filename": "group_0205__html_q1602__0d2ee665be__frame_000900.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1602
+      ]
+    },
+    {
+      "file_index": 206,
+      "filename": "group_0206__html_q1606__scene0583_00__1972.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1606
+      ]
+    },
+    {
+      "file_index": 207,
+      "filename": "group_0207__html_q1607__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1607
+      ]
+    },
+    {
+      "file_index": 208,
+      "filename": "group_0208__html_q1609__a8bf42d646__frame_007520.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1609
+      ]
+    },
+    {
+      "file_index": 209,
+      "filename": "group_0209__html_q1614__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1614
+      ]
+    },
+    {
+      "file_index": 210,
+      "filename": "group_0210__html_q1615__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1615
+      ]
+    },
+    {
+      "file_index": 211,
+      "filename": "group_0211__html_q1620__5f99900f09__frame_004700.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1620
+      ]
+    },
+    {
+      "file_index": 212,
+      "filename": "group_0212__html_q1621__0d2ee665be__frame_000900.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1621
+      ]
+    },
+    {
+      "file_index": 213,
+      "filename": "group_0213__html_q1625__scene0353_00__1509.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1625
+      ]
+    },
+    {
+      "file_index": 214,
+      "filename": "group_0214__html_q1629__scene0435_02__1515.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1629
+      ]
+    },
+    {
+      "file_index": 215,
+      "filename": "group_0215__html_q1630__scene0695_02__909.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1630
+      ]
+    },
+    {
+      "file_index": 216,
+      "filename": "group_0216__html_q1632__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1632
+      ]
+    },
+    {
+      "file_index": 217,
+      "filename": "group_0217__html_q1633__5942004064__frame_007490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1633
+      ]
+    },
+    {
+      "file_index": 218,
+      "filename": "group_0218__html_q1634__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1634
+      ]
+    },
+    {
+      "file_index": 219,
+      "filename": "group_0219__html_q1637__09c1414f1b__frame_001950.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1637
+      ]
+    },
+    {
+      "file_index": 220,
+      "filename": "group_0220__html_q1673__fb5a96b1a2__frame_006940.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1673
+      ]
+    },
+    {
+      "file_index": 221,
+      "filename": "group_0221__html_q1689__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1689
+      ]
+    },
+    {
+      "file_index": 222,
+      "filename": "group_0222__html_q1695__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1695
+      ]
+    },
+    {
+      "file_index": 223,
+      "filename": "group_0223__html_q1789__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1789
+      ]
+    },
+    {
+      "file_index": 224,
+      "filename": "group_0224__html_q1833__27dd4da69e__frame_000540.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1833
+      ]
+    },
+    {
+      "file_index": 225,
+      "filename": "group_0225__html_q1887__f3d64c30f8__frame_001080.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1887
+      ]
+    },
+    {
+      "file_index": 226,
+      "filename": "group_0226__html_q1890__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1890
+      ]
+    },
+    {
+      "file_index": 227,
+      "filename": "group_0227__html_q1891__f3d64c30f8__frame_001050.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1891
+      ]
+    },
+    {
+      "file_index": 228,
+      "filename": "group_0228__html_q1895__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1895
+      ]
+    },
+    {
+      "file_index": 229,
+      "filename": "group_0229__html_q1896__5942004064__frame_008330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1896
+      ]
+    },
+    {
+      "file_index": 230,
+      "filename": "group_0230__html_q1897__09c1414f1b__frame_000900.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1897
+      ]
+    },
+    {
+      "file_index": 231,
+      "filename": "group_0231__html_q1899__scene0653_01__627.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1899
+      ]
+    },
+    {
+      "file_index": 232,
+      "filename": "group_0232__html_q1901__6115eddb86__frame_007780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1901
+      ]
+    },
+    {
+      "file_index": 233,
+      "filename": "group_0233__html_q1902__scene0591_01__807.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1902
+      ]
+    },
+    {
+      "file_index": 234,
+      "filename": "group_0234__html_q1904__0d2ee665be__frame_001110.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1904
+      ]
+    },
+    {
+      "file_index": 235,
+      "filename": "group_0235__html_q1905__45b0dac5e3__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1905
+      ]
+    },
+    {
+      "file_index": 236,
+      "filename": "group_0236__html_q1910__scene0207_02__0.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1910
+      ]
+    },
+    {
+      "file_index": 237,
+      "filename": "group_0237__html_q1911__scene0696_02__579.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1911
+      ]
+    },
+    {
+      "file_index": 238,
+      "filename": "group_0238__html_q1912__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        1912
+      ]
+    },
+    {
+      "file_index": 239,
+      "filename": "group_0239__html_q1915__scene0645_00__774.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1915
+      ]
+    },
+    {
+      "file_index": 240,
+      "filename": "group_0240__html_q1918__fb5a96b1a2__frame_006760.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1918
+      ]
+    },
+    {
+      "file_index": 241,
+      "filename": "group_0241__html_q1920__ac48a9b736__frame_007660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1920
+      ]
+    },
+    {
+      "file_index": 242,
+      "filename": "group_0242__html_q1921__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1921
+      ]
+    },
+    {
+      "file_index": 243,
+      "filename": "group_0243__html_q1922__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1922
+      ]
+    },
+    {
+      "file_index": 244,
+      "filename": "group_0244__html_q1925__5942004064__frame_006660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1925
+      ]
+    },
+    {
+      "file_index": 245,
+      "filename": "group_0245__html_q1927__scene0565_00__147.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1927
+      ]
+    },
+    {
+      "file_index": 246,
+      "filename": "group_0246__html_q1930__scene0025_01__324.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1930
+      ]
+    },
+    {
+      "file_index": 247,
+      "filename": "group_0247__html_q1932__scene0653_01__4536.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1932
+      ]
+    },
+    {
+      "file_index": 248,
+      "filename": "group_0248__html_q1936__c49a8c6cff__frame_003880.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1936
+      ]
+    },
+    {
+      "file_index": 249,
+      "filename": "group_0249__html_q1937__scene0593_00__6.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1937
+      ]
+    },
+    {
+      "file_index": 250,
+      "filename": "group_0250__html_q1940__scene0583_00__1972.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1940
+      ]
+    },
+    {
+      "file_index": 251,
+      "filename": "group_0251__html_q1945__f3d64c30f8__frame_002710.jpg.html",
+      "group_count": 1,
+      "candidate_count": 12,
+      "viewer_indices": [
+        1945
+      ]
+    },
+    {
+      "file_index": 252,
+      "filename": "group_0252__html_q1951__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1951
+      ]
+    },
+    {
+      "file_index": 253,
+      "filename": "group_0253__html_q1953__5ee7c22ba0__frame_000450.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1953
+      ]
+    },
+    {
+      "file_index": 254,
+      "filename": "group_0254__html_q1954__0d2ee665be__frame_001200.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1954
+      ]
+    },
+    {
+      "file_index": 255,
+      "filename": "group_0255__html_q1956__c5439f4607__frame_005620.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1956
+      ]
+    },
+    {
+      "file_index": 256,
+      "filename": "group_0256__html_q1958__scene0356_01__3.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1958
+      ]
+    },
+    {
+      "file_index": 257,
+      "filename": "group_0257__html_q1959__scene0207_02__1023.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1959
+      ]
+    },
+    {
+      "file_index": 258,
+      "filename": "group_0258__html_q1962__09c1414f1b__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1962
+      ]
+    },
+    {
+      "file_index": 259,
+      "filename": "group_0259__html_q1963__scene0474_00__1359.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1963
+      ]
+    },
+    {
+      "file_index": 260,
+      "filename": "group_0260__html_q1964__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1964
+      ]
+    },
+    {
+      "file_index": 261,
+      "filename": "group_0261__html_q1967__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        1967
+      ]
+    },
+    {
+      "file_index": 262,
+      "filename": "group_0262__html_q1970__scene0696_02__579.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1970
+      ]
+    },
+    {
+      "file_index": 263,
+      "filename": "group_0263__html_q1972__5942004064__frame_007490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1972
+      ]
+    },
+    {
+      "file_index": 264,
+      "filename": "group_0264__html_q1973__0d2ee665be__frame_000900.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1973
+      ]
+    },
+    {
+      "file_index": 265,
+      "filename": "group_0265__html_q1980__scene0658_00__75.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1980
+      ]
+    },
+    {
+      "file_index": 266,
+      "filename": "group_0266__html_q1982__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        1982
+      ]
+    },
+    {
+      "file_index": 267,
+      "filename": "group_0267__html_q1987__scene0648_01__2442.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        1987
+      ]
+    },
+    {
+      "file_index": 268,
+      "filename": "group_0268__html_q1989__5942004064__frame_007490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        1989
+      ]
+    },
+    {
+      "file_index": 269,
+      "filename": "group_0269__html_q1992__a8bf42d646__frame_007520.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1992
+      ]
+    },
+    {
+      "file_index": 270,
+      "filename": "group_0270__html_q1994__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        1994
+      ]
+    },
+    {
+      "file_index": 271,
+      "filename": "group_0271__html_q1998__3db0a1c8f3__frame_006880.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        1998
+      ]
+    },
+    {
+      "file_index": 272,
+      "filename": "group_0272__html_q2001__scene0435_03__1804.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2001
+      ]
+    },
+    {
+      "file_index": 273,
+      "filename": "group_0273__html_q2007__45b0dac5e3__frame_002130.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2007
+      ]
+    },
+    {
+      "file_index": 274,
+      "filename": "group_0274__html_q2008__scene0353_00__885.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2008
+      ]
+    },
+    {
+      "file_index": 275,
+      "filename": "group_0275__html_q2011__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2011
+      ]
+    },
+    {
+      "file_index": 276,
+      "filename": "group_0276__html_q2015__scene0435_02__1515.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2015
+      ]
+    },
+    {
+      "file_index": 277,
+      "filename": "group_0277__html_q2022__scene0474_03__18.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2022
+      ]
+    },
+    {
+      "file_index": 278,
+      "filename": "group_0278__html_q2023__scene0606_02__2505.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2023
+      ]
+    },
+    {
+      "file_index": 279,
+      "filename": "group_0279__html_q2024__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2024
+      ]
+    },
+    {
+      "file_index": 280,
+      "filename": "group_0280__html_q2027__scene0353_00__762.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2027
+      ]
+    },
+    {
+      "file_index": 281,
+      "filename": "group_0281__html_q2029__0d2ee665be__frame_001570.jpg.html",
+      "group_count": 1,
+      "candidate_count": 13,
+      "viewer_indices": [
+        2029
+      ]
+    },
+    {
+      "file_index": 282,
+      "filename": "group_0282__html_q2050__5942004064__frame_010440.jpg.html",
+      "group_count": 1,
+      "candidate_count": 12,
+      "viewer_indices": [
+        2050
+      ]
+    },
+    {
+      "file_index": 283,
+      "filename": "group_0283__html_q2053__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2053
+      ]
+    },
+    {
+      "file_index": 284,
+      "filename": "group_0284__html_q2061__scene0565_00__147.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2061
+      ]
+    },
+    {
+      "file_index": 285,
+      "filename": "group_0285__html_q2093__cc5237fd77__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2093
+      ]
+    },
+    {
+      "file_index": 286,
+      "filename": "group_0286__html_q2094__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2094
+      ]
+    },
+    {
+      "file_index": 287,
+      "filename": "group_0287__html_q2097__09c1414f1b__frame_007570.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        2097
+      ]
+    },
+    {
+      "file_index": 288,
+      "filename": "group_0288__html_q2100__scene0025_01__324.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2100
+      ]
+    },
+    {
+      "file_index": 289,
+      "filename": "group_0289__html_q2103__40aec5fffa__frame_005220.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2103
+      ]
+    },
+    {
+      "file_index": 290,
+      "filename": "group_0290__html_q2106__27dd4da69e__frame_000300.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2106
+      ]
+    },
+    {
+      "file_index": 291,
+      "filename": "group_0291__html_q2109__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 12,
+      "viewer_indices": [
+        2109
+      ]
+    },
+    {
+      "file_index": 292,
+      "filename": "group_0292__html_q2111__27dd4da69e__frame_000030.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        2111
+      ]
+    },
+    {
+      "file_index": 293,
+      "filename": "group_0293__html_q2113__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2113
+      ]
+    },
+    {
+      "file_index": 294,
+      "filename": "group_0294__html_q2117__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2117
+      ]
+    },
+    {
+      "file_index": 295,
+      "filename": "group_0295__html_q2118__scene0025_01__324.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2118
+      ]
+    },
+    {
+      "file_index": 296,
+      "filename": "group_0296__html_q2128__09c1414f1b__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2128
+      ]
+    },
+    {
+      "file_index": 297,
+      "filename": "group_0297__html_q2129__09c1414f1b__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2129
+      ]
+    },
+    {
+      "file_index": 298,
+      "filename": "group_0298__html_q2131__scene0653_00__1101.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        2131
+      ]
+    },
+    {
+      "file_index": 299,
+      "filename": "group_0299__html_q2138__scene0435_02__1515.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2138
+      ]
+    },
+    {
+      "file_index": 300,
+      "filename": "group_0300__html_q2140__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        2140
+      ]
+    },
+    {
+      "file_index": 301,
+      "filename": "group_0301__html_q2142__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2142
+      ]
+    },
+    {
+      "file_index": 302,
+      "filename": "group_0302__html_q2145__f3d64c30f8__frame_002710.jpg.html",
+      "group_count": 1,
+      "candidate_count": 13,
+      "viewer_indices": [
+        2145
+      ]
+    },
+    {
+      "file_index": 303,
+      "filename": "group_0303__html_q2148__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2148
+      ]
+    },
+    {
+      "file_index": 304,
+      "filename": "group_0304__html_q2149__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2149
+      ]
+    },
+    {
+      "file_index": 305,
+      "filename": "group_0305__html_q2150__45b0dac5e3__frame_000780.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2150
+      ]
+    },
+    {
+      "file_index": 306,
+      "filename": "group_0306__html_q2153__27dd4da69e__frame_000060.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        2153
+      ]
+    },
+    {
+      "file_index": 307,
+      "filename": "group_0307__html_q2156__5942004064__frame_009170.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        2156
+      ]
+    },
+    {
+      "file_index": 308,
+      "filename": "group_0308__html_q2158__scene0653_00__1101.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        2158
+      ]
+    },
+    {
+      "file_index": 309,
+      "filename": "group_0309__html_q2159__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2159
+      ]
+    },
+    {
+      "file_index": 310,
+      "filename": "group_0310__html_q2162__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 12,
+      "viewer_indices": [
+        2162
+      ]
+    },
+    {
+      "file_index": 311,
+      "filename": "group_0311__html_q2165__5942004064__frame_009170.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        2165
+      ]
+    },
+    {
+      "file_index": 312,
+      "filename": "group_0312__html_q2166__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 21,
+      "viewer_indices": [
+        2166
+      ]
+    },
+    {
+      "file_index": 313,
+      "filename": "group_0313__html_q2168__09c1414f1b__frame_007570.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        2168
+      ]
+    },
+    {
+      "file_index": 314,
+      "filename": "group_0314__html_q2171__5942004064__frame_010440.jpg.html",
+      "group_count": 1,
+      "candidate_count": 18,
+      "viewer_indices": [
+        2171
+      ]
+    },
+    {
+      "file_index": 315,
+      "filename": "group_0315__html_q2173__09c1414f1b__frame_007570.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        2173
+      ]
+    },
+    {
+      "file_index": 316,
+      "filename": "group_0316__html_q2184__f3d64c30f8__frame_002710.jpg.html",
+      "group_count": 1,
+      "candidate_count": 15,
+      "viewer_indices": [
+        2184
+      ]
+    },
+    {
+      "file_index": 317,
+      "filename": "group_0317__html_q2185__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2185
+      ]
+    },
+    {
+      "file_index": 318,
+      "filename": "group_0318__html_q2204__0d2ee665be__frame_001510.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2204
+      ]
+    },
+    {
+      "file_index": 319,
+      "filename": "group_0319__html_q2211__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2211
+      ]
+    },
+    {
+      "file_index": 320,
+      "filename": "group_0320__html_q2216__scene0050_01__1167.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2216
+      ]
+    },
+    {
+      "file_index": 321,
+      "filename": "group_0321__html_q2218__scene0580_01__3757.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2218
+      ]
+    },
+    {
+      "file_index": 322,
+      "filename": "group_0322__html_q2222__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2222
+      ]
+    },
+    {
+      "file_index": 323,
+      "filename": "group_0323__html_q2226__c49a8c6cff__frame_003880.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2226
+      ]
+    },
+    {
+      "file_index": 324,
+      "filename": "group_0324__html_q2228__scene0046_02__1188.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2228
+      ]
+    },
+    {
+      "file_index": 325,
+      "filename": "group_0325__html_q2229__c49a8c6cff__frame_002890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        2229
+      ]
+    },
+    {
+      "file_index": 326,
+      "filename": "group_0326__html_q2232__d755b3d9d8__frame_008490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2232
+      ]
+    },
+    {
+      "file_index": 327,
+      "filename": "group_0327__html_q2234__ac48a9b736__frame_007660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2234
+      ]
+    },
+    {
+      "file_index": 328,
+      "filename": "group_0328__html_q2257__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2257
+      ]
+    },
+    {
+      "file_index": 329,
+      "filename": "group_0329__html_q2259__f3d64c30f8__frame_001050.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2259
+      ]
+    },
+    {
+      "file_index": 330,
+      "filename": "group_0330__html_q2272__0d2ee665be__frame_001200.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        2272
+      ]
+    },
+    {
+      "file_index": 331,
+      "filename": "group_0331__html_q2273__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2273
+      ]
+    },
+    {
+      "file_index": 332,
+      "filename": "group_0332__html_q2297__scene0435_02__1515.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2297
+      ]
+    },
+    {
+      "file_index": 333,
+      "filename": "group_0333__html_q2313__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2313
+      ]
+    },
+    {
+      "file_index": 334,
+      "filename": "group_0334__html_q2314__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2314
+      ]
+    },
+    {
+      "file_index": 335,
+      "filename": "group_0335__html_q2315__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2315
+      ]
+    },
+    {
+      "file_index": 336,
+      "filename": "group_0336__html_q2325__scene0658_00__75.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2325
+      ]
+    },
+    {
+      "file_index": 337,
+      "filename": "group_0337__html_q2336__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2336
+      ]
+    },
+    {
+      "file_index": 338,
+      "filename": "group_0338__html_q2338__scene0207_00__636.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2338
+      ]
+    },
+    {
+      "file_index": 339,
+      "filename": "group_0339__html_q2339__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2339
+      ]
+    },
+    {
+      "file_index": 340,
+      "filename": "group_0340__html_q2342__scene0046_02__1188.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        2342
+      ]
+    },
+    {
+      "file_index": 341,
+      "filename": "group_0341__html_q2351__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2351
+      ]
+    },
+    {
+      "file_index": 342,
+      "filename": "group_0342__html_q2366__scene0580_01__3769.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2366
+      ]
+    },
+    {
+      "file_index": 343,
+      "filename": "group_0343__html_q2379__scene0580_01__2647.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2379
+      ]
+    },
+    {
+      "file_index": 344,
+      "filename": "group_0344__html_q2412__0d2ee665be__frame_001510.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2412
+      ]
+    },
+    {
+      "file_index": 345,
+      "filename": "group_0345__html_q2413__5942004064__frame_000910.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2413
+      ]
+    },
+    {
+      "file_index": 346,
+      "filename": "group_0346__html_q2414__27dd4da69e__frame_005890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2414
+      ]
+    },
+    {
+      "file_index": 347,
+      "filename": "group_0347__html_q2416__27dd4da69e__frame_000540.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2416
+      ]
+    },
+    {
+      "file_index": 348,
+      "filename": "group_0348__html_q2417__5942004064__frame_010440.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2417
+      ]
+    },
+    {
+      "file_index": 349,
+      "filename": "group_0349__html_q2418__5942004064__frame_001990.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2418
+      ]
+    },
+    {
+      "file_index": 350,
+      "filename": "group_0350__html_q2421__27dd4da69e__frame_005890.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2421
+      ]
+    },
+    {
+      "file_index": 351,
+      "filename": "group_0351__html_q2424__5942004064__frame_001990.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2424
+      ]
+    },
+    {
+      "file_index": 352,
+      "filename": "group_0352__html_q2425__27dd4da69e__frame_000540.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2425
+      ]
+    },
+    {
+      "file_index": 353,
+      "filename": "group_0353__html_q2426__0d2ee665be__frame_001510.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2426
+      ]
+    },
+    {
+      "file_index": 354,
+      "filename": "group_0354__html_q2430__f3d64c30f8__frame_002710.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        2430
+      ]
+    },
+    {
+      "file_index": 355,
+      "filename": "group_0355__html_q2458__scene0149_00__381.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2458
+      ]
+    },
+    {
+      "file_index": 356,
+      "filename": "group_0356__html_q2483__27dd4da69e__frame_000330.jpg.html",
+      "group_count": 1,
+      "candidate_count": 13,
+      "viewer_indices": [
+        2483
+      ]
+    },
+    {
+      "file_index": 357,
+      "filename": "group_0357__html_q2533__c49a8c6cff__frame_000630.jpg.html",
+      "group_count": 1,
+      "candidate_count": 15,
+      "viewer_indices": [
+        2533
+      ]
+    },
+    {
+      "file_index": 358,
+      "filename": "group_0358__html_q2540__scene0064_00__741.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2540
+      ]
+    },
+    {
+      "file_index": 359,
+      "filename": "group_0359__html_q2652__ac48a9b736__frame_010070.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2652
+      ]
+    },
+    {
+      "file_index": 360,
+      "filename": "group_0360__html_q2690__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2690
+      ]
+    },
+    {
+      "file_index": 361,
+      "filename": "group_0361__html_q2694__0d2ee665be__frame_000990.jpg.html",
+      "group_count": 1,
+      "candidate_count": 17,
+      "viewer_indices": [
+        2694
+      ]
+    },
+    {
+      "file_index": 362,
+      "filename": "group_0362__html_q2712__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 22,
+      "viewer_indices": [
+        2712
+      ]
+    },
+    {
+      "file_index": 363,
+      "filename": "group_0363__html_q2756__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        2756
+      ]
+    },
+    {
+      "file_index": 364,
+      "filename": "group_0364__html_q2759__ac48a9b736__frame_010070.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2759
+      ]
+    },
+    {
+      "file_index": 365,
+      "filename": "group_0365__html_q2785__acd95847c5__frame_010530.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2785
+      ]
+    },
+    {
+      "file_index": 366,
+      "filename": "group_0366__html_q2803__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2803
+      ]
+    },
+    {
+      "file_index": 367,
+      "filename": "group_0367__html_q2846__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2846
+      ]
+    },
+    {
+      "file_index": 368,
+      "filename": "group_0368__html_q2853__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2853
+      ]
+    },
+    {
+      "file_index": 369,
+      "filename": "group_0369__html_q2859__c49a8c6cff__frame_000840.jpg.html",
+      "group_count": 1,
+      "candidate_count": 44,
+      "viewer_indices": [
+        2859
+      ]
+    },
+    {
+      "file_index": 370,
+      "filename": "group_0370__html_q2867__c49a8c6cff__frame_000600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 14,
+      "viewer_indices": [
+        2867
+      ]
+    },
+    {
+      "file_index": 371,
+      "filename": "group_0371__html_q2873__c49a8c6cff__frame_004450.jpg.html",
+      "group_count": 1,
+      "candidate_count": 3,
+      "viewer_indices": [
+        2873
+      ]
+    },
+    {
+      "file_index": 372,
+      "filename": "group_0372__html_q2890__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        2890
+      ]
+    },
+    {
+      "file_index": 373,
+      "filename": "group_0373__html_q2893__09c1414f1b__frame_007570.jpg.html",
+      "group_count": 1,
+      "candidate_count": 18,
+      "viewer_indices": [
+        2893
+      ]
+    },
+    {
+      "file_index": 374,
+      "filename": "group_0374__html_q2898__c49a8c6cff__frame_000840.jpg.html",
+      "group_count": 1,
+      "candidate_count": 44,
+      "viewer_indices": [
+        2898
+      ]
+    },
+    {
+      "file_index": 375,
+      "filename": "group_0375__html_q2911__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        2911
+      ]
+    },
+    {
+      "file_index": 376,
+      "filename": "group_0376__html_q2912__c49a8c6cff__frame_000660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        2912
+      ]
+    },
+    {
+      "file_index": 377,
+      "filename": "group_0377__html_q2915__c49a8c6cff__frame_000630.jpg.html",
+      "group_count": 1,
+      "candidate_count": 15,
+      "viewer_indices": [
+        2915
+      ]
+    },
+    {
+      "file_index": 378,
+      "filename": "group_0378__html_q2918__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 7,
+      "viewer_indices": [
+        2918
+      ]
+    },
+    {
+      "file_index": 379,
+      "filename": "group_0379__html_q2929__09c1414f1b__frame_007570.jpg.html",
+      "group_count": 1,
+      "candidate_count": 19,
+      "viewer_indices": [
+        2929
+      ]
+    },
+    {
+      "file_index": 380,
+      "filename": "group_0380__html_q2956__d755b3d9d8__frame_003660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2956
+      ]
+    },
+    {
+      "file_index": 381,
+      "filename": "group_0381__html_q2957__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        2957
+      ]
+    },
+    {
+      "file_index": 382,
+      "filename": "group_0382__html_q2966__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 46,
+      "viewer_indices": [
+        2966
+      ]
+    },
+    {
+      "file_index": 383,
+      "filename": "group_0383__html_q2983__a8bf42d646__frame_005360.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        2983
+      ]
+    },
+    {
+      "file_index": 384,
+      "filename": "group_0384__html_q2987__d755b3d9d8__frame_003530.jpg.html",
+      "group_count": 1,
+      "candidate_count": 72,
+      "viewer_indices": [
+        2987
+      ]
+    },
+    {
+      "file_index": 385,
+      "filename": "group_0385__html_q2994__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        2994
+      ]
+    },
+    {
+      "file_index": 386,
+      "filename": "group_0386__html_q3000__c5439f4607__frame_005290.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3000
+      ]
+    },
+    {
+      "file_index": 387,
+      "filename": "group_0387__html_q3001__acd95847c5__frame_010650.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3001
+      ]
+    },
+    {
+      "file_index": 388,
+      "filename": "group_0388__html_q3004__3864514494__frame_001110.jpg.html",
+      "group_count": 1,
+      "candidate_count": 140,
+      "viewer_indices": [
+        3004
+      ]
+    },
+    {
+      "file_index": 389,
+      "filename": "group_0389__html_q3006__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3006
+      ]
+    },
+    {
+      "file_index": 390,
+      "filename": "group_0390__html_q3007__ac48a9b736__frame_010070.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3007
+      ]
+    },
+    {
+      "file_index": 391,
+      "filename": "group_0391__html_q3014__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3014
+      ]
+    },
+    {
+      "file_index": 392,
+      "filename": "group_0392__html_q3015__3db0a1c8f3__frame_007090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        3015
+      ]
+    },
+    {
+      "file_index": 393,
+      "filename": "group_0393__html_q3016__d755b3d9d8__frame_003600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 11,
+      "viewer_indices": [
+        3016
+      ]
+    },
+    {
+      "file_index": 394,
+      "filename": "group_0394__html_q3022__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3022
+      ]
+    },
+    {
+      "file_index": 395,
+      "filename": "group_0395__html_q3028__0d2ee665be__frame_001510.jpg.html",
+      "group_count": 1,
+      "candidate_count": 40,
+      "viewer_indices": [
+        3028
+      ]
+    },
+    {
+      "file_index": 396,
+      "filename": "group_0396__html_q3036__acd95847c5__frame_010530.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        3036
+      ]
+    },
+    {
+      "file_index": 397,
+      "filename": "group_0397__html_q3037__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3037
+      ]
+    },
+    {
+      "file_index": 398,
+      "filename": "group_0398__html_q3038__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        3038
+      ]
+    },
+    {
+      "file_index": 399,
+      "filename": "group_0399__html_q3051__ac48a9b736__frame_010070.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3051
+      ]
+    },
+    {
+      "file_index": 400,
+      "filename": "group_0400__html_q3052__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 46,
+      "viewer_indices": [
+        3052
+      ]
+    },
+    {
+      "file_index": 401,
+      "filename": "group_0401__html_q3058__acd95847c5__frame_010650.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3058
+      ]
+    },
+    {
+      "file_index": 402,
+      "filename": "group_0402__html_q3060__d755b3d9d8__frame_003230.jpg.html",
+      "group_count": 1,
+      "candidate_count": 13,
+      "viewer_indices": [
+        3060
+      ]
+    },
+    {
+      "file_index": 403,
+      "filename": "group_0403__html_q3067__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        3067
+      ]
+    },
+    {
+      "file_index": 404,
+      "filename": "group_0404__html_q3071__scene0025_02__1020.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3071
+      ]
+    },
+    {
+      "file_index": 405,
+      "filename": "group_0405__html_q3079__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 6,
+      "viewer_indices": [
+        3079
+      ]
+    },
+    {
+      "file_index": 406,
+      "filename": "group_0406__html_q3090__d755b3d9d8__frame_003230.jpg.html",
+      "group_count": 1,
+      "candidate_count": 13,
+      "viewer_indices": [
+        3090
+      ]
+    },
+    {
+      "file_index": 407,
+      "filename": "group_0407__html_q3100__c5439f4607__frame_005290.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3100
+      ]
+    },
+    {
+      "file_index": 408,
+      "filename": "group_0408__html_q3116__d755b3d9d8__frame_003660.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3116
+      ]
+    },
+    {
+      "file_index": 409,
+      "filename": "group_0409__html_q3117__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 160,
+      "viewer_indices": [
+        3117
+      ]
+    },
+    {
+      "file_index": 410,
+      "filename": "group_0410__html_q3131__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 44,
+      "viewer_indices": [
+        3131
+      ]
+    },
+    {
+      "file_index": 411,
+      "filename": "group_0411__html_q3141__c49a8c6cff__frame_000840.jpg.html",
+      "group_count": 1,
+      "candidate_count": 508,
+      "viewer_indices": [
+        3141
+      ]
+    },
+    {
+      "file_index": 412,
+      "filename": "group_0412__html_q3143__c49a8c6cff__frame_000840.jpg.html",
+      "group_count": 1,
+      "candidate_count": 508,
+      "viewer_indices": [
+        3143
+      ]
+    },
+    {
+      "file_index": 413,
+      "filename": "group_0413__html_q3149__c49a8c6cff__frame_000630.jpg.html",
+      "group_count": 1,
+      "candidate_count": 110,
+      "viewer_indices": [
+        3149
+      ]
+    },
+    {
+      "file_index": 414,
+      "filename": "group_0414__html_q3152__09c1414f1b__frame_007480.jpg.html",
+      "group_count": 1,
+      "candidate_count": 44,
+      "viewer_indices": [
+        3152
+      ]
+    },
+    {
+      "file_index": 415,
+      "filename": "group_0415__html_q3153__27dd4da69e__frame_000030.jpg.html",
+      "group_count": 1,
+      "candidate_count": 136,
+      "viewer_indices": [
+        3153
+      ]
+    },
+    {
+      "file_index": 416,
+      "filename": "group_0416__html_q3163__c49a8c6cff__frame_000840.jpg.html",
+      "group_count": 1,
+      "candidate_count": 508,
+      "viewer_indices": [
+        3163
+      ]
+    },
+    {
+      "file_index": 417,
+      "filename": "group_0417__html_q3165__27dd4da69e__frame_000030.jpg.html",
+      "group_count": 1,
+      "candidate_count": 136,
+      "viewer_indices": [
+        3165
+      ]
+    },
+    {
+      "file_index": 418,
+      "filename": "group_0418__html_q3186__09c1414f1b__frame_009490.jpg.html",
+      "group_count": 1,
+      "candidate_count": 219,
+      "viewer_indices": [
+        3186
+      ]
+    },
+    {
+      "file_index": 419,
+      "filename": "group_0419__html_q3188__3db0a1c8f3__frame_009830.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        3188
+      ]
+    },
+    {
+      "file_index": 420,
+      "filename": "group_0420__html_q3194__3db0a1c8f3__frame_009830.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        3194
+      ]
+    },
+    {
+      "file_index": 421,
+      "filename": "group_0421__html_q3210__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        3210
+      ]
+    },
+    {
+      "file_index": 422,
+      "filename": "group_0422__html_q3214__578511c8a9__frame_007320.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3214
+      ]
+    },
+    {
+      "file_index": 423,
+      "filename": "group_0423__html_q3221__d755b3d9d8__frame_003600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3221
+      ]
+    },
+    {
+      "file_index": 424,
+      "filename": "group_0424__html_q3224__27dd4da69e__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 10,
+      "viewer_indices": [
+        3224
+      ]
+    },
+    {
+      "file_index": 425,
+      "filename": "group_0425__html_q3249__0d2ee665be__frame_001200.jpg.html",
+      "group_count": 1,
+      "candidate_count": 9,
+      "viewer_indices": [
+        3249
+      ]
+    },
+    {
+      "file_index": 426,
+      "filename": "group_0426__html_q3275__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3275
+      ]
+    },
+    {
+      "file_index": 427,
+      "filename": "group_0427__html_q3294__scene0207_01__1632.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3294
+      ]
+    },
+    {
+      "file_index": 428,
+      "filename": "group_0428__html_q3300__bcd2436daf__frame_000090.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3300
+      ]
+    },
+    {
+      "file_index": 429,
+      "filename": "group_0429__html_q3401__bcd2436daf__frame_004560.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3401
+      ]
+    },
+    {
+      "file_index": 430,
+      "filename": "group_0430__html_q3404__d755b3d9d8__frame_003600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 4,
+      "viewer_indices": [
+        3404
+      ]
+    },
+    {
+      "file_index": 431,
+      "filename": "group_0431__html_q3441__scene0025_01__249.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3441
+      ]
+    },
+    {
+      "file_index": 432,
+      "filename": "group_0432__html_q3504__scene0025_02__993.jpg.html",
+      "group_count": 1,
+      "candidate_count": 2,
+      "viewer_indices": [
+        3504
+      ]
+    },
+    {
+      "file_index": 433,
+      "filename": "group_0433__html_q3536__c49a8c6cff__frame_000600.jpg.html",
+      "group_count": 1,
+      "candidate_count": 5,
+      "viewer_indices": [
+        3536
+      ]
+    },
+    {
+      "file_index": 434,
+      "filename": "group_0434__html_q3550__3db0a1c8f3__frame_007000.jpg.html",
+      "group_count": 1,
+      "candidate_count": 8,
+      "viewer_indices": [
+        3550
+      ]
+    }
+  ]
+}

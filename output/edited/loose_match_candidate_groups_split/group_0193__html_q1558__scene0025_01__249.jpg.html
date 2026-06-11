@@ -1,0 +1,301 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Loose Match Candidate Groups</title>
+<style>
+body{font-family:Arial,sans-serif;margin:24px;background:#f6f7f9;color:#17202a}
+.summary{background:white;border:1px solid #d7dde5;border-radius:8px;padding:14px;margin-bottom:18px}
+.group{background:white;border:1px solid #cfd7e3;border-radius:8px;margin:18px 0;padding:14px}
+.html-card{border-left:4px solid #2f6fed;background:#f8fbff;padding:12px;margin-bottom:12px}
+.candidate{border:1px solid #d8dee8;border-radius:6px;padding:12px;margin:10px 0;background:#fff}
+.meta{color:#536171;font-size:13px;margin:4px 0 8px}
+.q{font-size:15px;line-height:1.45;margin:8px 0}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:4px 16px;margin:8px 0}
+.answer{font-weight:700;color:#1b5e20;margin:6px 0}
+.reasons{margin:6px 0}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;margin:2px;background:#e9edf5;font-size:12px}
+.relation{background:#e5f4ea}.exact{background:#e7f0ff}.overlap{background:#fff1d6}
+table.fields{border-collapse:collapse;margin-top:8px;font-size:12px}
+.fields th,.fields td{border:1px solid #dbe1ea;padding:4px 6px;text-align:left;vertical-align:top}
+.fields th{background:#f0f3f7;color:#3a4654}
+.muted{color:#7a8797;font-size:13px}
+</style></head><body>
+<h1>Loose Match Candidate Groups</h1>
+<div class="summary">
+<div><b>Source HTML:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\edited\merged_1-3593.html</div>
+<div><b>Benchmark:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\benchmark.json</div>
+<div><b>Loose cards:</b> 574</div>
+<div><b>Groups exported:</b> 1</div>
+<div><b>Candidate questions shown:</b> 14</div>
+</div>
+<section class="group" id="q1558">
+<h2>Group 1: HTML #1558 (14 candidates)</h2>
+<div class="html-card">
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the trophy and the cabinet, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> very close (&lt;1.0m)</div>
+<div><b>B.</b> moderate (2.0-3.3m)</div>
+<div><b>C.</b> close (1.0-2.0m)</div>
+<div><b>D.</b> far (&gt;3.3m)</div></div>
+<div class="answer">HTML answer: D: far (&gt;3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>table</td></tr>
+<tr><th>obj_b</th><td>trophy</td></tr>
+<tr><th>obj_c</th><td>cabinet</td></tr>
+<tr><th>old_distance_bin</th><td>close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>far (&gt;3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>1.39</td></tr>
+<tr><th>new_distance_m</th><td>3.6824666172248635</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 1</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag exact">object_exact:obj_c</span><span class="tag relation">relation_exact:new_distance_bin</span><span class="tag relation">relation_exact:new_distance_m</span><span class="tag relation">relation_exact:old_distance_bin</span><span class="tag relation">relation_exact:old_distance_m</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the blue book on the table and the cabinet, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> very close (&lt;1.0m)</div>
+<div><b>B.</b> moderate (2.0-3.3m)</div>
+<div><b>C.</b> close (1.0-2.0m)</div>
+<div><b>D.</b> far (&gt;3.3m)</div></div>
+<div class="answer">Benchmark answer: D: far (&gt;3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=blue book on the table; query_obj_label=blue book on the table</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=cabinet</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=far (&gt;3.3m); correct_value=far (&gt;3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.39</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=3.6824666172248635</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 2</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag relation">relation_exact:new_distance_bin</span><span class="tag relation">relation_exact:old_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the blue book on the table and the shelves, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> far (&gt;3.3m)</div>
+<div><b>B.</b> moderate (2.0-3.3m)</div>
+<div><b>C.</b> close (1.0-2.0m)</div>
+<div><b>D.</b> very close (&lt;1.0m)</div></div>
+<div class="answer">Benchmark answer: A: far (&gt;3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=blue book on the table; query_obj_label=blue book on the table</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=shelves</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=far (&gt;3.3m); correct_value=far (&gt;3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.56</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=3.8483125160186313</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 3</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_distance_bin</span><span class="tag relation">relation_exact:old_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, if the keyboard is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the keyboard and the shelves, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> far (&gt;3.3m)</div>
+<div><b>B.</b> moderate (2.0-3.3m)</div>
+<div><b>C.</b> very close (&lt;1.0m)</div>
+<div><b>D.</b> close (1.0-2.0m)</div></div>
+<div class="answer">Benchmark answer: A: far (&gt;3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=keyboard</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=keyboard; query_obj_label=keyboard</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=shelves</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=far (&gt;3.3m); correct_value=far (&gt;3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.81</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=4.275744314818686</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 4</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:obj_c</span><span class="tag relation">relation_exact:old_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, if the shelves is moved backward (toward the camera) by 2.5m, what is the approximate shortest distance between the shelves and the cabinet, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> moderate (2.0-3.3m)</div>
+<div><b>B.</b> far (&gt;3.3m)</div>
+<div><b>C.</b> very close (&lt;1.0m)</div>
+<div><b>D.</b> close (1.0-2.0m)</div></div>
+<div class="answer">Benchmark answer: A: moderate (2.0-3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=shelves</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=shelves; query_obj_label=shelves</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=cabinet</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=moderate (2.0-3.3m); correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.8</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=2.8582447576671854</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 5</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:obj_c</span><span class="tag relation">relation_exact:new_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, if the keyboard is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the keyboard and the cabinet, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> very close (&lt;1.0m)</div>
+<div><b>B.</b> close (1.0-2.0m)</div>
+<div><b>C.</b> moderate (2.0-3.3m)</div>
+<div><b>D.</b> far (&gt;3.3m)</div></div>
+<div class="answer">Benchmark answer: D: far (&gt;3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=keyboard</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=keyboard; query_obj_label=keyboard</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=cabinet</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=far (&gt;3.3m); correct_value=far (&gt;3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=0.94</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=3.8169979467977053</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 6</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag relation">relation_exact:old_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the desk backward (toward the camera) by 0.5m. After this change, what is the approximate shortest distance between the keyboard and the shelves, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> very close (&lt;1.0m)</div>
+<div><b>B.</b> far (&gt;3.3m)</div>
+<div><b>C.</b> moderate (2.0-3.3m)</div>
+<div><b>D.</b> close (1.0-2.0m)</div></div>
+<div class="answer">Benchmark answer: C: moderate (2.0-3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=desk</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=keyboard; query_obj_label=keyboard</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=shelves</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=moderate (2.0-3.3m); correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.81</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=2.13877231447202</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 7</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag relation">relation_exact:old_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the cabinet backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the cabinet and the shelves, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> close (1.0-2.0m)</div>
+<div><b>B.</b> very close (&lt;1.0m)</div>
+<div><b>C.</b> moderate (2.0-3.3m)</div>
+<div><b>D.</b> far (&gt;3.3m)</div></div>
+<div class="answer">Benchmark answer: C: moderate (2.0-3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=cabinet</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=cabinet; query_obj_label=cabinet</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=shelves</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=moderate (2.0-3.3m); correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.8</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=3.0911288146326776</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 8</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag relation">relation_exact:old_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the cabinet backward (toward the camera) by 0.5m. After this change, what is the approximate shortest distance between the book on top of the cabinet near the window and the keyboard, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> close (1.0-2.0m)</div>
+<div><b>B.</b> very close (&lt;1.0m)</div>
+<div><b>C.</b> far (&gt;3.3m)</div>
+<div><b>D.</b> moderate (2.0-3.3m)</div></div>
+<div class="answer">Benchmark answer: B: very close (&lt;1.0m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=cabinet</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=book on top of the cabinet near the window; query_obj_label=book on top of the cabinet near the window</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=keyboard</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=very close (&lt;1.0m); correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=1.25</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=0.8922418087644483</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 9</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_distance_bin</span></div>
+<div class="q">From the camera&#x27;s perspective, if the cabinet is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the book on top of the cabinet near the window and the shelves, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> moderate (2.0-3.3m)</div>
+<div><b>B.</b> far (&gt;3.3m)</div>
+<div><b>C.</b> close (1.0-2.0m)</div>
+<div><b>D.</b> very close (&lt;1.0m)</div></div>
+<div class="answer">Benchmark answer: B: far (&gt;3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=cabinet</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=book on top of the cabinet near the window; query_obj_label=book on top of the cabinet near the window</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=shelves</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=far (&gt;3.3m); correct_value=far (&gt;3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=2.34</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=3.599501447609772</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 10</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag exact">object_exact:obj_c</span></div>
+<div class="q">From the camera&#x27;s perspective, if the table is moved backward (toward the camera) by 2.5m, what is the approximate shortest distance between the table and the cabinet, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> moderate (2.0-3.3m)</div>
+<div><b>B.</b> far (&gt;3.3m)</div>
+<div><b>C.</b> close (1.0-2.0m)</div>
+<div><b>D.</b> very close (&lt;1.0m)</div></div>
+<div class="answer">Benchmark answer: A: moderate (2.0-3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=table; query_obj_label=table</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=cabinet</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=moderate (2.0-3.3m); correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=0.85</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=2.595764193156599</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 11</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the table and the shelves, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> far (&gt;3.3m)</div>
+<div><b>B.</b> close (1.0-2.0m)</div>
+<div><b>C.</b> moderate (2.0-3.3m)</div>
+<div><b>D.</b> very close (&lt;1.0m)</div></div>
+<div class="answer">Benchmark answer: C: moderate (2.0-3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=table; query_obj_label=table</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=shelves</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=moderate (2.0-3.3m); correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=0.0</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=2.3729160626343617</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 12</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the table and the keyboard, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> very close (&lt;1.0m)</div>
+<div><b>B.</b> moderate (2.0-3.3m)</div>
+<div><b>C.</b> close (1.0-2.0m)</div>
+<div><b>D.</b> far (&gt;3.3m)</div></div>
+<div class="answer">Benchmark answer: C: close (1.0-2.0m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=table; query_obj_label=table</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=keyboard</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=close (1.0-2.0m); correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=0.21</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=1.2248600506679177</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 13</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the blue book on the table and the keyboard, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> close (1.0-2.0m)</div>
+<div><b>B.</b> moderate (2.0-3.3m)</div>
+<div><b>C.</b> very close (&lt;1.0m)</div>
+<div><b>D.</b> far (&gt;3.3m)</div></div>
+<div class="answer">Benchmark answer: B: moderate (2.0-3.3m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=blue book on the table; query_obj_label=blue book on the table</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=keyboard</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=moderate (2.0-3.3m); correct_value=moderate (2.0-3.3m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=0.24</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=2.268804319399674</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 14</h3>
+<div class="meta">scene0025_01 / 249.jpg | L2_object_move_distance</div>
+<div class="reasons"><span class="tag exact">object_exact:obj_c</span></div>
+<div class="q">From the camera&#x27;s perspective, imagine moving the desk backward (toward the camera) by 0.5m. After this change, what is the approximate shortest distance between the keyboard and the cabinet, measured from their closest points?</div>
+<div class="opts"><div><b>A.</b> moderate (2.0-3.3m)</div>
+<div><b>B.</b> close (1.0-2.0m)</div>
+<div><b>C.</b> far (&gt;3.3m)</div>
+<div><b>D.</b> very close (&lt;1.0m)</div></div>
+<div class="answer">Benchmark answer: B: close (1.0-2.0m)</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=desk</td></tr>
+<tr><th>obj_b</th><td>obj_b_label=keyboard; query_obj_label=keyboard</td></tr>
+<tr><th>obj_c</th><td>obj_c_label=cabinet</td></tr>
+<tr><th>old_distance_bin</th><td>old_correct_value=very close (&lt;1.0m)</td></tr>
+<tr><th>new_distance_bin</th><td>new_correct_value=close (1.0-2.0m); correct_value=close (1.0-2.0m)</td></tr>
+<tr><th>old_distance_m</th><td>old_distance_m=0.94</td></tr>
+<tr><th>new_distance_m</th><td>new_distance_m=1.3940928178248517</td></tr></table>
+</div>
+</section>
+</body></html>
