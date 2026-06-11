@@ -1,0 +1,196 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Loose Match Candidate Groups</title>
+<style>
+body{font-family:Arial,sans-serif;margin:24px;background:#f6f7f9;color:#17202a}
+.summary{background:white;border:1px solid #d7dde5;border-radius:8px;padding:14px;margin-bottom:18px}
+.group{background:white;border:1px solid #cfd7e3;border-radius:8px;margin:18px 0;padding:14px}
+.html-card{border-left:4px solid #2f6fed;background:#f8fbff;padding:12px;margin-bottom:12px}
+.candidate{border:1px solid #d8dee8;border-radius:6px;padding:12px;margin:10px 0;background:#fff}
+.meta{color:#536171;font-size:13px;margin:4px 0 8px}
+.q{font-size:15px;line-height:1.45;margin:8px 0}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:4px 16px;margin:8px 0}
+.answer{font-weight:700;color:#1b5e20;margin:6px 0}
+.reasons{margin:6px 0}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;margin:2px;background:#e9edf5;font-size:12px}
+.relation{background:#e5f4ea}.exact{background:#e7f0ff}.overlap{background:#fff1d6}
+table.fields{border-collapse:collapse;margin-top:8px;font-size:12px}
+.fields th,.fields td{border:1px solid #dbe1ea;padding:4px 6px;text-align:left;vertical-align:top}
+.fields th{background:#f0f3f7;color:#3a4654}
+.muted{color:#7a8797;font-size:13px}
+</style></head><body>
+<h1>Loose Match Candidate Groups</h1>
+<div class="summary">
+<div><b>Source HTML:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\edited\merged_1-3593.html</div>
+<div><b>Benchmark:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\benchmark.json</div>
+<div><b>Loose cards:</b> 574</div>
+<div><b>Groups exported:</b> 1</div>
+<div><b>Candidate questions shown:</b> 10</div>
+</div>
+<section class="group" id="q967">
+<h2>Group 1: HTML #967 (10 candidates)</h2>
+<div class="html-card">
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="q">In this image the camera faces east. Viewed from above on the room&#x27;s layout, the sink is in which cardinal direction relative to the cereal box on the oven? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> southwest</div>
+<div><b>B.</b> northwest</div>
+<div><b>C.</b> northeast</div>
+<div><b>D.</b> southeast</div></div>
+<div class="answer">HTML answer: B: northwest</div>
+<table class="fields"><tr><th>query</th><td>sink</td></tr>
+<tr><th>reference</th><td>cereal box on the oven</td></tr>
+<tr><th>camera</th><td>east</td></tr>
+<tr><th>direction</th><td>northwest</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 1</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag overlap">object_overlap:reference</span><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">In this image the camera faces east. Viewed from above on the room&#x27;s layout, the sink is in which cardinal direction relative to the cereal box? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> southwest</div>
+<div><b>B.</b> northwest</div>
+<div><b>C.</b> northeast</div>
+<div><b>D.</b> southeast</div></div>
+<div class="answer">Benchmark answer: B: northwest</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=sink</td></tr>
+<tr><th>reference</th><td>obj_b_label=cereal box</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=northwest</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 2</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:reference</span><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">In this image the camera faces east. Viewed from above on the room&#x27;s layout, the wok pan is in which cardinal direction relative to the cereal box? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> northwest</div>
+<div><b>B.</b> northeast</div>
+<div><b>C.</b> south</div>
+<div><b>D.</b> west</div></div>
+<div class="answer">Benchmark answer: C: south</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_b_label=cereal box</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=south</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 3</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:reference</span><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">In this image the camera faces east. Viewed from above on the room&#x27;s layout, the dishwashing sponge is in which cardinal direction relative to the cereal box? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> north</div>
+<div><b>B.</b> south</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> west</div></div>
+<div class="answer">Benchmark answer: A: north</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_b_label=cereal box</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=north</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 4</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">The camera is facing east in this scene. On the room&#x27;s floor plan, in which cardinal direction is the wok pan from the faucet? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> northwest</div>
+<div><b>B.</b> northeast</div>
+<div><b>C.</b> south</div>
+<div><b>D.</b> east</div></div>
+<div class="answer">Benchmark answer: C: south</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_b_label=faucet</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=south</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 5</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">The camera is facing east in this scene. On the room&#x27;s floor plan, in which cardinal direction is the wok pan from the dishwashing sponge? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> west</div>
+<div><b>B.</b> northeast</div>
+<div><b>C.</b> south</div>
+<div><b>D.</b> east</div></div>
+<div class="answer">Benchmark answer: C: south</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_b_label=dishwashing sponge</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=south</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 6</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">The camera is facing east in this scene. On the room&#x27;s floor plan, in which cardinal direction is the dishwashing sponge from the pot cover? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> southeast</div>
+<div><b>B.</b> southwest</div>
+<div><b>C.</b> northwest</div>
+<div><b>D.</b> west</div></div>
+<div class="answer">Benchmark answer: A: southeast</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_b_label=pot cover</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=southeast</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 7</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">The camera is facing east in this scene. On the room&#x27;s floor plan, in which cardinal direction is the dishwashing sponge from the faucet? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> southeast</div>
+<div><b>B.</b> northwest</div>
+<div><b>C.</b> west</div>
+<div><b>D.</b> southwest</div></div>
+<div class="answer">Benchmark answer: A: southeast</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_b_label=faucet</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=southeast</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 8</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">The camera is facing east in this scene. On the room&#x27;s floor plan, in which cardinal direction is the dishwashing sponge from the dish drying rack? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> southwest</div>
+<div><b>B.</b> northwest</div>
+<div><b>C.</b> southeast</div>
+<div><b>D.</b> northeast</div></div>
+<div class="answer">Benchmark answer: C: southeast</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_b_label=dish drying rack</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=southeast</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 9</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">The camera is facing east in this scene. On the room&#x27;s floor plan, in which cardinal direction is the cutting board from the pot cover? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> north</div>
+<div><b>B.</b> southeast</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> west</div></div>
+<div class="answer">Benchmark answer: A: north</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_b_label=pot cover</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=north</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 10</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span></div>
+<div class="q">In this image the camera faces east. Viewed from above on the room&#x27;s layout, the cereal box is in which cardinal direction relative to the pot cover? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> west</div>
+<div><b>B.</b> north</div>
+<div><b>C.</b> southeast</div>
+<div><b>D.</b> northwest</div></div>
+<div class="answer">Benchmark answer: C: southeast</div>
+<table class="fields"><tr><th>query</th><td>obj_a_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_b_label=pot cover</td></tr>
+<tr><th>camera</th><td>camera_cardinal=east</td></tr>
+<tr><th>direction</th><td>correct_value=southeast</td></tr></table>
+</div>
+</section>
+</body></html>

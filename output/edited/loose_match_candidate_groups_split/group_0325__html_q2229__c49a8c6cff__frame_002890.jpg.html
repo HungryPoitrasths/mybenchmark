@@ -1,0 +1,218 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Loose Match Candidate Groups</title>
+<style>
+body{font-family:Arial,sans-serif;margin:24px;background:#f6f7f9;color:#17202a}
+.summary{background:white;border:1px solid #d7dde5;border-radius:8px;padding:14px;margin-bottom:18px}
+.group{background:white;border:1px solid #cfd7e3;border-radius:8px;margin:18px 0;padding:14px}
+.html-card{border-left:4px solid #2f6fed;background:#f8fbff;padding:12px;margin-bottom:12px}
+.candidate{border:1px solid #d8dee8;border-radius:6px;padding:12px;margin:10px 0;background:#fff}
+.meta{color:#536171;font-size:13px;margin:4px 0 8px}
+.q{font-size:15px;line-height:1.45;margin:8px 0}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:4px 16px;margin:8px 0}
+.answer{font-weight:700;color:#1b5e20;margin:6px 0}
+.reasons{margin:6px 0}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;margin:2px;background:#e9edf5;font-size:12px}
+.relation{background:#e5f4ea}.exact{background:#e7f0ff}.overlap{background:#fff1d6}
+table.fields{border-collapse:collapse;margin-top:8px;font-size:12px}
+.fields th,.fields td{border:1px solid #dbe1ea;padding:4px 6px;text-align:left;vertical-align:top}
+.fields th{background:#f0f3f7;color:#3a4654}
+.muted{color:#7a8797;font-size:13px}
+</style></head><body>
+<h1>Loose Match Candidate Groups</h1>
+<div class="summary">
+<div><b>Source HTML:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\edited\merged_1-3593.html</div>
+<div><b>Benchmark:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\benchmark.json</div>
+<div><b>Loose cards:</b> 574</div>
+<div><b>Groups exported:</b> 1</div>
+<div><b>Candidate questions shown:</b> 10</div>
+</div>
+<section class="group" id="q2229">
+<h2>Group 1: HTML #2229 (10 candidates)</h2>
+<div class="html-card">
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="q">After moving the table 2.5m to the east, on the room&#x27;s layout (camera facing west), in which cardinal direction is the computer tower from the headphones? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> northwest</div>
+<div><b>B.</b> southeast</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> south</div></div>
+<div class="answer">HTML answer: C: east</div>
+<table class="fields"><tr><th>moved</th><td>table</td></tr>
+<tr><th>query</th><td>computer tower</td></tr>
+<tr><th>reference</th><td>headphones</td></tr>
+<tr><th>camera</th><td>west</td></tr>
+<tr><th>old_direction</th><td>north</td></tr>
+<tr><th>new_direction</th><td>east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 1</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span></div>
+<div class="q">After moving the table 2.5m to the east, on the room&#x27;s layout (camera facing west), in which cardinal direction is the pc from the headphones? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> northwest</div>
+<div><b>B.</b> southeast</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> south</div></div>
+<div class="answer">Benchmark answer: C: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>query</th><td>query_obj_label=pc</td></tr>
+<tr><th>reference</th><td>obj_ref_label=headphones</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=north</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 2</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span></div>
+<div class="q">After moving the table 2.5m to the east, on the room&#x27;s layout (camera facing west), in which cardinal direction is the pc from the power socket? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> southwest</div>
+<div><b>B.</b> west</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> northeast</div></div>
+<div class="answer">Benchmark answer: C: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>query</th><td>query_obj_label=pc</td></tr>
+<tr><th>reference</th><td>obj_ref_label=power socket</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=north</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 3</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span></div>
+<div class="q">After moving the table 2.5m to the east, on the room&#x27;s layout (camera facing west), in which cardinal direction is the pc from the headphone holder? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> east</div>
+<div><b>B.</b> north</div>
+<div><b>C.</b> west</div>
+<div><b>D.</b> south</div></div>
+<div class="answer">Benchmark answer: A: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>query</th><td>query_obj_label=pc</td></tr>
+<tr><th>reference</th><td>obj_ref_label=headphone holder</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=north</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 4</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span></div>
+<div class="q">After moving the headphones 3.0m to the east, on the room&#x27;s layout (camera facing west), in which cardinal direction is the headphone holder from the power socket? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> south</div>
+<div><b>B.</b> northeast</div>
+<div><b>C.</b> west</div>
+<div><b>D.</b> east</div></div>
+<div class="answer">Benchmark answer: D: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=headphones</td></tr>
+<tr><th>query</th><td>query_obj_label=headphone holder</td></tr>
+<tr><th>reference</th><td>obj_ref_label=power socket</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=north</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 5</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span></div>
+<div class="q">If the table is moved 2.5m to the east, the camera faces west. On the floor plan, in which cardinal direction would the pc be from the notebook? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> north</div>
+<div><b>B.</b> west</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> south</div></div>
+<div class="answer">Benchmark answer: C: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>query</th><td>query_obj_label=pc</td></tr>
+<tr><th>reference</th><td>obj_ref_label=notebook</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=northwest</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 6</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span></div>
+<div class="q">If the table is moved 2.5m to the east, the camera faces west. On the floor plan, in which cardinal direction would the pc be from the keyboard? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> northwest</div>
+<div><b>B.</b> east</div>
+<div><b>C.</b> southwest</div>
+<div><b>D.</b> northeast</div></div>
+<div class="answer">Benchmark answer: B: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=table</td></tr>
+<tr><th>query</th><td>query_obj_label=pc</td></tr>
+<tr><th>reference</th><td>obj_ref_label=keyboard</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=west</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 7</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span></div>
+<div class="q">If the headphones is moved 3.0m to the east, the camera faces west. On the floor plan, in which cardinal direction would the headphone holder be from the table? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> east</div>
+<div><b>B.</b> southwest</div>
+<div><b>C.</b> southeast</div>
+<div><b>D.</b> northwest</div></div>
+<div class="answer">Benchmark answer: A: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=headphones</td></tr>
+<tr><th>query</th><td>query_obj_label=headphone holder</td></tr>
+<tr><th>reference</th><td>obj_ref_label=table</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=above</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 8</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span></div>
+<div class="q">If the headphones is moved 3.0m to the east, the camera faces west. On the floor plan, in which cardinal direction would the headphone holder be from the notebook? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> east</div>
+<div><b>B.</b> north</div>
+<div><b>C.</b> northeast</div>
+<div><b>D.</b> south</div></div>
+<div class="answer">Benchmark answer: A: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=headphones</td></tr>
+<tr><th>query</th><td>query_obj_label=headphone holder</td></tr>
+<tr><th>reference</th><td>obj_ref_label=notebook</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=west</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 9</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span></div>
+<div class="q">If the headphones is moved 3.0m to the east, the camera faces west. On the floor plan, in which cardinal direction would the headphone holder be from the keyboard? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> south</div>
+<div><b>B.</b> east</div>
+<div><b>C.</b> northeast</div>
+<div><b>D.</b> north</div></div>
+<div class="answer">Benchmark answer: B: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=headphones</td></tr>
+<tr><th>query</th><td>query_obj_label=headphone holder</td></tr>
+<tr><th>reference</th><td>obj_ref_label=keyboard</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=southwest</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 10</h3>
+<div class="meta">c49a8c6cff / frame_002890.jpg | L2_object_move_allocentric</div>
+<div class="reasons"><span class="tag relation">relation_exact:camera</span><span class="tag relation">relation_exact:new_direction</span></div>
+<div class="q">After moving the headphones 3.0m to the east, on the room&#x27;s layout (camera facing west), in which cardinal direction is the headphone holder from the pc? (for horizontal cardinal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plan.)</div>
+<div class="opts"><div><b>A.</b> north</div>
+<div><b>B.</b> west</div>
+<div><b>C.</b> east</div>
+<div><b>D.</b> south</div></div>
+<div class="answer">Benchmark answer: C: east</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=headphones</td></tr>
+<tr><th>query</th><td>query_obj_label=headphone holder</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pc</td></tr>
+<tr><th>camera</th><td>camera_cardinal=west</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=south</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=east; correct_value=east</td></tr></table>
+</div>
+</section>
+</body></html>

@@ -1,0 +1,2360 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Loose Match Candidate Groups</title>
+<style>
+body{font-family:Arial,sans-serif;margin:24px;background:#f6f7f9;color:#17202a}
+.summary{background:white;border:1px solid #d7dde5;border-radius:8px;padding:14px;margin-bottom:18px}
+.group{background:white;border:1px solid #cfd7e3;border-radius:8px;margin:18px 0;padding:14px}
+.html-card{border-left:4px solid #2f6fed;background:#f8fbff;padding:12px;margin-bottom:12px}
+.candidate{border:1px solid #d8dee8;border-radius:6px;padding:12px;margin:10px 0;background:#fff}
+.meta{color:#536171;font-size:13px;margin:4px 0 8px}
+.q{font-size:15px;line-height:1.45;margin:8px 0}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:4px 16px;margin:8px 0}
+.answer{font-weight:700;color:#1b5e20;margin:6px 0}
+.reasons{margin:6px 0}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;margin:2px;background:#e9edf5;font-size:12px}
+.relation{background:#e5f4ea}.exact{background:#e7f0ff}.overlap{background:#fff1d6}
+table.fields{border-collapse:collapse;margin-top:8px;font-size:12px}
+.fields th,.fields td{border:1px solid #dbe1ea;padding:4px 6px;text-align:left;vertical-align:top}
+.fields th{background:#f0f3f7;color:#3a4654}
+.muted{color:#7a8797;font-size:13px}
+</style></head><body>
+<h1>Loose Match Candidate Groups</h1>
+<div class="summary">
+<div><b>Source HTML:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\edited\merged_1-3593.html</div>
+<div><b>Benchmark:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\benchmark.json</div>
+<div><b>Loose cards:</b> 574</div>
+<div><b>Groups exported:</b> 1</div>
+<div><b>Candidate questions shown:</b> 136</div>
+</div>
+<section class="group" id="q3165">
+<h2>Group 1: HTML #3165 (136 candidates)</h2>
+<div class="html-card">
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the wok pan near the microwave, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">HTML answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>pot cover</td></tr>
+<tr><th>reference</th><td>kitchen brush</td></tr>
+<tr><th>facing</th><td>wok pan near the microwave</td></tr>
+<tr><th>rotation_angle</th><td>90</td></tr>
+<tr><th>old_direction</th><td>back</td></tr>
+<tr><th>new_direction</th><td>left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 1</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the wok pan, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 2</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the electric stove, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 3</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the wok pan, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 4</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the electric stove, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 5</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the pot cover, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 6</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the pot cover, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 7</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the electric stove, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 8</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the dish drying rack, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 9</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the dish drying rack, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 10</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the wok pan, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 11</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the wok pan, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 12</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the wok pan, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 13</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 14</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the faucet, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 15</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the electric stove, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 16</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the electric stove, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 17</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the electric stove, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: B: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 18</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the dishwashing sponge, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 19</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the faucet, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: D: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 20</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the faucet, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 21</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the electric stove, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: B: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 22</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the dishwashing sponge, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 23</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the dish drying rack, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: C: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 24</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the dish drying rack, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back</td></tr>
+<tr><th>new_direction</th><td>new_direction=left; correct_value=left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 25</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the wok pan, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: front-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-left</td></tr>
+<tr><th>new_direction</th><td>new_direction=front-left; correct_value=front-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 26</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 27</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 28</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the kitchen brush, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 29</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the faucet, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: D: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-right</td></tr>
+<tr><th>new_direction</th><td>new_direction=back-left; correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 30</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the kitchen brush at its rotated position and kept facing the same horizontal direction that originally pointed from the kitchen brush toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=kitchen brush</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 31</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the electric stove, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-right</td></tr>
+<tr><th>new_direction</th><td>new_direction=back-left; correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 32</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the tray, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 33</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 34</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the kitchen brush, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 35</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the faucet, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 36</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dishwashing sponge, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 37</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 38</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dishwashing sponge at its rotated position and kept facing the same horizontal direction that originally pointed from the dishwashing sponge toward the electric stove, in which direction would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-right</td></tr>
+<tr><th>new_direction</th><td>new_direction=back-left; correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 39</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the wok pan, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-right</td></tr>
+<tr><th>new_direction</th><td>new_direction=back-left; correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 40</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 41</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the wok pan, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 42</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 43</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the wok pan, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 44</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the wok pan, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 45</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 46</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the wok pan, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 47</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 48</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the wok pan, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 49</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the wok pan, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 50</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the wok pan, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 51</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the wok pan, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 52</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the wok pan, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 53</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dishwashing sponge at its rotated position and kept facing the same horizontal direction that originally pointed from the dishwashing sponge toward the wok pan, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 54</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dishwashing sponge at its rotated position and kept facing the same horizontal direction that originally pointed from the dishwashing sponge toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 55</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the wok pan, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 56</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the wok pan, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 57</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the wok pan, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 58</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 59</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 60</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 61</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 62</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the tray, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 63</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the sink, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 64</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the sink, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 65</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the pot cover, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 66</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the pot cover, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 67</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the kitchen brush, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 68</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the kitchen brush, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 69</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the kitchen brush, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 70</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the kitchen brush, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 71</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the faucet, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 72</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the faucet, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 73</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the dishwashing sponge, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 74</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the dish drying rack, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 75</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the wok pan at its rotated position and kept facing the same horizontal direction that originally pointed from the wok pan toward the dish drying rack, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 76</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the kitchen brush, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: D: front-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-left</td></tr>
+<tr><th>new_direction</th><td>new_direction=front-left; correct_value=front-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 77</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the tray at its rotated position and kept facing the same horizontal direction that originally pointed from the tray toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=tray</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 78</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the tray, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 79</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the tray, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 80</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 81</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the sink at its rotated position and kept facing the same horizontal direction that originally pointed from the sink toward the electric stove, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 82</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the tray, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 83</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the tray, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 84</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the kitchen brush, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 85</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the kitchen brush, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 86</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 87</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the electric stove, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 88</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the electric stove, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 89</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the electric stove, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 90</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the pot cover at its rotated position and kept facing the same horizontal direction that originally pointed from the pot cover toward the electric stove, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front-right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front-left</td></tr>
+<tr><th>new_direction</th><td>new_direction=front-right; correct_value=front-right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 91</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the tray, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 92</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the tray, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 93</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 94</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the faucet at its rotated position and kept facing the same horizontal direction that originally pointed from the faucet toward the electric stove, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 95</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the tray, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 96</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the tray, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 97</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the tray, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 98</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the tray, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 99</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 100</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 101</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 102</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 103</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 104</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the sink, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 105</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the pot cover, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 106</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the pot cover, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 107</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the pot cover, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 108</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the pot cover, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 109</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the pot cover, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 110</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the pot cover, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 111</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the kitchen brush, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 112</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the kitchen brush, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 113</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the faucet, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 114</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the faucet, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 115</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the faucet, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 116</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the faucet, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 117</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dishwashing sponge, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 118</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dishwashing sponge, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 119</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dishwashing sponge, in which direction would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 120</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 121</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 122</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 123</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 124</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 125</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the electric stove at its rotated position and kept facing the same horizontal direction that originally pointed from the electric stove toward the dish drying rack, in which direction would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=electric stove</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 126</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dishwashing sponge at its rotated position and kept facing the same horizontal direction that originally pointed from the dishwashing sponge toward the tray, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 127</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dishwashing sponge at its rotated position and kept facing the same horizontal direction that originally pointed from the dishwashing sponge toward the pot cover, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: B: front-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=back-left</td></tr>
+<tr><th>new_direction</th><td>new_direction=front-left; correct_value=front-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 128</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dishwashing sponge at its rotated position and kept facing the same horizontal direction that originally pointed from the dishwashing sponge toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 129</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the tray, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 130</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the tray, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=tray</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 131</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the sink, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 132</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the kitchen brush, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 133</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the kitchen brush, in which direction would the electric stove be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=electric stove</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=kitchen brush</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 134</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the electric stove, in which direction would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 135</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the electric stove, in which direction would the tray be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: D: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=tray</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 136</h3>
+<div class="meta">27dd4da69e / frame_000030.jpg | L3_coordinate_rotation_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:rotation_angle</span></div>
+<div class="q">Suppose this room had originally been oriented 90 degrees clockwise around the room center (viewed from above), with all objects keeping their relative positions. If you were the dish drying rack at its rotated position and kept facing the same horizontal direction that originally pointed from the dish drying rack toward the electric stove, in which direction would the kitchen brush be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: B: right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=kitchen brush</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=electric stove</td></tr>
+<tr><th>rotation_angle</th><td>rotation_angle=90</td></tr>
+<tr><th>old_direction</th><td>old_direction=front</td></tr>
+<tr><th>new_direction</th><td>new_direction=right; correct_value=right</td></tr></table>
+</div>
+</section>
+</body></html>

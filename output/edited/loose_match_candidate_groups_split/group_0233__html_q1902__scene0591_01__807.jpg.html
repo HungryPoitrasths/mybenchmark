@@ -1,0 +1,79 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Loose Match Candidate Groups</title>
+<style>
+body{font-family:Arial,sans-serif;margin:24px;background:#f6f7f9;color:#17202a}
+.summary{background:white;border:1px solid #d7dde5;border-radius:8px;padding:14px;margin-bottom:18px}
+.group{background:white;border:1px solid #cfd7e3;border-radius:8px;margin:18px 0;padding:14px}
+.html-card{border-left:4px solid #2f6fed;background:#f8fbff;padding:12px;margin-bottom:12px}
+.candidate{border:1px solid #d8dee8;border-radius:6px;padding:12px;margin:10px 0;background:#fff}
+.meta{color:#536171;font-size:13px;margin:4px 0 8px}
+.q{font-size:15px;line-height:1.45;margin:8px 0}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:4px 16px;margin:8px 0}
+.answer{font-weight:700;color:#1b5e20;margin:6px 0}
+.reasons{margin:6px 0}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;margin:2px;background:#e9edf5;font-size:12px}
+.relation{background:#e5f4ea}.exact{background:#e7f0ff}.overlap{background:#fff1d6}
+table.fields{border-collapse:collapse;margin-top:8px;font-size:12px}
+.fields th,.fields td{border:1px solid #dbe1ea;padding:4px 6px;text-align:left;vertical-align:top}
+.fields th{background:#f0f3f7;color:#3a4654}
+.muted{color:#7a8797;font-size:13px}
+</style></head><body>
+<h1>Loose Match Candidate Groups</h1>
+<div class="summary">
+<div><b>Source HTML:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\edited\merged_1-3593.html</div>
+<div><b>Benchmark:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\benchmark.json</div>
+<div><b>Loose cards:</b> 574</div>
+<div><b>Groups exported:</b> 1</div>
+<div><b>Candidate questions shown:</b> 2</div>
+</div>
+<section class="group" id="q1902">
+<h2>Group 1: HTML #1902 (2 candidates)</h2>
+<div class="html-card">
+<div class="meta">scene0591_01 / 807.jpg | L2_object_move_object_centric</div>
+<div class="q">Imagine you are the sofa and initially facing the camera. If you were shifted backward by 3.0m, from the pillow&#x27;s perspective (which initially faces the camera too), in which horizontal direction would the trash can be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">HTML answer: C: back-right</div>
+<table class="fields"><tr><th>moved</th><td>sofa</td></tr>
+<tr><th>query</th><td>pillow</td></tr>
+<tr><th>reference</th><td>trash can</td></tr>
+<tr><th>old_direction</th><td>front-right</td></tr>
+<tr><th>new_direction</th><td>back-right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 1</h3>
+<div class="meta">scene0591_01 / 807.jpg | L2_object_move_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span></div>
+<div class="q">Imagine you are the sofa initially facing the camera. If you were shifted backward by 3.0m, from the sofa&#x27;s perspective (which also initially faces the camera), in which horizontal direction is the trash can? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: B: back-right</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=sofa</td></tr>
+<tr><th>query</th><td>query_obj_label=sofa</td></tr>
+<tr><th>reference</th><td>obj_ref_label=trash can</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=front-right</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=back-right; correct_value=back-right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 2</h3>
+<div class="meta">scene0591_01 / 807.jpg | L2_object_move_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:moved</span><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:new_direction</span><span class="tag relation">relation_exact:old_direction</span></div>
+<div class="q">Imagine you are the sofa and initially facing the camera. If you were shifted backward by 3.0m, from the sofa&#x27;s perspective (which initially faces the camera too), in which horizontal direction would the trash can be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: back-right</div>
+<table class="fields"><tr><th>moved</th><td>moved_obj_label=sofa</td></tr>
+<tr><th>query</th><td>query_obj_label=sofa</td></tr>
+<tr><th>reference</th><td>obj_ref_label=trash can</td></tr>
+<tr><th>old_direction</th><td>old_correct_value=front-right</td></tr>
+<tr><th>new_direction</th><td>new_correct_value=back-right; correct_value=back-right</td></tr></table>
+</div>
+</section>
+</body></html>

@@ -1,0 +1,2191 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Loose Match Candidate Groups</title>
+<style>
+body{font-family:Arial,sans-serif;margin:24px;background:#f6f7f9;color:#17202a}
+.summary{background:white;border:1px solid #d7dde5;border-radius:8px;padding:14px;margin-bottom:18px}
+.group{background:white;border:1px solid #cfd7e3;border-radius:8px;margin:18px 0;padding:14px}
+.html-card{border-left:4px solid #2f6fed;background:#f8fbff;padding:12px;margin-bottom:12px}
+.candidate{border:1px solid #d8dee8;border-radius:6px;padding:12px;margin:10px 0;background:#fff}
+.meta{color:#536171;font-size:13px;margin:4px 0 8px}
+.q{font-size:15px;line-height:1.45;margin:8px 0}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:4px 16px;margin:8px 0}
+.answer{font-weight:700;color:#1b5e20;margin:6px 0}
+.reasons{margin:6px 0}
+.tag{display:inline-block;border-radius:4px;padding:2px 6px;margin:2px;background:#e9edf5;font-size:12px}
+.relation{background:#e5f4ea}.exact{background:#e7f0ff}.overlap{background:#fff1d6}
+table.fields{border-collapse:collapse;margin-top:8px;font-size:12px}
+.fields th,.fields td{border:1px solid #dbe1ea;padding:4px 6px;text-align:left;vertical-align:top}
+.fields th{background:#f0f3f7;color:#3a4654}
+.muted{color:#7a8797;font-size:13px}
+</style></head><body>
+<h1>Loose Match Candidate Groups</h1>
+<div class="summary">
+<div><b>Source HTML:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\edited\merged_1-3593.html</div>
+<div><b>Benchmark:</b> C:\Users\65781\Desktop\讨论2\PredictiveSpatial-Bench\output\benchmark.json</div>
+<div><b>Loose cards:</b> 574</div>
+<div><b>Groups exported:</b> 1</div>
+<div><b>Candidate questions shown:</b> 143</div>
+</div>
+<section class="group" id="q786">
+<h2>Group 1: HTML #786 (143 candidates)</h2>
+<div class="html-card">
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="q">If you were the sink, looking toward the wok pan near the microwave, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">HTML answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>cereal box</td></tr>
+<tr><th>reference</th><td>sink</td></tr>
+<tr><th>facing</th><td>wok pan near the microwave</td></tr>
+<tr><th>direction</th><td>front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 1</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the sink, looking toward the wok pan, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 2</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the pot cover and facing toward the wok pan. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 3</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the faucet and facing toward the wok pan. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 4</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the wok pan. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 5</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dish drying rack and facing toward the wok pan. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 6</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the wok pan. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 7</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the sink. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 8</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the pot cover. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 9</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the dishwashing sponge. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 10</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the cutting board. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 11</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the sink and facing toward the dish drying rack. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 12</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the sink and facing toward the cutting board. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 13</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the pot cover and facing toward the dishwashing sponge. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 14</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the faucet and facing toward the dishwashing sponge. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 15</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dish drying rack and facing toward the dishwashing sponge. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 16</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the sink. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 17</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the dishwashing sponge. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 18</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the dish drying rack. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 19</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the faucet, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 20</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the dish drying rack, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 21</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the sink, looking toward the cereal box, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 22</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the pot cover, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 23</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the faucet, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 24</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the pot cover and facing toward the wok pan. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 25</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dish drying rack and facing toward the wok pan. From your perspective, in which direction is the dishwashing sponge? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 26</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the wok pan. From your perspective, in which direction is the dishwashing sponge? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 27</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the wok pan, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 28</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the wok pan, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 29</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the wok pan, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 30</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the sink. From your perspective, in which direction is the faucet? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 31</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the sink. From your perspective, in which direction is the dish drying rack? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 32</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the pot cover. From your perspective, in which direction is the faucet? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 33</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the pot cover. From your perspective, in which direction is the dish drying rack? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 34</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the pot cover. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 35</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the dishwashing sponge. From your perspective, in which direction is the dish drying rack? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 36</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the dishwashing sponge. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 37</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the dish drying rack. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 38</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the dish drying rack. From your perspective, in which direction is the dishwashing sponge? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 39</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the dish drying rack. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 40</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the cutting board. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 41</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the cutting board. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 42</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the cutting board. From your perspective, in which direction is the dishwashing sponge? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 43</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the cereal box. From your perspective, in which direction is the dishwashing sponge? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 44</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the wok pan and facing toward the cereal box. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 45</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the pot cover and facing toward the dishwashing sponge. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 46</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the pot cover and facing toward the cereal box. From your perspective, in which direction is the dishwashing sponge? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 47</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the faucet and facing toward the cereal box. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 48</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the pot cover. From your perspective, in which direction is the dish drying rack? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 49</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the pot cover. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 50</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the faucet. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 51</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the faucet. From your perspective, in which direction is the dish drying rack? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 52</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the dish drying rack. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 53</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the cutting board. From your perspective, in which direction is the faucet? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 54</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the cutting board. From your perspective, in which direction is the dish drying rack? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 55</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dish drying rack and facing toward the sink. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 56</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dish drying rack and facing toward the dishwashing sponge. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 57</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the dish drying rack and facing toward the cereal box. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 58</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the pot cover. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 59</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the pot cover. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 60</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the faucet. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 61</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the dishwashing sponge. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 62</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the dish drying rack. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 63</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cutting board and facing toward the cereal box. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 64</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cereal box and facing toward the sink. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 65</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cereal box and facing toward the pot cover. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 66</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cereal box and facing toward the pot cover. From your perspective, in which direction is the faucet? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 67</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cereal box and facing toward the cutting board. From your perspective, in which direction is the sink? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 68</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cereal box and facing toward the cutting board. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 69</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">Imagine you are the cereal box and facing toward the cutting board. From your perspective, in which direction is the faucet? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 70</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the sink, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 71</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the sink, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 72</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the sink, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 73</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the pot cover, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 74</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the pot cover, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 75</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the faucet, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 76</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the faucet, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 77</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the faucet, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 78</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the faucet, where would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 79</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the faucet, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 80</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the dishwashing sponge, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 81</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the dishwashing sponge, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 82</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the dishwashing sponge, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 83</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the dish drying rack, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 84</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the dish drying rack, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 85</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the cutting board, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 86</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the cutting board, where would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 87</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the cereal box, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 88</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the cereal box, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 89</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the cereal box, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 90</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the wok pan, looking toward the cereal box, where would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=wok pan</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 91</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the pot cover, looking toward the cereal box, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 92</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the pot cover, looking toward the cereal box, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 93</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the faucet, looking toward the cereal box, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 94</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the pot cover, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 95</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the faucet, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 96</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the dish drying rack, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 97</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the dish drying rack, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 98</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the cutting board, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 99</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the dish drying rack, looking toward the cereal box, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 100</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the sink, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 101</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the sink, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 102</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the sink, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 103</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the sink, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 104</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the faucet, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 105</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the faucet, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 106</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the dishwashing sponge, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 107</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the dishwashing sponge, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dishwashing sponge</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 108</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the dish drying rack, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 109</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the dish drying rack, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 110</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the dish drying rack, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 111</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the dish drying rack, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 112</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the cereal box, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 113</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the cereal box, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: C: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 114</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the cereal box, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 115</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cutting board, looking toward the cereal box, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cutting board</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 116</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the sink, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 117</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the sink, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> back-right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=sink</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 118</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the pot cover, where would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 119</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the pot cover, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 120</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the faucet, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 121</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the faucet, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back-right</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 122</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the dish drying rack, where would the sink be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=sink</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 123</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the dish drying rack, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: B: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 124</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the dish drying rack, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-right</div>
+<div><b>B.</b> left</div>
+<div><b>C.</b> back-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 125</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the dish drying rack, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: D: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 126</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag relation">relation_exact:direction</span></div>
+<div class="q">If you were the cereal box, looking toward the cutting board, where would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: front</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=front</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 127</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">Imagine you are the sink and facing toward the wok pan. From your perspective, in which direction is the pot cover? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> above</div></div>
+<div class="answer">Benchmark answer: B: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 128</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">If you were the sink, looking toward the wok pan, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> below</div></div>
+<div class="answer">Benchmark answer: B: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 129</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span></div>
+<div class="q">Imagine you are the sink and facing toward the cutting board. From your perspective, in which direction is the wok pan? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: C: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 130</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span></div>
+<div class="q">Imagine you are the faucet and facing toward the cutting board. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front-left</div>
+<div><b>C.</b> front-right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: A: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 131</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the pot cover. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> front</div></div>
+<div class="answer">Benchmark answer: B: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=pot cover</td></tr>
+<tr><th>direction</th><td>correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 132</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span></div>
+<div class="q">Imagine you are the dishwashing sponge and facing toward the dish drying rack. From your perspective, in which direction is the cereal box? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front-right</div>
+<div><b>B.</b> right</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back-left</div></div>
+<div class="answer">Benchmark answer: D: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 133</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span></div>
+<div class="q">If you were the sink, looking toward the dish drying rack, where would the wok pan be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: D: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=wok pan</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=dish drying rack</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 134</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:reference</span></div>
+<div class="q">If you were the sink, looking toward the cereal box, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> below</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=sink</td></tr>
+<tr><th>facing</th><td>obj_face_label=cereal box</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 135</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the faucet, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> right</div>
+<div><b>B.</b> back-left</div>
+<div><b>C.</b> above</div>
+<div><b>D.</b> front-left</div></div>
+<div class="answer">Benchmark answer: B: back-left</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=faucet</td></tr>
+<tr><th>direction</th><td>correct_value=back-left</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 136</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag exact">object_exact:query</span></div>
+<div class="q">If you were the dish drying rack, looking toward the cutting board, where would the cereal box be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> front-left</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: A: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cereal box</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dish drying rack</td></tr>
+<tr><th>facing</th><td>obj_face_label=cutting board</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 137</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">Imagine you are the pot cover and facing toward the wok pan. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> above</div>
+<div><b>B.</b> front-right</div>
+<div><b>C.</b> below</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: D: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=pot cover</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 138</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">Imagine you are the faucet and facing toward the wok pan. From your perspective, in which direction is the cutting board? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> right</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=faucet</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 139</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">If you were the dishwashing sponge, looking toward the wok pan, where would the pot cover be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> back-left</div>
+<div><b>B.</b> back-right</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> left</div></div>
+<div class="answer">Benchmark answer: B: back-right</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=pot cover</td></tr>
+<tr><th>reference</th><td>obj_ref_label=dishwashing sponge</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back-right</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 140</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">If you were the cereal box, looking toward the wok pan, where would the faucet be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> front</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> left</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: D: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=faucet</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 141</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">If you were the cereal box, looking toward the wok pan, where would the dishwashing sponge be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> back</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> front-right</div></div>
+<div class="answer">Benchmark answer: B: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dishwashing sponge</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 142</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">If you were the cereal box, looking toward the wok pan, where would the dish drying rack be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> left</div>
+<div><b>B.</b> above</div>
+<div><b>C.</b> front</div>
+<div><b>D.</b> back</div></div>
+<div class="answer">Benchmark answer: D: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=dish drying rack</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+<div class="candidate">
+<h3>Candidate 143</h3>
+<div class="meta">27dd4da69e / frame_000090.jpg | L1_direction_object_centric</div>
+<div class="reasons"><span class="tag overlap">object_overlap:facing</span></div>
+<div class="q">If you were the cereal box, looking toward the wok pan, where would the cutting board be? (For horizontal directions, compare the objects&#x27; 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)</div>
+<div class="opts"><div><b>A.</b> below</div>
+<div><b>B.</b> front</div>
+<div><b>C.</b> back</div>
+<div><b>D.</b> right</div></div>
+<div class="answer">Benchmark answer: C: back</div>
+<table class="fields"><tr><th>query</th><td>obj_target_label=cutting board</td></tr>
+<tr><th>reference</th><td>obj_ref_label=cereal box</td></tr>
+<tr><th>facing</th><td>obj_face_label=wok pan</td></tr>
+<tr><th>direction</th><td>correct_value=back</td></tr></table>
+</div>
+</section>
+</body></html>
