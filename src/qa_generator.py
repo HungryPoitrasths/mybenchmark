@@ -7119,7 +7119,15 @@ def generate_l2_object_move_object_centric(
                     if relation_unchanged and not attachment_relation_propagated:
                         continue
 
-                    direction_desc = _delta_to_description(delta, camera_pose)
+                    # Object-centric phrasing puts the reader in the moved
+                    # object's frame ("you are X facing the camera"), so the
+                    # movement word must be expressed in that frame, not the
+                    # camera frame.  Since X faces the camera, this mirrors
+                    # both forward/backward and left/right vs. camera wording.
+                    source_center = np.array(move_source["center"], dtype=float)
+                    direction_desc = _delta_to_object_facing_description(
+                        delta, source_center, camera_center
+                    )
                     tpl = random.choice(tpl_list)
                     question_text = tpl.format(
                         obj_a=_the(move_source["label"]),
@@ -8833,6 +8841,46 @@ def _delta_to_description(delta: np.ndarray, camera_pose: CameraPose | None = No
     labels = {0: ("right", "left"), 1: ("forward", "backward"), 2: ("up", "down")}
     pos_label, neg_label = labels[axis]
     return pos_label if sign > 0 else neg_label
+
+
+def _delta_to_object_facing_description(
+    delta: np.ndarray,
+    source_center: np.ndarray,
+    facing_center: np.ndarray,
+) -> str:
+    """Describe a world-frame delta in the moved object's own facing frame.
+
+    Used by object-centric move questions whose text asks the reader to *be*
+    the moved object ("imagine you are X and facing the camera").  The
+    forward/right axes are built from the object's heading toward
+    *facing_center* (the camera) using the SAME right-hand convention as
+    ``primary_direction_object_centric`` (right = [fwd_y, -fwd_x]), so the
+    movement word and the answer direction live in one consistent frame.
+
+    Because the object faces the camera, its forward = away from the camera
+    and its left/right are mirrored relative to the camera frame; this helper
+    encodes that automatically instead of using camera-frame wording.
+    """
+    delta = np.asarray(delta, dtype=float)
+
+    horiz_mag = float(np.linalg.norm(delta[:2]))
+    vert_mag = abs(float(delta[2]))
+    if vert_mag > horiz_mag:
+        return "up" if delta[2] > 0 else "down"
+
+    fwd = np.asarray(facing_center, dtype=float)[:2] - np.asarray(source_center, dtype=float)[:2]
+    fwd_norm = float(np.linalg.norm(fwd))
+    if fwd_norm < 1e-6:
+        # Degenerate heading (object directly above/below camera) → world fallback.
+        return _delta_to_description(delta)
+    fwd /= fwd_norm
+    right = np.array([fwd[1], -fwd[0]], dtype=float)
+
+    fwd_comp = float(np.dot(delta[:2], fwd))
+    right_comp = float(np.dot(delta[:2], right))
+    if abs(fwd_comp) >= abs(right_comp):
+        return "forward" if fwd_comp > 0 else "backward"
+    return "right" if right_comp > 0 else "left"
 
 
 def _delta_to_object_centric_direction(
