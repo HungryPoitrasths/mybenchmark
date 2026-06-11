@@ -1313,6 +1313,28 @@ def _default_templates() -> dict:
     }
 
 
+def _evenly_spaced_direction_options(correct_answer: str) -> list[str] | None:
+    """For a horizontal-direction answer, return four options that evenly divide
+    360°.
+
+    Both ``HORIZONTAL_DIRECTIONS`` (front/…/front-left) and
+    ``CARDINAL_DIRECTIONS_8`` (north/…/northwest) are stored in clockwise order,
+    so each list step is 45° and stepping by two is 90°. The four returned
+    options are the correct answer plus the directions 90°, 180° and 270° away
+    (e.g. ``front-left`` → ``front-left, front-right, back-right, back-left``).
+    Vertical directions (above/below) are never included.
+
+    Returns ``None`` when ``correct_answer`` is not one of the 8 horizontal ring
+    directions (e.g. a distance label or above/below), so the caller falls back
+    to its default option logic.
+    """
+    for ring in (HORIZONTAL_DIRECTIONS, CARDINAL_DIRECTIONS_8):
+        if correct_answer in ring:
+            idx = ring.index(correct_answer)
+            return [ring[(idx + step) % len(ring)] for step in (0, 2, 4, 6)]
+    return None
+
+
 def generate_options(
     correct_answer: str,
     answer_pool: list[str],
@@ -1331,6 +1353,17 @@ def generate_options(
     HORIZONTAL = set(HORIZONTAL_DIRECTIONS)  # front/back/left/right/…
 
     HORIZONTAL.update(CARDINAL_DIRECTIONS_8)
+
+    # Horizontal-direction answers get four options that evenly divide 360°
+    # (the answer + the directions 90°/180°/270° away), never above/below.
+    if n_options == 4:
+        even = _evenly_spaced_direction_options(correct_answer)
+        if even is not None:
+            shuffled = list(even)
+            random.shuffle(shuffled)
+            correct_idx = shuffled.index(correct_answer)
+            return shuffled, chr(65 + correct_idx)
+
     if correct_answer in VERTICAL:
         exclude = HORIZONTAL
     elif correct_answer in HORIZONTAL:
@@ -1416,6 +1449,16 @@ def generate_direction_options(
     n_options: int = 4,
 ) -> tuple[list[str], str]:
     """Generate direction options while excluding adjacent/confusable directions."""
+    # Horizontal-direction answers get four options that evenly divide 360°
+    # (the answer + the directions 90°/180°/270° away), never above/below.
+    if n_options == 4:
+        even = _evenly_spaced_direction_options(correct_answer)
+        if even is not None:
+            shuffled = list(even)
+            random.shuffle(shuffled)
+            correct_idx = shuffled.index(correct_answer)
+            return shuffled, chr(65 + correct_idx)
+
     exclude = _direction_distractor_exclusions(
         correct_answer,
         answer_pool,
@@ -7750,7 +7793,15 @@ def generate_l3_attachment_move(
                                     tpl = random.choice(tpl_allocentric)
                                 direction_desc = _delta_to_description(delta, camera_pose)
                                 options, answer = generate_options(new_dir, answer_pool)
-                                if old_dir in answer_pool and old_dir not in options:
+                                # For horizontal-direction answers the four
+                                # options already evenly divide 360°; injecting
+                                # old_dir would break that spacing, so only force
+                                # old_dir in when even spacing did not apply.
+                                if (
+                                    _evenly_spaced_direction_options(new_dir) is None
+                                    and old_dir in answer_pool
+                                    and old_dir not in options
+                                ):
                                     replace_idx = next(
                                         (
                                             idx for idx, opt in enumerate(options)
