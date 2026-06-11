@@ -1158,11 +1158,44 @@ def _rank_attachment_candidates_by_child(
     return ranked_edges
 
 
+def _scene_bbox_volume(objects: list[dict]) -> float:
+    """Union-bbox volume of the scene, used to flag room-scale parents."""
+    if not objects:
+        return 0.0
+    mins = np.min([np.asarray(o["bbox_min"], dtype=float) for o in objects], axis=0)
+    maxs = np.max([np.asarray(o["bbox_max"], dtype=float) for o in objects], axis=0)
+    return float(np.prod(np.maximum(maxs - mins, 0.0)))
+
+
+# A genuine container/support (table, shelf, bed) is small relative to the room.
+# A failed-segmentation blob spans a large fraction of the scene and would
+# otherwise win "contained_in" edges for any small object inside its bbox,
+# stealing the real parent and breaking move-propagation chains. Reject any
+# containment parent whose bbox volume exceeds this fraction of the scene
+# volume. Calibrated above the largest legitimate furniture observed
+# (a bed at ~0.18 of scene volume).
+OVERSIZED_CONTAINMENT_PARENT_VOLUME_FRACTION = 0.30
+_CONTAINMENT_EDGE_TYPES = {"contained_in"}
+
+
+def _bbox_volume(obj: dict) -> float:
+    dims = np.asarray(obj["bbox_max"], dtype=float) - np.asarray(obj["bbox_min"], dtype=float)
+    return float(np.prod(np.maximum(dims, 0.0)))
+
+
 def build_attachment_candidates(
     objects: list[dict],
     z_threshold: float | None = None,
 ) -> list[dict[str, Any]]:
     """Return all raw attachment candidates accepted by geometry/semantic rules."""
+    scene_volume = _scene_bbox_volume(objects)
+    oversized_volume = (
+        scene_volume * OVERSIZED_CONTAINMENT_PARENT_VOLUME_FRACTION
+        if scene_volume > GEOM_EPS
+        else float("inf")
+    )
+    object_by_id = {int(o["id"]): o for o in objects}
+
     raw_edges: list[dict[str, Any]] = []
     for obj_a in objects:
         for obj_b in objects:
@@ -1171,6 +1204,16 @@ def build_attachment_candidates(
             edge = _attachment_candidate(obj_a, obj_b, z_threshold)
             if edge is None:
                 continue
+            if str(edge.get("type", "")) in _CONTAINMENT_EDGE_TYPES:
+                parent = object_by_id.get(int(edge["parent_id"]))
+                if parent is not None and _bbox_volume(parent) > oversized_volume:
+                    logger.debug(
+                        "Rejecting oversized containment parent %s for child %s "
+                        "(parent vol %.2f > %.2f cap)",
+                        edge["parent_id"], edge["child_id"],
+                        _bbox_volume(parent), oversized_volume,
+                    )
+                    continue
             raw_edges.append(edge)
     return _rank_attachment_candidates_by_child(raw_edges)
 

@@ -279,6 +279,10 @@ _BASE_EXCLUDED_LABELS = {
     # Boundary-unclear / large amorphous / historically noisy labels
     "blanket", "cloth", "clothes", "clothing", "rug",
     "lamp",
+    # ScanNet++ failed-segmentation amorphous mesh: room-scale bbox with no
+    # coherent geometry. Swallows real attachment parents (a table-supported
+    # plant pot gets re-parented onto the blob), breaking move-propagation chains.
+    "split",
     # Too small to reliably identify in images
     "power outlet", "light switch", "fire alarm", "controller",
     "power strip", "soda can", "starbucks cup", "battery disposal jar",
