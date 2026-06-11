@@ -225,6 +225,7 @@ ALLOCENTRIC_DIRECTION_NOTE = (
 ATTACHMENT_CHAIN_MULTI_SELECT_NOTE = (
     "This is a multiple-select question; choose all options that apply."
 )
+ATTACHMENT_CHAIN_NONE_OF_THE_ABOVE = "None of the above"
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.5
 DISTANCE_MOVE_SEARCH_MAX_M = 3.0
@@ -7481,6 +7482,11 @@ def generate_l3_attachment_chain(
                 answer_letters = sorted(
                     chr(65 + options.index(value)) for value in correct_values
                 )
+                # Fixed final distractor: both the parent and grandchild always
+                # move, so "None of the above" is never correct. Pinned to the
+                # last slot (option D) and excluded from the shuffle so its
+                # position is stable.
+                options.append(ATTACHMENT_CHAIN_NONE_OF_THE_ABOVE)
 
                 questions.append(_annotate_attachment_trace_reason({
                     "level": "L3",
@@ -7655,15 +7661,21 @@ def generate_l3_attachment_move(
                                 new_ref_center = np.array(moved_ref["center"], dtype=float)
 
                                 if frame == "agent":
+                                    # Template asks for the position of the
+                                    # query object relative to the reference
+                                    # object, with obj_ref as the origin.
+                                    # primary_direction(A, B) returns the
+                                    # direction of B relative to A, so the
+                                    # reference must be A and the query B.
                                     old_dir, old_amb = primary_direction(
-                                        query_center,
                                         ref_center,
+                                        query_center,
                                         camera_pose,
                                         horizontal_only=True,
                                     )
                                     new_dir, new_amb = primary_direction(
-                                        new_query_center,
                                         new_ref_center,
+                                        new_query_center,
                                         camera_pose,
                                         horizontal_only=True,
                                     )
