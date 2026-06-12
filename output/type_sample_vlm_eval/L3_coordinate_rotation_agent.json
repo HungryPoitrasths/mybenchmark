@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004890.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the bottle relative to the computer tower? (Use the computer tower as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "6115eddb86",
+    "frame": "frame_007780.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the ottoman chair relative to the cabinet? (Use the cabinet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_000000.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the toilet paper relative to the trash can? (Use the trash can as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_000540.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the table relative to the power socket? (Use the power socket as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "cc5237fd77",
+    "frame": "frame_000540.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the computer tower relative to the multiplug? (Use the multiplug as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0591_02",
+    "frame": "1836.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the trash can relative to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_008440.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the trash can relative to the cutting board? (Use the cutting board as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0699_00",
+    "frame": "375.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the night stand relative to the pillow? (Use the pillow as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0474_01",
+    "frame": "99.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the cup relative to the keyboard? (Use the keyboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0164_01",
+    "frame": "393.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the picture relative to the towel? (Use the towel as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_000990.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the desk lamp relative to the sweater? (Use the sweater as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "578511c8a9",
+    "frame": "frame_007290.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the jug relative to the books? (Use the books as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0329_02",
+    "frame": "806.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the chair relative to the keyboard? (Use the keyboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0131_02",
+    "frame": "126.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the keyboard relative to the shelves? (Use the shelves as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_023450.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the range hood relative to the oven? (Use the oven as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_003040.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the telephone relative to the power socket? (Use the power socket as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0046_01",
+    "frame": "1791.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the toilet relative to the trash can? (Use the trash can as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_000240.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the bag relative to the shelf? (Use the shelf as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_002680.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the headphones relative to the cup? (Use the cup as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "c4c04e6d6c",
+    "frame": "frame_003560.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the telephone relative to the overhead projector? (Use the overhead projector as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0064_00",
+    "frame": "741.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the table relative to the sofa? (Use the sofa as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0695_01",
+    "frame": "989.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the laptop relative to the bag? (Use the bag as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0353_02",
+    "frame": "435.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the shelves relative to the bag? (Use the bag as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0629_01",
+    "frame": "1284.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the shelves relative to the picture? (Use the picture as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_008330.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the pillow relative to the tv stand? (Use the tv stand as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0050_01",
+    "frame": "1167.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the shelves relative to the cup? (Use the cup as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "21d970d8de",
+    "frame": "frame_006480.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the projector relative to the speaker? (Use the speaker as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "3864514494",
+    "frame": "frame_002520.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the tray relative to the microwave? (Use the microwave as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0583_00",
+    "frame": "1972.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the toilet relative to the sink? (Use the sink as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0131_00",
+    "frame": "522.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the shelves relative to the keyboard? (Use the keyboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0046_00",
+    "frame": "0.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the chair relative to the laptop? (Use the laptop as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "c50d2d1d42",
+    "frame": "frame_007110.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the chair relative to the headphones? (Use the headphones as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0565_00",
+    "frame": "147.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the desk relative to the trash can? (Use the trash can as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0164_02",
+    "frame": "24.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the cabinet relative to the towel? (Use the towel as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "acd95847c5",
+    "frame": "frame_001090.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the mouse relative to the filter jug? (Use the filter jug as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "774.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the pillow relative to the ottoman? (Use the ottoman as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "3f15a9266d",
+    "frame": "frame_001800.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the wall clock relative to the files? (Use the files as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0663_02",
+    "frame": "681.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the computer tower relative to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0644_00",
+    "frame": "1155.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the radiator relative to the keyboard? (Use the keyboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0164_00",
+    "frame": "126.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the cabinet relative to the towel? (Use the towel as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0606_02",
+    "frame": "2064.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the bag relative to the storage container? (Use the storage container as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0591_01",
+    "frame": "450.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the chair relative to the bag? (Use the bag as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_000090.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the jacket relative to the power socket? (Use the power socket as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "561.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the whiteboard relative to the pillow? (Use the pillow as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0149_00",
+    "frame": "381.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the sink relative to the towel? (Use the towel as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0144_00",
+    "frame": "204.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the bag relative to the night stand? (Use the night stand as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0307_01",
+    "frame": "2014.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the shelves relative to the refrigerator? (Use the refrigerator as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "837.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the laptop relative to the shelves? (Use the shelves as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannet",
+    "scene": "scene0025_01",
+    "frame": "1647.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the cabinet relative to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L3_coordinate_rotation_agent",
+    "dataset": "scannetpp",
+    "scene": "f9f95681fd",
+    "frame": "frame_007290.jpg",
+    "question": "Suppose this room had originally been designed with its orientation rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. Observed from the original camera position and viewing direction (unchanged), in which direction is the cup relative to the coffee machine? (Use the coffee machine as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

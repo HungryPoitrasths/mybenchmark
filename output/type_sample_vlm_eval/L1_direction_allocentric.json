@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_001950.jpg",
+    "question": "In this image the camera faces east. Viewed from above on the room's layout, the cabinet is in which cardinal direction relative to the plant pot? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0695_02",
+    "frame": "909.jpg",
+    "question": "In this image the camera faces east. Viewed from above on the room's layout, the bookshelf is in which cardinal direction relative to the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0645_01",
+    "frame": "822.jpg",
+    "question": "In this image the camera faces north. Viewed from above on the room's layout, the chair is in which cardinal direction relative to the table? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_01",
+    "frame": "120.jpg",
+    "question": "The camera is facing east in this scene. On the room's floor plan, in which cardinal direction is the laptop from the keyboard? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0583_00",
+    "frame": "174.jpg",
+    "question": "In this image the camera faces north. Viewed from above on the room's layout, the picture is in which cardinal direction relative to the bottle? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_001550.jpg",
+    "question": "In this image the camera faces south. Viewed from above on the room's layout, the bag is in which cardinal direction relative to the heater? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0353_02",
+    "frame": "1557.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the shelves from the plate? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0046_02",
+    "frame": "558.jpg",
+    "question": "In this image the camera faces southwest. Viewed from above on the room's layout, the laptop is in which cardinal direction relative to the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0695_01",
+    "frame": "0.jpg",
+    "question": "In this image the camera faces southeast. Viewed from above on the room's layout, the bookshelf is in which cardinal direction relative to the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0678_02",
+    "frame": "300.jpg",
+    "question": "In this image the camera faces east. Viewed from above on the room's layout, the trash can is in which cardinal direction relative to the laundry basket? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "acd95847c5",
+    "frame": "frame_010650.jpg",
+    "question": "In this image the camera faces south. Viewed from above on the room's layout, the cup is in which cardinal direction relative to the book? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_005360.jpg",
+    "question": "The camera is facing south in this scene. On the room's floor plan, in which cardinal direction is the helmet from the stool? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_008490.jpg",
+    "question": "In this image the camera faces east. Viewed from above on the room's layout, the cup is in which cardinal direction relative to the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0131_00",
+    "frame": "522.jpg",
+    "question": "In this image the camera faces northeast. Viewed from above on the room's layout, the shelves is in which cardinal direction relative to the keyboard? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "ac48a9b736",
+    "frame": "frame_010070.jpg",
+    "question": "In this image the camera faces south. Viewed from above on the room's layout, the box is in which cardinal direction relative to the heater? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "774.jpg",
+    "question": "The camera is facing northeast in this scene. On the room's floor plan, in which cardinal direction is the table from the ottoman? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_000030.jpg",
+    "question": "The camera is facing southwest in this scene. On the room's floor plan, in which cardinal direction is the table from the water kettle? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "578511c8a9",
+    "frame": "frame_007320.jpg",
+    "question": "The camera is facing east in this scene. On the room's floor plan, in which cardinal direction is the printer from the jug? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_000600.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the book from the keyboard? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_005880.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the telephone from the air conditioner? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0131_02",
+    "frame": "690.jpg",
+    "question": "In this image the camera faces west. Viewed from above on the room's layout, the chair is in which cardinal direction relative to the computer tower? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_009170.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the pot from the guitar? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "99fa5c25e1",
+    "frame": "frame_006140.jpg",
+    "question": "In this image the camera faces west. Viewed from above on the room's layout, the wooden brush is in which cardinal direction relative to the spray bottle? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_006430.jpg",
+    "question": "The camera is facing east in this scene. On the room's floor plan, in which cardinal direction is the bottle from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0435_02",
+    "frame": "1515.jpg",
+    "question": "The camera is facing southeast in this scene. On the room's floor plan, in which cardinal direction is the suitcase from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_023450.jpg",
+    "question": "In this image the camera faces southeast. Viewed from above on the room's layout, the range hood is in which cardinal direction relative to the dishwashing sponge? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "21d970d8de",
+    "frame": "frame_002690.jpg",
+    "question": "The camera is facing southeast in this scene. On the room's floor plan, in which cardinal direction is the whiteboard from the paper towel dispenser? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0591_01",
+    "frame": "1206.jpg",
+    "question": "In this image the camera faces south. Viewed from above on the room's layout, the chair is in which cardinal direction relative to the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c4c04e6d6c",
+    "frame": "frame_008640.jpg",
+    "question": "In this image the camera faces southeast. Viewed from above on the room's layout, the sink is in which cardinal direction relative to the speaker? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0025_00",
+    "frame": "1194.jpg",
+    "question": "The camera is facing south in this scene. On the room's floor plan, in which cardinal direction is the chair from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0164_00",
+    "frame": "126.jpg",
+    "question": "The camera is facing north in this scene. On the room's floor plan, in which cardinal direction is the cabinet from the towel? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0050_02",
+    "frame": "3882.jpg",
+    "question": "In this image the camera faces northeast. Viewed from above on the room's layout, the shelves is in which cardinal direction relative to the printer? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_02",
+    "frame": "0.jpg",
+    "question": "The camera is facing west in this scene. On the room's floor plan, in which cardinal direction is the pillow from the towel? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "1755.jpg",
+    "question": "In this image the camera faces northeast. Viewed from above on the room's layout, the bowl is in which cardinal direction relative to the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_007090.jpg",
+    "question": "The camera is facing northeast in this scene. On the room's floor plan, in which cardinal direction is the power socket from the kettle? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0046_00",
+    "frame": "2178.jpg",
+    "question": "The camera is facing east in this scene. On the room's floor plan, in which cardinal direction is the toilet from the sink? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_000990.jpg",
+    "question": "In this image the camera faces northwest. Viewed from above on the room's layout, the desk lamp is in which cardinal direction relative to the mousepad? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "3276.jpg",
+    "question": "In this image the camera faces northwest. Viewed from above on the room's layout, the cabinet is in which cardinal direction relative to the keyboard? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_004560.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the dark green jacket from the pillow? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "cc5237fd77",
+    "frame": "frame_008060.jpg",
+    "question": "The camera is facing northeast in this scene. On the room's floor plan, in which cardinal direction is the keyboard from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0591_02",
+    "frame": "1047.jpg",
+    "question": "The camera is facing south in this scene. On the room's floor plan, in which cardinal direction is the keyboard from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c50d2d1d42",
+    "frame": "frame_008020.jpg",
+    "question": "In this image the camera faces south. Viewed from above on the room's layout, the keyboard is in which cardinal direction relative to the cup? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0084_02",
+    "frame": "708.jpg",
+    "question": "The camera is facing southwest in this scene. On the room's floor plan, in which cardinal direction is the toilet from the radiator? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "a24f64f7fb",
+    "frame": "frame_000450.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the fan from the folding sofa? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0231_00",
+    "frame": "2523.jpg",
+    "question": "The camera is facing northwest in this scene. On the room's floor plan, in which cardinal direction is the stool from the sink? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "1020.jpg",
+    "question": "In this image the camera faces south. Viewed from above on the room's layout, the cup is in which cardinal direction relative to the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "3864514494",
+    "frame": "frame_001110.jpg",
+    "question": "In this image the camera faces east. Viewed from above on the room's layout, the water boiler is in which cardinal direction relative to the serving trolley? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1359.jpg",
+    "question": "In this image the camera faces northeast. Viewed from above on the room's layout, the computer tower is in which cardinal direction relative to the pillow? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannetpp",
+    "scene": "3f15a9266d",
+    "frame": "frame_001800.jpg",
+    "question": "In this image the camera faces northeast. Viewed from above on the room's layout, the wall clock is in which cardinal direction relative to the files? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L1_direction_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0629_01",
+    "frame": "1284.jpg",
+    "question": "The camera is facing north in this scene. On the room's floor plan, in which cardinal direction is the shelves from the picture? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

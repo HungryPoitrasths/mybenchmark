@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_004450.jpg",
+    "question": "If the bed is moved 0.5m to the south, the camera faces west. On the floor plan, in which cardinal direction would the pillow be from the blue book? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_010100.jpg",
+    "question": "If the table is moved 3.0m to the east, the camera faces southeast. On the floor plan, in which cardinal direction would the chair be from the air conditioner? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "1632.jpg",
+    "question": "If the stool is moved 3.0m to the east, the camera faces northwest. On the floor plan, in which cardinal direction would the food container be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_00",
+    "frame": "636.jpg",
+    "question": "If the chair is moved 3.0m to the east, the camera faces southwest. On the floor plan, in which cardinal direction would the food container be from the counter? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_000780.jpg",
+    "question": "If the toilet is moved 1.5m to the west, the camera faces east. On the floor plan, in which cardinal direction would the toilet paper be from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "1020.jpg",
+    "question": "If the desk is moved 2.0m to the north, the camera faces south. On the floor plan, in which cardinal direction would the white box be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_005380.jpg",
+    "question": "If the laboratory bench is moved 2.0m to the south, the camera faces northwest. On the floor plan, in which cardinal direction would the plastic case be from the soldering iron? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0606_00",
+    "frame": "99.jpg",
+    "question": "After moving the cabinets 3.0m to the east, on the room's layout (camera facing northwest), in which cardinal direction is the counter from the bin? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000330.jpg",
+    "question": "If the oven is moved 3.0m to the east, the camera faces southeast. On the floor plan, in which cardinal direction would the cereal box be from the microwave? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_02",
+    "frame": "2433.jpg",
+    "question": "If the desk is moved 3.0m to the north, the camera faces southwest. On the floor plan, in which cardinal direction would the printer be from the radiator? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0046_01",
+    "frame": "201.jpg",
+    "question": "If the table is moved 3.0m to the south, the camera faces north. On the floor plan, in which cardinal direction would the laptop be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0050_01",
+    "frame": "1023.jpg",
+    "question": "After moving the sofa 2.5m to the west, on the room's layout (camera facing east), in which cardinal direction is the pillow from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0378_00",
+    "frame": "144.jpg",
+    "question": "After moving the cabinet 3.0m to the north, on the room's layout (camera facing east), in which cardinal direction is the printer from the desk? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "3222.jpg",
+    "question": "If the desk is moved 3.0m to the south, the camera faces north. On the floor plan, in which cardinal direction would the keyboard be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0658_00",
+    "frame": "75.jpg",
+    "question": "If the desk is moved 3.0m to the north, the camera faces southeast. On the floor plan, in which cardinal direction would the trash can be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "ac48a9b736",
+    "frame": "frame_007660.jpg",
+    "question": "If the table is moved 3.0m to the east, the camera faces northwest. On the floor plan, in which cardinal direction would the mouse be from the box? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0378_01",
+    "frame": "111.jpg",
+    "question": "If the cabinet is moved 3.0m to the south, the camera faces west. On the floor plan, in which cardinal direction would the printer be from the speaker? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0593_00",
+    "frame": "2289.jpg",
+    "question": "If the sofa is moved 3.0m to the north, the camera faces southwest. On the floor plan, in which cardinal direction would the bag be from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "885.jpg",
+    "question": "If the desk is moved 3.0m to the south, the camera faces northeast. On the floor plan, in which cardinal direction would the laptop be from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0648_01",
+    "frame": "2421.jpg",
+    "question": "If the desk is moved 3.0m to the east, the camera faces west. On the floor plan, in which cardinal direction would the shelves be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0643_00",
+    "frame": "1827.jpg",
+    "question": "If the desk is moved 3.0m to the south, the camera faces northwest. On the floor plan, in which cardinal direction would the keyboard be from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0025_01",
+    "frame": "1653.jpg",
+    "question": "After moving the desk 1.5m to the north, on the room's layout (camera facing south), in which cardinal direction is the keyboard from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "After moving the bookshelf 3.0m to the south, on the room's layout (camera facing northeast), in which cardinal direction is the coffee machine from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0414_00",
+    "frame": "804.jpg",
+    "question": "After moving the cabinet 1.5m to the east, on the room's layout (camera facing south), in which cardinal direction is the whiteboard from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004920.jpg",
+    "question": "If the table is moved 2.5m to the east, the camera faces northwest. On the floor plan, in which cardinal direction would the headset be from the rolling chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0046_02",
+    "frame": "1188.jpg",
+    "question": "If the bathtub is moved 3.0m to the north, the camera faces southeast. On the floor plan, in which cardinal direction would the curtain be from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c4c04e6d6c",
+    "frame": "frame_007610.jpg",
+    "question": "After moving the rolling cart 3.0m to the west, on the room's layout (camera facing east), in which cardinal direction is the overhead projector from the telephone? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_01",
+    "frame": "879.jpg",
+    "question": "If the desk is moved 2.5m to the west, the camera faces north. On the floor plan, in which cardinal direction would the keyboard be from the computer tower? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_007520.jpg",
+    "question": "After moving the table 3.0m to the west, on the room's layout (camera facing northeast), in which cardinal direction is the box from the cart? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0606_02",
+    "frame": "2505.jpg",
+    "question": "After moving the cabinets 3.0m to the east, on the room's layout (camera facing north), in which cardinal direction is the plant from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c50d2d1d42",
+    "frame": "frame_007110.jpg",
+    "question": "If the office table is moved 3.0m to the west, the camera faces east. On the floor plan, in which cardinal direction would the mousepad be from the desk fan? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0580_01",
+    "frame": "3757.jpg",
+    "question": "If the chair is moved 3.0m to the east, the camera faces southwest. On the floor plan, in which cardinal direction would the backpack be from the table? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_005700.jpg",
+    "question": "After moving the table 3.0m to the east, on the room's layout (camera facing northwest), in which cardinal direction is the telephone from the air conditioner? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0356_01",
+    "frame": "3.jpg",
+    "question": "After moving the desk 2.5m to the south, on the room's layout (camera facing north), in which cardinal direction is the shelves from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0144_00",
+    "frame": "192.jpg",
+    "question": "After moving the night stand 2.5m to the south, on the room's layout (camera facing north), in which cardinal direction is the printer from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_000090.jpg",
+    "question": "If the plant pot is moved 3.0m to the south, the camera faces northwest. On the floor plan, in which cardinal direction would the plant be from the dark green jacket? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0591_01",
+    "frame": "807.jpg",
+    "question": "After moving the sofa 3.0m to the west, on the room's layout (camera facing northeast), in which cardinal direction is the pillow from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1359.jpg",
+    "question": "After moving the desk 2.0m to the west, on the room's layout (camera facing northeast), in which cardinal direction is the computer tower from the pillow? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_007600.jpg",
+    "question": "If the sink is moved 3.0m to the east, the camera faces west. On the floor plan, in which cardinal direction would the tap be from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_008490.jpg",
+    "question": "After moving the table 3.0m to the west, on the room's layout (camera facing east), in which cardinal direction is the mouse from the cup? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0695_01",
+    "frame": "2130.jpg",
+    "question": "After moving the desk 2.5m to the west, on the room's layout (camera facing north), in which cardinal direction is the bag from the box? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001110.jpg",
+    "question": "If the bed is moved 3.0m to the east, the camera faces southwest. On the floor plan, in which cardinal direction would the mattress be from the duffle bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "578511c8a9",
+    "frame": "frame_007320.jpg",
+    "question": "After moving the table 3.0m to the west, on the room's layout (camera facing east), in which cardinal direction is the books from the printer? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0583_00",
+    "frame": "1972.jpg",
+    "question": "If the cabinet is moved 3.0m to the west, the camera faces north. On the floor plan, in which cardinal direction would the sink be from the toilet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0329_00",
+    "frame": "1303.jpg",
+    "question": "If the table is moved 3.0m to the east, the camera faces south. On the floor plan, in which cardinal direction would the computer tower be from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_004700.jpg",
+    "question": "If the refrigerator is moved 3.0m to the south, the camera faces north. On the floor plan, in which cardinal direction would the coffee maker be from the arm chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0653_01",
+    "frame": "4536.jpg",
+    "question": "After moving the cabinet 3.0m to the west, on the room's layout (camera facing south), in which cardinal direction is the box from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0583_01",
+    "frame": "1511.jpg",
+    "question": "After moving the cabinet 2.0m to the south, on the room's layout (camera facing west), in which cardinal direction is the sink from the picture? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5ee7c22ba0",
+    "frame": "frame_000450.jpg",
+    "question": "After moving the table 2.0m to the east, on the room's layout (camera facing south), in which cardinal direction is the microwave from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L2_object_move_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "774.jpg",
+    "question": "After moving the chair 3.0m to the south, on the room's layout (camera facing northeast), in which cardinal direction is the pillow from the ottoman? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

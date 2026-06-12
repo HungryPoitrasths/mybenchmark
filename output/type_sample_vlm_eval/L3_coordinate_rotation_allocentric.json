@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_03",
+    "frame": "969.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southwest, remains in place. On the floor plan, in which cardinal direction is the cabinet from the cup? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0050_02",
+    "frame": "3882.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northeast, remains in place. On the floor plan, in which cardinal direction is the shelves from the printer? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "1755.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northeast, remains in place. On the floor plan, in which cardinal direction is the bowl from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_008330.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the pillow from the guitar? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000090.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the wok pan from the dishwashing sponge? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0207_02",
+    "frame": "1023.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northeast, remains in place. On the floor plan, in which cardinal direction is the counter from the towel? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "2949.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the bookshelf from the pillow? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_000240.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the laundry basket from the shelf? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0658_00",
+    "frame": "75.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southeast, remains in place. On the floor plan, in which cardinal direction is the cabinet from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0046_02",
+    "frame": "0.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing north, remains in place. On the floor plan, in which cardinal direction is the chair from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0699_00",
+    "frame": "348.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing north, remains in place. On the floor plan, in which cardinal direction is the night stand from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0246_00",
+    "frame": "108.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the wardrobe from the night stand? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "40aec5fffa",
+    "frame": "frame_004050.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the paper towels from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "38d58a7a31",
+    "frame": "frame_002820.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the soap dispenser from the sink? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0222_01",
+    "frame": "708.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southeast, remains in place. On the floor plan, in which cardinal direction is the chair from the bottle? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0583_01",
+    "frame": "1511.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing west, remains in place. On the floor plan, in which cardinal direction is the sink from the toilet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0050_00",
+    "frame": "4146.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the chair from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "99fa5c25e1",
+    "frame": "frame_005120.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the stool from the bucket? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "f9f95681fd",
+    "frame": "frame_001230.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the trash can from the cup? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0164_01",
+    "frame": "393.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southwest, remains in place. On the floor plan, in which cardinal direction is the towel from the sink? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_003520.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing north, remains in place. On the floor plan, in which cardinal direction is the dish drainer from the coffee maker? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "acd95847c5",
+    "frame": "frame_010710.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the laptop from the book? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0643_00",
+    "frame": "1827.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the keyboard from the bag? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c50d2d1d42",
+    "frame": "frame_007110.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the keyboard from the desk fan? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_005700.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the telephone from the air conditioner? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0435_01",
+    "frame": "264.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southeast, remains in place. On the floor plan, in which cardinal direction is the trash can from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0046_01",
+    "frame": "1791.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the toilet from the sink? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_005930.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southwest, remains in place. On the floor plan, in which cardinal direction is the crate from the stool? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_005620.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the soldering iron from the plastic case? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_008490.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the cabinet from the cup? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_02",
+    "frame": "2439.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southeast, remains in place. On the floor plan, in which cardinal direction is the chair from the keyboard? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "north",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "21d970d8de",
+    "frame": "frame_002690.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing southeast, remains in place. On the floor plan, in which cardinal direction is the whiteboard from the paper towel dispenser? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "east",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0583_00",
+    "frame": "144.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing north, remains in place. On the floor plan, in which cardinal direction is the picture from the bottle? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_000840.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing west, remains in place. On the floor plan, in which cardinal direction is the chair from the headphones? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_009830.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the chair from the carton? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "south",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0591_02",
+    "frame": "1047.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the keyboard from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0435_00",
+    "frame": "2616.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northeast, remains in place. On the floor plan, in which cardinal direction is the sink from the trash can? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0629_01",
+    "frame": "1284.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing north, remains in place. On the floor plan, in which cardinal direction is the shelves from the picture? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "east",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "cc5237fd77",
+    "frame": "frame_000720.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the multiplug from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0131_02",
+    "frame": "690.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing west, remains in place. On the floor plan, in which cardinal direction is the chair from the computer tower? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "c4c04e6d6c",
+    "frame": "frame_003620.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northeast, remains in place. On the floor plan, in which cardinal direction is the telephone from the overhead projector? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "southwest",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "southwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "561.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northeast, remains in place. On the floor plan, in which cardinal direction is the whiteboard from the sofa? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northeast",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "southeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0663_01",
+    "frame": "567.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the cabinet from the computer tower? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "south",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "west",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_004500.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the power socket from the plant? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "northeast",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "northwest",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "southeast",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1059.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the bag from the chair? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001570.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing north, remains in place. On the floor plan, in which cardinal direction is the bluetooth speaker from the laptop? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "north",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "north",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0050_01",
+    "frame": "1023.jpg",
+    "question": "Imagine all furniture is rotated 90 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing east, remains in place. On the floor plan, in which cardinal direction is the chair from the pillow? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannetpp",
+    "scene": "825d228aec",
+    "frame": "frame_003450.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the stapler from the printer? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "west",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "west",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "399.jpg",
+    "question": "Imagine all furniture is rotated 270 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing south, remains in place. On the floor plan, in which cardinal direction is the box from the keyboard? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "southwest",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "southeast",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "northwest",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "northeast",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "northwest",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L3_coordinate_rotation_allocentric",
+    "dataset": "scannet",
+    "scene": "scene0653_01",
+    "frame": "627.jpg",
+    "question": "Imagine all furniture is rotated 180 degrees clockwise about the camera (viewed from above), with every object keeping its position relative to the others. The camera, facing northwest, remains in place. On the floor plan, in which cardinal direction is the cup from the cabinet? (for horizontal cardinal directions, compare the objects' 3D bounding-box centers projected onto the floor plan.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "north",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "west",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "east",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "south",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "south",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

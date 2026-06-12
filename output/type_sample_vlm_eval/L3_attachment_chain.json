@@ -1,0 +1,762 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001200.jpg",
+    "question": "Suppose the table were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the chair",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the desk lamp",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the monitor",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "the desk lamp; the monitor",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000540.jpg",
+    "question": "Imagine the counter is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the red moka pot",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the flour bag",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the oven",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "red moka pot; flour bag; oven",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010440.jpg",
+    "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['B', 'C']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the shower rug",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the soap bottle",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['B', 'C']",
+    "model_letter": null,
+    "correct_value": "the sink; the soap bottle",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_000780.jpg",
+    "question": "If the carpet were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['B', 'C']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the plant",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the pillow",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the sofa",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['B', 'C']",
+    "model_letter": null,
+    "correct_value": "the sofa; the pillow",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "Suppose the cabinet were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['A', 'B']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the microwave",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the cup",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the french press",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['A', 'B']",
+    "model_letter": null,
+    "correct_value": "the microwave; the cup",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_006910.jpg",
+    "question": "Suppose the counter were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the oven",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the stove",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the pan",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "the stove; the pan",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_005890.jpg",
+    "question": "Imagine the counter is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the bar stool",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the oven",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the tray",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "the oven; the tray",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_000780.jpg",
+    "question": "Imagine the carpet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['A', 'C']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the bookshelf",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the plant",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the hat",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['A', 'C']",
+    "model_letter": null,
+    "correct_value": "the bookshelf; the hat",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_000910.jpg",
+    "question": "If the cabinet were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the faucet",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the bathtub",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "none",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001200.jpg",
+    "question": "If the table were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['A', 'C']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the bottle",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the chair",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the desk lamp",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['A', 'C']",
+    "model_letter": null,
+    "correct_value": "the desk lamp; the bottle",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_001990.jpg",
+    "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the bathtub",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the soap bottle",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "none",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010440.jpg",
+    "question": "If the cabinet were relocated elsewhere in the room, which of the following objects would also change position? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the shower rug",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the faucet",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "none",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_005890.jpg",
+    "question": "Suppose the counter were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the bar stool",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the oven",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the cereal box",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "the oven; the cereal box",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010470.jpg",
+    "question": "Imagine the cabinet is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the shower rug",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the faucet",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "none",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001510.jpg",
+    "question": "Suppose the table were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the desk lamp",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the bluetooth speaker",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the monitor",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "desk lamp; bluetooth speaker; monitor",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_001990.jpg",
+    "question": "Suppose the cabinet were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the bathtub",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the faucet",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "none",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_023450.jpg",
+    "question": "Imagine the counter is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the oven",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the cereal box",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the clothes dryer",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "the oven; the cereal box",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001510.jpg",
+    "question": "Imagine the table is moved to a new spot. Which of the following objects would also be displaced as a result? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['A', 'B', 'C']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the bluetooth speaker",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the bottle",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the desk lamp",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "none of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['A', 'B', 'C']",
+    "model_letter": null,
+    "correct_value": "the bluetooth speaker; the bottle; the desk lamp",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000540.jpg",
+    "question": "Suppose the counter were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "['A', 'B', 'C']",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the oven",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the moka pot",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the flour bag",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "none of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "['A', 'B', 'C']",
+    "model_letter": null,
+    "correct_value": "the oven; the moka pot; the flour bag",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L3_attachment_chain",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_002020.jpg",
+    "question": "Suppose the cabinet were moved to a different location. Which of the following objects would also be displaced from their current positions? This is a multiple-select question; choose all options that apply.",
+    "gold_answer": "[]",
+    "options": [
+      {
+        "letter": "A",
+        "text": "the shower rug",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "the faucet",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "the sink",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "None of the above",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "[]",
+    "model_letter": null,
+    "correct_value": "the faucet; the sink",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

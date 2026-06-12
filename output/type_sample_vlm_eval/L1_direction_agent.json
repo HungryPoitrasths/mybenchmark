@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001200.jpg",
+    "question": "From the camera's viewpoint, the mouse is in which direction relative to the desk lamp? (Use the desk lamp as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "ac48a9b736",
+    "frame": "frame_007660.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the box to the mouse? (Use the mouse as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_006940.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the bottle spray to the book? (Use the book as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "78.jpg",
+    "question": "From the camera's viewpoint, the keyboard is in which direction relative to the cabinet? (Use the cabinet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0131_02",
+    "frame": "126.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the shelves to the keyboard? (Use the keyboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0231_02",
+    "frame": "102.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the trash can positioned relative to the bag? (Use the bag as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0474_01",
+    "frame": "126.jpg",
+    "question": "From the camera's viewpoint, the cup is in which direction relative to the laptop? (Use the laptop as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0678_02",
+    "frame": "300.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the laundry basket positioned relative to the trash can? (Use the trash can as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_004500.jpg",
+    "question": "From the camera's viewpoint, the plant is in which direction relative to the power socket? (Use the power socket as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0378_02",
+    "frame": "231.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the trash can positioned relative to the printer? (Use the printer as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "acd95847c5",
+    "frame": "frame_010530.jpg",
+    "question": "From the camera's viewpoint, the green book is in which direction relative to the mouse? (Use the mouse as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0207_02",
+    "frame": "1023.jpg",
+    "question": "From the camera's viewpoint, the towel is in which direction relative to the sink? (Use the sink as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0629_01",
+    "frame": "1284.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the picture positioned relative to the bottle? (Use the bottle as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "837.jpg",
+    "question": "From the camera's viewpoint, the bowl is in which direction relative to the laptop? (Use the laptop as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "cc5237fd77",
+    "frame": "frame_000810.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the portable speaker positioned relative to the air vent? (Use the air vent as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0645_01",
+    "frame": "3837.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the trash can positioned relative to the toilet? (Use the toilet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0435_01",
+    "frame": "354.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the chair positioned relative to the refrigerator? (Use the refrigerator as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_005020.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the night stand to the keyboard? (Use the keyboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000030.jpg",
+    "question": "From the camera's viewpoint, the electric stove is in which direction relative to the dish drying rack? (Use the dish drying rack as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "40aec5fffa",
+    "frame": "frame_005220.jpg",
+    "question": "From the camera's viewpoint, the water kettle is in which direction relative to the water filter? (Use the water filter as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0591_01",
+    "frame": "450.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the plant positioned relative to the cabinet? (Use the cabinet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0030_02",
+    "frame": "366.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the bag to the bookshelf? (Use the bookshelf as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0222_01",
+    "frame": "402.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the bottle to the night stand? (Use the night stand as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0550_00",
+    "frame": "3.jpg",
+    "question": "From the camera's viewpoint, the trash can is in which direction relative to the toilet? (Use the toilet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0608_02",
+    "frame": "123.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the piano positioned relative to the clock? (Use the clock as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0131_00",
+    "frame": "522.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the keyboard positioned relative to the shelves? (Use the shelves as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004890.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the cabinet positioned relative to the laptop? (Use the laptop as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0084_02",
+    "frame": "708.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the radiator to the toilet? (Use the toilet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "21d970d8de",
+    "frame": "frame_004050.jpg",
+    "question": "From the camera's viewpoint, the speaker is in which direction relative to the blinds? (Use the blinds as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_008440.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the knife holder to the stove? (Use the stove as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_002780.jpg",
+    "question": "From the camera's viewpoint, the laptop is in which direction relative to the headphone? (Use the headphone as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1440.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the keyboard positioned relative to the computer tower? (Use the computer tower as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0222_00",
+    "frame": "768.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the pillow positioned relative to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "909.jpg",
+    "question": "From the camera's viewpoint, the toilet is in which direction relative to the sink? (Use the sink as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_000840.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the power plug to the wall clock? (Use the wall clock as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_000120.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the water kettle positioned relative to the trash can? (Use the trash can as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "678.jpg",
+    "question": "From the camera's viewpoint, the ottoman is in which direction relative to the pillow? (Use the pillow as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0629_02",
+    "frame": "1005.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the bottle to the shelves? (Use the shelves as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_000780.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the trash can to the toilet paper? (Use the toilet paper as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0149_00",
+    "frame": "1328.jpg",
+    "question": "From the camera's viewpoint, the bag is in which direction relative to the table? (Use the table as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0207_00",
+    "frame": "1632.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the trash can to the sink? (Use the sink as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0050_01",
+    "frame": "1023.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the pillow to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_009540.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the first aid cabinet positioned relative to the laboratory cabinet? (Use the laboratory cabinet as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_011270.jpg",
+    "question": "From the camera's viewpoint, the piano book is in which direction relative to the piano chair? (Use the piano chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0663_02",
+    "frame": "837.jpg",
+    "question": "From the camera's viewpoint, the cabinet is in which direction relative to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0353_02",
+    "frame": "2115.jpg",
+    "question": "From the current camera perspective, what is the spatial relationship of the pillow to the whiteboard? (Use the whiteboard as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0648_01",
+    "frame": "1920.jpg",
+    "question": "From the camera's viewpoint, the chair is in which direction relative to the bag? (Use the bag as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0025_00",
+    "frame": "1194.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the cabinet positioned relative to the chair? (Use the chair as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannetpp",
+    "scene": "3864514494",
+    "frame": "frame_002520.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the microwave positioned relative to the window sill? (Use the window sill as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L1_direction_agent",
+    "dataset": "scannet",
+    "scene": "scene0644_00",
+    "frame": "1155.jpg",
+    "question": "Looking at the scene from the camera's perspective, where is the keyboard positioned relative to the radiator? (Use the radiator as the reference origin and align the axes with the camera coordinate frame: front means farther from the camera, back means toward the camera, and left/right follow the image left/right. For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

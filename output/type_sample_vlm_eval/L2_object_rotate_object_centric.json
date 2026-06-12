@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0435_02",
+    "frame": "1515.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted right by 2.0m, from the picture's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_000780.jpg",
+    "question": "Imagine you are the hat and facing toward the pillow. If the bookshelf were moved along a 180-degree clockwise (viewed from above) orbit around the center of the pillow in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the plant be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "Imagine you are the microwave and facing toward the bookshelf. If the cabinet were moved along a 135-degree counterclockwise (viewed from above) orbit around the center of the bookshelf in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the towel be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_008490.jpg",
+    "question": "Imagine you are the cabinet and facing toward the mouse. If the cabinet were moved along a 135-degree clockwise (viewed from above) orbit around the center of the mouse in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the trash can be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0207_00",
+    "frame": "636.jpg",
+    "question": "Imagine you are the sink and facing toward the food container. If the counter were moved along a 135-degree counterclockwise (viewed from above) orbit around the center of the food container in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the towel be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_004500.jpg",
+    "question": "Imagine you are the plant and facing toward the pillow. If the plant pot were moved along a 180-degree clockwise (viewed from above) orbit around the center of the pillow in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the power socket be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004920.jpg",
+    "question": "Imagine you are the headset and facing toward the rolling chair. If the table were moved along a 180-degree clockwise (viewed from above) orbit around the center of the rolling chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bottle be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0164_01",
+    "frame": "393.jpg",
+    "question": "Imagine you are the picture and facing toward the towel. If the picture were moved along a 90-degree clockwise (viewed from above) orbit around the center of the towel in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the sink be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0025_01",
+    "frame": "249.jpg",
+    "question": "Imagine you are the book on top of the cabinet near the window and facing toward the keyboard. If the cabinet were moved along a 180-degree clockwise (viewed from above) orbit around the center of the keyboard in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the black shelves be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010440.jpg",
+    "question": "Imagine you are the soap bottle and facing toward the shower rug. If the cabinet were moved along a 45-degree clockwise (viewed from above) orbit around the center of the shower rug in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the shelf be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "cc5237fd77",
+    "frame": "frame_000330.jpg",
+    "question": "Imagine you are the monitor and facing toward the computer tower. If the desk were moved along a 135-degree clockwise (viewed from above) orbit around the center of the computer tower in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_006940.jpg",
+    "question": "Imagine you are the stove and facing toward the tap. If the stove were moved along a 90-degree clockwise (viewed from above) orbit around the center of the tap in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the oven be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001200.jpg",
+    "question": "Imagine you are the desk lamp and facing toward the chair. If the table were moved along a 135-degree clockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bluetooth speaker be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000060.jpg",
+    "question": "Imagine you are the plates and facing toward the sink. If the dish drying rack were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the sink in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the clothes dryer be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_005880.jpg",
+    "question": "Imagine you are the telephone and facing toward the sofa. If the table were moved along a 45-degree counterclockwise (viewed from above) orbit around the center of the sofa in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the air conditioner be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_005290.jpg",
+    "question": "Imagine you are the plastic case and facing toward the chair. If the laboratory bench were moved along a 135-degree counterclockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the soldering iron be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "1632.jpg",
+    "question": "Imagine you are the blue book and facing toward the chair. If the sofa were moved along a 180-degree clockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the food container be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0050_01",
+    "frame": "1023.jpg",
+    "question": "Imagine you are the laptop and facing toward the pillow. If the desk were moved along a 45-degree clockwise (viewed from above) orbit around the center of the pillow in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0046_02",
+    "frame": "1188.jpg",
+    "question": "Imagine you are the curtain and facing toward the sink. If the bathtub were moved along a 45-degree clockwise (viewed from above) orbit around the center of the sink in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the towel be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0606_02",
+    "frame": "2505.jpg",
+    "question": "Imagine you are the plant and facing toward the bag. If the cabinets were moved along a 45-degree counterclockwise (viewed from above) orbit around the center of the bag in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the storage container be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0629_01",
+    "frame": "1284.jpg",
+    "question": "Imagine you are the shelves and facing toward the bottle. If the shelves were moved along a 135-degree clockwise (viewed from above) orbit around the center of the bottle in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the picture be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0257_00",
+    "frame": "159.jpg",
+    "question": "Imagine you are the table and facing toward the fire extinguisher. If the table were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the fire extinguisher in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "774.jpg",
+    "question": "Imagine you are the pillow and facing toward the table. If the chair were moved along a 180-degree clockwise (viewed from above) orbit around the center of the table in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the ottoman be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_001550.jpg",
+    "question": "Imagine you are the bag and facing toward the laundry basket. If the bag were moved along a 135-degree counterclockwise (viewed from above) orbit around the center of the laundry basket in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the heater be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "993.jpg",
+    "question": "Imagine you are the white box and facing toward the chair. If the desk were moved along a 45-degree clockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_002890.jpg",
+    "question": "Imagine you are the headphone holder and facing toward the table. If the headphones were moved along a 135-degree clockwise (viewed from above) orbit around the center of the table in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the computer tower be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_000780.jpg",
+    "question": "Imagine you are the toilet paper and facing toward the trash can. If the toilet were moved along a 45-degree counterclockwise (viewed from above) orbit around the center of the trash can in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bathtub be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_005360.jpg",
+    "question": "Imagine you are the helmet and facing toward the crate. If the metal workbench were moved along a 180-degree clockwise (viewed from above) orbit around the center of the crate in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the stool be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "1509.jpg",
+    "question": "Imagine you are the pillow and facing toward the bookshelf. If the sofa were moved along a 90-degree clockwise (viewed from above) orbit around the center of the bookshelf in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the whiteboard be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "40aec5fffa",
+    "frame": "frame_005220.jpg",
+    "question": "Imagine you are the cup and facing toward the water filter. If the coffee maker were moved along a 45-degree clockwise (viewed from above) orbit around the center of the water filter in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the power socket be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0353_01",
+    "frame": "1461.jpg",
+    "question": "Imagine you are the pillow and facing toward the trash can. If the sofa were moved along a 90-degree clockwise (viewed from above) orbit around the center of the trash can in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bookshelf be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0663_02",
+    "frame": "837.jpg",
+    "question": "Imagine you are the headphones and facing toward the chair. If the desk were moved along a 180-degree clockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "1101.jpg",
+    "question": "Imagine you are the boxes and facing toward the desk. If the cabinet were moved along a 45-degree clockwise (viewed from above) orbit around the center of the desk in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bag be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "38d58a7a31",
+    "frame": "frame_006380.jpg",
+    "question": "Imagine you are the sink and facing toward the power socket. If the sink were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the power socket in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the coat hanger be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "578511c8a9",
+    "frame": "frame_007320.jpg",
+    "question": "Imagine you are the pile of books and documents and facing toward the printer. If the table were moved along a 135-degree clockwise (viewed from above) orbit around the center of the printer in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the jug be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "21d970d8de",
+    "frame": "frame_002690.jpg",
+    "question": "Imagine you are the paper towel dispenser and facing toward the whiteboard. If the paper towel dispenser were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the whiteboard in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the sink be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0658_00",
+    "frame": "75.jpg",
+    "question": "Imagine you are the lamp and facing toward the cabinet. If the desk were moved along a 135-degree clockwise (viewed from above) orbit around the center of the cabinet in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "6115eddb86",
+    "frame": "frame_007780.jpg",
+    "question": "Imagine you are the bottle and facing toward the chair. If the cabinet were moved along a 135-degree counterclockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the ottoman chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004920.jpg",
+    "question": "Imagine you are the laptop and facing toward the rolling chair. If the table were moved along a 180-degree clockwise (viewed from above) orbit around the center of the rolling chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010440.jpg",
+    "question": "Imagine you are the soap bottle and facing toward the shower rug. If the sink were moved along a 135-degree clockwise (viewed from above) orbit around the center of the shower rug in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bathtub be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0435_02",
+    "frame": "1515.jpg",
+    "question": "Imagine you are the desk and facing toward the suitcase. If the desk were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the suitcase in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_001050.jpg",
+    "question": "Imagine you are the cup near the jug and facing toward the table. If the microwave were moved along a 180-degree clockwise (viewed from above) orbit around the center of the table in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the jug be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "Imagine you are the microwave and facing toward the towel. If the cabinet were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the towel in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the french press be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001570.jpg",
+    "question": "Imagine you are the mouse and facing toward the trash can. If the table were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the trash can in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the bluetooth speaker be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_009460.jpg",
+    "question": "Imagine you are the tap and facing toward the power socket. If the sink were moved along a 135-degree clockwise (viewed from above) orbit around the center of the power socket in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the cutting board be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000030.jpg",
+    "question": "Imagine you are the dish drying rack and facing toward the sink. If the dish drying rack were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the sink in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the electric stove be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "Imagine you are the coffee maker and facing toward the cabinet. If the bookshelf were moved along a 180-degree clockwise (viewed from above) orbit around the center of the cabinet in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the towel be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0025_01",
+    "frame": "1647.jpg",
+    "question": "Imagine you are the white box and facing toward the chair. If the desk were moved along a 135-degree clockwise (viewed from above) orbit around the center of the chair in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_005350.jpg",
+    "question": "Imagine you are the moka pot and facing toward the flour bag. If the microwave were moved along a 90-degree counterclockwise (viewed from above) orbit around the center of the flour bag in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the cutting board be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L2_object_rotate_object_centric",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_007570.jpg",
+    "question": "Imagine you are the knife holder and facing toward the instant pot. If the knife holder were moved along a 135-degree counterclockwise (viewed from above) orbit around the center of the instant pot in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would the windowframe be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

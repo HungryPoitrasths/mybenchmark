@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0257_00",
+    "frame": "159.jpg",
+    "question": "Imagine you are the table and initially facing the camera. If you were shifted forward by 3.0m, from the sink's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_006760.jpg",
+    "question": "Imagine you are the bookshelf initially facing the camera. If you were shifted forward by 3.0m, from the model car's perspective (which also initially faces the camera), in which horizontal direction is the mouse? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000060.jpg",
+    "question": "Imagine you are the dish drying rack and initially facing the camera. If you were shifted backward by 3.0m, from the plates's perspective (which initially faces the camera too), in which horizontal direction would the clothes dryer be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_006880.jpg",
+    "question": "Imagine you are the stove initially facing the camera. If you were shifted right by 2.0m, from the pan's perspective (which also initially faces the camera), in which horizontal direction is the oven? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "Imagine you are the bookshelf and initially facing the camera. If you were shifted left by 3.0m, from the coffee machine's perspective (which initially faces the camera too), in which horizontal direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0606_02",
+    "frame": "2505.jpg",
+    "question": "Imagine you are the cabinets and initially facing the camera. If you were shifted forward by 3.0m, from the plant's perspective (which initially faces the camera too), in which horizontal direction would the storage container be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0207_02",
+    "frame": "0.jpg",
+    "question": "Imagine you are the pillow and initially facing the camera. If you were shifted forward by 3.0m, from the pillow's perspective (which initially faces the camera too), in which horizontal direction would the bowl be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0356_01",
+    "frame": "3.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted forward by 2.0m, from the shelves's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0050_01",
+    "frame": "1023.jpg",
+    "question": "Imagine you are the sofa and initially facing the camera. If you were shifted left by 2.5m, from the pillow's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0025_01",
+    "frame": "1653.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted left by 1.5m, from the keyboard's perspective (which initially faces the camera too), in which horizontal direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_004560.jpg",
+    "question": "Imagine you are the plant pot and initially facing the camera. If you were shifted forward by 3.0m, from the plant's perspective (which initially faces the camera too), in which horizontal direction would the dark green jacket be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_000900.jpg",
+    "question": "Imagine you are the bed initially facing the camera. If you were shifted forward by 3.0m, from the mattress's perspective (which also initially faces the camera), in which horizontal direction is the sweater? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_005290.jpg",
+    "question": "Imagine you are the laboratory bench and initially facing the camera. If you were shifted right by 2.5m, from the plastic case's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0608_00",
+    "frame": "3301.jpg",
+    "question": "Imagine you are the books and initially facing the camera. If you were shifted forward by 2.5m, from the plant's perspective (which initially faces the camera too), in which horizontal direction would the guitar be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0696_02",
+    "frame": "579.jpg",
+    "question": "Imagine you are the sofa and initially facing the camera. If you were shifted forward by 2.0m, from the pillow's perspective (which initially faces the camera too), in which horizontal direction would the basket be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0695_01",
+    "frame": "2130.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted forward by 2.5m, from the laptop's perspective (which initially faces the camera too), in which horizontal direction would the box be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_003880.jpg",
+    "question": "Imagine you are the mouse initially facing the camera. If you were shifted forward by 1.0m, from the mouse's perspective (which also initially faces the camera), in which horizontal direction is the cup? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0025_00",
+    "frame": "1194.jpg",
+    "question": "Imagine you are the cabinet and initially facing the camera. If you were shifted forward by 3.0m, from the books's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0658_00",
+    "frame": "75.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted forward by 3.0m, from the trash can's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0435_03",
+    "frame": "1804.jpg",
+    "question": "Imagine you are the desk initially facing the camera. If you were shifted forward by 3.0m, from the trash can's perspective (which also initially faces the camera), in which horizontal direction is the suitcase? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5ee7c22ba0",
+    "frame": "frame_000450.jpg",
+    "question": "Imagine you are the table initially facing the camera. If you were shifted forward by 2.0m, from the microwave's perspective (which also initially faces the camera), in which horizontal direction is the trash can? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_007520.jpg",
+    "question": "Imagine you are the table initially facing the camera. If you were shifted left by 3.0m, from the box's perspective (which also initially faces the camera), in which horizontal direction is the cart? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004920.jpg",
+    "question": "Imagine you are the table initially facing the camera. If you were shifted left by 2.5m, from the laptop's perspective (which also initially faces the camera), in which horizontal direction is the headset? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0474_02",
+    "frame": "2439.jpg",
+    "question": "Imagine you are the desk initially facing the camera. If you were shifted forward by 2.0m, from the keyboard's perspective (which also initially faces the camera), in which horizontal direction is the chair? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_009110.jpg",
+    "question": "Imagine you are the sofa initially facing the camera. If you were shifted forward by 2.0m, from the pillow's perspective (which also initially faces the camera), in which horizontal direction is the tv stand? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0046_02",
+    "frame": "1188.jpg",
+    "question": "Imagine you are the bathtub initially facing the camera. If you were shifted forward by 3.0m, from the curtain's perspective (which also initially faces the camera), in which horizontal direction is the sink? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_007600.jpg",
+    "question": "Imagine you are the sink initially facing the camera. If you were shifted forward by 3.0m, from the tap's perspective (which also initially faces the camera), in which horizontal direction is the kitchen hood? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "993.jpg",
+    "question": "Imagine you are the desk initially facing the camera. If you were shifted forward by 1.5m, from the white box's perspective (which also initially faces the camera), in which horizontal direction is the cabinet? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1359.jpg",
+    "question": "Imagine you are the sofa initially facing the camera. If you were shifted left by 0.5m, from the pillow's perspective (which also initially faces the camera), in which horizontal direction is the chair? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "front",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0606_01",
+    "frame": "330.jpg",
+    "question": "Imagine you are the counter and initially facing the camera. If you were shifted forward by 1.5m, from the plant's perspective (which initially faces the camera too), in which horizontal direction would the bin be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0653_01",
+    "frame": "4536.jpg",
+    "question": "Imagine you are the cabinet and initially facing the camera. If you were shifted forward by 3.0m, from the box's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "3222.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted forward by 3.0m, from the keyboard's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0378_00",
+    "frame": "144.jpg",
+    "question": "Imagine you are the cabinet and initially facing the camera. If you were shifted right by 3.0m, from the printer's perspective (which initially faces the camera too), in which horizontal direction would the desk be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "615.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted forward by 3.0m, from the shelves's perspective (which initially faces the camera too), in which horizontal direction would the plate be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0353_01",
+    "frame": "1461.jpg",
+    "question": "Imagine you are the sofa and initially facing the camera. If you were shifted forward by 3.0m, from the pillow's perspective (which initially faces the camera too), in which horizontal direction would the bookshelf be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0583_00",
+    "frame": "1972.jpg",
+    "question": "Imagine you are the cabinet initially facing the camera. If you were shifted forward by 3.0m, from the white bottle's perspective (which also initially faces the camera), in which horizontal direction is the toilet? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "ac48a9b736",
+    "frame": "frame_007660.jpg",
+    "question": "Imagine you are the table initially facing the camera. If you were shifted forward by 3.0m, from the cabinet's perspective (which also initially faces the camera), in which horizontal direction is the keyboard? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0580_01",
+    "frame": "3757.jpg",
+    "question": "Imagine you are the chair initially facing the camera. If you were shifted forward by 2.0m, from the backpack's perspective (which also initially faces the camera), in which horizontal direction is the table? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "1632.jpg",
+    "question": "Imagine you are the sofa initially facing the camera. If you were shifted left by 3.0m, from the book's perspective (which also initially faces the camera), in which horizontal direction is the chair? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0583_01",
+    "frame": "1511.jpg",
+    "question": "Imagine you are the cabinet and initially facing the camera. If you were shifted left by 0.5m, from the sink's perspective (which initially faces the camera too), in which horizontal direction would the picture be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0593_00",
+    "frame": "2289.jpg",
+    "question": "Imagine you are the sofa and initially facing the camera. If you were shifted forward by 2.0m, from the bag's perspective (which initially faces the camera too), in which horizontal direction would the cabinet be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0565_00",
+    "frame": "147.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted forward by 3.0m, from the computer tower's perspective (which initially faces the camera too), in which horizontal direction would the trash can be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0695_03",
+    "frame": "1206.jpg",
+    "question": "Imagine you are the box initially facing the camera. If you were shifted right by 2.5m, from the bag's perspective (which also initially faces the camera), in which horizontal direction is the bookshelf? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0046_01",
+    "frame": "1083.jpg",
+    "question": "Imagine you are the floor mat and initially facing the camera. If you were shifted forward by 2.5m, from the toilet's perspective (which initially faces the camera too), in which horizontal direction would the sink be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0648_01",
+    "frame": "2442.jpg",
+    "question": "Imagine you are the bed and initially facing the camera. If you were shifted forward by 1.5m, from the pillow's perspective (which initially faces the camera too), in which horizontal direction would the shelf be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "back-right",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0474_01",
+    "frame": "99.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted right by 3.0m, from the cup's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "38d58a7a31",
+    "frame": "frame_003050.jpg",
+    "question": "Imagine you are the sink and initially facing the camera. If you were shifted right by 3.0m, from the soap dispenser's perspective (which initially faces the camera too), in which horizontal direction would the power socket be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front-left",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0356_02",
+    "frame": "57.jpg",
+    "question": "Imagine you are the desk and initially facing the camera. If you were shifted right by 3.0m, from the shelves's perspective (which initially faces the camera too), in which horizontal direction would the chair be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "front",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannet",
+    "scene": "scene0046_00",
+    "frame": "0.jpg",
+    "question": "Imagine you are the desk initially facing the camera. If you were shifted forward by 3.0m, from the laptop's perspective (which also initially faces the camera), in which horizontal direction is the chair? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "back-right",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "back-left",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "front-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "back-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L2_object_move_object_centric",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_002130.jpg",
+    "question": "Imagine you are the cabinet initially facing the camera. If you were shifted forward by 1.5m, from the tap's perspective (which also initially faces the camera), in which horizontal direction is the towel? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane.)",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "front-left",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "back-left",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "front-right",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "back-right",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "front-left",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

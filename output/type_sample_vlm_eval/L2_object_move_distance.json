@@ -1,0 +1,1902 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0658_00",
+    "frame": "75.jpg",
+    "question": "From the camera's perspective, if the desk is moved backward (toward the camera) by 2.5m, what is the approximate shortest distance between the trash can and the cabinet, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0207_02",
+    "frame": "0.jpg",
+    "question": "From the camera's perspective, imagine moving the bed backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the pillow and the towel, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_002710.jpg",
+    "question": "From the camera's perspective, imagine moving the cabinet right by 3.0m. After this change, what is the approximate shortest distance between the microwave and the bookshelf, measured from their closest points?",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "0d2ee665be",
+    "frame": "frame_001570.jpg",
+    "question": "From the camera's perspective, if the table is moved right by 3.0m, what is the approximate shortest distance between the mousepad and the bluetooth speaker, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010440.jpg",
+    "question": "From the camera's perspective, if the cabinet is moved left by 3.0m, what is the approximate shortest distance between the soap bottle and the bathtub, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "774.jpg",
+    "question": "From the camera's perspective, imagine moving the chair backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the pillow and the end table, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0356_01",
+    "frame": "3.jpg",
+    "question": "From the camera's perspective, if the desk is moved backward (toward the camera) by 2.5m, what is the approximate shortest distance between the trash can and the chair, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "3db0a1c8f3",
+    "frame": "frame_010100.jpg",
+    "question": "From the camera's perspective, imagine moving the table forward (away from the camera) by 3.0m. After this change, what is the approximate shortest distance between the chair and the air conditioner, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_005880.jpg",
+    "question": "From the camera's perspective, imagine moving the table right by 3.0m. After this change, what is the approximate shortest distance between the telephone and the sofa, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0025_02",
+    "frame": "993.jpg",
+    "question": "From the camera's perspective, imagine moving the desk backward (toward the camera) by 2.0m. After this change, what is the approximate shortest distance between the white mug near the keyboard and the box, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0207_00",
+    "frame": "636.jpg",
+    "question": "From the camera's perspective, imagine moving the chair backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the food container and the sink, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "far (>3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0606_02",
+    "frame": "2505.jpg",
+    "question": "From the camera's perspective, if the cabinets is moved right by 3.0m, what is the approximate shortest distance between the counter and the bag, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000090.jpg",
+    "question": "From the camera's perspective, if the sink is moved forward (away from the camera) by 3.0m, what is the approximate shortest distance between the faucet and the wok pan near the microwave, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0025_01",
+    "frame": "249.jpg",
+    "question": "From the camera's perspective, imagine moving the table backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the trophy and the cabinet, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "far (>3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0643_00",
+    "frame": "1827.jpg",
+    "question": "From the camera's perspective, imagine moving the desk backward (toward the camera) by 2.0m. After this change, what is the approximate shortest distance between the keyboard and the messenger bag, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0046_01",
+    "frame": "201.jpg",
+    "question": "From the camera's perspective, if the table is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the laptop and the chair, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0046_02",
+    "frame": "558.jpg",
+    "question": "From the camera's perspective, if the desk is moved left by 3.0m, what is the approximate shortest distance between the bag and the laptop, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_007600.jpg",
+    "question": "From the camera's perspective, if the sink is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the tap and the knife holder, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "far (>3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "bcd2436daf",
+    "frame": "frame_004500.jpg",
+    "question": "From the camera's perspective, if the plant pot is moved left by 3.0m, what is the approximate shortest distance between the plant and the power socket, measured from their closest points?",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0653_01",
+    "frame": "4536.jpg",
+    "question": "From the camera's perspective, imagine moving the desk right by 3.0m. After this change, what is the approximate shortest distance between the keyboard and the chair, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0474_03",
+    "frame": "18.jpg",
+    "question": "From the camera's perspective, imagine moving the desk left by 3.0m. After this change, what is the approximate shortest distance between the computer tower and the keyboard, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0591_01",
+    "frame": "807.jpg",
+    "question": "From the camera's perspective, imagine moving the sofa backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the pillow and the trash can, measured from their closest points?",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0606_01",
+    "frame": "9.jpg",
+    "question": "From the camera's perspective, imagine moving the counter right by 2.5m. After this change, what is the approximate shortest distance between the plant and the bin, measured from their closest points?",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0593_00",
+    "frame": "2289.jpg",
+    "question": "From the camera's perspective, if the sofa is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the bag and the cabinet, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "6115eddb86",
+    "frame": "frame_007780.jpg",
+    "question": "From the camera's perspective, if the cabinet is moved left by 3.0m, what is the approximate shortest distance between the coffee maker and the ottoman chair, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004920.jpg",
+    "question": "From the camera's perspective, if the table is moved right by 2.5m, what is the approximate shortest distance between the headset and the bottle, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "far (>3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "a8bf42d646",
+    "frame": "frame_007520.jpg",
+    "question": "From the camera's perspective, if the table is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the hammer and the cart, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "far (>3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0695_01",
+    "frame": "2130.jpg",
+    "question": "From the camera's perspective, if the desk is moved backward (toward the camera) by 2.5m, what is the approximate shortest distance between the laptop and the box, measured from their closest points?",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0435_03",
+    "frame": "1804.jpg",
+    "question": "From the camera's perspective, if the desk is moved backward (toward the camera) by 3.0m, what is the approximate shortest distance between the trash can and the suitcase, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "1755.jpg",
+    "question": "From the camera's perspective, imagine moving the table backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the laptop and the bowl, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0653_00",
+    "frame": "1101.jpg",
+    "question": "From the camera's perspective, if the cabinet is moved right by 3.0m, what is the approximate shortest distance between the boxes and the desk, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "45b0dac5e3",
+    "frame": "frame_002130.jpg",
+    "question": "From the camera's perspective, if the cabinet is moved backward (toward the camera) by 1.5m, what is the approximate shortest distance between the tap and the washing machine, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0329_00",
+    "frame": "1303.jpg",
+    "question": "From the camera's perspective, if the table is moved left by 3.0m, what is the approximate shortest distance between the computer tower and the chair, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0257_00",
+    "frame": "159.jpg",
+    "question": "From the camera's perspective, imagine moving the table backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the sink and the chair, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0474_01",
+    "frame": "99.jpg",
+    "question": "From the camera's perspective, imagine moving the desk left by 3.0m. After this change, what is the approximate shortest distance between the cup and the chair, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1359.jpg",
+    "question": "From the camera's perspective, imagine moving the sofa right by 0.5m. After this change, what is the approximate shortest distance between the pillow and the computer tower, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0648_01",
+    "frame": "2421.jpg",
+    "question": "From the camera's perspective, if the desk is moved backward (toward the camera) by 2.5m, what is the approximate shortest distance between the shelves and the chair, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0144_01",
+    "frame": "111.jpg",
+    "question": "From the camera's perspective, imagine moving the night stand backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the printer and the dresser, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0474_02",
+    "frame": "2439.jpg",
+    "question": "From the camera's perspective, imagine moving the desk backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the keyboard and the chair, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_008490.jpg",
+    "question": "From the camera's perspective, imagine moving the table backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the cup and the cabinet, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "far (>3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0565_00",
+    "frame": "147.jpg",
+    "question": "From the camera's perspective, imagine moving the desk right by 1.0m. After this change, what is the approximate shortest distance between the computer tower and the trash can, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_005620.jpg",
+    "question": "From the camera's perspective, if the laboratory bench is moved backward (toward the camera) by 2.0m, what is the approximate shortest distance between the plastic case and the soldering iron, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "very close (<1.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0378_00",
+    "frame": "144.jpg",
+    "question": "From the camera's perspective, if the cabinet is moved left by 3.0m, what is the approximate shortest distance between the printer and the desk, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "1812.jpg",
+    "question": "From the camera's perspective, imagine moving the desk backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the shelf and the bag, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0606_00",
+    "frame": "99.jpg",
+    "question": "From the camera's perspective, if the counter is moved right by 2.5m, what is the approximate shortest distance between the plant and the bin, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_002890.jpg",
+    "question": "From the camera's perspective, imagine moving the headphones backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the headphone holder and the table, measured from their closest points?",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0648_00",
+    "frame": "2805.jpg",
+    "question": "From the camera's perspective, imagine moving the desk backward (toward the camera) by 3.0m. After this change, what is the approximate shortest distance between the laptop and the laundry basket, measured from their closest points?",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_004700.jpg",
+    "question": "From the camera's perspective, imagine moving the refrigerator right by 3.0m. After this change, what is the approximate shortest distance between the water kettle and the arm chair, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "close (1.0-2.0m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "close (1.0-2.0m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0583_01",
+    "frame": "1511.jpg",
+    "question": "From the camera's perspective, if the cabinet is moved backward (toward the camera) by 2.0m, what is the approximate shortest distance between the sink and the picture, measured from their closest points?",
+    "gold_answer": "D",
+    "options": [
+      {
+        "letter": "A",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "D",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "D",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L2_object_move_distance",
+    "dataset": "scannet",
+    "scene": "scene0144_00",
+    "frame": "192.jpg",
+    "question": "From the camera's perspective, imagine moving the night stand backward (toward the camera) by 2.5m. After this change, what is the approximate shortest distance between the printer and the bag, measured from their closest points?",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "very close (<1.0m)",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "far (>3.3m)",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "moderate (2.0-3.3m)",
+        "is_gold": true
+      },
+      {
+        "letter": "D",
+        "text": "close (1.0-2.0m)",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "moderate (2.0-3.3m)",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]

@@ -1,0 +1,1652 @@
+[
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 1,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_006010.jpg",
+    "question": "Suppose the dish drying rack is taken away. Which best describes the cutting board: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 2,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0378_01",
+    "frame": "1497.jpg",
+    "question": "If the desk were removed from the scene, what would be the occlusion status of the chair from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 3,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0474_05",
+    "frame": "1691.jpg",
+    "question": "If the desk were removed from the scene, what would be the occlusion status of the computer tower from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 4,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0580_01",
+    "frame": "2647.jpg",
+    "question": "Suppose the backpack is taken away. Which best describes the chair: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 5,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0670_01",
+    "frame": "2040.jpg",
+    "question": "If the shelves were removed from the scene, what would be the occlusion status of the chair from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 6,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0474_00",
+    "frame": "1359.jpg",
+    "question": "If the computer tower were removed from the scene, what would be the occlusion status of the desk from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 7,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0608_02",
+    "frame": "1833.jpg",
+    "question": "If the chair were removed from the scene, what would be the occlusion status of the guitar from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 8,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0645_01",
+    "frame": "2643.jpg",
+    "question": "After removing the suitcase, what is the occlusion status of the shoes from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 9,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_000980.jpg",
+    "question": "If the pedestal fan were removed from the scene, what would be the occlusion status of the heater from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 10,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0435_01",
+    "frame": "264.jpg",
+    "question": "Suppose the desk is taken away. Which best describes the trash can: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 11,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0695_02",
+    "frame": "411.jpg",
+    "question": "After removing the laptop, what is the occlusion status of the desk from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 12,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0616_00",
+    "frame": "1944.jpg",
+    "question": "If the table were removed from the scene, what would be the occlusion status of the radiator from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 13,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_000870.jpg",
+    "question": "Suppose the chair is taken away. Which best describes the computer tower: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 14,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004920.jpg",
+    "question": "If the laptop were removed from the scene, what would be the occlusion status of the headset from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 15,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "f3d64c30f8",
+    "frame": "frame_001050.jpg",
+    "question": "Suppose the table is taken away. Which best describes the heater: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 16,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0591_01",
+    "frame": "450.jpg",
+    "question": "Suppose the chair is taken away. Which best describes the cabinet: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 17,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0207_01",
+    "frame": "822.jpg",
+    "question": "After removing the vacuum cleaner, what is the occlusion status of the table from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 18,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0046_01",
+    "frame": "165.jpg",
+    "question": "After removing the laptop, what is the occlusion status of the table from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 19,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0050_00",
+    "frame": "4146.jpg",
+    "question": "Suppose the laptop is taken away. Which best describes the chair: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 20,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0356_01",
+    "frame": "705.jpg",
+    "question": "Suppose the desk is taken away. Which best describes the chair: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 21,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "5f99900f09",
+    "frame": "frame_000120.jpg",
+    "question": "If the table were removed from the scene, what would be the occlusion status of the trash can from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 22,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0222_01",
+    "frame": "708.jpg",
+    "question": "If the chair were removed from the scene, what would be the occlusion status of the desk from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 23,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "09c1414f1b",
+    "frame": "frame_005920.jpg",
+    "question": "Suppose the apple is taken away. Which best describes the bananas: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 24,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "5942004064",
+    "frame": "frame_010440.jpg",
+    "question": "If the cabinet were removed from the scene, what would be the occlusion status of the bathtub from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 25,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "c5439f4607",
+    "frame": "frame_009660.jpg",
+    "question": "Suppose the chair is taken away. Which best describes the wooden stick: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 26,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0353_02",
+    "frame": "435.jpg",
+    "question": "Suppose the bag is taken away. Which best describes the shelves: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 27,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0645_00",
+    "frame": "1698.jpg",
+    "question": "If the chair were removed from the scene, what would be the occlusion status of the desk from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 28,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "fb5a96b1a2",
+    "frame": "frame_005880.jpg",
+    "question": "If the sofa were removed from the scene, what would be the occlusion status of the table from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 29,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0645_02",
+    "frame": "1854.jpg",
+    "question": "Suppose the ottoman is taken away. Which best describes the chair: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 30,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "578511c8a9",
+    "frame": "frame_000210.jpg",
+    "question": "If the chair were removed from the scene, what would be the occlusion status of the table from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 31,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0046_00",
+    "frame": "0.jpg",
+    "question": "If the laptop were removed from the scene, what would be the occlusion status of the desk from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 32,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0353_00",
+    "frame": "1509.jpg",
+    "question": "After removing the whiteboard, what is the occlusion status of the bookshelf from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 33,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0011_00",
+    "frame": "1506.jpg",
+    "question": "After removing the chair, what is the occlusion status of the trash can from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 34,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0064_00",
+    "frame": "741.jpg",
+    "question": "If the table were removed from the scene, what would be the occlusion status of the black sofa from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 35,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "c4c04e6d6c",
+    "frame": "frame_001090.jpg",
+    "question": "If the overhead projector were removed from the scene, what would be the occlusion status of the rolling cart from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 36,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "d755b3d9d8",
+    "frame": "frame_003330.jpg",
+    "question": "After removing the trash can, what is the occlusion status of the bag from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 37,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "a980334473",
+    "frame": "frame_001240.jpg",
+    "question": "After removing the printer, what is the occlusion status of the table from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 38,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0658_00",
+    "frame": "111.jpg",
+    "question": "If the desk were removed from the scene, what would be the occlusion status of the trash can from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 39,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "cc5237fd77",
+    "frame": "frame_006250.jpg",
+    "question": "After removing the chair, what is the occlusion status of the desk from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 40,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000000.jpg",
+    "question": "If the dish drying rack were removed from the scene, what would be the occlusion status of the sink from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 41,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0645_01",
+    "frame": "2433.jpg",
+    "question": "After removing the suitcase, what is the occlusion status of the shoes from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 42,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_000800.jpg",
+    "question": "Suppose the pedestal fan is taken away. Which best describes the heater: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 43,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_005020.jpg",
+    "question": "After removing the chair, what is the occlusion status of the cup from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 44,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "c49a8c6cff",
+    "frame": "frame_000630.jpg",
+    "question": "Suppose the chair is taken away. Which best describes the table: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "C",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": true
+      }
+    ],
+    "gt_letter": "C",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 45,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "25f3b7a318",
+    "frame": "frame_005360.jpg",
+    "question": "After removing the pedestal fan, what is the occlusion status of the heater from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 46,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_005830.jpg",
+    "question": "If the faucet were removed from the scene, what would be the occlusion status of the dishwashing sponge from the current viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 47,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0356_01",
+    "frame": "3.jpg",
+    "question": "After removing the desk, what is the occlusion status of the chair from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 48,
+    "question_type": "L2_object_remove",
+    "dataset": "scannet",
+    "scene": "scene0222_01",
+    "frame": "702.jpg",
+    "question": "After removing the chair, what is the occlusion status of the desk from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "B",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "B",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "C",
+        "text": "not occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "B",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 49,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "5eb31827b7",
+    "frame": "frame_004890.jpg",
+    "question": "Suppose the laptop is taken away. Which best describes the rolling chair: not occluded, occluded, or not visible? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not occluded",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "not visible",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  },
+  {
+    "result": null,
+    "image_base64": "",
+    "id": 50,
+    "question_type": "L2_object_remove",
+    "dataset": "scannetpp",
+    "scene": "27dd4da69e",
+    "frame": "frame_000330.jpg",
+    "question": "After removing the cereal box, what is the occlusion status of the flour bag from this viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in the image; being partly outside the image frame does not count as occlusion.",
+    "gold_answer": "A",
+    "options": [
+      {
+        "letter": "A",
+        "text": "not occluded",
+        "is_gold": true
+      },
+      {
+        "letter": "B",
+        "text": "not visible",
+        "is_gold": false
+      },
+      {
+        "letter": "C",
+        "text": "occluded",
+        "is_gold": false
+      }
+    ],
+    "gt_letter": "A",
+    "model_letter": null,
+    "correct_value": "not occluded",
+    "model_reasoning": null,
+    "model_raw_answer": null
+  }
+]
