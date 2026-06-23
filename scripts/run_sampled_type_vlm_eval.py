@@ -568,10 +568,15 @@ def call_model(
     max_tokens: int,
     temperature: float,
     api_image_max_px: int,
+    blind: bool = False,
 ) -> str:
-    b64, mime = _encode_image(image_path, api_image_max_px)
-    data_url = f"data:{mime};base64,{b64}"
+    if not blind:
+        b64, mime = _encode_image(image_path, api_image_max_px)
+        data_url = f"data:{mime};base64,{b64}"
     if api_provider == "openai_responses":
+        user_content: list[Any] = (
+            [] if blind else [{"type": "input_image", "image_url": data_url}]
+        ) + [{"type": "input_text", "text": prompt}]
         response = client.responses.create(
             model=model,
             input=[
@@ -581,13 +586,7 @@ def call_model(
                         {"type": "input_text", "text": SYSTEM_PROMPT},
                     ],
                 },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_image", "image_url": data_url},
-                        {"type": "input_text", "text": prompt},
-                    ],
-                },
+                {"role": "user", "content": user_content},
             ],
             max_output_tokens=max_tokens,
             temperature=temperature,
@@ -604,25 +603,17 @@ def call_model(
         return "\n".join(chunks).strip()
 
     if api_provider == "anthropic":
+        anthropic_user_content: list[Any] = []
+        if not blind:
+            anthropic_user_content.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": mime, "data": b64},
+            })
+        anthropic_user_content.append({"type": "text", "text": prompt})
         response = client.messages.create(
             model=model,
             system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime,
-                                "data": b64,
-                            },
-                        },
-                        {"type": "text", "text": prompt},
-                    ],
-                },
-            ],
+            messages=[{"role": "user", "content": anthropic_user_content}],
             max_tokens=max_tokens,
             temperature=temperature,
         )
@@ -639,13 +630,14 @@ def call_model(
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": data_url},
-                    },
-                ],
+                "content": (
+                    [{"type": "text", "text": prompt}]
+                    if blind else
+                    [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                    ]
+                ),
             },
         ],
     }
@@ -1321,6 +1313,7 @@ def run_api_question(
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 api_image_max_px=args.api_image_max_px,
+                blind=getattr(args, "blind", False),
             )
             print(f"[{idx}/{total}] done", flush=True)
             break
@@ -1424,16 +1417,19 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             results_by_uid[uid] = cached
             continue
 
-        resolution = resolve_image(
-            question,
-            scannet_roots=[Path(p) for p in args.scannet_image_root],
-            scannetpp_roots=[Path(p) for p in args.scannetpp_image_root],
-            scannetpp_sensor=args.scannetpp_sensor,
-        )
+        if getattr(args, "blind", False):
+            resolution = ImageResolution(None, ())
+        else:
+            resolution = resolve_image(
+                question,
+                scannet_roots=[Path(p) for p in args.scannet_image_root],
+                scannetpp_roots=[Path(p) for p in args.scannetpp_image_root],
+                scannetpp_sensor=args.scannetpp_sensor,
+            )
 
         raw_response: str | None = None
         error: str | None = None
-        if resolution.path is None:
+        if not getattr(args, "blind", False) and resolution.path is None:
             error = "image_not_found"
         elif args.skip_api:
             error = "api_skipped"
@@ -1553,6 +1549,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output_html", default="output/type_sample_vlm_eval/viewer.html", help="HTML report path")
     parser.add_argument("--title", default="Sampled VLM Spatial QA Evaluation", help="HTML report title")
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
+    parser.add_argument("--blind", action="store_true", help="Text-only baseline: omit image from all API requests")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
     parser.add_argument(
         "--only_type",

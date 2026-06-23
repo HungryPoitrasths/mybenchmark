@@ -182,6 +182,22 @@ def make_qwen_caller(api_key: str) -> Callable[[Path, str], str]:
     return call
 
 
+def _make_openai_text_caller(client, model_name: str) -> Callable[[Path, str], str]:
+    """Text-only (blind) variant for any OpenAI-compatible endpoint."""
+    def call(_image_path: Path, prompt: str) -> str:
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": _SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=16,
+            temperature=0,
+        )
+        return resp.choices[0].message.content.strip()
+    return call
+
+
 def make_openai_local_caller(
     base_url: str,
     model_name: str,
@@ -314,8 +330,8 @@ def main() -> None:
     )
     parser.add_argument("--benchmark",   required=True,
                         help="Path to benchmark.json")
-    parser.add_argument("--image_root",  required=True,
-                        help="Root directory of ScanNet++ data")
+    parser.add_argument("--image_root",  default="",
+                        help="Root directory of ScanNet++ data (not needed with --blind)")
     parser.add_argument("--model",       required=True,
                         choices=list(_CALLER_FACTORIES),
                         help="VLM to evaluate")
@@ -340,7 +356,12 @@ def main() -> None:
                         help="Restrict to one level (optional)")
     parser.add_argument("--qtype",  default=None,
                         help="Restrict to one question type, e.g. attachment_chain (optional)")
+    parser.add_argument("--blind", action="store_true",
+                        help="Text-only (no-image) baseline: omit image from all requests")
     args = parser.parse_args()
+
+    if not args.blind and not args.image_root:
+        parser.error("--image_root is required unless --blind is set")
 
     # ── Load benchmark ────────────────────────────────────────────────────────
     all_questions = _load_benchmark(Path(args.benchmark))
@@ -367,7 +388,7 @@ def main() -> None:
         logger.info("Capped at %d questions", len(indexed_questions))
 
     # ── Build caller ──────────────────────────────────────────────────────────
-    logger.info("Initialising model: %s", args.model)
+    logger.info("Initialising model: %s%s", args.model, " (blind)" if args.blind else "")
 
     if args.model == "openai_local":
         if not args.base_url:
@@ -375,7 +396,11 @@ def main() -> None:
         if not args.model_name:
             raise SystemExit("--model_name is required for openai_local")
         api_key = args.api_key or "EMPTY"
-        caller = make_openai_local_caller(args.base_url, args.model_name, api_key)
+        if args.blind:
+            from openai import OpenAI as _OAI
+            caller = _make_openai_text_caller(_OAI(api_key=api_key, base_url=args.base_url), args.model_name)
+        else:
+            caller = make_openai_local_caller(args.base_url, args.model_name, api_key)
     else:
         env_var, factory = _CALLER_FACTORIES[args.model]
         api_key = args.api_key or os.environ.get(env_var)
@@ -383,10 +408,29 @@ def main() -> None:
             raise SystemExit(
                 f"API key required. Pass --api_key or set the {env_var} environment variable."
             )
-        caller = factory(api_key)
+        if args.blind:
+            if args.model == "gemini-2.5-pro":
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                _gm = genai.GenerativeModel("gemini-2.5-pro-preview-05-06", system_instruction=_SYSTEM)
+                def caller(_ip, prompt):  # noqa: E306
+                    return _gm.generate_content(
+                        [prompt],
+                        generation_config={"max_output_tokens": 16, "temperature": 0},
+                    ).text.strip()
+            else:
+                from openai import OpenAI as _OAI
+                _model_ids = {"gpt-4o": "gpt-4o", "qwen2.5-vl": "qwen2.5-vl-72b-instruct"}
+                _base_urls = {"qwen2.5-vl": "https://dashscope.aliyuncs.com/compatible-mode/v1"}
+                caller = _make_openai_text_caller(
+                    _OAI(api_key=api_key, base_url=_base_urls.get(args.model)),
+                    _model_ids[args.model],
+                )
+        else:
+            caller = factory(api_key)
 
     # ── Inference loop ────────────────────────────────────────────────────────
-    image_root   = Path(args.image_root)
+    image_root   = Path(args.image_root) if args.image_root else None
     output_path  = Path(args.output)
     predictions: list[dict] = []
 
@@ -401,20 +445,22 @@ def main() -> None:
         loop = indexed_questions
 
     for processed_idx, (orig_idx, q) in enumerate(loop):
-        image_path = resolve_image(q, image_root)
-
-        if not image_path.exists():
-            logger.warning("[%d] Image not found: %s", orig_idx, image_path)
-            predictions.append({
-                "question_id": orig_idx,
-                "prediction":  None,
-                "error":       "image_not_found",
-                "scene_id":     q.get("scene_id"),
-                "image_name":   q.get("image_name"),
-                "question":     q.get("question"),
-            })
-            n_missing += 1
-            continue
+        if args.blind:
+            image_path = None
+        else:
+            image_path = resolve_image(q, image_root)
+            if not image_path.exists():
+                logger.warning("[%d] Image not found: %s", orig_idx, image_path)
+                predictions.append({
+                    "question_id": orig_idx,
+                    "prediction":  None,
+                    "error":       "image_not_found",
+                    "scene_id":     q.get("scene_id"),
+                    "image_name":   q.get("image_name"),
+                    "question":     q.get("question"),
+                })
+                n_missing += 1
+                continue
 
         prompt       = build_prompt(q)
         pred, raw    = _call_with_retry(caller, image_path, prompt)
