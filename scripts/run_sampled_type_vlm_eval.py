@@ -240,7 +240,9 @@ def load_questions_from_subset(subset_path: Path) -> tuple[list[dict[str, Any]],
     return questions, metadata
 
 
-def load_questions(roots: list[Path], subset_path: Path | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def load_questions(
+    roots: list[Path], subset_path: Path | None = None
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if subset_path is not None:
         return load_questions_from_subset(subset_path)
     return _load_questions_from_roots(roots)
@@ -368,8 +370,10 @@ def sample_questions(
     return sampled, sampling_stats
 
 
-def build_prompt(question: dict[str, Any], direct: bool = False) -> str:
+def build_prompt(question: dict[str, Any], direct: bool = False, oracle: bool = False) -> str:
     parts = [str(question.get("question") or "").strip(), ""]
+    if oracle and "_oracle_info" in question:
+        parts.insert(0, question["_oracle_info"] + "\n")
     options = question.get("options") or []
     for idx, option in enumerate(options):
         parts.append(f"{chr(65 + idx)}) {option}")
@@ -539,6 +543,18 @@ def _is_reasoning_chat_model(model: str) -> bool:
     return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+def _should_omit_temperature(model: str) -> bool:
+    """Return whether the served model/proxy rejects an explicit temperature."""
+    name = (model or "").lower()
+    return _is_reasoning_chat_model(model) or name.startswith(
+        (
+            "claude-opus-4",
+            "claude-sonnet-4",
+            "claude-4",
+        )
+    )
+
+
 def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
     if api_provider == "anthropic":
         from anthropic import Anthropic
@@ -578,6 +594,7 @@ def call_model(
     api_image_max_px: int,
     blind: bool = False,
 ) -> str:
+    omit_temperature = _should_omit_temperature(model)
     if not blind:
         b64, mime = _encode_image(image_path, api_image_max_px)
         data_url = f"data:{mime};base64,{b64}"
@@ -585,9 +602,9 @@ def call_model(
         user_content: list[Any] = (
             [] if blind else [{"type": "input_image", "image_url": data_url}]
         ) + [{"type": "input_text", "text": prompt}]
-        response = client.responses.create(
-            model=model,
-            input=[
+        response_kwargs: dict[str, Any] = {
+            "model": model,
+            "input": [
                 {
                     "role": "system",
                     "content": [
@@ -596,9 +613,11 @@ def call_model(
                 },
                 {"role": "user", "content": user_content},
             ],
-            max_output_tokens=max_tokens,
-            temperature=temperature,
-        )
+            "max_output_tokens": max_tokens,
+        }
+        if not omit_temperature:
+            response_kwargs["temperature"] = temperature
+        response = client.responses.create(**response_kwargs)
         output_text = getattr(response, "output_text", None)
         if output_text:
             return str(output_text).strip()
@@ -618,13 +637,15 @@ def call_model(
                 "source": {"type": "base64", "media_type": mime, "data": b64},
             })
         anthropic_user_content.append({"type": "text", "text": prompt})
-        response = client.messages.create(
-            model=model,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": anthropic_user_content}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        message_kwargs: dict[str, Any] = {
+            "model": model,
+            "system": SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": anthropic_user_content}],
+            "max_tokens": max_tokens,
+        }
+        if not omit_temperature:
+            message_kwargs["temperature"] = temperature
+        response = client.messages.create(**message_kwargs)
         chunks = [
             str(getattr(block, "text", ""))
             for block in getattr(response, "content", []) or []
@@ -650,10 +671,11 @@ def call_model(
         ],
     }
     if _is_reasoning_chat_model(model):
-        # GPT-5 / o-series: use max_completion_tokens and only the default temperature.
+        # GPT-5 / o-series: use max_completion_tokens.
         chat_kwargs["max_completion_tokens"] = max_tokens
     else:
         chat_kwargs["max_tokens"] = max_tokens
+    if not omit_temperature:
         chat_kwargs["temperature"] = temperature
 
     # Stream explicitly: some OpenAI-compatible proxies always reply with SSE chunks
@@ -1304,7 +1326,7 @@ def run_api_question(
 ) -> dict[str, Any]:
     raw_response: str | None = None
     error: str | None = None
-    prompt = build_prompt(question, direct=getattr(args, "direct", False))
+    prompt = build_prompt(question, direct=getattr(args, "direct", False), oracle=getattr(args, "oracle", False))
     print(
         f"[{idx}/{total}] {question.get('type')} "
         f"{question.get('scene_id')}/{question.get('image_name')} -> API",
@@ -1559,6 +1581,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
     parser.add_argument("--blind", action="store_true", help="Text-only baseline: omit image from all API requests")
     parser.add_argument("--direct", action="store_true", help="Direct-answer baseline: ask for a single letter with no reasoning")
+    parser.add_argument("--oracle", action="store_true", help="Perception oracle: prepend ground-truth 3D object positions from _oracle_info field")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
     parser.add_argument(
         "--only_type",

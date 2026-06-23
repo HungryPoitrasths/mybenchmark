@@ -9,6 +9,7 @@ from scripts.extract_l3_attachment_chain_multiselect import (
 from scripts.run_sampled_type_vlm_eval import (
     ImageResolution,
     _option_html,
+    _should_omit_temperature,
     build_prompt,
     load_questions,
     parse_answers,
@@ -64,6 +65,11 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
 
         self.assertIn("list all letters comma-separated", prompt)
         self.assertIn("Answer: <letter(s)>", prompt)
+
+    def test_claude_opus_4_omits_temperature_for_proxy_compatibility(self) -> None:
+        self.assertTrue(_should_omit_temperature("claude-opus-4-7"))
+        self.assertTrue(_should_omit_temperature("claude-sonnet-4-5"))
+        self.assertFalse(_should_omit_temperature("qwen3.5-flash"))
 
     def test_parse_answers_accepts_common_multi_select_formats(self) -> None:
         self.assertEqual(parse_answers("Answer: A,C\nReasoning: ...", "ABC"), ["A", "C"])
