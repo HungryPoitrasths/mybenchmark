@@ -582,6 +582,71 @@ class ThreadLocalOpenAIClientFactory:
         return client
 
 
+def _content_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+            else:
+                text = getattr(item, "text", None) or getattr(item, "content", None)
+                if text:
+                    parts.append(str(text))
+        return "".join(parts)
+    return str(value)
+
+
+def _get_field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _extract_chat_choice_text(choice: Any) -> str:
+    parts: list[str] = []
+    for container_name in ("delta", "message"):
+        container = _get_field(choice, container_name)
+        if container is None:
+            continue
+        for field_name in ("content", "reasoning_content", "text"):
+            text = _content_text(_get_field(container, field_name))
+            if text:
+                parts.append(text)
+    text = _content_text(_get_field(choice, "text"))
+    if text:
+        parts.append(text)
+    return "".join(parts)
+
+
+def _extract_chat_response_text(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    choices = _get_field(response, "choices") or []
+    parts = [_extract_chat_choice_text(choice) for choice in choices]
+    text = "".join(part for part in parts if part)
+    if text:
+        return text
+    return _content_text(_get_field(response, "content"))
+
+
+def _require_response_text(text: str, *, provider: str, model: str) -> str:
+    text = text.strip()
+    if not text:
+        raise RuntimeError(
+            f"{provider} returned an empty response for model {model!r}; "
+            "check the API base URL, model name, provider protocol, and streaming compatibility"
+        )
+    return text
+
+
 def call_model(
     client: Any,
     *,
@@ -627,7 +692,11 @@ def call_model(
                 text = getattr(content, "text", None)
                 if text:
                     chunks.append(str(text))
-        return "\n".join(chunks).strip()
+        return _require_response_text(
+            "\n".join(chunks),
+            provider=api_provider,
+            model=model,
+        )
 
     if api_provider == "anthropic":
         anthropic_user_content: list[Any] = []
@@ -651,7 +720,11 @@ def call_model(
             for block in getattr(response, "content", []) or []
             if getattr(block, "type", None) == "text" and getattr(block, "text", None)
         ]
-        return "\n".join(chunks).strip()
+        return _require_response_text(
+            "\n".join(chunks),
+            provider=api_provider,
+            model=model,
+        )
 
     chat_kwargs: dict[str, Any] = {
         "model": model,
@@ -685,14 +758,14 @@ def call_model(
     stream = client.chat.completions.create(**chat_kwargs)
     parts: list[str] = []
     for chunk in stream:
-        choices = getattr(chunk, "choices", None)
-        if not choices:
-            continue
-        delta = getattr(choices[0], "delta", None)
-        content = getattr(delta, "content", None) if delta is not None else None
-        if content:
-            parts.append(str(content))
-    return "".join(parts).strip()
+        text = _extract_chat_response_text(chunk)
+        if text:
+            parts.append(text)
+    return _require_response_text(
+        "".join(parts),
+        provider=api_provider,
+        model=model,
+    )
 
 
 def load_existing_results(path: Path) -> dict[str, dict[str, Any]]:

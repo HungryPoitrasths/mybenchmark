@@ -11,6 +11,7 @@ from scripts.run_sampled_type_vlm_eval import (
     _option_html,
     _should_omit_temperature,
     build_prompt,
+    call_model,
     load_questions,
     parse_answers,
     result_from_question,
@@ -18,6 +19,54 @@ from scripts.run_sampled_type_vlm_eval import (
 
 
 class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
+    def test_call_model_reads_proxy_stream_reasoning_content(self) -> None:
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return iter(
+                    [
+                        {"choices": [{"delta": {"reasoning_content": "Reasoning: visible. "}}]},
+                        {"choices": [{"delta": {"content": "Answer: B"}}]},
+                    ]
+                )
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        response = call_model(
+            FakeClient(),
+            api_provider="openai_chat",
+            model="claude-sonnet-4-6",
+            image_path=Path("unused.jpg"),
+            prompt="Question?",
+            max_tokens=16,
+            temperature=0.0,
+            api_image_max_px=0,
+            blind=True,
+        )
+
+        self.assertEqual(response, "Reasoning: visible. Answer: B")
+
+    def test_call_model_rejects_empty_stream_response(self) -> None:
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return iter([{"choices": [{"delta": {"content": ""}}]}])
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with self.assertRaisesRegex(RuntimeError, "empty response"):
+            call_model(
+                FakeClient(),
+                api_provider="openai_chat",
+                model="claude-sonnet-4-6",
+                image_path=Path("unused.jpg"),
+                prompt="Question?",
+                max_tokens=16,
+                temperature=0.0,
+                api_image_max_px=0,
+                blind=True,
+            )
+
     def test_convert_attachment_chain_question_removes_both_option(self) -> None:
         question = convert_attachment_chain_question(
             {
