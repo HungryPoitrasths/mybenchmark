@@ -74,6 +74,11 @@ MULTI_SELECT_PROMPT_SUFFIX = (
     "Answer: <letter(s)>"
 )
 
+DIRECT_PROMPT_SUFFIX = "Answer with a single letter only (A, B, C, or D). Do not explain."
+DIRECT_MULTI_SELECT_PROMPT_SUFFIX = (
+    "Answer with the correct letter(s) only, comma-separated if more than one. Do not explain."
+)
+
 QTYPE_ORDER = [
     "direction_agent",
     "occlusion",
@@ -363,12 +368,15 @@ def sample_questions(
     return sampled, sampling_stats
 
 
-def build_prompt(question: dict[str, Any]) -> str:
+def build_prompt(question: dict[str, Any], direct: bool = False) -> str:
     parts = [str(question.get("question") or "").strip(), ""]
     options = question.get("options") or []
     for idx, option in enumerate(options):
         parts.append(f"{chr(65 + idx)}) {option}")
-    suffix = MULTI_SELECT_PROMPT_SUFFIX if is_multi_select_question(question) else PROMPT_SUFFIX
+    if direct:
+        suffix = DIRECT_MULTI_SELECT_PROMPT_SUFFIX if is_multi_select_question(question) else DIRECT_PROMPT_SUFFIX
+    else:
+        suffix = MULTI_SELECT_PROMPT_SUFFIX if is_multi_select_question(question) else PROMPT_SUFFIX
     parts.extend(["", suffix])
     return "\n".join(parts)
 
@@ -1296,7 +1304,7 @@ def run_api_question(
 ) -> dict[str, Any]:
     raw_response: str | None = None
     error: str | None = None
-    prompt = build_prompt(question)
+    prompt = build_prompt(question, direct=getattr(args, "direct", False))
     print(
         f"[{idx}/{total}] {question.get('type')} "
         f"{question.get('scene_id')}/{question.get('image_name')} -> API",
@@ -1550,6 +1558,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--title", default="Sampled VLM Spatial QA Evaluation", help="HTML report title")
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
     parser.add_argument("--blind", action="store_true", help="Text-only baseline: omit image from all API requests")
+    parser.add_argument("--direct", action="store_true", help="Direct-answer baseline: ask for a single letter with no reasoning")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
     parser.add_argument(
         "--only_type",
