@@ -640,8 +640,8 @@ def _load_oracle_scene_cache_entry(
         with open(_cache_file, "rb") as _f:
             _cached = _pkl.load(_f)
         _scene_path = Path(_cached["scene_path"])
-        _poses = None
-        if need_poses and _oracle_load_poses is not None:
+        _poses = _cached.get("poses")
+        if _poses is None and need_poses and _oracle_load_poses is not None:
             _poses = _oracle_load_poses(_scene_path, dataset_kind, scannetpp_sensor)
         return OracleSceneCacheEntry(scene_path=_scene_path, objects=_cached["objects"], poses=_poses)
 

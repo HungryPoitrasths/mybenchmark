@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.enrich_oracle_fields import _dataset_kind, _scene_path as _resolve_scene_path
+from scripts.enrich_oracle_fields import _dataset_kind, _load_poses, _scene_path as _resolve_scene_path
 from src.scene_parser import parse_scene
 
 
@@ -40,7 +40,7 @@ def _collect_obj_ids(q: dict) -> set[int]:
 
 
 def _process_scene(args_tuple: tuple) -> tuple[str, str]:
-    scene_id, dataset_kind, scene_path_str, obj_ids, out_path_str = args_tuple
+    scene_id, dataset_kind, scene_path_str, obj_ids, out_path_str, oracle_mode, scannetpp_sensor = args_tuple
     out_path = Path(out_path_str)
     if out_path.is_file():
         return scene_id, "cached"
@@ -53,9 +53,15 @@ def _process_scene(args_tuple: tuple) -> tuple[str, str]:
             objects = {k: v for k, v in objects.items() if k in obj_ids}
         if not objects:
             return scene_id, "no_objects"
+        poses = None
+        if oracle_mode == "task_frame":
+            try:
+                poses = _load_poses(Path(scene_path_str), dataset_kind, scannetpp_sensor)
+            except Exception:
+                poses = None
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "wb") as f:
-            pickle.dump({"objects": objects, "scene_path": scene_path_str}, f)
+            pickle.dump({"objects": objects, "scene_path": scene_path_str, "poses": poses}, f)
         return scene_id, "ok"
     except Exception as exc:
         return scene_id, f"error: {exc}"
@@ -67,6 +73,7 @@ def main() -> None:
     parser.add_argument("--scannet_root", default="", help="ScanNet scans root")
     parser.add_argument("--scannetpp_geometry_root", default="", help="ScanNet++ geometry root")
     parser.add_argument("--scannetpp_sensor", default="iphone")
+    parser.add_argument("--oracle_mode", choices=("world", "task_frame"), default="task_frame")
     parser.add_argument("--output_dir", default="output/oracle_cache")
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
@@ -89,7 +96,7 @@ def main() -> None:
 
     out_dir = Path(args.output_dir)
     tasks = [
-        (sid, info["dataset_kind"], info["scene_path"], info["obj_ids"], str(out_dir / f"{sid}.pkl"))
+        (sid, info["dataset_kind"], info["scene_path"], info["obj_ids"], str(out_dir / f"{sid}.pkl"), args.oracle_mode, args.scannetpp_sensor)
         for sid, info in scenes.items()
     ]
     print(f"Processing {len(tasks)} scenes with {args.workers} workers...")
