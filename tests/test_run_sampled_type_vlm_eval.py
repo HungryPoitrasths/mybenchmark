@@ -9,6 +9,7 @@ from scripts.extract_l3_attachment_chain_multiselect import (
 from scripts.run_sampled_type_vlm_eval import (
     ImageResolution,
     _option_html,
+    _resolve_scannetpp_geometry_roots,
     _should_omit_temperature,
     build_prompt,
     call_model,
@@ -118,6 +119,16 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
     def test_claude_opus_4_omits_temperature_for_proxy_compatibility(self) -> None:
         self.assertTrue(_should_omit_temperature("claude-opus-4-7"))
         self.assertTrue(_should_omit_temperature("claude-sonnet-4-5"))
+
+    def test_scannetpp_geometry_roots_include_frame_root_siblings(self) -> None:
+        roots = _resolve_scannetpp_geometry_roots(
+            ["/home/sujinyue/mybenchmark/output/scannetpp_iphone_frames"],
+            None,
+        )
+        normalized = {root.replace("\\", "/") for root in roots}
+
+        self.assertIn("/home/sujinyue/mybenchmark/data/scannetpp", normalized)
+        self.assertIn("/home/sujinyue/mybenchmark/++data", normalized)
         self.assertFalse(_should_omit_temperature("qwen3.5-flash"))
 
     def test_parse_answers_accepts_common_multi_select_formats(self) -> None:

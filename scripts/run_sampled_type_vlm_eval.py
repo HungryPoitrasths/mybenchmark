@@ -568,21 +568,35 @@ def _resolve_scannet_geometry_root(image_roots: list[str]) -> str:
     return image_roots[0] if image_roots else "data/scannet/scans"
 
 
-def _resolve_scannetpp_geometry_root(image_roots: list[str], explicit_root: str | None) -> str:
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+
+def _resolve_scannetpp_geometry_roots(image_roots: list[str], explicit_root: str | None) -> list[str]:
     candidates: list[Path] = []
     if explicit_root:
         candidates.append(Path(explicit_root))
     candidates.extend([Path("data/scannetpp"), Path("++data")])
-    candidates.extend(Path(root_text) for root_text in image_roots)
-    for candidate in candidates:
-        if (candidate / "scans").exists() or any((candidate / child).exists() for child in ("iphone", "dslr")):
-            return str(candidate)
-        try:
-            if candidate.exists() and any((p / "scans").exists() for p in candidate.iterdir() if p.is_dir()):
-                return str(candidate)
-        except OSError:
-            continue
-    return str(candidates[0]) if candidates else "data/scannetpp"
+    for root_text in image_roots:
+        root = Path(root_text)
+        candidates.extend(
+            [
+                root,
+                root.parent / "data" / "scannetpp",
+                root.parent / "++data",
+                root.parent.parent / "data" / "scannetpp",
+                root.parent.parent / "++data",
+            ]
+        )
+    return [str(path) for path in _unique_paths(candidates)]
 
 
 def _load_oracle_scene_cache_entry(
@@ -590,7 +604,7 @@ def _load_oracle_scene_cache_entry(
     dataset: str,
     *,
     scannet_root: str,
-    scannetpp_root: str,
+    scannetpp_roots: list[str],
     scannetpp_sensor: str,
     need_poses: bool,
 ) -> Any:
@@ -601,16 +615,42 @@ def _load_oracle_scene_cache_entry(
         or _parse_oracle_scene is None
     ):
         raise RuntimeError("runtime oracle generation helpers are unavailable")
-    scene_path = _oracle_scene_path(scene_id, dataset, scannet_root, scannetpp_root)
     dataset_kind = _oracle_dataset_kind(scene_id, dataset)
-    parsed = _parse_oracle_scene(scene_path, dataset=dataset_kind)
-    objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
-    poses = None
-    if need_poses:
-        if _oracle_load_poses is None:
-            raise RuntimeError("runtime oracle pose loader is unavailable")
-        poses = _oracle_load_poses(scene_path, dataset_kind, scannetpp_sensor)
-    return OracleSceneCacheEntry(scene_path=scene_path, objects=objects, poses=poses)
+
+    if dataset_kind == "scannet":
+        scene_path = _oracle_scene_path(scene_id, dataset, scannet_root, scannetpp_roots[0] if scannetpp_roots else "")
+        parsed = _parse_oracle_scene(scene_path, dataset=dataset_kind)
+        objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
+        poses = None
+        if need_poses:
+            if _oracle_load_poses is None:
+                raise RuntimeError("runtime oracle pose loader is unavailable")
+            poses = _oracle_load_poses(scene_path, dataset_kind, scannetpp_sensor)
+        return OracleSceneCacheEntry(scene_path=scene_path, objects=objects, poses=poses)
+
+    errors: list[str] = []
+    for root in scannetpp_roots:
+        scene_path = _oracle_scene_path(scene_id, dataset, scannet_root, root)
+        try:
+            parsed = _parse_oracle_scene(scene_path, dataset=dataset_kind)
+            objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
+            if not objects:
+                errors.append(f"{scene_path}: no parsed objects")
+                continue
+            poses = None
+            if need_poses:
+                if _oracle_load_poses is None:
+                    raise RuntimeError("runtime oracle pose loader is unavailable")
+                poses = _oracle_load_poses(scene_path, dataset_kind, scannetpp_sensor)
+            return OracleSceneCacheEntry(scene_path=scene_path, objects=objects, poses=poses)
+        except Exception as exc:
+            errors.append(f"{scene_path}: {exc}")
+            continue
+
+    tried = "; ".join(errors[:6])
+    if len(errors) > 6:
+        tried += f"; ... {len(errors) - 6} more"
+    raise RuntimeError(f"could not load ScanNet++ geometry/poses for {scene_id}; tried {tried}")
 
 
 def ensure_runtime_oracle_info(
@@ -618,7 +658,7 @@ def ensure_runtime_oracle_info(
     *,
     oracle_mode: str,
     scannet_root: str,
-    scannetpp_root: str,
+    scannetpp_roots: list[str],
     scannetpp_sensor: str,
 ) -> dict[str, int]:
     if oracle_mode == "none":
@@ -648,7 +688,7 @@ def ensure_runtime_oracle_info(
                     scene_id,
                     dataset,
                     scannet_root=scannet_root,
-                    scannetpp_root=scannetpp_root,
+                    scannetpp_roots=scannetpp_roots,
                     scannetpp_sensor=scannetpp_sensor,
                     need_poses=need_poses,
                 )
@@ -1621,7 +1661,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     oracle_stats: dict[str, int] | None = None
     if getattr(args, "oracle", False):
         scannet_root = _resolve_scannet_geometry_root(list(args.scannet_image_root or []))
-        scannetpp_root = _resolve_scannetpp_geometry_root(
+        scannetpp_roots = _resolve_scannetpp_geometry_roots(
             list(args.scannetpp_image_root or []),
             getattr(args, "scannetpp_geometry_root", None),
         )
@@ -1630,11 +1670,13 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             selected,
             oracle_mode=oracle_mode,
             scannet_root=scannet_root,
-            scannetpp_root=scannetpp_root,
+            scannetpp_roots=scannetpp_roots,
             scannetpp_sensor=args.scannetpp_sensor,
         )
     else:
         oracle_mode = "none"
+        scannet_root = None
+        scannetpp_roots = []
 
     metadata.update(
         {
@@ -1650,6 +1692,8 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "vlm_workers": args.vlm_workers,
             "oracle": bool(getattr(args, "oracle", False)),
             "oracle_mode": oracle_mode,
+            "oracle_scannet_root": scannet_root,
+            "oracle_scannetpp_roots": list(scannetpp_roots),
         }
     )
     if oracle_stats is not None:
