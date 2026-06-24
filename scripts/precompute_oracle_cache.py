@@ -75,7 +75,8 @@ def main() -> None:
     args = parser.parse_args()
 
     with open(args.subset) as f:
-        questions = json.load(f)
+        raw = json.load(f)
+    questions = raw if isinstance(raw, list) else raw.get("questions", list(raw.values())[0] if isinstance(list(raw.values())[0], list) else [])
 
     scenes: dict[str, dict] = {}
     for q in questions:
