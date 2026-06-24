@@ -623,6 +623,7 @@ def _load_oracle_scene_cache_entry(
     scannetpp_roots: list[str],
     scannetpp_sensor: str,
     need_poses: bool,
+    oracle_cache_dir: str | None = None,
 ) -> Any:
     if (
         OracleSceneCacheEntry is None
@@ -633,10 +634,25 @@ def _load_oracle_scene_cache_entry(
         raise RuntimeError("runtime oracle generation helpers are unavailable")
     dataset_kind = _oracle_dataset_kind(scene_id, dataset)
 
+    import pickle as _pkl
+    _cache_file = Path(oracle_cache_dir) / f"{scene_id}.pkl" if oracle_cache_dir else None
+    if _cache_file and _cache_file.is_file():
+        with open(_cache_file, "rb") as _f:
+            _cached = _pkl.load(_f)
+        _scene_path = Path(_cached["scene_path"])
+        _poses = None
+        if need_poses and _oracle_load_poses is not None:
+            _poses = _oracle_load_poses(_scene_path, dataset_kind, scannetpp_sensor)
+        return OracleSceneCacheEntry(scene_path=_scene_path, objects=_cached["objects"], poses=_poses)
+
     if dataset_kind == "scannet":
         scene_path = _oracle_scene_path(scene_id, dataset, scannet_root, scannetpp_roots[0] if scannetpp_roots else "")
         parsed = _parse_oracle_scene(scene_path, dataset=dataset_kind)
         objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
+        if _cache_file and objects:
+            _cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(_cache_file, "wb") as _f:
+                _pkl.dump({"objects": objects, "scene_path": str(scene_path)}, _f)
         poses = None
         if need_poses:
             if _oracle_load_poses is None:
@@ -659,6 +675,10 @@ def _load_oracle_scene_cache_entry(
             if not objects:
                 errors.append(f"{scene_path}: no parsed objects")
                 continue
+            if _cache_file and objects:
+                _cache_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(_cache_file, "wb") as _f:
+                    _pkl.dump({"objects": objects, "scene_path": str(scene_path)}, _f)
             poses = None
             if need_poses:
                 if _oracle_load_poses is None:
@@ -687,6 +707,7 @@ def ensure_runtime_oracle_info(
     scannet_root: str,
     scannetpp_roots: list[str],
     scannetpp_sensor: str,
+    oracle_cache_dir: str | None = None,
 ) -> dict[str, int]:
     if oracle_mode == "none":
         return {"generated": 0, "preexisting": 0, "skipped": 0, "pose_missing": 0, "scene_errors": 0}
@@ -718,6 +739,7 @@ def ensure_runtime_oracle_info(
                     scannetpp_roots=scannetpp_roots,
                     scannetpp_sensor=scannetpp_sensor,
                     need_poses=need_poses,
+                    oracle_cache_dir=oracle_cache_dir,
                 )
             except Exception as exc:
                 print(f"oracle warning: {scene_id}: {exc}", file=sys.stderr, flush=True)
@@ -1700,6 +1722,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             scannet_root=scannet_root,
             scannetpp_roots=scannetpp_roots,
             scannetpp_sensor=args.scannetpp_sensor,
+            oracle_cache_dir=getattr(args, "oracle_cache_dir", None),
         )
     else:
         oracle_mode = "none"
@@ -1908,6 +1931,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--direct", action="store_true", help="Direct-answer baseline: ask for a single letter with no reasoning")
     parser.add_argument("--oracle", action="store_true", help="Generate/prepend ground-truth 3D oracle information to each prompt")
     parser.add_argument("--oracle_mode", choices=("world", "task_frame"), default="task_frame", help="Oracle coordinate mode used when --oracle is set")
+    parser.add_argument("--oracle_cache_dir", default=None, help="Directory for pre-computed oracle scene cache (pickle files). Pre-compute with scripts/precompute_oracle_cache.py.")
     parser.add_argument("--scannetpp_geometry_root", default=None, help="Optional ScanNet++ geometry root; defaults to auto-detecting data/scannetpp, ++data, then --scannetpp_image_root")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
     parser.add_argument(

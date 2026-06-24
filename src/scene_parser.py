@@ -975,6 +975,8 @@ def parse_scene(
     scene_path: str | Path,
     preloaded_geometry: SceneGeometry | None = None,
     dataset: str | None = None,
+    object_ids_filter: set[int] | None = None,
+    skip_support_geom: bool = False,
 ) -> dict[str, Any] | None:
     """Parse a single ScanNet or ScanNet++ scene.
 
@@ -1006,6 +1008,12 @@ def parse_scene(
     objects: list[dict[str, Any]] = []
     for anno in anno_list:
         instance_id = anno.get("id", anno.get("objectId"))
+        if object_ids_filter is not None and instance_id is not None:
+            try:
+                if int(instance_id) not in object_ids_filter:
+                    continue
+            except (TypeError, ValueError):
+                pass
         raw_label = str(anno.get("label", "unknown"))
         label = normalize_label(raw_label)
         alias_meta = resolve_alias_metadata(
@@ -1025,7 +1033,7 @@ def parse_scene(
         bbox_max   = obj_vertices.max(axis=0)
         center     = (bbox_min + bbox_max) / 2.0
         dimensions = bbox_max - bbox_min
-        support_geom = _build_support_geom(obj_vertices, bbox_min, bbox_max)
+        support_geom = {} if skip_support_geom else _build_support_geom(obj_vertices, bbox_min, bbox_max)
 
         objects.append(
             {
