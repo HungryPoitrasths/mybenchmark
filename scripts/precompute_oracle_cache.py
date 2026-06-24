@@ -45,15 +45,12 @@ def _process_scene(args_tuple: tuple) -> tuple[str, str]:
     if out_path.is_file():
         return scene_id, "cached"
     try:
-        parsed = parse_scene(
-            scene_path_str,
-            dataset=dataset_kind,
-            object_ids_filter=obj_ids if obj_ids else None,
-            skip_support_geom=True,
-        )
+        parsed = parse_scene(scene_path_str, dataset=dataset_kind, skip_support_geom=True)
         if not parsed:
             return scene_id, "no_data"
         objects = {int(o["id"]): o for o in parsed.get("objects", [])}
+        if obj_ids:
+            objects = {k: v for k, v in objects.items() if k in obj_ids}
         if not objects:
             return scene_id, "no_objects"
         out_path.parent.mkdir(parents=True, exist_ok=True)
