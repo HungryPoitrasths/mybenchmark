@@ -46,6 +46,31 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from scripts.enrich_oracle_fields import (
+        SceneCacheEntry as OracleSceneCacheEntry,
+        _dataset_kind as _oracle_dataset_kind,
+        _frame_kind_for_question as _oracle_frame_kind_for_question,
+        _load_poses as _oracle_load_poses,
+        _make_task_frame_oracle_prefix,
+        _make_world_oracle_prefix,
+        _scene_path as _oracle_scene_path,
+    )
+    from src.scene_parser import parse_scene as _parse_oracle_scene
+except ImportError:  # pragma: no cover - optional when only using pre-enriched oracle fields
+    OracleSceneCacheEntry = None  # type: ignore[assignment]
+    _oracle_dataset_kind = None  # type: ignore[assignment]
+    _oracle_frame_kind_for_question = None  # type: ignore[assignment]
+    _oracle_load_poses = None  # type: ignore[assignment]
+    _make_task_frame_oracle_prefix = None  # type: ignore[assignment]
+    _make_world_oracle_prefix = None  # type: ignore[assignment]
+    _oracle_scene_path = None  # type: ignore[assignment]
+    _parse_oracle_scene = None  # type: ignore[assignment]
+
 try:
     from PIL import Image
 except ImportError:  # pragma: no cover - optional dependency
@@ -533,6 +558,127 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
+def _resolve_scannet_geometry_root(image_roots: list[str]) -> str:
+    for root_text in image_roots:
+        root = Path(root_text)
+        if root.name == "scans":
+            return str(root)
+        if (root / "scans").exists():
+            return str(root / "scans")
+    return image_roots[0] if image_roots else "data/scannet/scans"
+
+
+def _resolve_scannetpp_geometry_root(image_roots: list[str], explicit_root: str | None) -> str:
+    candidates: list[Path] = []
+    if explicit_root:
+        candidates.append(Path(explicit_root))
+    candidates.extend([Path("data/scannetpp"), Path("++data")])
+    candidates.extend(Path(root_text) for root_text in image_roots)
+    for candidate in candidates:
+        if (candidate / "scans").exists() or any((candidate / child).exists() for child in ("iphone", "dslr")):
+            return str(candidate)
+        try:
+            if candidate.exists() and any((p / "scans").exists() for p in candidate.iterdir() if p.is_dir()):
+                return str(candidate)
+        except OSError:
+            continue
+    return str(candidates[0]) if candidates else "data/scannetpp"
+
+
+def _load_oracle_scene_cache_entry(
+    scene_id: str,
+    dataset: str,
+    *,
+    scannet_root: str,
+    scannetpp_root: str,
+    scannetpp_sensor: str,
+    need_poses: bool,
+) -> Any:
+    if (
+        OracleSceneCacheEntry is None
+        or _oracle_scene_path is None
+        or _oracle_dataset_kind is None
+        or _parse_oracle_scene is None
+    ):
+        raise RuntimeError("runtime oracle generation helpers are unavailable")
+    scene_path = _oracle_scene_path(scene_id, dataset, scannet_root, scannetpp_root)
+    dataset_kind = _oracle_dataset_kind(scene_id, dataset)
+    parsed = _parse_oracle_scene(scene_path, dataset=dataset_kind)
+    objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
+    poses = None
+    if need_poses:
+        if _oracle_load_poses is None:
+            raise RuntimeError("runtime oracle pose loader is unavailable")
+        poses = _oracle_load_poses(scene_path, dataset_kind, scannetpp_sensor)
+    return OracleSceneCacheEntry(scene_path=scene_path, objects=objects, poses=poses)
+
+
+def ensure_runtime_oracle_info(
+    questions: list[dict[str, Any]],
+    *,
+    oracle_mode: str,
+    scannet_root: str,
+    scannetpp_root: str,
+    scannetpp_sensor: str,
+) -> dict[str, int]:
+    if oracle_mode == "none":
+        return {"generated": 0, "preexisting": 0, "skipped": 0, "pose_missing": 0, "scene_errors": 0}
+    if oracle_mode == "task_frame" and _make_task_frame_oracle_prefix is None:
+        raise RuntimeError("runtime task-frame oracle generation is unavailable")
+    if oracle_mode == "world" and _make_world_oracle_prefix is None:
+        raise RuntimeError("runtime world oracle generation is unavailable")
+
+    scene_cache: dict[str, Any] = {}
+    stats = {"generated": 0, "preexisting": 0, "skipped": 0, "pose_missing": 0, "scene_errors": 0}
+    for question in questions:
+        if question.get("_oracle_info"):
+            stats["preexisting"] += 1
+            continue
+
+        scene_id = str(question.get("scene_id") or "")
+        dataset = str(question.get("_dataset") or question.get("dataset") or "")
+        if not scene_id:
+            stats["skipped"] += 1
+            continue
+
+        if scene_id not in scene_cache:
+            need_poses = oracle_mode == "task_frame"
+            try:
+                scene_cache[scene_id] = _load_oracle_scene_cache_entry(
+                    scene_id,
+                    dataset,
+                    scannet_root=scannet_root,
+                    scannetpp_root=scannetpp_root,
+                    scannetpp_sensor=scannetpp_sensor,
+                    need_poses=need_poses,
+                )
+            except Exception as exc:
+                print(f"oracle warning: {scene_id}: {exc}", file=sys.stderr, flush=True)
+                stats["scene_errors"] += 1
+                scene_cache[scene_id] = None
+
+        entry = scene_cache[scene_id]
+        if entry is None:
+            stats["skipped"] += 1
+            continue
+
+        if oracle_mode == "world":
+            prefix = _make_world_oracle_prefix(question, entry.objects)
+        else:
+            pose = entry.poses.get(str(question.get("image_name") or "")) if entry.poses is not None else None
+            if _oracle_frame_kind_for_question is not None and _oracle_frame_kind_for_question(question) in {"agent", "object_centric"} and pose is None:
+                stats["pose_missing"] += 1
+            prefix = _make_task_frame_oracle_prefix(question, entry.objects, pose)
+
+        if prefix:
+            question["_oracle_info"] = prefix
+            question["_oracle_mode"] = oracle_mode
+            stats["generated"] += 1
+        else:
+            stats["skipped"] += 1
+    return stats
+
+
 def _is_reasoning_chat_model(model: str) -> bool:
     """GPT-5 / o-series chat models reject `max_tokens` and non-default `temperature`.
 
@@ -841,6 +987,9 @@ def result_from_question(
         "correct": correct,
         "error": error,
     }
+    if question.get("_oracle_info"):
+        row["oracle_info"] = question.get("_oracle_info")
+        row["oracle_mode"] = question.get("_oracle_mode")
     if multi_select:
         row["multi_select"] = True
         row["gt_answers"] = gt_answers
@@ -965,6 +1114,14 @@ def build_html(results: list[dict[str, Any]], *, title: str, html_image_max_px: 
             status = "error"
         pred = row.get("prediction") or "-"
         raw = row.get("raw_response") or row.get("error") or ""
+        oracle_details = ""
+        if row.get("oracle_info"):
+            oracle_details = (
+                "<details>"
+                "<summary>Oracle prompt prefix</summary>"
+                f"<pre>{html.escape(str(row.get('oracle_info') or ''))}</pre>"
+                "</details>"
+            )
         cards.append(
             f'<article class="card {status}">'
             '<div class="image-wrap">'
@@ -985,6 +1142,7 @@ def build_html(results: list[dict[str, Any]], *, title: str, html_image_max_px: 
             f'<strong>Model:</strong> {html.escape(str(pred))}'
             f'<strong>Correct value:</strong> {html.escape(str(row.get("correct_value") or "-"))}'
             "</div>"
+            f"{oracle_details}"
             "<details open>"
             "<summary>Model reasoning and raw answer</summary>"
             f"<pre>{html.escape(str(raw))}</pre>"
@@ -1460,6 +1618,24 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             seed=args.seed,
         )
 
+    oracle_stats: dict[str, int] | None = None
+    if getattr(args, "oracle", False):
+        scannet_root = _resolve_scannet_geometry_root(list(args.scannet_image_root or []))
+        scannetpp_root = _resolve_scannetpp_geometry_root(
+            list(args.scannetpp_image_root or []),
+            getattr(args, "scannetpp_geometry_root", None),
+        )
+        oracle_mode = str(getattr(args, "oracle_mode", "task_frame") or "task_frame")
+        oracle_stats = ensure_runtime_oracle_info(
+            selected,
+            oracle_mode=oracle_mode,
+            scannet_root=scannet_root,
+            scannetpp_root=scannetpp_root,
+            scannetpp_sensor=args.scannetpp_sensor,
+        )
+    else:
+        oracle_mode = "none"
+
     metadata.update(
         {
             "input_question_count": len(all_questions),
@@ -1472,8 +1648,12 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "api_provider": args.api_provider,
             "scannetpp_sensor": args.scannetpp_sensor,
             "vlm_workers": args.vlm_workers,
+            "oracle": bool(getattr(args, "oracle", False)),
+            "oracle_mode": oracle_mode,
         }
     )
+    if oracle_stats is not None:
+        metadata["oracle_stats"] = oracle_stats
 
     output_json = Path(args.output_json)
     existing = load_existing_results(output_json)
@@ -1654,7 +1834,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip_api", action="store_true", help="Only sample and build a report skeleton; do not call the API")
     parser.add_argument("--blind", action="store_true", help="Text-only baseline: omit image from all API requests")
     parser.add_argument("--direct", action="store_true", help="Direct-answer baseline: ask for a single letter with no reasoning")
-    parser.add_argument("--oracle", action="store_true", help="Perception oracle: prepend ground-truth 3D object positions from _oracle_info field")
+    parser.add_argument("--oracle", action="store_true", help="Generate/prepend ground-truth 3D oracle information to each prompt")
+    parser.add_argument("--oracle_mode", choices=("world", "task_frame"), default="task_frame", help="Oracle coordinate mode used when --oracle is set")
+    parser.add_argument("--scannetpp_geometry_root", default=None, help="Optional ScanNet++ geometry root; defaults to auto-detecting data/scannetpp, ++data, then --scannetpp_image_root")
     parser.add_argument("--force", action="store_true", help="Re-run questions even if cached in output_json")
     parser.add_argument(
         "--only_type",
