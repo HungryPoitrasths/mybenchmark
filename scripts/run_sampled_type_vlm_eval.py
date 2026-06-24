@@ -599,6 +599,22 @@ def _resolve_scannetpp_geometry_roots(image_roots: list[str], explicit_root: str
     return [str(path) for path in _unique_paths(candidates)]
 
 
+def _has_scannetpp_geometry(scene_path: Path) -> bool:
+    return (
+        (scene_path / "scans" / "mesh_aligned_0.05.ply").is_file()
+        and (scene_path / "scans" / "segments.json").is_file()
+        and (scene_path / "scans" / "segments_anno.json").is_file()
+    )
+
+
+def _has_scannetpp_pose_files(scene_path: Path, sensor: str) -> bool:
+    if sensor == "iphone":
+        return (scene_path / "iphone" / "colmap" / "images.txt").is_file()
+    if sensor == "dslr":
+        return (scene_path / "dslr" / "nerfstudio" / "transforms.json").is_file()
+    return False
+
+
 def _load_oracle_scene_cache_entry(
     scene_id: str,
     dataset: str,
@@ -631,6 +647,12 @@ def _load_oracle_scene_cache_entry(
     errors: list[str] = []
     for root in scannetpp_roots:
         scene_path = _oracle_scene_path(scene_id, dataset, scannet_root, root)
+        if not _has_scannetpp_geometry(scene_path):
+            errors.append(f"{scene_path}: missing scans/mesh_aligned_0.05.ply or segment annotation files")
+            continue
+        if need_poses and not _has_scannetpp_pose_files(scene_path, scannetpp_sensor):
+            errors.append(f"{scene_path}: missing {scannetpp_sensor} pose files")
+            continue
         try:
             parsed = _parse_oracle_scene(scene_path, dataset=dataset_kind)
             objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
@@ -650,7 +672,12 @@ def _load_oracle_scene_cache_entry(
     tried = "; ".join(errors[:6])
     if len(errors) > 6:
         tried += f"; ... {len(errors) - 6} more"
-    raise RuntimeError(f"could not load ScanNet++ geometry/poses for {scene_id}; tried {tried}")
+    raise RuntimeError(
+        f"could not load ScanNet++ raw geometry/poses for {scene_id}; "
+        f"--scannetpp_image_root is only the extracted frame root. "
+        f"Pass the raw ScanNet++ root with --scannetpp_geometry_root if it is elsewhere. "
+        f"Tried {tried}"
+    )
 
 
 def ensure_runtime_oracle_info(
@@ -1623,7 +1650,8 @@ def run_api_question(
                 error = f"api_error: {exc}"
                 print(f"[{idx}/{total}] failed: {exc}", flush=True)
             else:
-                wait = args.retry_delay * (2 ** attempt)
+                is_rate_limit = "429" in str(exc) or "quota" in str(exc).lower()
+                wait = (60.0 if is_rate_limit else args.retry_delay) * (2 ** attempt)
                 print(
                     f"[{idx}/{total}] attempt {attempt + 1} failed: {exc}; "
                     f"retrying in {wait:.1f}s",
