@@ -1724,7 +1724,7 @@ def _projected_area_from_records(
     return float(area), float(in_frame_count / len(projected_records))
 
 
-def _quick_moved_bbox_projection(
+def quick_moved_bbox_projection(
     moved_target: dict[str, Any],
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics,
@@ -4953,7 +4953,7 @@ def _find_object_move_occlusion_changes(
 
         moved_target = moved_map.get(target_obj_id)
         if moved_target is not None and old_status in L1_VISIBLE_OCCLUSION_STATES:
-            quick_area, _quick_in_frame_ratio = _quick_moved_bbox_projection(
+            quick_area, _quick_in_frame_ratio = quick_moved_bbox_projection(
                 moved_target,
                 camera_pose,
                 color_intrinsics,
@@ -5005,6 +5005,153 @@ def _find_object_move_occlusion_changes(
             return occlusion_changes
 
     return occlusion_changes
+
+
+def _find_primary_occluder_of_moved_target(
+    *,
+    target_obj_id: int,
+    moved_target: dict[str, Any],
+    original_objects: list[dict[str, Any]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData,
+) -> int | None:
+    """Return the instance id most responsible for occluding moved_target from camera_pose.
+
+    Tests spatially nearby objects using _removed_object_occludes_target_mesh and
+    returns the one with the highest blocking ratio, or None if nothing blocks.
+    """
+    moved_center = np.asarray(
+        moved_target.get("center", [
+            (moved_target["bbox_min"][i] + moved_target["bbox_max"][i]) / 2 for i in range(3)
+        ]),
+        dtype=np.float64,
+    )
+    search_radius = float(np.linalg.norm(
+        np.asarray(moved_target["bbox_max"], dtype=np.float64)
+        - np.asarray(moved_target["bbox_min"], dtype=np.float64)
+    )) * 3.0
+
+    best_id: int | None = None
+    best_ratio = 0.0
+    for obj in original_objects:
+        if int(obj["id"]) == target_obj_id:
+            continue
+        obj_center = np.asarray(
+            obj.get("center", [
+                (obj["bbox_min"][i] + obj["bbox_max"][i]) / 2 for i in range(3)
+            ]),
+            dtype=np.float64,
+        )
+        if float(np.linalg.norm(obj_center - moved_center)) > search_radius:
+            continue
+        result = _removed_object_occludes_target_mesh(
+            removed_obj=obj,
+            target_obj=moved_target,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        ratio = float(result.get("blocking_hit_ratio", 0.0))
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_id = int(obj["id"])
+    return best_id if best_ratio > 0.0 else None
+
+
+def find_auxiliary_frame_for_occlusion_question(
+    *,
+    moved_target: dict[str, Any],
+    gt_new_status: str,
+    occluder_id: int | None,
+    orig_camera_pose: CameraPose,
+    orig_visible_ids: set[int],
+    all_poses: dict[str, CameraPose],
+    scene_objects: list[dict[str, Any]],
+    color_intrinsics: CameraIntrinsics,
+    ray_caster,
+    instance_mesh_data: InstanceMeshData,
+) -> str | None:
+    """Find an auxiliary frame image_name for an object_move_occlusion question.
+
+    Returns the best candidate image_name from all_poses, or None if none qualifies.
+    Conditions:
+      1. Moved target bbox projects into F' with sufficient coverage.
+      2. F' shares at least one visible object with the original frame (quick proxy).
+      3. Moved target has a valid occlusion status in F' (not invisible/grayzone).
+      4. [GT=occluded only] The occluder is also visible in F' (not blocked by a third object).
+    """
+    objects_by_id = {int(o["id"]): o for o in scene_objects}
+
+    # If GT=occluded and the occluder wasn't supplied, identify it from the original camera.
+    if gt_new_status == "occluded" and occluder_id is None:
+        occluder_id = _find_primary_occluder_of_moved_target(
+            target_obj_id=int(moved_target["id"]),
+            moved_target=moved_target,
+            original_objects=scene_objects,
+            camera_pose=orig_camera_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+    occluder_obj = objects_by_id.get(int(occluder_id)) if occluder_id is not None else None
+
+    candidates: list[tuple[float, str]] = []
+    for img_name, frame_pose in all_poses.items():
+        if img_name == orig_camera_pose.image_name:
+            continue
+
+        # Condition 1: moved target in frustum
+        area, in_frame_ratio = quick_moved_bbox_projection(moved_target, frame_pose, color_intrinsics)
+        if in_frame_ratio < 0.5 or area < MIN_PROJECTED_AREA_PX:
+            continue
+
+        # Condition 2: at least one orig-visible object also projects into F'
+        if not any(
+            oid in objects_by_id
+            and quick_moved_bbox_projection(objects_by_id[oid], frame_pose, color_intrinsics)[1] >= 0.3
+            for oid in orig_visible_ids
+        ):
+            continue
+
+        # Condition 3: moved target is not_occluded or occluded in F' (not invisible/grayzone)
+        tgt_metrics = _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
+            obj=moved_target,
+            camera_pose=frame_pose,
+            color_intrinsics=color_intrinsics,
+            ray_caster=ray_caster,
+            instance_mesh_data=instance_mesh_data,
+        )
+        tgt_status, _, _ = _resolve_counterfactual_l1_visibility_status(tgt_metrics)
+        if tgt_status not in {"not occluded", "occluded"}:
+            continue
+
+        # Condition 4 (GT=occluded only): occluder must also be visible in F'
+        if gt_new_status == "occluded" and occluder_obj is not None:
+            occ_metrics = _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
+                obj=occluder_obj,
+                camera_pose=frame_pose,
+                color_intrinsics=color_intrinsics,
+                ray_caster=ray_caster,
+                instance_mesh_data=instance_mesh_data,
+            )
+            occ_status, _, _ = _resolve_counterfactual_l1_visibility_status(occ_metrics)
+            if occ_status not in {"not occluded", "occluded"}:
+                continue
+
+        # Score: prefer high coverage + large angular difference from orig (more new info)
+        a, b = orig_camera_pose.position, frame_pose.position
+        na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        angle = (
+            math.acos(float(np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0)))
+            if na > 1e-9 and nb > 1e-9 else 0.0
+        )
+        score = in_frame_ratio * math.log1p(area) * min(angle, math.pi / 2)
+        candidates.append((score, img_name))
+
+    return max(candidates, key=lambda x: x[0])[1] if candidates else None
 
 
 def _query_visibility_for_object_move_state(

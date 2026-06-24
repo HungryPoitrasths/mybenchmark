@@ -57,6 +57,7 @@ from src.qa_generator import (
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
     _apply_attachment_surface_text_overrides,
+    find_auxiliary_frame_for_occlusion_question,
     generate_all_questions,
 )
 from src.referability_checks import (
@@ -5333,6 +5334,43 @@ def run_pipeline(
                 for q in questions:
                     q["scene_id"] = scene_id
                     q["image_name"] = image_name
+                    if (
+                        q.get("type") == "object_move_occlusion"
+                        and color_intrinsics is not None
+                        and instance_mesh_data is not None
+                        and ray_caster is not None
+                    ):
+                        _orig_obj = next(
+                            (o for o in scene["objects"] if int(o["id"]) == int(q["target_obj_id"])),
+                            None,
+                        )
+                        if _orig_obj is not None:
+                            _delta = np.asarray(q["delta"], dtype=np.float64)
+                            _moved_tgt = dict(_orig_obj)
+                            _moved_tgt["bbox_min"] = (
+                                np.asarray(_orig_obj["bbox_min"], dtype=np.float64) + _delta
+                            ).tolist()
+                            _moved_tgt["bbox_max"] = (
+                                np.asarray(_orig_obj["bbox_max"], dtype=np.float64) + _delta
+                            ).tolist()
+                            if "center" in _orig_obj:
+                                _moved_tgt["center"] = (
+                                    np.asarray(_orig_obj["center"], dtype=np.float64) + _delta
+                                ).tolist()
+                            _aux = find_auxiliary_frame_for_occlusion_question(
+                                moved_target=_moved_tgt,
+                                gt_new_status=str(q.get("new_visibility", "")),
+                                occluder_id=q.get("occluder_id"),
+                                orig_camera_pose=camera_pose,
+                                orig_visible_ids=visible_id_set,
+                                all_poses=poses,
+                                scene_objects=scene["objects"],
+                                color_intrinsics=color_intrinsics,
+                                ray_caster=ray_caster,
+                                instance_mesh_data=instance_mesh_data,
+                            )
+                            if _aux is not None:
+                                q["auxiliary_image_name"] = _aux
 
                 with _timed_frame_phase(frame_ctx, "referability_post_filter"):
                     kept_questions, audited_questions = _apply_question_referability_filter(
