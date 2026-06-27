@@ -5369,8 +5369,8 @@ def run_pipeline(
                                 ray_caster=ray_caster,
                                 instance_mesh_data=instance_mesh_data,
                             )
-                            if _aux is not None:
-                                q["auxiliary_image_name"] = _aux
+                            if _aux:
+                                q["auxiliary_image_names"] = _aux
 
                 with _timed_frame_phase(frame_ctx, "referability_post_filter"):
                     kept_questions, audited_questions = _apply_question_referability_filter(

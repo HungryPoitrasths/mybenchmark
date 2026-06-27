@@ -5073,10 +5073,10 @@ def find_auxiliary_frame_for_occlusion_question(
     color_intrinsics: CameraIntrinsics,
     ray_caster,
     instance_mesh_data: InstanceMeshData,
-) -> str | None:
-    """Find an auxiliary frame image_name for an object_move_occlusion question.
+) -> list[str]:
+    """Find auxiliary frame image_names for an object_move_occlusion question.
 
-    Returns the best candidate image_name from all_poses, or None if none qualifies.
+    Returns all qualifying image_names from all_poses sorted by score (best first), or [] if none qualifies.
     Conditions:
       1. Moved target bbox projects into F' with sufficient coverage.
       2. F' shares at least one visible object with the original frame (quick proxy).
@@ -5103,9 +5103,9 @@ def find_auxiliary_frame_for_occlusion_question(
         if img_name == orig_camera_pose.image_name:
             continue
 
-        # Condition 1: moved target in frustum
+        # Condition 1: all 8 moved-target bbox corners must fall inside F'
         area, in_frame_ratio = quick_moved_bbox_projection(moved_target, frame_pose, color_intrinsics)
-        if in_frame_ratio < 0.5 or area < MIN_PROJECTED_AREA_PX:
+        if in_frame_ratio < 1.0 or area < MIN_PROJECTED_AREA_PX:
             continue
 
         # Condition 2: at least one orig-visible object also projects into F'
@@ -5151,7 +5151,7 @@ def find_auxiliary_frame_for_occlusion_question(
         score = in_frame_ratio * math.log1p(area) * min(angle, math.pi / 2)
         candidates.append((score, img_name))
 
-    return max(candidates, key=lambda x: x[0])[1] if candidates else None
+    return [img for _, img in sorted(candidates, reverse=True)] if candidates else []
 
 
 def _query_visibility_for_object_move_state(

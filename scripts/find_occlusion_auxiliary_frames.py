@@ -37,6 +37,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 _SCANNET_SCENE_RE = re.compile(r"^scene\d{4}_\d{2}$")
 MIN_ORIG_VISIBLE_IN_FRAME_RATIO = 0.3
+MAX_CANDIDATE_POSES = 400
+
+
+def _subsample_poses(poses: dict, max_n: int) -> dict:
+    if len(poses) <= max_n:
+        return poses
+    items = list(poses.items())
+    step = len(items) / max_n
+    return dict(items[int(i * step)] for i in range(max_n))
 
 
 def _is_scannetpp(scene_id: str) -> bool:
@@ -119,14 +128,25 @@ def _process_scene(scene_id: str, questions: list[dict], args: argparse.Namespac
     resources = _load_scene_resources(scene_id, args)
     if resources is None:
         return
-    poses, color_intrinsics, scene, ray_caster, instance_mesh_data = resources
-    logger.info("%s: %d questions, %d poses", scene_id, len(questions), len(poses))
+    full_poses, color_intrinsics, scene, ray_caster, instance_mesh_data = resources
+
+    candidate_poses = _subsample_poses(full_poses, MAX_CANDIDATE_POSES)
+    logger.info("%s: %d questions, %d poses (sampled %d)", scene_id, len(questions), len(full_poses), len(candidate_poses))
 
     objects_by_id = {int(o["id"]): o for o in scene["objects"]}
 
+    # Precompute visible object ids per candidate pose (amortized across all questions in scene).
+    frame_visible: dict[str, set[int]] = {
+        img_name: {
+            int(o["id"]) for o in scene["objects"]
+            if quick_moved_bbox_projection(o, pose, color_intrinsics)[1] >= 0.3
+        }
+        for img_name, pose in candidate_poses.items()
+    }
+
     for q in questions:
-        q["auxiliary_image_name"] = None
-        orig_pose = poses.get(q.get("image_name", ""))
+        q["auxiliary_image_names"] = None
+        orig_pose = full_poses.get(q.get("image_name", ""))
         if orig_pose is None:
             continue
 
@@ -143,6 +163,14 @@ def _process_scene(scene_id: str, questions: list[dict], args: argparse.Namespac
 
         orig_visible = _approx_visible_ids(scene["objects"], orig_pose, color_intrinsics)
 
+        # Pre-filter to frames that share at least one visible object (condition 2),
+        # excluding the original frame. This avoids redundant raycasting in the inner loop.
+        filtered_poses = {
+            img_name: pose
+            for img_name, pose in candidate_poses.items()
+            if img_name != orig_pose.image_name and (orig_visible & frame_visible[img_name])
+        }
+
         try:
             aux = find_auxiliary_frame_for_occlusion_question(
                 moved_target=moved_target,
@@ -150,13 +178,13 @@ def _process_scene(scene_id: str, questions: list[dict], args: argparse.Namespac
                 occluder_id=None,
                 orig_camera_pose=orig_pose,
                 orig_visible_ids=orig_visible,
-                all_poses=poses,
+                all_poses=filtered_poses,
                 scene_objects=scene["objects"],
                 color_intrinsics=color_intrinsics,
                 ray_caster=ray_caster,
                 instance_mesh_data=instance_mesh_data,
             )
-            q["auxiliary_image_name"] = aux
+            q["auxiliary_image_names"] = aux
         except Exception as e:
             logger.warning("Error on %s/%s: %s", scene_id, q.get("image_name"), e)
 
@@ -187,7 +215,7 @@ def main() -> None:
     for scene_id in scene_ids:
         _process_scene(scene_id, by_scene[scene_id], args)
 
-    found = sum(1 for q in questions if q.get("auxiliary_image_name"))
+    found = sum(1 for q in questions if q.get("auxiliary_image_names"))
     logger.info("Done: %d/%d questions got an auxiliary frame", found, len(questions))
 
     with open(args.output, "w", encoding="utf-8") as f:
