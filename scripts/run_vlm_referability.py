@@ -8656,6 +8656,7 @@ def main():
     api_key = (
         os.getenv("DASHSCOPE_API_KEY")
         or os.getenv("OPENAI_API_KEY")
+        or os.getenv("API_KEY")
         or "EMPTY"
     )
     client = OpenAI(api_key=api_key, base_url=args.vlm_url)
