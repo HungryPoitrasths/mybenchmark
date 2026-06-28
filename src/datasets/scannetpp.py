@@ -7,6 +7,7 @@ later adapter layers.
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 from dataclasses import dataclass
@@ -632,9 +633,18 @@ def _colmap_qvec_to_rotmat(qw: float, qx: float, qy: float, qz: float) -> np.nda
     )
 
 
+def _colmap_open(path: Path):
+    """Open a COLMAP text file, transparently handling .gz compression."""
+    if not path.exists() and path.suffix != ".gz":
+        gz = path.with_suffix(path.suffix + ".gz")
+        if gz.exists():
+            return gzip.open(gz, "rt", encoding="utf-8")
+    return open(path, encoding="utf-8")
+
+
 def _parse_colmap_cameras(path: Path) -> list[dict[str, Any]]:
     """Parse a COLMAP ``cameras.txt`` into a list of camera dicts."""
-    with open(path, encoding="utf-8") as f:
+    with _colmap_open(path) as f:
         lines = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
 
     cameras: list[dict[str, Any]] = []
@@ -672,7 +682,7 @@ def _parse_colmap_images(path: Path) -> list[dict[str, Any]]:
     may be empty.  We read line-by-line (including blank lines) so that
     the two-lines-per-image structure is preserved.
     """
-    with open(path, encoding="utf-8") as f:
+    with _colmap_open(path) as f:
         raw_lines = f.read().splitlines()
 
     # Skip comment lines
