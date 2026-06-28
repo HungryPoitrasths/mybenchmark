@@ -97,7 +97,7 @@ SCANNET_METADATA_SPLIT_FILES: dict[str, Path] = {
     "val": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_val.txt"),
 }
 SCANNETPP_METADATA_SPLIT_FILES: dict[str, Path] = {
-    "train": Path("/data/zju-151/scannet/splits/nvs_sem_train.txt"),
+    "train": Path("/home/sujinyue/datasets/scannetpp/train/selected_train_100.txt"),
     "val": Path("/data/zju-151/scannet/splits/nvs_sem_val.txt"),
 }
 SCENE_STATUS_VERSION = 1
@@ -8599,6 +8599,10 @@ def main():
         help="Sensor to use when dataset=scannetpp",
     )
     parser.add_argument(
+        "--scannetpp_split_file", type=str, default=None,
+        help="Path to a custom scene-ID list (one per line) for scannetpp, overrides --split",
+    )
+    parser.add_argument(
         "--scannetpp_frame_root",
         type=str,
         default=None,
@@ -8679,18 +8683,21 @@ def main():
 
     data_root = Path(args.data_root)
     if args.dataset == "scannetpp":
-        from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
         selected_split = args.split or "train"
-        scannetpp_dirs = resolve_scannetpp_scene_dirs(
-            data_root,
-            sensor=args.scannetpp_sensor,
-        )
-        if selected_split != "all":
-            split_file = SCANNETPP_METADATA_SPLIT_FILES.get(selected_split)
-            if split_file is None:
-                raise ValueError(f"Unsupported ScanNet++ split: {selected_split!r}")
-            split_ids = {line.strip() for line in split_file.read_text(encoding="utf-8").splitlines() if line.strip()}
-            scannetpp_dirs = [d for d in scannetpp_dirs if d.name in split_ids]
+        if args.scannetpp_split_file:
+            split_file = Path(args.scannetpp_split_file)
+        elif selected_split == "train":
+            split_file = SCANNETPP_METADATA_SPLIT_FILES.get("train")
+        else:
+            split_file = None
+        if split_file is not None:
+            split_ids = [l.strip() for l in split_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+            scannetpp_dirs = [data_root / sid for sid in split_ids if (data_root / sid).is_dir()]
+        else:
+            from src.datasets.scannetpp import has_scannetpp_geometry
+            scannetpp_dirs = sorted(p for p in data_root.iterdir() if p.is_dir() and has_scannetpp_geometry(p))
+        if args.scannetpp_frame_root is None:
+            args.scannetpp_frame_root = str(data_root.parent / "iphone_frames")
         scene_entries = [(selected_split, d) for d in scannetpp_dirs]
         logger.info(
             "Found %d ScanNet++ scene directories under %s (split=%s)",

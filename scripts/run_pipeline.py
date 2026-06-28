@@ -924,6 +924,7 @@ def _apply_question_post_generation_audit(
     frame_context_by_key: dict[tuple[str, str], dict[str, object]] | None = None,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_frame_root: str | None = None,
 ) -> list[dict[str, object]]:
     detection_cache: dict[tuple[str, str, str], dict[str, object]] = {}
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None] = {}
@@ -934,6 +935,7 @@ def _apply_question_post_generation_audit(
             output_dir=output_dir,
             dataset=dataset,
             scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
     scene_mesh_cache: dict[str, object] = {}
     scene_depth_intrinsics_cache: dict[str, object] = {}
@@ -1766,9 +1768,11 @@ def _build_question_review_frame_context(
     scene_context: dict[str, object],
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_frame_root: str | None = None,
 ) -> dict[str, object]:
     from src.datasets import make_data_source
-    ds_review = make_data_source(dataset, data_root / scene_id, sensor=scannetpp_sensor)
+    ds_review = make_data_source(dataset, data_root / scene_id, sensor=scannetpp_sensor,
+                                 frame_root=scannetpp_frame_root)
     image_path = ds_review.image_path(image_name)
     image_exists = image_path.exists()
     image_b64 = None
@@ -1865,6 +1869,7 @@ def _prebuild_question_review_frame_contexts(
     output_dir: Path,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_frame_root: str | None = None,
 ) -> dict[tuple[str, str], dict[str, object]]:
     frame_keys: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -1895,6 +1900,7 @@ def _prebuild_question_review_frame_contexts(
             scene_context=scene_contexts[scene_id],
             dataset=dataset,
             scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
     return frame_contexts
 
@@ -2661,6 +2667,7 @@ def _run_question_presence_review(
     frame_context_by_key: dict[tuple[str, str], dict[str, object]] | None = None,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_frame_root: str | None = None,
 ) -> dict[str, object]:
     from scripts.make_viewer import build_viewer_html
 
@@ -2731,6 +2738,7 @@ def _run_question_presence_review(
             output_dir=output_dir,
             dataset=dataset,
             scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
 
     if presence_review_targets or attachment_pair_review_targets:
@@ -4415,6 +4423,7 @@ def _rebuild_pipeline_outputs(
             output_dir=output_dir,
             dataset=dataset,
             scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
     if run_question_dinox_audit:
         final_questions = _apply_question_post_generation_audit(
@@ -4424,6 +4433,7 @@ def _rebuild_pipeline_outputs(
             frame_context_by_key=question_review_frame_contexts,
             dataset=dataset,
             scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
     else:
         logger.info("Skipping DINO-X-dependent post-generation audit")
@@ -4457,6 +4467,7 @@ def _rebuild_pipeline_outputs(
             frame_context_by_key=question_review_frame_contexts,
             dataset=dataset,
             scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
 
     logger.info(
@@ -4472,6 +4483,8 @@ def run_pipeline(
     output_dir: Path,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_split_file: str | None = None,
+    scannetpp_frame_root: str | None = None,
     max_scenes: int = 300,
     max_frames: int = 5,
     use_occlusion: bool = True,
@@ -4540,11 +4553,14 @@ def run_pipeline(
         frame_debug_dir.mkdir(parents=True, exist_ok=True)
 
     if dataset == "scannetpp":
-        from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
-        discovered_scene_dirs = resolve_scannetpp_scene_dirs(
-            data_root,
-            sensor=scannetpp_sensor,
-        )
+        if scannetpp_split_file is not None:
+            split_ids = [l.strip() for l in Path(scannetpp_split_file).read_text(encoding="utf-8").splitlines() if l.strip()]
+            discovered_scene_dirs = [data_root / sid for sid in split_ids if (data_root / sid).is_dir()]
+        else:
+            from src.datasets.scannetpp import has_scannetpp_geometry
+            discovered_scene_dirs = sorted(p for p in data_root.iterdir() if p.is_dir() and has_scannetpp_geometry(p))
+        if scannetpp_frame_root is None:
+            scannetpp_frame_root = str(Path(data_root).parent / "iphone_frames")
     else:
         discovered_scene_dirs = sorted(
             p for p in data_root.iterdir()
@@ -4823,7 +4839,8 @@ def run_pipeline(
         ds = None
         if dataset == "scannetpp":
             from src.datasets import make_data_source
-            ds = make_data_source(dataset, scene_dir, sensor=scannetpp_sensor)
+            ds = make_data_source(dataset, scene_dir, sensor=scannetpp_sensor,
+                                  frame_root=scannetpp_frame_root)
 
         scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
         frames = _frames_from_referability_cache(scene_frames)
@@ -5811,6 +5828,7 @@ def run_pipeline(
             vlm_url=vlm_url,
             vlm_model=vlm_model,
             workers=question_presence_review_workers,
+            scannetpp_frame_root=scannetpp_frame_root,
         )
 
     logger.info(
@@ -5839,6 +5857,16 @@ def main():
     parser.add_argument(
         "--scannetpp_sensor", type=str, choices=("iphone", "dslr"), default="iphone",
         help="Sensor to use when dataset=scannetpp",
+    )
+    parser.add_argument(
+        "--scannetpp_split_file", type=str,
+        default=None,
+        help="Path to scene-ID list (one per line) for scannetpp; if omitted, all scenes with geometry in data_root are used",
+    )
+    parser.add_argument(
+        "--scannetpp_frame_root", type=str,
+        default=None,
+        help="Root directory for extracted ScanNet++ iPhone frames; defaults to data_root/../iphone_frames",
     )
     parser.add_argument(
         "--output_dir", type=str, default="output",
@@ -6040,6 +6068,8 @@ def main():
         output_dir=Path(args.output_dir),
         dataset=args.dataset,
         scannetpp_sensor=args.scannetpp_sensor,
+        scannetpp_split_file=args.scannetpp_split_file,
+        scannetpp_frame_root=args.scannetpp_frame_root,
         max_scenes=args.max_scenes,
         max_frames=args.max_frames,
         use_occlusion=not args.no_occlusion,
