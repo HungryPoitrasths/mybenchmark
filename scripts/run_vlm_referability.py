@@ -8504,6 +8504,10 @@ def main():
         help="Resume from the global scene_status.json if present; with --scene_number, only scenes inside that fixed interval are considered",
     )
     parser.add_argument(
+        "--force", action="store_true",
+        help="Ignore scene_status.json and reprocess all scenes",
+    )
+    parser.add_argument(
         "--reset", type=int, default=None,
         help="Remove the most recently completed N scene entries from scene_status.json before processing; existing batch JSON files, frame sidecars, and review artifacts are kept",
     )
@@ -8761,6 +8765,8 @@ def main():
         if isinstance(completed_scene_records, dict)
         else set()
     )
+    if args.force:
+        completed_scene_ids = set()
     if args.resume and completed_scene_ids:
         logger.info(
             "Resuming from %s with %d completed scene(s) for split=%s",
