@@ -96,6 +96,10 @@ SCANNET_METADATA_SPLIT_FILES: dict[str, Path] = {
     "train": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_train.txt"),
     "val": Path("/home/lihongxing/datasets/ScanNet/data/metadata/scannetv2_val.txt"),
 }
+SCANNETPP_METADATA_SPLIT_FILES: dict[str, Path] = {
+    "train": Path("/data/zju-151/scannet/splits/nvs_sem_train.txt"),
+    "val": Path("/data/zju-151/scannet/splits/nvs_sem_val.txt"),
+}
 SCENE_STATUS_VERSION = 1
 DEFAULT_BATCH_OUTPUT_PREFIX = "flash"
 
@@ -1805,24 +1809,32 @@ def _run_in_thread_pool(
 
 def _frame_prompt() -> str:
     return (
-        "You are given one original scene image. "
-        "Decide whether this frame is usable for object-level visual spatial-reasoning questions. "
-        "A usable frame should allow several scene objects to be recognized and referred to reliably from the image alone. "
-        "Reject frames that are too blurry, too dark, too unclear, or where most candidate objects are hard to identify or distinguish. "
-        'Answer with strict JSON only: {"frame_usable": true, "reason": "clear_scene"}'
+        "You are given one indoor scene image. "
+        "Judge whether the image itself is visually sharp and well-exposed. "
+        "Reject if ANY of the following apply: "
+        "(1) motion blur or camera shake makes edges visibly smeared; "
+        "(2) the scene is so dark that object surfaces are indistinguishable; "
+        "(3) severe overexposure washes out large regions; "
+        "(4) more than half the frame is out-of-focus. "
+        "Accept only if object boundaries and surface textures are crisp and readable. "
+        'Answer with strict JSON only: {"frame_usable": true, "reason": "sharp_and_well_exposed"}'
     )
 
 
 def _frame_batch_prompt(image_names: list[str]) -> str:
     rendered_names = ", ".join(json.dumps(str(name), ensure_ascii=False) for name in image_names)
     return (
-        "You are given multiple original scene images. "
-        "For each image independently, decide whether that frame is usable for object-level visual spatial-reasoning questions. "
-        "A usable frame should allow several scene objects to be recognized and referred to reliably from the image alone. "
-        "Reject frames that are too blurry, too dark, too unclear, or where most candidate objects are hard to identify or distinguish. "
+        "You are given multiple indoor scene images. "
+        "For each image independently, judge whether it is visually sharp and well-exposed. "
+        "Reject if ANY of the following apply: "
+        "(1) motion blur or camera shake makes edges visibly smeared; "
+        "(2) the scene is so dark that object surfaces are indistinguishable; "
+        "(3) severe overexposure washes out large regions; "
+        "(4) more than half the frame is out-of-focus. "
+        "Accept only if object boundaries and surface textures are crisp and readable. "
         "You will receive image_name text before each image. "
         f"Return exactly one result for each of these image_name values: {rendered_names}. "
-        'Answer with strict JSON only using this schema: {"images":[{"image_name":"000001.jpg","frame_usable":true,"reason":"clear_scene"}]}'
+        'Answer with strict JSON only using this schema: {"images":[{"image_name":"000001.jpg","frame_usable":true,"reason":"sharp_and_well_exposed"}]}'
     )
 
 
@@ -8610,9 +8622,8 @@ def main():
         parser.error(str(exc))
     if args.dataset == "scannetv2" and args.split is None:
         args.split = "train"  # backward compat: default split for v2
-    if args.dataset == "scannetpp" and args.split is not None:
-        logger.info("--split is ignored for ScanNet++; processing all discovered scenes")
-        args.split = None
+    if args.dataset == "scannetpp" and args.split is None:
+        args.split = "train"  # default split for scannetpp
     if scene_number_range is not None and args.split == "all":
         parser.error("--scene_number only supports --split train or --split val; --split all is ambiguous")
     if int(args.vlm_workers) <= 0:
@@ -8668,16 +8679,23 @@ def main():
     data_root = Path(args.data_root)
     if args.dataset == "scannetpp":
         from src.datasets.scannetpp import resolve_scannetpp_scene_dirs
-        selected_split = "scannetpp"
+        selected_split = args.split or "train"
         scannetpp_dirs = resolve_scannetpp_scene_dirs(
             data_root,
             sensor=args.scannetpp_sensor,
         )
-        scene_entries = [(None, d) for d in scannetpp_dirs]  # split=None
+        if selected_split != "all":
+            split_file = SCANNETPP_METADATA_SPLIT_FILES.get(selected_split)
+            if split_file is None:
+                raise ValueError(f"Unsupported ScanNet++ split: {selected_split!r}")
+            split_ids = {line.strip() for line in split_file.read_text(encoding="utf-8").splitlines() if line.strip()}
+            scannetpp_dirs = [d for d in scannetpp_dirs if d.name in split_ids]
+        scene_entries = [(selected_split, d) for d in scannetpp_dirs]
         logger.info(
-            "Found %d ScanNet++ scene directories under %s",
+            "Found %d ScanNet++ scene directories under %s (split=%s)",
             len(scene_entries),
             data_root,
+            selected_split,
         )
     else:
         selected_split = args.split or _infer_default_split(data_root)
