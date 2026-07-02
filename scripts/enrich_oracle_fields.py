@@ -77,6 +77,22 @@ def _scene_path(scene_id: str, dataset: str, scannet_root: str, scannetpp_root: 
     return by_scene
 
 
+def _has_scannetpp_geometry(scene_path: Path) -> bool:
+    return (
+        (scene_path / "scans" / "mesh_aligned_0.05.ply").is_file()
+        and (scene_path / "scans" / "segments.json").is_file()
+        and (scene_path / "scans" / "segments_anno.json").is_file()
+    )
+
+
+def _has_scannetpp_pose_files(scene_path: Path, sensor: str) -> bool:
+    if sensor == "iphone":
+        return (scene_path / "iphone" / "colmap" / "images.txt").is_file()
+    if sensor == "dslr":
+        return (scene_path / "dslr" / "nerfstudio" / "transforms.json").is_file()
+    return False
+
+
 def _dataset_kind(scene_id: str, dataset: str) -> str:
     text = f"{scene_id} {dataset}".lower()
     if scene_id.startswith("scene") and "scannetpp" not in text:
@@ -345,6 +361,15 @@ def _load_scene_cache_entry(
 ) -> SceneCacheEntry:
     scene_path = _scene_path(scene_id, dataset, scannet_root, scannetpp_root)
     dataset_kind = _dataset_kind(scene_id, dataset)
+    if dataset_kind == "scannetpp":
+        if not _has_scannetpp_geometry(scene_path):
+            raise FileNotFoundError(
+                f"{scene_path} is not a raw ScanNet++ scene directory with scans/mesh_aligned_0.05.ply"
+            )
+        if load_poses_for_task_frame and not _has_scannetpp_pose_files(scene_path, scannetpp_sensor):
+            raise FileNotFoundError(
+                f"{scene_path} is missing {scannetpp_sensor} pose files required for task-frame oracle"
+            )
     parsed = parse_scene(scene_path, dataset=dataset_kind)
     objects = {int(o["id"]): o for o in (parsed or {}).get("objects", [])}
     poses = _load_poses(scene_path, dataset_kind, scannetpp_sensor) if load_poses_for_task_frame else None
