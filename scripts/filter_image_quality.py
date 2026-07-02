@@ -5,7 +5,8 @@ Pipeline:
 1. Compute grayscale Laplacian variance and Tenengrad focus metrics.
 2. Keep only images that pass both stage-1 thresholds.
 3. Score stage-1 survivors with BRISQUE.
-4. Keep only images whose BRISQUE score is at or below the threshold.
+4. Drop the worst fraction of stage-1 survivors by BRISQUE score (relative
+   cutoff, not an absolute threshold), keeping the rest.
 5. Export JSON, CSV, and an HTML gallery for the final selected images.
 
 Example:
@@ -14,7 +15,7 @@ Example:
         --output_dir output/scene0000_02_quality ^
         --laplacian-threshold 120 ^
         --tenengrad-threshold 15 ^
-        --brisque-threshold 35
+        --brisque-drop-fraction 0.30
 
 BRISQUE dependency:
     This script intentionally does not change the repo's existing pipeline.
@@ -30,6 +31,7 @@ import base64
 import csv
 import html
 import json
+import math
 import mimetypes
 import os
 import re
@@ -51,7 +53,7 @@ from src.image_quality import (
 DEFAULT_IMAGE_PATTERNS = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp")
 DEFAULT_LAPLACIAN_THRESHOLD = 120.0
 DEFAULT_TENENGRAD_THRESHOLD = 15.0
-DEFAULT_BRISQUE_THRESHOLD = 35.0
+DEFAULT_BRISQUE_DROP_FRACTION = 0.30
 DEFAULT_REPORT_IMAGE_MAX_SIDE = 0
 DEFAULT_REPORT_JPEG_QUALITY = 85
 _NATURAL_SORT_PATTERN = re.compile(r"(\d+)")
@@ -219,15 +221,25 @@ def evaluate_stage1(
 def apply_brisque_filter(
     records_and_images: Iterable[tuple[ImageQualityRecord, np.ndarray]],
     *,
-    brisque_threshold: float,
+    brisque_drop_fraction: float,
     brisque_max_side: int | None,
     scorer: BrisqueScorer,
     show_progress: bool = False,
 ) -> list[ImageQualityRecord]:
-    results: list[ImageQualityRecord] = []
+    """Score stage-1 survivors with BRISQUE, then drop the worst fraction.
+
+    Rather than an absolute BRISQUE threshold (which rejects everything when
+    a whole batch has uniformly high/poor scores, e.g. ScanNet++ flash-mode
+    captures), this ranks stage-1 survivors by BRISQUE score and drops the
+    bottom ``brisque_drop_fraction`` of them, keeping the relatively best
+    survivors regardless of their absolute score.
+    """
+    pending: list[tuple[ImageQualityRecord, np.ndarray]] = []
     iterable: Iterable[tuple[ImageQualityRecord, np.ndarray]] = records_and_images
     if show_progress:
         iterable = tqdm(list(records_and_images), desc="Stage 2/2 BRISQUE", unit="img")
+
+    results: list[ImageQualityRecord] = []
     for record, image in iterable:
         if not record.stage1_pass:
             record.stage2_pass = False
@@ -242,11 +254,22 @@ def apply_brisque_filter(
         )
         record.brisque_input_width = int(brisque_info["brisque_input_width"])
         record.brisque_input_height = int(brisque_info["brisque_input_height"])
-        score = float(brisque_info["brisque_score"])
-        record.brisque_score = score
-        record.stage2_pass = score <= float(brisque_threshold)
-        record.final_pass = bool(record.stage2_pass)
+        record.brisque_score = float(brisque_info["brisque_score"])
+        pending.append((record, image))
         results.append(record)
+
+    if not pending:
+        return results
+
+    ranked = sorted(pending, key=lambda item: float(item[0].brisque_score))
+    drop_count = math.floor(float(brisque_drop_fraction) * len(ranked))
+    keep_count = len(ranked) - drop_count
+    kept_records = {id(item[0]) for item in ranked[:keep_count]}
+
+    for record, _image in pending:
+        record.stage2_pass = id(record) in kept_records
+        record.final_pass = bool(record.stage2_pass)
+
     return results
 
 
@@ -611,10 +634,13 @@ def parse_args() -> argparse.Namespace:
         help="Minimum mean Tenengrad magnitude required to pass stage 1.",
     )
     parser.add_argument(
-        "--brisque-threshold",
+        "--brisque-drop-fraction",
         type=float,
-        default=DEFAULT_BRISQUE_THRESHOLD,
-        help="Maximum BRISQUE score allowed to pass stage 2. Lower is better.",
+        default=DEFAULT_BRISQUE_DROP_FRACTION,
+        help=(
+            "Fraction (0-1) of stage-1 survivors to drop by BRISQUE score, worst "
+            "first. Relative cutoff instead of an absolute threshold."
+        ),
     )
     parser.add_argument(
         "--brisque-max-side",
@@ -688,7 +714,7 @@ def main() -> None:
     brisque_scorer = BrisqueScorer()
     records = apply_brisque_filter(
         stage1_records_and_images,
-        brisque_threshold=float(args.brisque_threshold),
+        brisque_drop_fraction=float(args.brisque_drop_fraction),
         brisque_max_side=int(args.brisque_max_side),
         scorer=brisque_scorer,
         show_progress=True,
@@ -698,7 +724,7 @@ def main() -> None:
     thresholds = {
         "laplacian_threshold": float(args.laplacian_threshold),
         "tenengrad_threshold": float(args.tenengrad_threshold),
-        "brisque_threshold": float(args.brisque_threshold),
+        "brisque_drop_fraction": float(args.brisque_drop_fraction),
         "brisque_max_side": float(args.brisque_max_side),
         "report_image_max_side": float(args.report_image_max_side),
         "report_jpeg_quality": float(args.report_jpeg_quality),

@@ -118,9 +118,11 @@ class FilterImageQualityTests(unittest.TestCase):
             ),
         ]
 
+        # Two stage-1 survivors (a.jpg=22.0, c.jpg=41.0); dropping the worst
+        # 50% by BRISQUE score should keep only a.jpg (the better score).
         results = quality_module.apply_brisque_filter(
             records,
-            brisque_threshold=35.0,
+            brisque_drop_fraction=0.50,
             brisque_max_side=16,
             scorer=_StubBrisqueScorer([22.0, 41.0]),
         )
@@ -129,9 +131,46 @@ class FilterImageQualityTests(unittest.TestCase):
         self.assertEqual(results[0].brisque_score, 22.0)
         self.assertEqual(results[0].brisque_input_width, 16)
         self.assertEqual(results[0].brisque_input_height, 16)
-        self.assertIsNone(results[1].brisque_score)
+        self.assertEqual(results[1].brisque_score, None)
         self.assertEqual(results[2].brisque_score, 41.0)
         self.assertEqual(results[1].stage2_pass, False)
+        self.assertEqual(results[2].stage2_pass, False)
+
+    def test_apply_brisque_filter_keeps_all_when_drop_fraction_zero(self) -> None:
+        image = np.zeros((32, 32, 3), dtype=np.uint8)
+        records = [
+            (
+                quality_module.ImageQualityRecord(
+                    image_path=Path("a.jpg"),
+                    width=32,
+                    height=32,
+                    laplacian_variance=200.0,
+                    tenengrad=40.0,
+                    stage1_pass=True,
+                ),
+                image,
+            ),
+            (
+                quality_module.ImageQualityRecord(
+                    image_path=Path("c.jpg"),
+                    width=32,
+                    height=32,
+                    laplacian_variance=220.0,
+                    tenengrad=50.0,
+                    stage1_pass=True,
+                ),
+                image,
+            ),
+        ]
+
+        results = quality_module.apply_brisque_filter(
+            records,
+            brisque_drop_fraction=0.0,
+            brisque_max_side=16,
+            scorer=_StubBrisqueScorer([48.0, 52.0]),
+        )
+
+        self.assertEqual([item.final_pass for item in results], [True, True])
 
     def test_build_html_report_lists_selected_images(self) -> None:
         output_dir = Path("output/report_test")
@@ -190,7 +229,7 @@ class FilterImageQualityTests(unittest.TestCase):
             thresholds={
                 "laplacian_threshold": 120.0,
                 "tenengrad_threshold": 15.0,
-                "brisque_threshold": 35.0,
+                "brisque_drop_fraction": 0.30,
             },
             copied_image_map=embedded_images,
         )
