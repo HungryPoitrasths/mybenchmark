@@ -649,6 +649,8 @@ h1{{text-align:center;color:#333;margin-bottom:4px}}
 .img-wrap{{flex:0 0 auto;width:480px;background:#222;display:flex;
            align-items:center;justify-content:center}}
 .img-wrap img{{width:480px;display:block}}
+.dual-img{{width:100%}}
+.img-label{{font-size:11px;color:#999;text-align:center;padding:2px 0;background:#1a1a1a}}
 .no-img{{width:480px;height:200px;display:flex;align-items:center;
          justify-content:center;color:#999;font-size:13px}}
 .body{{padding:18px 20px 56px;flex:1;min-width:0;position:relative}}
@@ -1326,6 +1328,36 @@ def _record_image_result(
         missing_paths.append(str(img_path))
 
 
+def _build_one_image_html(
+    question: dict,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
+    max_width: int,
+    scannetpp_sensor: str,
+    image_stats: dict[str, object] | None,
+    missing_label: str = "image not found",
+) -> str:
+    img_path = _resolve_image_path(question, scannet_roots, scannetpp_roots, scannetpp_sensor)
+    b64 = img_to_b64(img_path, max_width)
+    if b64:
+        _record_image_result(image_stats, img_path, embedded=True)
+        return f'<img src="data:image/jpeg;base64,{b64}">'
+    _record_image_result(image_stats, img_path, embedded=False)
+    return f'<div class="no-img">{html.escape(missing_label)}</div>'
+
+
+def _collect_aux_image_names(question: dict) -> list[str]:
+    names: list[str] = []
+    raw_list = question.get("auxiliary_image_names")
+    if isinstance(raw_list, list):
+        names.extend(str(name).strip() for name in raw_list if str(name).strip())
+    if not names:
+        single = str(question.get("aux_image_name") or question.get("image_name_2") or "").strip()
+        if single:
+            names.append(single)
+    return names
+
+
 def _build_image_html(
     question: dict,
     scannet_roots: list[Path],
@@ -1334,13 +1366,25 @@ def _build_image_html(
     scannetpp_sensor: str = "iphone",
     image_stats: dict[str, object] | None = None,
 ) -> str:
-    img_path = _resolve_image_path(question, scannet_roots, scannetpp_roots, scannetpp_sensor)
-    b64 = img_to_b64(img_path, max_width)
-    if b64:
-        _record_image_result(image_stats, img_path, embedded=True)
-        return f'<img src="data:image/jpeg;base64,{b64}">'
-    _record_image_result(image_stats, img_path, embedded=False)
-    return '<div class="no-img">image not found</div>'
+    primary = _build_one_image_html(
+        question, scannet_roots, scannetpp_roots, max_width, scannetpp_sensor, image_stats,
+    )
+    aux_names = _collect_aux_image_names(question)
+    if not aux_names:
+        return primary
+
+    blocks = [f'<div class="img-label">original</div>{primary}']
+    total = len(aux_names)
+    for i, aux_name in enumerate(aux_names, start=1):
+        aux_q = {**question, "image_name": aux_name}
+        label = "auxiliary" if total == 1 else f"auxiliary {i}/{total}"
+        aux_html = _build_one_image_html(
+            aux_q, scannet_roots, scannetpp_roots, max_width, scannetpp_sensor, image_stats,
+            missing_label=f"{label} not found",
+        )
+        blocks.append(f'<div class="img-label">{html.escape(label)}</div>{aux_html}')
+
+    return '<div class="dual-img">' + "".join(blocks) + '</div>'
 
 
 def _warn_if_scannetpp_iphone_root_looks_raw(roots: list[Path]) -> None:
