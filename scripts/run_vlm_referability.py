@@ -131,7 +131,7 @@ FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
 # disabled server-side; this headroom is added on top of every task's own
 # answer-token budget so the response isn't truncated before the JSON ever
 # appears.
-VLM_REASONING_TOKEN_HEADROOM = 16000
+VLM_REASONING_TOKEN_HEADROOM = 2048
 DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 70
 VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
 ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
