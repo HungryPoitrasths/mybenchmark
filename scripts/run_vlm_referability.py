@@ -126,6 +126,12 @@ REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 FRAME_CLARITY_BATCH_SIZE = 6
 FRAME_CLARITY_MAX_TOKENS_PER_IMAGE = 128
 FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
+# Reasoning-mode backends (e.g. Qwen3 "-a3b" thinking variants) may emit a
+# <think>...</think> block before the JSON answer even with enable_thinking
+# disabled server-side; this headroom is added on top of every task's own
+# answer-token budget so the response isn't truncated before the JSON ever
+# appears.
+VLM_REASONING_TOKEN_HEADROOM = 16000
 DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 70
 VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
 ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
@@ -180,6 +186,7 @@ _VLM_CALL_FAILURE_COUNT = 0
 _VLM_CALL_FAILURE_COUNT_LOCK = threading.Lock()
 _VLM_REQUEST_SEMAPHORE: threading.BoundedSemaphore | None = None
 _VLM_THREAD_LOCAL_CLIENTS = threading.local()
+_EXTRA_BODY_UNSUPPORTED = False
 
 
 @dataclass
@@ -1641,7 +1648,7 @@ def _attachment_pair_group_rename_advice_vlm_review(
         model_name,
         content,
         default=default,
-        max_tokens=1024,
+        max_tokens=1024 + VLM_REASONING_TOKEN_HEADROOM,
     )
     reviews_by_pair_id: dict[str, dict[str, Any]] = {}
     for raw_review in parsed.get("pair_reviews", []):
@@ -1727,6 +1734,10 @@ def _image_to_base64(image: np.ndarray) -> str:
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
     text = text.strip()
+    # Reasoning-mode models (e.g. Qwen3 "thinking" variants) prepend a
+    # <think>...</think> block before the actual answer; strip it so the
+    # JSON regex below doesn't have to span (or get truncated inside) it.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?", "", text).strip()
         text = re.sub(r"```$", "", text).strip()
@@ -1739,28 +1750,98 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         return None
 
 
+_VLM_DEBUG_LOG_PATH = os.getenv("VLM_DEBUG_LOG_PATH")
+_VLM_DEBUG_LOG_LOCK = threading.Lock()
+
+
+def _log_vlm_parse_failure(model: str, text: str, *, exception: str | None) -> None:
+    """Best-effort diagnostic sink for parse-fallback cases.
+
+    No-op unless VLM_DEBUG_LOG_PATH is set, so this never changes default
+    behavior or performance; it exists to capture raw completions the next
+    time this pipeline runs somewhere that can reach the VLM server, since
+    the fallback path otherwise discards the raw text.
+    """
+    if not _VLM_DEBUG_LOG_PATH:
+        return
+    try:
+        record = {
+            "model": model,
+            "exception": exception,
+            "raw_text": text[:4000],
+        }
+        with _VLM_DEBUG_LOG_LOCK:
+            with open(_VLM_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _with_no_think_directive(content: list[dict]) -> list[dict]:
+    """Append Qwen3's "/no_think" directive to the trailing text block.
+
+    This is the model's own chat-template convention for disabling reasoning
+    mode and works purely via the prompt text, independent of whether the
+    serving framework (vLLM/SGLang/etc.) honors the `enable_thinking`
+    extra_body kwarg we also send. Belt-and-suspenders against the
+    <think>...</think> truncation that was causing ~91% referability
+    parse-fallback rates.
+    """
+    updated = list(content)
+    for index in range(len(updated) - 1, -1, -1):
+        item = updated[index]
+        if isinstance(item, dict) and item.get("type") == "text":
+            updated[index] = {**item, "text": f"{item.get('text', '')} /no_think"}
+            return updated
+    return updated
+
+
 def _call_vlm_json_impl(
     client,
     model: str,
     content: list[dict],
     default: dict[str, Any],
-    max_tokens: int = 512,
+    max_tokens: int = 512 + VLM_REASONING_TOKEN_HEADROOM,
 ) -> tuple[dict[str, Any], str]:
+    global _EXTRA_BODY_UNSUPPORTED
+    content = _with_no_think_directive(content)
+    kwargs = dict(model=model, messages=[{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0)
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=max_tokens,
-            temperature=0,
-        )
+        # Reasoning-mode backends (e.g. Qwen3 "-a3b" thinking variants) emit a
+        # long <think>...</think> block before the JSON answer by default;
+        # with a small max_tokens this truncates the response before any JSON
+        # ever appears, so every call falls back to `default`. Ask the server
+        # to skip thinking. If the server rejects the field the first time,
+        # remember that and stop trying it (avoids a doubled request on every
+        # subsequent call for servers that don't support it).
+        if not _EXTRA_BODY_UNSUPPORTED:
+            try:
+                resp = client.chat.completions.create(
+                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                    **kwargs,
+                )
+            except Exception as exc:
+                _EXTRA_BODY_UNSUPPORTED = True
+                logger.warning("VLM server rejected enable_thinking=False extra_body, disabling it for the rest of this run: %s", exc)
+                resp = client.chat.completions.create(**kwargs)
+        else:
+            resp = client.chat.completions.create(**kwargs)
         text = (resp.choices[0].message.content or "").strip()
         parsed = _extract_json_object(text)
+        logger.info(
+            "VLM response parsed=%s (model=%s, response_chars=%d)",
+            parsed is not None,
+            model,
+            len(text),
+        )
         if parsed is None:
+            _log_vlm_parse_failure(model, text, exception=None)
             return default, text
         return parsed, text
     except Exception as exc:
         _record_vlm_call_failure()
         logger.warning("VLM call failed: %s", exc)
+        _log_vlm_parse_failure(model, "", exception=str(exc))
         return default, ""
 
 
@@ -1769,7 +1850,7 @@ def _call_vlm_json(
     model: str,
     content: list[dict],
     default: dict[str, Any],
-    max_tokens: int = 512,
+    max_tokens: int = 512 + VLM_REASONING_TOKEN_HEADROOM,
 ) -> tuple[dict[str, Any], str]:
     resolved_client = _resolve_vlm_client(client)
     semaphore = _VLM_REQUEST_SEMAPHORE
@@ -2766,7 +2847,8 @@ def _frame_decision_batch(
         max_tokens=min(
             FRAME_CLARITY_BATCH_MAX_TOKENS,
             FRAME_CLARITY_MAX_TOKENS_PER_IMAGE * max(1, len(ordered_names)),
-        ),
+        )
+        + VLM_REASONING_TOKEN_HEADROOM,
     )
 
     batch_results: dict[str, dict[str, Any]] = {}
@@ -5220,7 +5302,7 @@ def _frame_decision(
             {"type": "text", "text": _frame_prompt()},
         ],
         default=default,
-        max_tokens=128,
+        max_tokens=128 + VLM_REASONING_TOKEN_HEADROOM,
     )
     return _normalize_frame_review({**default, **parsed})
 
@@ -5242,7 +5324,7 @@ def _object_review_decision(
             {"type": "text", "text": _object_review_prompt(label)},
         ],
         default=default,
-        max_tokens=128,
+        max_tokens=128 + VLM_REASONING_TOKEN_HEADROOM,
     )
     status = _normalize_object_review_status(parsed.get("status")) or OBJECT_STATUS_UNSURE
     return status, raw_text
@@ -5274,7 +5356,7 @@ def _object_review_decision_batch(
         model,
         content,
         default={"results": []},
-        max_tokens=min(512, 128 * max(1, batch_size)),
+        max_tokens=min(512, 128 * max(1, batch_size)) + VLM_REASONING_TOKEN_HEADROOM,
     )
     fallback_raw = raw_text or ""
     results: list[tuple[str, str]] = [
@@ -5365,7 +5447,7 @@ def _full_frame_label_vlm_review_batch(
             {"type": "text", "text": _full_frame_label_count_batch_prompt(expected_labels)},
         ],
         default={"results": []},
-        max_tokens=128 * max(1, len(expected_labels)),
+        max_tokens=128 * max(1, len(expected_labels)) + VLM_REASONING_TOKEN_HEADROOM,
     )
 
     raw_items = parsed.get("results") if isinstance(parsed, dict) else None
@@ -5438,7 +5520,7 @@ def _out_of_frame_label_vlm_review(
             {"type": "text", "text": _full_frame_out_of_frame_label_prompt(normalized_label)},
         ],
         default=default,
-        max_tokens=128,
+        max_tokens=128 + VLM_REASONING_TOKEN_HEADROOM,
     )
     status = (
         _normalize_out_of_frame_review_status(parsed.get("status"))
