@@ -1826,11 +1826,18 @@ def _call_vlm_json_impl(
                 resp = client.chat.completions.create(**kwargs)
         else:
             resp = client.chat.completions.create(**kwargs)
-        text = (resp.choices[0].message.content or "").strip()
+        message = resp.choices[0].message
+        text = (message.content or "").strip()
+        # Some servers strip <think> blocks out of `content` and surface them
+        # in a separate `reasoning_content` field instead of inlining them,
+        # so check both to know whether our enable_thinking=False / /no_think
+        # attempts actually took effect.
+        had_thinking = bool(getattr(message, "reasoning_content", None)) or "<think" in text.lower()
         parsed = _extract_json_object(text)
         logger.info(
-            "VLM response parsed=%s (model=%s, response_chars=%d)",
+            "VLM response parsed=%s had_thinking=%s (model=%s, response_chars=%d)",
             parsed is not None,
+            had_thinking,
             model,
             len(text),
         )
