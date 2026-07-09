@@ -186,7 +186,6 @@ _VLM_CALL_FAILURE_COUNT = 0
 _VLM_CALL_FAILURE_COUNT_LOCK = threading.Lock()
 _VLM_REQUEST_SEMAPHORE: threading.BoundedSemaphore | None = None
 _VLM_THREAD_LOCAL_CLIENTS = threading.local()
-_EXTRA_BODY_UNSUPPORTED = False
 
 
 @dataclass
@@ -1803,29 +1802,18 @@ def _call_vlm_json_impl(
     default: dict[str, Any],
     max_tokens: int = 512 + VLM_REASONING_TOKEN_HEADROOM,
 ) -> tuple[dict[str, Any], str]:
-    global _EXTRA_BODY_UNSUPPORTED
     content = _with_no_think_directive(content)
     kwargs = dict(model=model, messages=[{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0)
     try:
         # Reasoning-mode backends (e.g. Qwen3 "-a3b" thinking variants) emit a
-        # long <think>...</think> block before the JSON answer by default;
-        # with a small max_tokens this truncates the response before any JSON
-        # ever appears, so every call falls back to `default`. Ask the server
-        # to skip thinking. If the server rejects the field the first time,
-        # remember that and stop trying it (avoids a doubled request on every
-        # subsequent call for servers that don't support it).
-        if not _EXTRA_BODY_UNSUPPORTED:
-            try:
-                resp = client.chat.completions.create(
-                    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-                    **kwargs,
-                )
-            except Exception as exc:
-                _EXTRA_BODY_UNSUPPORTED = True
-                logger.warning("VLM server rejected enable_thinking=False extra_body, disabling it for the rest of this run: %s", exc)
-                resp = client.chat.completions.create(**kwargs)
-        else:
-            resp = client.chat.completions.create(**kwargs)
+        # long <think>...</think> block before the JSON answer by default.
+        # The /no_think directive appended to the prompt above is Qwen3's own
+        # chat-template convention for disabling this and needs no server-side
+        # support; we previously also sent an extra_body enable_thinking=False
+        # kwarg, but that appears to force some servers onto a slower,
+        # non-cached prompt-template render path (throughput dropped ~60%
+        # once it was added), so it's been dropped in favor of /no_think alone.
+        resp = client.chat.completions.create(**kwargs)
         message = resp.choices[0].message
         text = (message.content or "").strip()
         # Some servers strip <think> blocks out of `content` and surface them
