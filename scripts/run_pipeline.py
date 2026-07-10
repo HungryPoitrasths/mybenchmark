@@ -57,7 +57,7 @@ from src.qa_generator import (
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
     _apply_attachment_surface_text_overrides,
-    find_auxiliary_frame_for_occlusion_question,
+    find_auxiliary_frames_for_occlusion_question_v2,
     generate_all_questions,
 )
 from src.referability_checks import (
@@ -5374,17 +5374,27 @@ def run_pipeline(
                                 _moved_tgt["center"] = (
                                     np.asarray(_orig_obj["center"], dtype=np.float64) + _delta
                                 ).tolist()
-                            _aux = find_auxiliary_frame_for_occlusion_question(
+                            _orig_center = np.asarray(
+                                _orig_obj.get("center", [
+                                    (_orig_obj["bbox_min"][i] + _orig_obj["bbox_max"][i]) / 2
+                                    for i in range(3)
+                                ]),
+                                dtype=np.float64,
+                            )
+                            _moved_center = np.asarray(
+                                _moved_tgt.get("center", [
+                                    (_moved_tgt["bbox_min"][i] + _moved_tgt["bbox_max"][i]) / 2
+                                    for i in range(3)
+                                ]),
+                                dtype=np.float64,
+                            )
+                            _aux = find_auxiliary_frames_for_occlusion_question_v2(
+                                original_center=_orig_center,
+                                moved_center=_moved_center,
                                 moved_target=_moved_tgt,
-                                gt_new_status=str(q.get("new_visibility", "")),
-                                occluder_id=q.get("occluder_id"),
                                 orig_camera_pose=camera_pose,
-                                orig_visible_ids=visible_id_set,
                                 all_poses=poses,
-                                scene_objects=scene["objects"],
                                 color_intrinsics=color_intrinsics,
-                                ray_caster=ray_caster,
-                                instance_mesh_data=instance_mesh_data,
                             )
                             if _aux:
                                 q["auxiliary_image_names"] = _aux

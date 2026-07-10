@@ -11,6 +11,13 @@ Usage:
 
 For ScanNet++ the raw scene data (mesh, annotations) is expected at
 --scannetpp_data_root (defaults to --scannetpp_image_root if omitted).
+
+Auxiliary frames are picked via route-continuity: sample the straight-line
+path the moved object travels (original position -> moved position) and
+chain together frames whose orientation stays roughly parallel and whose
+in-frame coverage of that path overlaps enough to read as "the same route",
+ending in a frame that fully frames the moved target. See
+find_auxiliary_frames_for_occlusion_question_v2 in src/qa_generator.py.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.qa_generator import find_auxiliary_frame_for_occlusion_question, quick_moved_bbox_projection
+from src.qa_generator import find_auxiliary_frames_for_occlusion_question_v2
 from src.scene_parser import load_instance_mesh_data, parse_scene
 from src.utils import RayCaster
 from src.utils.colmap_loader import load_axis_alignment, load_scannet_intrinsics, load_scannet_poses
@@ -36,33 +43,23 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
 _SCANNET_SCENE_RE = re.compile(r"^scene\d{4}_\d{2}$")
-MIN_ORIG_VISIBLE_IN_FRAME_RATIO = 0.3
-MAX_CANDIDATE_POSES = 400
-
-
-def _subsample_poses(poses: dict, max_n: int) -> dict:
-    if len(poses) <= max_n:
-        return poses
-    items = list(poses.items())
-    step = len(items) / max_n
-    return dict(items[int(i * step)] for i in range(max_n))
 
 
 def _is_scannetpp(scene_id: str) -> bool:
     return not _SCANNET_SCENE_RE.match(scene_id)
 
 
-def _approx_visible_ids(scene_objects: list[dict], camera_pose, color_intrinsics) -> set[int]:
-    return {
-        int(o["id"])
-        for o in scene_objects
-        if quick_moved_bbox_projection(o, camera_pose, color_intrinsics)[1] >= MIN_ORIG_VISIBLE_IN_FRAME_RATIO
-    }
+def _obj_center(obj: dict) -> np.ndarray:
+    if "center" in obj:
+        return np.asarray(obj["center"], dtype=np.float64)
+    bbox_min = np.asarray(obj["bbox_min"], dtype=np.float64)
+    bbox_max = np.asarray(obj["bbox_max"], dtype=np.float64)
+    return (bbox_min + bbox_max) / 2.0
 
 
-def _load_scene_resources(scene_id: str, args: argparse.Namespace):
+def load_scene_resources(scene_id: str, args: argparse.Namespace):
     """Load (poses, intrinsics, scene, ray_caster, instance_mesh_data) for a scene.
-    Returns None on any failure.
+    Returns None on any failure. Shared with scripts/aux_route_coverage_stats.py.
     """
     if _is_scannetpp(scene_id):
         if not args.scannetpp_image_root:
@@ -125,24 +122,14 @@ def _load_scene_resources(scene_id: str, args: argparse.Namespace):
 
 
 def _process_scene(scene_id: str, questions: list[dict], args: argparse.Namespace) -> None:
-    resources = _load_scene_resources(scene_id, args)
+    resources = load_scene_resources(scene_id, args)
     if resources is None:
         return
-    full_poses, color_intrinsics, scene, ray_caster, instance_mesh_data = resources
+    full_poses, color_intrinsics, scene, _ray_caster, _instance_mesh_data = resources
 
-    candidate_poses = _subsample_poses(full_poses, MAX_CANDIDATE_POSES)
-    logger.info("%s: %d questions, %d poses (sampled %d)", scene_id, len(questions), len(full_poses), len(candidate_poses))
+    logger.info("%s: %d questions, %d poses", scene_id, len(questions), len(full_poses))
 
     objects_by_id = {int(o["id"]): o for o in scene["objects"]}
-
-    # Precompute visible object ids per candidate pose (amortized across all questions in scene).
-    frame_visible: dict[str, set[int]] = {
-        img_name: {
-            int(o["id"]) for o in scene["objects"]
-            if quick_moved_bbox_projection(o, pose, color_intrinsics)[1] >= 0.3
-        }
-        for img_name, pose in candidate_poses.items()
-    }
 
     for q in questions:
         q["auxiliary_image_names"] = None
@@ -161,30 +148,23 @@ def _process_scene(scene_id: str, questions: list[dict], args: argparse.Namespac
         if "center" in orig_obj:
             moved_target["center"] = (np.asarray(orig_obj["center"]) + delta).tolist()
 
-        orig_visible = _approx_visible_ids(scene["objects"], orig_pose, color_intrinsics)
-
-        # Pre-filter to frames that share at least one visible object (condition 2),
-        # excluding the original frame. This avoids redundant raycasting in the inner loop.
-        filtered_poses = {
-            img_name: pose
-            for img_name, pose in candidate_poses.items()
-            if img_name != orig_pose.image_name and (orig_visible & frame_visible[img_name])
-        }
+        original_center = _obj_center(orig_obj)
+        moved_center = _obj_center(moved_target)
 
         try:
-            aux = find_auxiliary_frame_for_occlusion_question(
+            aux = find_auxiliary_frames_for_occlusion_question_v2(
+                original_center=original_center,
+                moved_center=moved_center,
                 moved_target=moved_target,
-                gt_new_status=str(q.get("new_visibility", "")),
-                occluder_id=None,
                 orig_camera_pose=orig_pose,
-                orig_visible_ids=orig_visible,
-                all_poses=filtered_poses,
-                scene_objects=scene["objects"],
+                all_poses=full_poses,
                 color_intrinsics=color_intrinsics,
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
+                orientation_threshold_deg=args.threshold_angle_deg,
+                min_overlap_frac=args.min_overlap_frac,
+                max_backtrack=args.max_backtrack,
+                max_primary_candidates=args.max_primary_candidates,
             )
-            q["auxiliary_image_names"] = aux
+            q["auxiliary_image_names"] = aux or None
         except Exception as e:
             logger.warning("Error on %s/%s: %s", scene_id, q.get("image_name"), e)
 
@@ -199,6 +179,14 @@ def main() -> None:
     ap.add_argument("--scannetpp_sensor", default="iphone")
     ap.add_argument("--output", default="output/occlusion_with_auxiliary.json")
     ap.add_argument("--scenes", nargs="*", help="Only process these scene_ids")
+    ap.add_argument("--threshold_angle_deg", type=float, default=60.0,
+                    help="Max forward-direction angle (degrees) between chain-adjacent frames.")
+    ap.add_argument("--min_overlap_frac", type=float, default=0.15,
+                    help="Min route-coverage overlap (fraction of route length in [0,1]) between chain-adjacent frames.")
+    ap.add_argument("--max_backtrack", type=int, default=20,
+                    help="Max alternate-candidate retries in the chain search before giving up.")
+    ap.add_argument("--max_primary_candidates", type=int, default=8,
+                    help="Max primary-frame candidates to try chain-bridging for, ordered by smallest bridge gap first.")
     args = ap.parse_args()
 
     with open(args.benchmark, encoding="utf-8") as f:

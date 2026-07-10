@@ -68,7 +68,9 @@ from .virtual_ops import (
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
 from .utils.coordinate_transform import (
+    get_camera_forward,
     is_in_image,
+    project_camera_points_to_image,
     project_pinhole_batch,
     project_to_image,
     world_to_camera_batch,
@@ -5152,6 +5154,242 @@ def find_auxiliary_frame_for_occlusion_question(
         candidates.append((score, img_name))
 
     return [img for _, img in sorted(candidates, reverse=True)] if candidates else []
+
+
+# ---- v2: route-continuity auxiliary frame selection ----
+#
+# Instead of a "shared visible object" proxy for continuity between the primary
+# image and the auxiliary frame, this samples the straight-line route the moved
+# object travels (original_center -> moved_center) and picks frames whose forward
+# direction stays roughly parallel to its chain neighbor while their in-frame
+# coverage of that route overlaps enough to be visually recognizable as "the same
+# path". See docs/attachment_relation_spec.md sibling discussion in the redesign
+# proposal for the full rationale.
+
+_ROUTE_SAMPLE_SPACING_M = 0.09
+_ROUTE_MIN_SAMPLES = 10
+_ROUTE_MAX_SAMPLES = 40
+_ROUTE_ORIENTATION_THRESHOLD_DEG = 60.0
+_ROUTE_MIN_OVERLAP_FRAC = 0.15
+_ROUTE_MAX_BACKTRACK = 20
+_ROUTE_MAX_PRIMARY_CANDIDATES = 8
+
+
+def _route_sample_points(
+    original_center: np.ndarray, moved_center: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample points along the straight-line route original_center -> moved_center.
+
+    Returns (ts, points) where ts is an ascending (N,) array in [0, 1] and points
+    is the corresponding (N, 3) world-space positions. Sample count scales with
+    route length (~9cm spacing), clamped to [_ROUTE_MIN_SAMPLES, _ROUTE_MAX_SAMPLES].
+    """
+    route_vec = moved_center - original_center
+    route_length = float(np.linalg.norm(route_vec))
+    if route_length < 1e-6:
+        n_samples = _ROUTE_MIN_SAMPLES
+    else:
+        n_samples = int(np.clip(
+            round(route_length / _ROUTE_SAMPLE_SPACING_M),
+            _ROUTE_MIN_SAMPLES,
+            _ROUTE_MAX_SAMPLES,
+        ))
+    ts = np.linspace(0.0, 1.0, n_samples)
+    points = original_center[None, :] + ts[:, None] * route_vec[None, :]
+    return ts, points
+
+
+def _route_coverage_runs(in_frame: np.ndarray, ts: np.ndarray) -> list[tuple[float, float]]:
+    """Return contiguous [t_min, t_max] runs where in_frame is True."""
+    runs: list[tuple[float, float]] = []
+    start: int | None = None
+    for i, ok in enumerate(in_frame):
+        if ok and start is None:
+            start = i
+        elif not ok and start is not None:
+            runs.append((float(ts[start]), float(ts[i - 1])))
+            start = None
+    if start is not None:
+        runs.append((float(ts[start]), float(ts[-1])))
+    return runs
+
+
+def _route_runs_for_pose(
+    route_points: np.ndarray,
+    ts: np.ndarray,
+    pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> list[tuple[float, float]]:
+    """Vectorized per-frame projection of route_points; returns in-frame coverage runs."""
+    cam_pts = world_to_camera_batch(route_points, pose)
+    uv, depths = project_camera_points_to_image(cam_pts, color_intrinsics)
+    in_frame = (
+        (depths > 0)
+        & np.isfinite(uv[:, 0]) & np.isfinite(uv[:, 1])
+        & (uv[:, 0] >= 0) & (uv[:, 0] < color_intrinsics.width)
+        & (uv[:, 1] >= 0) & (uv[:, 1] < color_intrinsics.height)
+    )
+    return _route_coverage_runs(in_frame, ts)
+
+
+def _solve_route_chain(
+    *,
+    frontier: float,
+    tail_forward: np.ndarray,
+    target: float,
+    excluded: set[str],
+    runs_by_frame: dict[str, list[tuple[float, float]]],
+    forward_by_frame: dict[str, np.ndarray],
+    cos_threshold: float,
+    min_overlap_frac: float,
+    budget: list[int],
+) -> list[str] | None:
+    """Bounded-backtracking greedy search for a chain of frames covering [0, target].
+
+    At each step, among frames whose orientation is within cos_threshold of the
+    chain tail and whose route-coverage run overlaps the current frontier by at
+    least min_overlap_frac, pick the one advancing the frontier furthest first;
+    if the recursive continuation fails, fall back to the next-best candidate,
+    consuming a shared backtrack budget so the search stays bounded.
+    """
+    if frontier >= target - 1e-6:
+        return []
+
+    feasible: list[tuple[float, str]] = []
+    for name, runs in runs_by_frame.items():
+        if name in excluded:
+            continue
+        fwd = forward_by_frame[name]
+        if float(np.dot(fwd, tail_forward)) <= cos_threshold:
+            continue
+        best_run_max: float | None = None
+        for run_min, run_max in runs:
+            if run_min > frontier + 1e-9:
+                continue
+            if run_max <= frontier + 1e-9:
+                continue
+            overlap = frontier - run_min
+            if frontier > 1e-9 and overlap < min_overlap_frac:
+                continue
+            if best_run_max is None or run_max > best_run_max:
+                best_run_max = run_max
+        if best_run_max is not None:
+            feasible.append((best_run_max, name))
+
+    if not feasible:
+        return None
+
+    feasible.sort(key=lambda x: -x[0])
+
+    for i, (run_max, name) in enumerate(feasible):
+        if i > 0:
+            if budget[0] <= 0:
+                break
+            budget[0] -= 1
+        result = _solve_route_chain(
+            frontier=run_max,
+            tail_forward=forward_by_frame[name],
+            target=target,
+            excluded=excluded | {name},
+            runs_by_frame=runs_by_frame,
+            forward_by_frame=forward_by_frame,
+            cos_threshold=cos_threshold,
+            min_overlap_frac=min_overlap_frac,
+            budget=budget,
+        )
+        if result is not None:
+            return [name] + result
+
+    return None
+
+
+def find_auxiliary_frames_for_occlusion_question_v2(
+    *,
+    original_center: np.ndarray,
+    moved_center: np.ndarray,
+    moved_target: dict[str, Any],
+    orig_camera_pose: CameraPose,
+    all_poses: dict[str, CameraPose],
+    color_intrinsics: CameraIntrinsics,
+    orientation_threshold_deg: float = _ROUTE_ORIENTATION_THRESHOLD_DEG,
+    min_overlap_frac: float = _ROUTE_MIN_OVERLAP_FRAC,
+    max_backtrack: int = _ROUTE_MAX_BACKTRACK,
+    max_primary_candidates: int = _ROUTE_MAX_PRIMARY_CANDIDATES,
+) -> list[str]:
+    """Find auxiliary frame(s) for an object_move_occlusion question via route continuity.
+
+    Samples the straight-line route original_center -> moved_center and looks for
+    a "primary" frame that fully frames the moved target's bbox and whose route
+    coverage reaches the route's end, optionally bridged by a chain of "secondary"
+    frames whose route coverage and orientation stay continuous back to the
+    original camera. Returns auxiliary_image_names ordered by route position
+    (secondaries first, primary last), or [] if no primary frame qualifies.
+
+    Unlike the v1 shared-visible-object proxy, this does not require the moved
+    target's post-move occlusion status to be independently resolvable in the
+    auxiliary frame(s) — the GT is already determined from orig_camera_pose, and
+    the auxiliary image(s) are purely a visualization aid.
+    """
+    original_center = np.asarray(original_center, dtype=np.float64)
+    moved_center = np.asarray(moved_center, dtype=np.float64)
+    ts, route_points = _route_sample_points(original_center, moved_center)
+    cos_threshold = math.cos(math.radians(orientation_threshold_deg))
+
+    candidate_names = [name for name in all_poses if name != orig_camera_pose.image_name]
+
+    runs_by_frame: dict[str, list[tuple[float, float]]] = {}
+    forward_by_frame: dict[str, np.ndarray] = {}
+    for name in candidate_names:
+        pose = all_poses[name]
+        runs = _route_runs_for_pose(route_points, ts, pose, color_intrinsics)
+        if runs:
+            runs_by_frame[name] = runs
+            forward_by_frame[name] = get_camera_forward(pose)
+
+    primary_candidates: list[tuple[float, str]] = []
+    for name in candidate_names:
+        pose = all_poses[name]
+        area, in_frame_ratio = quick_moved_bbox_projection(moved_target, pose, color_intrinsics)
+        if in_frame_ratio < 1.0 or area < MIN_PROJECTED_AREA_PX:
+            continue
+        runs = runs_by_frame.get(name)
+        if not runs:
+            continue
+        last_run = runs[-1]
+        if last_run[1] < 1.0 - 1e-6:
+            continue
+        primary_candidates.append((last_run[0], name))
+
+    if not primary_candidates:
+        return []
+
+    # Smaller primary_start = shorter bridge needed = cheaper/more-likely chain search.
+    primary_candidates.sort(key=lambda x: x[0])
+    primary_candidates = primary_candidates[:max_primary_candidates]
+
+    orig_forward = get_camera_forward(orig_camera_pose)
+
+    for primary_start, primary_name in primary_candidates:
+        if primary_start <= 1e-6:
+            return [primary_name]
+
+        search_target = min(primary_start + min_overlap_frac, 1.0)
+        budget = [max_backtrack]
+        chain = _solve_route_chain(
+            frontier=0.0,
+            tail_forward=orig_forward,
+            target=search_target,
+            excluded={primary_name},
+            runs_by_frame=runs_by_frame,
+            forward_by_frame=forward_by_frame,
+            cos_threshold=cos_threshold,
+            min_overlap_frac=min_overlap_frac,
+            budget=budget,
+        )
+        if chain is not None:
+            return chain + [primary_name]
+
+    return []
 
 
 def _query_visibility_for_object_move_state(
