@@ -42,6 +42,7 @@ from .relation_engine import (
     primary_direction_allocentric,
     camera_cardinal_direction,
     compute_distance_details,
+    compute_pairwise_direction,
 )
 from .support_graph import (
     _bbox_axis_gaps,
@@ -191,6 +192,18 @@ ALL_DIRECTIONS_ALLOCENTRIC = list(CARDINAL_DIRECTIONS_8)
 ALL_DISTANCES = [label for _, label in DISTANCE_BINS]
 L1_OCCLUSION_STATES = ["not occluded", "occluded", "not visible"]
 L1_VISIBLE_OCCLUSION_STATES = frozenset({"not occluded", "occluded"})
+# L2 object_move_occlusion uses its own display label for the "not visible"
+# internal status ("not in the frame") instead of L1_OCCLUSION_STATES' label,
+# since a moved object going out of frame reads more naturally that way than
+# a static L1 object simply not being visible. Kept as a separate constant
+# (rather than renaming L1_OCCLUSION_STATES) so L1 occlusion and object_remove
+# questions, which share the same internal status vocabulary, are unaffected.
+L2_OBJECT_MOVE_OCCLUSION_NOT_IN_FRAME_LABEL = "not in the frame"
+L2_OBJECT_MOVE_OCCLUSION_STATES = [
+    "not occluded",
+    "occluded",
+    L2_OBJECT_MOVE_OCCLUSION_NOT_IN_FRAME_LABEL,
+]
 OCCLUSION_DEFINITION_NOTE = (
     "Here, 'occluded' means blocked by another object; being partly outside "
     "the image frame does not count as occlusion."
@@ -276,6 +289,15 @@ def _is_l2_occlusion_unchanged_candidate(
     new_status: str | None,
 ) -> bool:
     return old_status in L1_VISIBLE_OCCLUSION_STATES and old_status == new_status
+
+
+def _l2_object_move_occlusion_display_status(status: str | None) -> str | None:
+    """Map the internal "not visible" status to object_move_occlusion's
+    user-facing "not in the frame" label; all other statuses pass through
+    unchanged."""
+    if status == "not visible":
+        return L2_OBJECT_MOVE_OCCLUSION_NOT_IN_FRAME_LABEL
+    return status
 
 
 def _select_l2_object_move_occlusion_records(
@@ -1254,7 +1276,7 @@ def _default_templates() -> dict:
         ],
         "L2_object_move_occlusion": [
             f"From the camera's perspective, imagine moving {{obj_a}} {{direction_with_camera_hint}} by {{distance}}. After this change, what is the occlusion status of {{obj_b}}? {OCCLUSION_DEFINITION_NOTE}",
-            f"From the camera's perspective, if {{obj_a}} is moved {{direction_with_camera_hint}} by {{distance}}, which best describes {{obj_b}}: not occluded, occluded, or not visible? {OCCLUSION_DEFINITION_NOTE}",
+            f"From the camera's perspective, if {{obj_a}} is moved {{direction_with_camera_hint}} by {{distance}}, which best describes {{obj_b}}: not occluded, occluded, or not in the frame? {OCCLUSION_DEFINITION_NOTE}",
         ],
         "L2_object_remove": [
             f"If {{obj_a}} were removed from the scene, what would be the occlusion status of {{obj_b}} from the current viewpoint? {OCCLUSION_DEFINITION_NOTE}",
@@ -2323,6 +2345,343 @@ def _removed_object_occludes_target_mesh(
         else "blocking_ratio_below_threshold"
     )
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Occluder-directed candidate search for object_move_occlusion ("Phase 1.5").
+#
+# Instead of blindly walking the fixed 48-delta grid and hoping a moved
+# object happens to land in another object's shadow, this aims the move at a
+# specific candidate occluder: pick a nearby object with enough on-screen
+# footprint to plausibly occlude something, check whether the direction from
+# the query object toward it snaps to one of the 8 canonical move
+# directions, then scan magnitudes along that direction and directly test
+# (via ray-casting against the occluder's own instance mesh) whether the
+# query object's *hypothetical* translated position would be blocked.
+# ---------------------------------------------------------------------------
+
+_OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES = 20
+_OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT = 128
+_OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO = 0.15
+_OCCLUSION_DIRECTED_HIT_EPSILON_M = 0.05
+_OCCLUSION_DIRECTED_DISTANCE_STEP_M = 0.3
+_OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG = 15.0
+_OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD = math.cos(
+    math.radians(_OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG)
+)
+# obj_ref and obj_move need not be visible in the same image frame (a
+# separate auxiliary-frame mechanism can supplement a second image), so the
+# candidate pool isn't restricted to "naturally visible together" objects --
+# only bounded by a generous max distance/magnitude, wider than the plain
+# object_move_distance search range.
+_OCCLUSION_DIRECTED_MAX_CANDIDATE_DISTANCE_M = 4.0
+_OCCLUSION_DIRECTED_MAX_MAGNITUDE_M = 5.0
+# The distance scan starts this much before the projected reach distance to
+# obj_ref (see _find_occlusion_directed_delta_for_occluder), to account for
+# obj_ref's own thickness without starting from scratch at min_magnitude_m.
+_OCCLUSION_DIRECTED_REACH_MARGIN_M = 0.3
+# Scene-wide budget for this occluder-directed search: with candidates drawn
+# from the whole scene (not just one frame) there can be many more
+# (query_obj, obj_ref) pairs to try than before, so cap total accepted
+# "changed" object_move_occlusion questions and total occluder attempts per
+# scene to bound generation cost.
+OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE = 40
+OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE = 20
+
+
+def _select_occlusion_directed_occluder_candidates(
+    *,
+    query_obj: dict[str, Any],
+    moved_ids: set[int],
+    occlusion_source_objects: list[dict[str, Any]],
+    original_visibility: dict[int, tuple[str | None, str, str, "_L1OcclusionMetrics"]],
+    max_candidates: int = _OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES,
+    min_projected_area_px: float = MIN_PROJECTED_AREA_PX,
+    max_distance_m: float = _OCCLUSION_DIRECTED_MAX_CANDIDATE_DISTANCE_M,
+) -> list[dict[str, Any]]:
+    """Return nearby, on-screen-sized candidate occluders for *query_obj*.
+
+    Reuses the free ``original_visibility`` precompute (already built for
+    every object in ``occlusion_source_objects``) instead of recomputing
+    anything; this keeps the pre-filter cheap. Candidates farther than
+    ``max_distance_m`` are dropped outright -- moving *query_obj* that far is
+    outside the search range anyway (see ``_find_occlusion_directed_delta_for_occluder``).
+    """
+    query_center = np.asarray(query_obj["center"], dtype=np.float64)
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for obj in occlusion_source_objects:
+        obj_id = int(obj["id"])
+        if obj_id == int(query_obj["id"]) or obj_id in moved_ids:
+            continue
+        visibility_entry = original_visibility.get(obj_id)
+        if visibility_entry is None:
+            continue
+        metrics = visibility_entry[3]
+        if metrics is None or float(metrics.projected_area) < float(min_projected_area_px):
+            continue
+        obj_center = np.asarray(obj["center"], dtype=np.float64)
+        distance = float(np.linalg.norm(obj_center - query_center))
+        if not np.isfinite(distance) or distance > float(max_distance_m):
+            continue
+        candidates.append((distance, obj))
+    candidates.sort(key=lambda item: item[0])
+    return [obj for _distance, obj in candidates[: max(0, int(max_candidates))]]
+
+
+def _match_world_xy_direction_bin(
+    vector_world: np.ndarray,
+    *,
+    directions: tuple[np.ndarray, ...] = DISTANCE_MOVE_DIRECTIONS,
+    cos_threshold: float = _OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD,
+) -> tuple[int, np.ndarray] | None:
+    """Snap *vector_world* to the nearest of the 8 canonical move directions.
+
+    Returns ``None`` when the vector isn't within ``cos_threshold`` of any
+    bin's center — i.e. it doesn't clearly point toward one of the 8
+    axis/diagonal directions the movement grid supports, so the caller
+    should skip this candidate rather than force a mismatched direction.
+    Note ``cos_threshold`` must be tighter than ``cos(22.5deg)``: the 8 bins
+    are exactly 45deg apart with no gap, so every vector is within 22.5deg of
+    its nearest bin by construction and a 22.5deg threshold would never
+    reject anything.
+    """
+    vector_xy = np.asarray(vector_world, dtype=np.float64)[:2]
+    norm = float(np.linalg.norm(vector_xy))
+    if not np.isfinite(norm) or norm <= 1e-9:
+        return None
+    unit_vector_xy = vector_xy / norm
+    best_idx = -1
+    best_dot = -1.0
+    for idx, direction in enumerate(directions):
+        dot = float(np.dot(unit_vector_xy, np.asarray(direction, dtype=np.float64)[:2]))
+        if dot > best_dot:
+            best_dot = dot
+            best_idx = idx
+    if best_idx < 0 or best_dot < float(cos_threshold):
+        return None
+    return best_idx, np.asarray(directions[best_idx], dtype=np.float64)
+
+
+def _occluder_blocks_translated_query_object(
+    *,
+    obj_ref: dict[str, Any],
+    query_obj: dict[str, Any],
+    target_delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
+    min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
+    hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
+) -> bool:
+    """Test whether *obj_ref* would occlude *query_obj* if moved by *target_delta*.
+
+    Casts rays from the (fixed) camera to *query_obj*'s surface samples
+    translated by ``target_delta``, against a ray caster scoped to *only*
+    ``obj_ref``'s own triangles (``_get_instance_intersector``). Using an
+    instance-scoped caster (rather than the full-scene caster used by
+    ``_removed_object_occludes_target_mesh``) avoids any confusion with
+    *query_obj*'s own real mesh, which still sits at its original,
+    untranslated position in the full scene mesh -- only ``obj_ref`` is
+    real/static here, so only its own triangles need to be considered.
+    """
+    if color_intrinsics is None or instance_mesh_data is None:
+        return False
+    obj_ref_id = int(obj_ref["id"])
+    obj_ref_caster = _get_instance_intersector(instance_mesh_data, obj_ref_id)
+    if obj_ref_caster is None:
+        return False
+
+    query_obj_id = int(query_obj["id"])
+    sample_points = _instance_surface_samples(instance_mesh_data, query_obj_id)
+    if len(sample_points) == 0:
+        return False
+    translated_points = sample_points + np.asarray(target_delta, dtype=np.float64)
+
+    _projected_area, _in_frame_ratio, in_frame_points, _tri_ids, _barys = (
+        _in_frame_surface_sample_subset(
+            translated_points,
+            camera_pose,
+            color_intrinsics,
+        )
+    )
+    if len(in_frame_points) == 0:
+        return False
+
+    probe_points, _probe_tri_ids, _probe_barys = _surface_probe_subset(
+        in_frame_points,
+        max_probe_samples,
+    )
+    if len(probe_points) == 0:
+        return False
+
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    directions = probe_points - camera_pos
+    target_dists = np.linalg.norm(directions, axis=1)
+    valid_mask = np.isfinite(target_dists) & (target_dists > 1e-6)
+    if not np.any(valid_mask):
+        return False
+    max_distances = target_dists + float(hit_epsilon)
+    origins = np.broadcast_to(camera_pos, directions.shape).copy()
+    hit_dists = _batch_first_hit_distances_compat(
+        obj_ref_caster,
+        origins=origins,
+        directions=directions,
+        max_distances=max_distances,
+    )
+    blocking_mask = valid_mask & (hit_dists < (target_dists - float(hit_epsilon)))
+    valid_count = int(np.count_nonzero(valid_mask))
+    if valid_count <= 0:
+        return False
+    blocking_ratio = float(np.count_nonzero(blocking_mask) / valid_count)
+    return blocking_ratio > float(min_blocking_ratio)
+
+
+def _find_occlusion_directed_delta_for_occluder(
+    *,
+    query_obj: dict[str, Any],
+    obj_ref: dict[str, Any],
+    unit_direction: np.ndarray,
+    move_source_id: int,
+    moved_ids: set[int],
+    movement_scene_objects: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    room_min: np.ndarray,
+    room_max: np.ndarray,
+    collision_objects: list[dict] | None,
+    min_magnitude_m: float = MIN_DISTANCE_QUESTION_DISTANCE_M,
+    max_magnitude_m: float = _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M,
+    step_m: float = _OCCLUSION_DIRECTED_DISTANCE_STEP_M,
+    reach_margin_m: float = _OCCLUSION_DIRECTED_REACH_MARGIN_M,
+) -> "_SelectedObjectMoveState | None":
+    """Scan magnitudes along *unit_direction* for the first one where
+    *obj_ref* would actually occlude the (hypothetically moved) *query_obj*,
+    then validate that delta against the existing room-bounds/collision
+    checks. Returns ``None`` if no magnitude in range works.
+
+    *query_obj* can only end up occluded by *obj_ref* once it has moved past
+    *obj_ref*'s own position along the movement axis -- moving toward but not
+    yet reaching *obj_ref* always leaves *query_obj* closer to the camera
+    (i.e. in front of *obj_ref*, not behind it), which can never be occluded
+    by it. So: (1) project *obj_ref*'s offset onto the *snapped* canonical
+    ``unit_direction`` (not the raw, possibly off-axis obj_ref-query_obj
+    vector) to get the reach distance ``along``; if that already exceeds
+    ``max_magnitude_m``, *query_obj* can never move far enough to get behind
+    *obj_ref* within the search budget, so skip immediately without any
+    ray-casting; (2) otherwise start the scan a bit before ``along`` (not
+    from ``min_magnitude_m``) since any shorter magnitude is known to still
+    be in front of *obj_ref*.
+    """
+    unit_direction = np.asarray(unit_direction, dtype=np.float64)
+    along = float(
+        np.dot(
+            np.asarray(obj_ref["center"], dtype=np.float64)
+            - np.asarray(query_obj["center"], dtype=np.float64),
+            unit_direction,
+        )
+    )
+    if along > float(max_magnitude_m):
+        return None
+    magnitude = max(float(min_magnitude_m), along - float(reach_margin_m))
+    while magnitude <= float(max_magnitude_m) + 1e-9:
+        delta = unit_direction * magnitude
+        if _occluder_blocks_translated_query_object(
+            obj_ref=obj_ref,
+            query_obj=query_obj,
+            target_delta=delta,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            instance_mesh_data=instance_mesh_data,
+        ):
+            new_objects = apply_movement(
+                movement_scene_objects,
+                attachment_graph,
+                move_source_id,
+                delta,
+            )
+            if is_within_room(new_objects, room_min, room_max) and not has_terminal_bbox_collision(
+                movement_scene_objects,
+                new_objects,
+                moved_ids,
+                collision_objects=collision_objects,
+            ):
+                return _make_selected_object_move_state(delta, new_objects, moved_ids)
+        magnitude += float(step_m)
+    return None
+
+
+def _iter_occlusion_directed_object_move_states(
+    *,
+    query_obj: dict[str, Any],
+    move_source_id: int,
+    moved_ids: set[int],
+    movement_scene_objects: list[dict[str, Any]],
+    occlusion_source_objects: list[dict[str, Any]],
+    original_visibility: dict[int, tuple[str | None, str, str, "_L1OcclusionMetrics"]],
+    attachment_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    room_min: np.ndarray,
+    room_max: np.ndarray,
+    collision_objects: list[dict] | None,
+    candidates_tried_counter: list[int] | None = None,
+    max_candidates_tried: int | None = None,
+):
+    """Yield occluder-directed movement candidates for *query_obj*, ordered
+    nearest-occluder-first. Each candidate is a delta aimed so that
+    *query_obj* is likely to end up occluded by a specific nearby object,
+    rather than an arbitrary grid step.
+
+    ``candidates_tried_counter`` (a single-element list used as a shared,
+    mutable counter across all query_obj/move_source pairs in the current
+    scene) is incremented once per occluder actually handed to
+    ``_find_occlusion_directed_delta_for_occluder``; once it reaches
+    ``max_candidates_tried`` this generator stops yielding new candidates for
+    the rest of the scene, bounding total search cost when the candidate
+    pool is large.
+    """
+    occluder_candidates = _select_occlusion_directed_occluder_candidates(
+        query_obj=query_obj,
+        moved_ids=moved_ids,
+        occlusion_source_objects=occlusion_source_objects,
+        original_visibility=original_visibility,
+    )
+    query_center = np.asarray(query_obj["center"], dtype=np.float64)
+    for obj_ref in occluder_candidates:
+        if (
+            candidates_tried_counter is not None
+            and max_candidates_tried is not None
+            and candidates_tried_counter[0] >= max_candidates_tried
+        ):
+            break
+        obj_ref_center = np.asarray(obj_ref["center"], dtype=np.float64)
+        match = _match_world_xy_direction_bin(obj_ref_center - query_center)
+        if match is None:
+            continue
+        _bin_idx, unit_direction = match
+        if candidates_tried_counter is not None:
+            candidates_tried_counter[0] += 1
+        selected_state = _find_occlusion_directed_delta_for_occluder(
+            query_obj=query_obj,
+            obj_ref=obj_ref,
+            unit_direction=unit_direction,
+            move_source_id=move_source_id,
+            moved_ids=moved_ids,
+            movement_scene_objects=movement_scene_objects,
+            attachment_graph=attachment_graph,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            instance_mesh_data=instance_mesh_data,
+            room_min=room_min,
+            room_max=room_max,
+            collision_objects=collision_objects,
+        )
+        if selected_state is not None:
+            yield selected_state
 
 
 def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
@@ -5392,6 +5751,211 @@ def find_auxiliary_frames_for_occlusion_question_v2(
     return []
 
 
+# ---- two-frame group split (generalizes route-continuity beyond a single moved object) ----
+#
+# Every non-attachment_chain L2/L3 type reduces to: split the objects a question refers to
+# into two groups, find one real frame that fully frames group A and another that fully
+# frames group B (both at their real, current positions -- no hypothetical "moved to" point
+# is involved here, unlike the single-object route above), and bridge the two frames with the
+# same route-continuity chain-search used for occlusion, now walking the straight line between
+# the two groups' centroids instead of a single object's before/after centers.
+
+
+def _group_center(objects: list[dict[str, Any]]) -> np.ndarray:
+    """Centroid of a group's object centers (a single-object group is just its own center)."""
+    centers = []
+    for obj in objects:
+        center = obj.get("center")
+        if center is None:
+            bbox_min = np.asarray(obj["bbox_min"], dtype=np.float64)
+            bbox_max = np.asarray(obj["bbox_max"], dtype=np.float64)
+            center = ((bbox_min + bbox_max) / 2.0).tolist()
+        centers.append(np.asarray(center, dtype=np.float64))
+    return np.mean(centers, axis=0)
+
+
+def _group_fully_in_frame(
+    objects: list[dict[str, Any]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> bool:
+    """True iff every object in the group has its full bbox in-frame with enough area.
+
+    Checked per-object (not on a merged bbox) so a group spanning e.g. a support pair
+    can't pass just because their combined envelope happens to fit the frame while one
+    member is actually occluded/out of frame.
+    """
+    for obj in objects:
+        if not _bbox_fully_in_frame(obj, camera_pose, color_intrinsics):
+            return False
+        if not color_intrinsics.is_distorted:
+            area, _ratio = quick_moved_bbox_projection(obj, camera_pose, color_intrinsics)
+            if area < MIN_PROJECTED_AREA_PX:
+                return False
+    return True
+
+
+def _rank_candidate_anchor_frames(
+    objects: list[dict[str, Any]],
+    all_poses: dict[str, CameraPose],
+    color_intrinsics: CameraIntrinsics,
+    *,
+    preferred_pose: CameraPose | None = None,
+    bonus_objects: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    """Rank real frames where *objects* are all fully in-frame, best first.
+
+    *preferred_pose* (if it already qualifies) is always ranked first, to minimize
+    disruption from the question's existing shared camera and keep chain-search cheap.
+    Candidates that also happen to fully frame *bonus_objects* (a soft-preference helper
+    such as an obj_face anchor) are ranked ahead of ones that don't, but bonus_objects
+    are never required to qualify.
+    """
+    scored: list[tuple[int, float, str]] = []
+    for name, pose in all_poses.items():
+        if not _group_fully_in_frame(objects, pose, color_intrinsics):
+            continue
+        bonus_hit = 0
+        if bonus_objects and _group_fully_in_frame(bonus_objects, pose, color_intrinsics):
+            bonus_hit = 1
+        area = min(
+            (quick_moved_bbox_projection(obj, pose, color_intrinsics)[0] for obj in objects),
+            default=0.0,
+        )
+        scored.append((bonus_hit, area, name))
+
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    ranked = [name for _, _, name in scored]
+
+    if preferred_pose is not None and preferred_pose.image_name in ranked:
+        ranked.remove(preferred_pose.image_name)
+        ranked.insert(0, preferred_pose.image_name)
+
+    return ranked
+
+
+def find_two_frame_split_v2(
+    *,
+    group_a_objects: list[dict[str, Any]],
+    group_b_objects: list[dict[str, Any]],
+    all_poses: dict[str, CameraPose],
+    color_intrinsics: CameraIntrinsics,
+    preferred_camera_pose: CameraPose | None = None,
+    bonus_objects: list[dict[str, Any]] | None = None,
+    max_start_candidates: int = _ROUTE_MAX_PRIMARY_CANDIDATES,
+    orientation_threshold_deg: float = _ROUTE_ORIENTATION_THRESHOLD_DEG,
+    min_overlap_frac: float = _ROUTE_MIN_OVERLAP_FRAC,
+    max_backtrack: int = _ROUTE_MAX_BACKTRACK,
+    max_primary_candidates: int = _ROUTE_MAX_PRIMARY_CANDIDATES,
+) -> tuple[str, str, list[str]] | None:
+    """Find two real frames -- frame_a fully framing group_a, frame_b fully framing
+    group_b -- bridged by a route-continuity chain along the straight line between the
+    two groups' centroids.
+
+    Both groups are real objects at their real, current positions; no hypothetical
+    "moved to" point is involved (unlike find_auxiliary_frames_for_occlusion_question_v2).
+    bonus_objects (e.g. an obj_face anchor that only needs to be *somewhere* visible) are
+    a soft preference on the frame_a search, never a hard requirement.
+
+    Returns (frame_a_name, frame_b_name, chain) where chain is the ordered bridge
+    (excluding frame_a and frame_b themselves; empty if they're already continuous), or
+    None if no valid split + chain exists.
+    """
+    frame_a_candidates = _rank_candidate_anchor_frames(
+        group_a_objects,
+        all_poses,
+        color_intrinsics,
+        preferred_pose=preferred_camera_pose,
+        bonus_objects=bonus_objects,
+    )[:max_start_candidates]
+    if not frame_a_candidates:
+        return None
+
+    center_a = _group_center(group_a_objects)
+    center_b = _group_center(group_b_objects)
+    ts, route_points = _route_sample_points(center_a, center_b)
+    cos_threshold = math.cos(math.radians(orientation_threshold_deg))
+
+    for frame_a_name in frame_a_candidates:
+        frame_a_pose = all_poses[frame_a_name]
+
+        candidate_names = [name for name in all_poses if name != frame_a_name]
+        runs_by_frame: dict[str, list[tuple[float, float]]] = {}
+        forward_by_frame: dict[str, np.ndarray] = {}
+        for name in candidate_names:
+            pose = all_poses[name]
+            runs = _route_runs_for_pose(route_points, ts, pose, color_intrinsics)
+            if runs:
+                runs_by_frame[name] = runs
+                forward_by_frame[name] = get_camera_forward(pose)
+
+        frame_b_candidates: list[tuple[float, str]] = []
+        for name in candidate_names:
+            pose = all_poses[name]
+            if not _group_fully_in_frame(group_b_objects, pose, color_intrinsics):
+                continue
+            runs = runs_by_frame.get(name)
+            if not runs:
+                continue
+            last_run = runs[-1]
+            if last_run[1] < 1.0 - 1e-6:
+                continue
+            frame_b_candidates.append((last_run[0], name))
+
+        if not frame_b_candidates:
+            continue
+
+        # Smaller frame_b_start = shorter bridge needed = cheaper/more-likely chain search.
+        frame_b_candidates.sort(key=lambda x: x[0])
+        frame_b_candidates = frame_b_candidates[:max_primary_candidates]
+
+        frame_a_forward = get_camera_forward(frame_a_pose)
+
+        for frame_b_start, frame_b_name in frame_b_candidates:
+            if frame_b_start <= 1e-6:
+                return frame_a_name, frame_b_name, []
+
+            search_target = min(frame_b_start + min_overlap_frac, 1.0)
+            budget = [max_backtrack]
+            chain = _solve_route_chain(
+                frontier=0.0,
+                tail_forward=frame_a_forward,
+                target=search_target,
+                excluded={frame_b_name},
+                runs_by_frame=runs_by_frame,
+                forward_by_frame=forward_by_frame,
+                cos_threshold=cos_threshold,
+                min_overlap_frac=min_overlap_frac,
+                budget=budget,
+            )
+            if chain is not None:
+                return frame_a_name, frame_b_name, chain
+
+    return None
+
+
+def build_multi_frame_split_note(
+    group_a_objects: list[dict[str, Any]],
+    group_b_objects: list[dict[str, Any]],
+) -> str:
+    """Build the note appended to a question's text when find_two_frame_split_v2
+    found a valid split -- names which real objects end up in the first image vs.
+    the last, since the model can no longer read their relative position off a
+    single shared photo.
+    """
+    def _labels(objs: list[dict[str, Any]]) -> str:
+        names = [_the(obj.get("label", "object")) for obj in objs]
+        if len(names) == 1:
+            return names[0]
+        return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+    return (
+        f"Note: the images below are connected by a continuous path through the room -- "
+        f"the first image shows {_labels(group_a_objects)}, and the last image shows "
+        f"{_labels(group_b_objects)}."
+    )
+
+
 def _query_visibility_for_object_move_state(
     *,
     query_obj: dict[str, Any],
@@ -6037,6 +6601,21 @@ def generate_l2_object_move(
                 metrics,
             )
 
+    occlusion_directed_room_min, occlusion_directed_room_max = compute_room_bounds(
+        movement_scene_objects, room_bounds=room_bounds,
+    )
+    # Scene-wide budget for the occluder-directed search (Phase 1.5): with
+    # candidates drawn from the whole scene, there can be far more
+    # (query_obj, obj_ref) pairs to try than the old blind-grid search ever
+    # considered, so bound total generation cost per scene rather than per
+    # query_obj alone. `_occlusion_directed_candidates_tried` is a
+    # single-element list (not a plain int) because it's incremented from
+    # inside `_iter_occlusion_directed_object_move_states`, a separate
+    # top-level function -- passing it by reference avoids needing a return
+    # channel just for the counter.
+    _occlusion_directed_changed_count = 0
+    _occlusion_directed_candidates_tried = [0]
+
     logger.info("L2 object_move: precompute done, entering main loop (%d source objects, max_move_sources=%s)",
                 len(movement_scene_objects), max_move_sources)
     # Sort: prioritize objects that have attachment chains (can generate
@@ -6445,6 +7024,57 @@ def generate_l2_object_move(
                             "total_corner_count": int(total_corners),
                             "used_changed_delta": bool(selected_state.used_changed_delta),
                         })
+                if (
+                    occlusion_state is None
+                    and original_visibility.get(query_obj_id, (None,))[0] == "not occluded"
+                    and _occlusion_directed_changed_count < OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE
+                    and _occlusion_directed_candidates_tried[0] < OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE
+                ):
+                    # Phase 1.5: occluder-directed search, aimed at a specific
+                    # nearby object's geometry instead of a blind grid walk.
+                    # Only attempted for "not occluded" originals, and accepted
+                    # strictly on "occluded" (not the general state-transition
+                    # check), since the whole point is to stop over-producing
+                    # "not visible" outcomes -- if a candidate resolves to
+                    # "not visible" it falls through to the next occluder, and
+                    # ultimately to the unchanged Phase 2 blind fallback below.
+                    for candidate_state in _iter_occlusion_directed_object_move_states(
+                        query_obj=query_obj,
+                        move_source_id=move_source_id,
+                        moved_ids=moved_ids,
+                        movement_scene_objects=movement_scene_objects,
+                        occlusion_source_objects=occlusion_source_objects,
+                        original_visibility=original_visibility,
+                        attachment_graph=attachment_graph,
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        instance_mesh_data=instance_mesh_data,
+                        room_min=occlusion_directed_room_min,
+                        room_max=occlusion_directed_room_max,
+                        collision_objects=collision_objects,
+                        candidates_tried_counter=_occlusion_directed_candidates_tried,
+                        max_candidates_tried=OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE,
+                    ):
+                        target_ok, visible_corners, total_corners = _target_in_frame_for_state(candidate_state)
+                        if not target_ok:
+                            occlusion_counterfactual_corner_failures.append({
+                                "delta": candidate_state.delta.tolist(),
+                                "visible_corner_count": int(visible_corners),
+                                "total_corner_count": int(total_corners),
+                                "used_changed_delta": bool(candidate_state.used_changed_delta),
+                            })
+                            continue
+                        visibility = _visibility_for_state(query_obj, candidate_state)
+                        if visibility[4] == "occluded":
+                            occlusion_state = candidate_state
+                            occlusion_visibility = visibility
+                            _occlusion_directed_changed_count += 1
+                            break
+                        if (
+                            occlusion_unchanged_fallback is None
+                            and _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4])
+                        ):
+                            occlusion_unchanged_fallback = (candidate_state, visibility)
                 if occlusion_state is None:
                     for candidate_state in _fallback_states():
                         target_ok, visible_corners, total_corners = _target_in_frame_for_state(candidate_state)
@@ -6566,9 +7196,11 @@ def generate_l2_object_move(
                     obj_target=_the(query_obj["label"]),
                 )
                 question_text = _with_occlusion_definition(question_text)
+                query_old_status_display = _l2_object_move_occlusion_display_status(query_old_status)
+                query_new_status_display = _l2_object_move_occlusion_display_status(query_new_status)
                 options, answer = generate_options(
-                    query_new_status,
-                    L1_OCCLUSION_STATES,
+                    query_new_status_display,
+                    L2_OBJECT_MOVE_OCCLUSION_STATES,
                     n_options=3,
                 )
                 occlusion_dict: dict[str, Any] = {
@@ -6577,11 +7209,11 @@ def generate_l2_object_move(
                     "question": question_text,
                     "options": options,
                     "answer": answer,
-                    "correct_value": query_new_status,
-                    "old_correct_value": query_old_status,
-                    "new_correct_value": query_new_status,
-                    "old_visibility": query_old_status,
-                    "new_visibility": query_new_status,
+                    "correct_value": query_new_status_display,
+                    "old_correct_value": query_old_status_display,
+                    "new_correct_value": query_new_status_display,
+                    "old_visibility": query_old_status_display,
+                    "new_visibility": query_new_status_display,
                     "old_visibility_source": query_old_source,
                     "new_visibility_source": query_new_source,
                     "old_visibility_resolution": query_old_reason_code,
@@ -8255,6 +8887,35 @@ def generate_l3_attachment_move(
 
     result = [q for group in questions_by_query.values() for q in group]
     return [_annotate_attachment_trace_reason(q) for q in result]
+
+
+def recompute_coordinate_rotation_agent_answer(
+    obj_a: dict[str, Any],
+    obj_b: dict[str, Any],
+    rotation_angle_deg: float,
+    observer_camera_pose: CameraPose,
+) -> tuple[str, list[str], str]:
+    """Re-derive the coordinate_rotation_agent GT direction (of A relative to B),
+    its MCQ options, and its answer letter, pivoting the rotation on
+    *observer_camera_pose*'s world position instead of the room-centre pivot used
+    at generation time.
+
+    Used in post-processing when a question's frame_1 (the real frame chosen to
+    show obj_a) differs from the scene's original shared camera. The pivot itself
+    never changes the rotated relative vector between obj_a and obj_b (see
+    apply_coordinate_rotation), but front/back/left/right are binned relative to
+    whichever camera is anchored to obj_a's frame, so the *observer* camera does
+    change the answer and must be re-derived explicitly.
+    """
+    rotation_center = observer_camera_pose.position
+    rotated = apply_coordinate_rotation(
+        [obj_a, obj_b], -float(rotation_angle_deg), rotation_center=rotation_center
+    )
+    rot_a, rot_b = rotated[0], rotated[1]
+    dir_label, _ambiguity = compute_pairwise_direction(rot_a, rot_b, observer_camera_pose)
+    new_dir = _invert_direction(dir_label)
+    options, answer_letter = generate_options(new_dir, ALL_DIRECTIONS)
+    return new_dir, options, answer_letter
 
 
 def generate_l3_coordinate_rotation(

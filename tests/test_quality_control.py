@@ -2,6 +2,7 @@ from collections import Counter
 
 from src.quality_control import (
     balance_answer_distribution,
+    cap_l2_object_move_occlusion_answer_ratios,
     full_quality_pipeline,
     quality_filter,
 )
@@ -149,3 +150,89 @@ def test_full_quality_pipeline_caps_l1_occlusion_not_visible_ratio() -> None:
     )
 
     assert not_visible_count / len(occlusion_questions) <= 1.0 / 3.0
+
+
+def _make_object_move_occlusion_question(idx: int, correct_value: str) -> dict:
+    return {
+        **_make_question("object_move_occlusion", idx, correct_value),
+        "level": "L2",
+        "type": "object_move_occlusion",
+        "correct_value": correct_value,
+        "moved_obj_id": 1,
+        "query_obj_id": idx + 2,
+    }
+
+
+def test_cap_l2_object_move_occlusion_answer_ratios_downsamples_minority_values() -> None:
+    # 4 occluded, 4 not-occluded, 4 not-in-the-frame: both minority values
+    # exceed occluded_count/2 = 2, so both must be downsampled to 2.
+    questions = (
+        [_make_object_move_occlusion_question(idx, "occluded") for idx in range(4)]
+        + [_make_object_move_occlusion_question(idx, "not occluded") for idx in range(4, 8)]
+        + [_make_object_move_occlusion_question(idx, "not in the frame") for idx in range(8, 12)]
+    )
+
+    capped = cap_l2_object_move_occlusion_answer_ratios(questions)
+
+    kept_values = Counter(q["correct_value"] for q in capped)
+    assert kept_values["occluded"] == 4
+    assert kept_values["not occluded"] == 2
+    assert kept_values["not in the frame"] == 2
+
+
+def test_cap_l2_object_move_occlusion_answer_ratios_noop_when_already_within_ratio() -> None:
+    questions = (
+        [_make_object_move_occlusion_question(idx, "occluded") for idx in range(4)]
+        + [_make_object_move_occlusion_question(idx, "not occluded") for idx in range(4, 6)]
+    )
+
+    capped = cap_l2_object_move_occlusion_answer_ratios(questions)
+
+    assert capped == questions
+
+
+def test_cap_l2_object_move_occlusion_answer_ratios_noop_when_no_occluded_questions() -> None:
+    questions = [
+        _make_object_move_occlusion_question(idx, "not occluded")
+        for idx in range(5)
+    ]
+
+    capped = cap_l2_object_move_occlusion_answer_ratios(questions)
+
+    assert capped == questions
+
+
+def test_cap_l2_object_move_occlusion_answer_ratios_ignores_other_question_types() -> None:
+    questions = (
+        [_make_object_move_occlusion_question(idx, "occluded") for idx in range(2)]
+        + [
+            {
+                **_make_question("occlusion", idx, "not visible"),
+                "level": "L1",
+                "type": "occlusion",
+            }
+            for idx in range(10, 15)
+        ]
+    )
+
+    capped = cap_l2_object_move_occlusion_answer_ratios(questions)
+
+    assert capped == questions
+
+
+def test_full_quality_pipeline_caps_l2_object_move_occlusion_answer_ratios() -> None:
+    questions = (
+        [_make_object_move_occlusion_question(idx, "occluded") for idx in range(4)]
+        + [_make_object_move_occlusion_question(idx, "not occluded") for idx in range(4, 8)]
+        + [_make_object_move_occlusion_question(idx, "not in the frame") for idx in range(8, 12)]
+    )
+
+    filtered = full_quality_pipeline(questions)
+    occlusion_questions = [
+        q for q in filtered
+        if q["level"] == "L2" and q["type"] == "object_move_occlusion"
+    ]
+    counts = Counter(q["correct_value"] for q in occlusion_questions)
+
+    assert counts["not occluded"] <= counts["occluded"] / 2
+    assert counts["not in the frame"] <= counts["occluded"] / 2

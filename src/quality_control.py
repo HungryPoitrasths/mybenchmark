@@ -13,13 +13,18 @@ import re
 from collections import Counter
 from typing import Any, Callable
 
-from .qa_generator import _cap_l3_unchanged_ratio
+from .qa_generator import _cap_l3_unchanged_ratio, L2_OBJECT_MOVE_OCCLUSION_NOT_IN_FRAME_LABEL
 
 logger = logging.getLogger(__name__)
 
 MAX_ANSWER_RATIO = 0.35  # no single option should exceed 35% of correct answers
 MAX_L1_OCCLUSION_NOT_VISIBLE_RATIO = 1.0 / 3.0
 L1_OCCLUSION_NOT_VISIBLE_DOWNSAMPLE_SEED = 42
+# Each of "not occluded" / "not in the frame" is capped at this fraction of
+# the "occluded" count for L2 object_move_occlusion, so the type's target
+# answer (occluded) stays the majority outcome.
+MAX_L2_OBJECT_MOVE_OCCLUSION_MINORITY_RATIO = 0.5
+L2_OBJECT_MOVE_OCCLUSION_DOWNSAMPLE_SEED = 43
 ATTACHMENT_NEAR_DUP_TYPES = {
     "object_move",
     "object_move_agent",
@@ -430,6 +435,64 @@ def cap_l1_occlusion_not_visible_ratio(
     return capped_questions
 
 
+def cap_l2_object_move_occlusion_answer_ratios(
+    questions: list[dict],
+    max_ratio: float = MAX_L2_OBJECT_MOVE_OCCLUSION_MINORITY_RATIO,
+    seed: int = L2_OBJECT_MOVE_OCCLUSION_DOWNSAMPLE_SEED,
+) -> list[dict]:
+    """Cap L2 object_move_occlusion's minority answers relative to "occluded".
+
+    Downsamples "not occluded" and "not in the frame" answers so each stays
+    at or below ``max_ratio`` times the "occluded" count -- "occluded" is the
+    type's target answer (see the occluder-directed search in
+    generate_l2_object_move), so this keeps it the majority outcome without
+    eliminating answer diversity. A no-op when there are no "occluded"
+    questions, since the ratio is undefined without that reference count.
+    """
+    if max_ratio <= 0.0:
+        raise ValueError(f"max_ratio must be positive, got {max_ratio}")
+
+    type_indices = [
+        idx for idx, q in enumerate(questions)
+        if q.get("level") == "L2" and q.get("type") == "object_move_occlusion"
+    ]
+    if not type_indices:
+        return questions
+
+    occluded_count = sum(
+        1 for idx in type_indices if questions[idx].get("correct_value") == "occluded"
+    )
+    if occluded_count == 0:
+        return questions
+
+    rng = random.Random(seed)
+    max_allowed = int(occluded_count * max_ratio)
+    removed_indices: set[int] = set()
+    for minority_value in ("not occluded", L2_OBJECT_MOVE_OCCLUSION_NOT_IN_FRAME_LABEL):
+        minority_indices = [
+            idx for idx in type_indices
+            if questions[idx].get("correct_value") == minority_value
+        ]
+        minority_count = len(minority_indices)
+        if minority_count <= max_allowed:
+            continue
+        excess = minority_count - max_allowed
+        removed_for_value = set(rng.sample(minority_indices, excess))
+        removed_indices |= removed_for_value
+        logger.info(
+            "Capped L2 object_move_occlusion '%s' answers: occluded_count=%d, original=%d, kept=%d, removed=%d",
+            minority_value,
+            occluded_count,
+            minority_count,
+            minority_count - len(removed_for_value),
+            len(removed_for_value),
+        )
+
+    if not removed_indices:
+        return questions
+    return [q for idx, q in enumerate(questions) if idx not in removed_indices]
+
+
 def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
     """Balance L2 attachment variants per batch and canonical qtype.
 
@@ -803,13 +866,15 @@ def full_quality_pipeline(questions: list[dict]) -> list[dict]:
         2. Batch-level-per-qtype L2 attachment balance
         3. Batch-level-per-qtype L3 unchanged ratio cap
         4. Cap global L1 occlusion not-visible ratio
-        5. Answer-letter distribution balancing
-        6. Log statistics
+        5. Cap global L2 object_move_occlusion minority-answer ratios
+        6. Answer-letter distribution balancing
+        7. Log statistics
     """
     questions = quality_filter(questions)
     questions = balance_l2_attachment_per_scene(questions)
     questions = _cap_l3_unchanged_ratio(questions)
     questions = cap_l1_occlusion_not_visible_ratio(questions)
+    questions = cap_l2_object_move_occlusion_answer_ratios(questions)
     questions = balance_answer_distribution(questions)
     stats = compute_statistics(questions)
     logger.info("Final statistics: %s", stats)
