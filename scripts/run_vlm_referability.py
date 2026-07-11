@@ -10034,31 +10034,31 @@ def main():
     else:
         target_scene_entries = pending_scene_entries[:max(0, int(args.max_scenes))]
 
-    if not target_scene_entries:
-        logger.info(
-            "No unprocessed scenes remain for split=%s according to %s",
-            selected_split,
-            scene_status_path,
-        )
-    else:
-        scene_worker_count = min(int(args.scene_workers), len(target_scene_entries))
-        if args.dataset == "scannetpp" and scene_worker_count > 1:
+    def _resolve_scene_worker_count(num_entries: int) -> int:
+        worker_count = min(int(args.scene_workers), num_entries)
+        if args.dataset == "scannetpp" and worker_count > 1:
             logger.warning(
                 "ScanNet++ scene-level concurrency was requested with --scene_workers=%d; "
                 "using 1 scene worker to avoid native Open3D/CV2 memory corruption on large meshes. "
                 "VLM/frame-level concurrency still uses --vlm_workers=%d.",
-                scene_worker_count,
+                worker_count,
                 int(args.vlm_workers),
             )
-            scene_worker_count = 1
+            worker_count = 1
+        return worker_count
+
+    def _run_scene_processing_pool(entries: list[tuple[str, Path]]) -> None:
+        if not entries:
+            return
+        worker_count = _resolve_scene_worker_count(len(entries))
         reorder_buffer: dict[int, SceneWorkerResult] = {}
         next_commit_position = 0
         next_submit_position = 0
-        executor = ThreadPoolExecutor(max_workers=scene_worker_count)
+        executor = ThreadPoolExecutor(max_workers=worker_count)
         in_flight: dict[Any, int] = {}
         try:
-            while next_submit_position < scene_worker_count:
-                scene_split, scene_dir = target_scene_entries[next_submit_position]
+            while next_submit_position < worker_count:
+                scene_split, scene_dir = entries[next_submit_position]
                 future = executor.submit(
                     _process_scene_worker,
                     next_submit_position,
@@ -10075,8 +10075,8 @@ def main():
                 while next_commit_position in reorder_buffer:
                     _commit_scene_result(reorder_buffer.pop(next_commit_position))
                     next_commit_position += 1
-                if next_submit_position < len(target_scene_entries):
-                    scene_split, scene_dir = target_scene_entries[next_submit_position]
+                if next_submit_position < len(entries):
+                    scene_split, scene_dir = entries[next_submit_position]
                     future = executor.submit(
                         _process_scene_worker,
                         next_submit_position,
@@ -10092,6 +10092,66 @@ def main():
             raise
         else:
             executor.shutdown(wait=True, cancel_futures=False)
+
+    def _scene_has_failed_review_attempt(scene_id: str) -> bool:
+        summary = scene_grouping_cache.get(scene_id)
+        if not isinstance(summary, dict):
+            return False
+        for group in summary.get("groups", []) or []:
+            if not isinstance(group, dict):
+                continue
+            for attempt in group.get("attempts", []) or []:
+                if isinstance(attempt, dict) and attempt.get("review_status") == "review_failed_or_missing_image":
+                    return True
+        return False
+
+    if not target_scene_entries:
+        logger.info(
+            "No unprocessed scenes remain for split=%s according to %s",
+            selected_split,
+            scene_status_path,
+        )
+    else:
+        _run_scene_processing_pool(target_scene_entries)
+
+        retry_scene_entries = [
+            (scene_split, scene_dir)
+            for scene_split, scene_dir in target_scene_entries
+            if _scene_has_failed_review_attempt(scene_dir.name)
+        ]
+        if retry_scene_entries:
+            retry_scene_ids = sorted(scene_dir.name for _, scene_dir in retry_scene_entries)
+            logger.warning(
+                "Retrying %d scene(s) with at least one failed VLM review attempt: %s",
+                len(retry_scene_ids),
+                ", ".join(retry_scene_ids),
+            )
+            retry_id_set = set(retry_scene_ids)
+            # Drop this run's stale records for retried scenes so re-committing doesn't duplicate them.
+            attachment_review_scenes[:] = [
+                record for record in attachment_review_scenes
+                if record.get("scene_id") not in retry_id_set
+            ]
+            attachment_pair_salvage_review_scenes[:] = [
+                record for record in attachment_pair_salvage_review_scenes
+                if record.get("scene_id") not in retry_id_set
+            ]
+            attachment_review_terminal_lines[:] = [
+                line for line in attachment_review_terminal_lines
+                if not any(f"scene={scene_id} " in line for scene_id in retry_id_set)
+            ]
+            _reset_completed_scene_status_for_scene_ids(scene_status_doc, scene_ids=retry_scene_ids)
+            _run_scene_processing_pool(retry_scene_entries)
+            still_failed_scene_ids = sorted(
+                scene_id for scene_id in retry_scene_ids
+                if _scene_has_failed_review_attempt(scene_id)
+            )
+            if still_failed_scene_ids:
+                logger.warning(
+                    "%d scene(s) still have failed VLM review attempts after the retry pass: %s",
+                    len(still_failed_scene_ids),
+                    ", ".join(still_failed_scene_ids),
+                )
 
     batch_scene_count = len(scene_status_cache)
     if batch_scene_count > 0:
