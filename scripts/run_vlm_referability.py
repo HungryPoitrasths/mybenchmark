@@ -499,6 +499,54 @@ def _validate_scene_status_doc(
             )
 
 
+def _grouping_summary_has_failed_review_attempt(summary: dict[str, Any] | None) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    for group in summary.get("groups", []) or []:
+        if not isinstance(group, dict):
+            continue
+        for attempt in group.get("attempts", []) or []:
+            if isinstance(attempt, dict) and attempt.get("review_status") == "review_failed_or_missing_image":
+                return True
+    return False
+
+
+def _find_completed_scenes_with_failed_review_attempts(
+    scene_status_doc: dict[str, Any],
+    *,
+    scene_status_path: Path,
+) -> list[str]:
+    """Scan every already-completed scene's recorded batch file (which may be from a
+    prior process invocation, possibly predating this check) for a frame whose VLM
+    review call failed. Used by --retry_failed_reviews to find scenes to reprocess."""
+    completed_scenes = scene_status_doc.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        return []
+    loaded_batch_docs: dict[str, dict[str, Any]] = {}
+    flagged_scene_ids: list[str] = []
+    for scene_id, record in completed_scenes.items():
+        if not isinstance(record, dict):
+            continue
+        batch_file = str(record.get("batch_file", "")).strip()
+        if not batch_file:
+            continue
+        batch_doc = loaded_batch_docs.get(batch_file)
+        if batch_doc is None:
+            batch_path = scene_status_path.parent / batch_file
+            if not batch_path.exists():
+                continue
+            with open(batch_path, "r", encoding="utf-8") as f:
+                batch_doc = json.load(f)
+            if not isinstance(batch_doc, dict):
+                continue
+            loaded_batch_docs[batch_file] = batch_doc
+        scene_grouping = batch_doc.get("scene_grouping")
+        summary = scene_grouping.get(str(scene_id)) if isinstance(scene_grouping, dict) else None
+        if _grouping_summary_has_failed_review_attempt(summary):
+            flagged_scene_ids.append(str(scene_id))
+    return flagged_scene_ids
+
+
 def _mark_scene_completed(
     scene_status_doc: dict[str, Any],
     *,
@@ -8640,6 +8688,16 @@ def main():
         help="Remove the most recently completed N scene entries from scene_status.json before processing; existing batch JSON files, frame sidecars, and review artifacts are kept",
     )
     parser.add_argument(
+        "--retry_failed_reviews", action="store_true",
+        help=(
+            "Before resuming, rescan every already-completed scene's recorded batch file "
+            "(including ones from prior process invocations) for a frame whose VLM review "
+            "call failed all in-call retries (review_status=review_failed_or_missing_image). "
+            "Any such scene is treated as not-yet-completed for this run and reprocessed from "
+            "scratch, re-issuing fresh VLM calls. Combine with --resume."
+        ),
+    )
+    parser.add_argument(
         "--label_batch_size", type=int, default=LABEL_BATCH_SIZE,
         help="Legacy compatibility flag; per-object review now issues one VLM request per valid crop",
     )
@@ -8895,6 +8953,23 @@ def main():
     )
     if args.force:
         completed_scene_ids = set()
+    if args.retry_failed_reviews:
+        stale_failed_scene_ids = _find_completed_scenes_with_failed_review_attempts(
+            scene_status_doc,
+            scene_status_path=scene_status_path,
+        )
+        if stale_failed_scene_ids:
+            completed_scene_ids -= set(stale_failed_scene_ids)
+            logger.warning(
+                "--retry_failed_reviews: found %d previously-completed scene(s) with a failed "
+                "VLM review attempt in their recorded batch file; will reprocess: %s",
+                len(stale_failed_scene_ids),
+                ", ".join(sorted(stale_failed_scene_ids)),
+            )
+        else:
+            logger.info(
+                "--retry_failed_reviews: no previously-completed scene had a failed VLM review attempt"
+            )
     if args.resume and completed_scene_ids:
         logger.info(
             "Resuming from %s with %d completed scene(s) for split=%s",
@@ -10094,16 +10169,7 @@ def main():
             executor.shutdown(wait=True, cancel_futures=False)
 
     def _scene_has_failed_review_attempt(scene_id: str) -> bool:
-        summary = scene_grouping_cache.get(scene_id)
-        if not isinstance(summary, dict):
-            return False
-        for group in summary.get("groups", []) or []:
-            if not isinstance(group, dict):
-                continue
-            for attempt in group.get("attempts", []) or []:
-                if isinstance(attempt, dict) and attempt.get("review_status") == "review_failed_or_missing_image":
-                    return True
-        return False
+        return _grouping_summary_has_failed_review_attempt(scene_grouping_cache.get(scene_id))
 
     if not target_scene_entries:
         logger.info(
