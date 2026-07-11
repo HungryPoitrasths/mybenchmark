@@ -2364,7 +2364,6 @@ _OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES = 20
 _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT = 128
 _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO = 0.15
 _OCCLUSION_DIRECTED_HIT_EPSILON_M = 0.05
-_OCCLUSION_DIRECTED_DISTANCE_STEP_M = 0.3
 _OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG = 15.0
 _OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD = math.cos(
     math.radians(_OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG)
@@ -2376,10 +2375,24 @@ _OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD = math.cos(
 # object_move_distance search range.
 _OCCLUSION_DIRECTED_MAX_CANDIDATE_DISTANCE_M = 4.0
 _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M = 5.0
-# The distance scan starts this much before the projected reach distance to
-# obj_ref (see _find_occlusion_directed_delta_for_occluder), to account for
-# obj_ref's own thickness without starting from scratch at min_magnitude_m.
-_OCCLUSION_DIRECTED_REACH_MARGIN_M = 0.3
+# The distance scan's step size and its starting margin before the projected
+# reach distance to obj_ref (see _find_occlusion_directed_delta_for_occluder)
+# both scale with how "thick" obj_ref is along the movement direction, rather
+# than a fixed distance. query_obj's own size does NOT matter here: each
+# scanned magnitude already tests query_obj's full set of translated surface
+# samples (via _occluder_blocks_translated_query_object's blocking-ratio
+# check), so query_obj's extent is accounted for within a single test, not
+# by how far apart the tests are. What the step must never exceed is
+# obj_ref's own extent -- the occlusion window's depth-extent is governed by
+# how thick the occluder itself is, so a step larger than that could jump
+# clean over the window (landing one test before it and the next test after
+# it, without ever landing inside it). _OCCLUSION_DIRECTED_MAX_DISTANCE_STEP_M
+# additionally caps it so a very large occluder doesn't blow up the number of
+# scan steps needlessly; _OCCLUSION_DIRECTED_MIN_DISTANCE_STEP_M bounds
+# worst-case scan length for tiny occluders.
+_OCCLUSION_DIRECTED_STEP_SIZE_FRACTION = 0.5
+_OCCLUSION_DIRECTED_MIN_DISTANCE_STEP_M = 0.05
+_OCCLUSION_DIRECTED_MAX_DISTANCE_STEP_M = 1.0
 # Scene-wide budget for this occluder-directed search: with candidates drawn
 # from the whole scene (not just one frame) there can be many more
 # (query_obj, obj_ref) pairs to try than before, so cap total accepted
@@ -2387,6 +2400,42 @@ _OCCLUSION_DIRECTED_REACH_MARGIN_M = 0.3
 # scene to bound generation cost.
 OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE = 40
 OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE = 20
+
+
+def _aabb_extent_along_direction(obj: dict[str, Any], unit_direction: np.ndarray) -> float:
+    """Return *obj*'s axis-aligned bbox extent projected onto *unit_direction*.
+
+    Exact for an AABB: the projection of a box onto an arbitrary direction is
+    the sum of each axis's extent scaled by that axis's component of the
+    direction (``sum(|size_i * dir_i|)``), regardless of the box's actual
+    orientation relative to that direction.
+    """
+    bbox_min = obj.get("bbox_min")
+    bbox_max = obj.get("bbox_max")
+    if bbox_min is None or bbox_max is None:
+        return 0.0
+    size = np.asarray(bbox_max, dtype=np.float64) - np.asarray(bbox_min, dtype=np.float64)
+    return float(np.sum(np.abs(size * np.asarray(unit_direction, dtype=np.float64))))
+
+
+def _adaptive_occlusion_directed_step(
+    obj_ref: dict[str, Any],
+    unit_direction: np.ndarray,
+    *,
+    fraction: float = _OCCLUSION_DIRECTED_STEP_SIZE_FRACTION,
+    min_step_m: float = _OCCLUSION_DIRECTED_MIN_DISTANCE_STEP_M,
+    max_step_m: float = _OCCLUSION_DIRECTED_MAX_DISTANCE_STEP_M,
+) -> float:
+    """Scan-step size scaled to how thick *obj_ref* is along *unit_direction*,
+    clamped to ``[min_step_m, max_step_m]``.
+
+    ``fraction`` keeps the step strictly smaller than *obj_ref*'s own extent
+    (the occlusion window's depth-extent), so the scan can't jump clean over
+    it; query_obj's size isn't a factor (see the module-level comment above).
+    """
+    ref_extent = _aabb_extent_along_direction(obj_ref, unit_direction)
+    step = float(fraction) * ref_extent
+    return float(np.clip(step, float(min_step_m), float(max_step_m)))
 
 
 def _select_occlusion_directed_occluder_candidates(
@@ -2554,8 +2603,8 @@ def _find_occlusion_directed_delta_for_occluder(
     collision_objects: list[dict] | None,
     min_magnitude_m: float = MIN_DISTANCE_QUESTION_DISTANCE_M,
     max_magnitude_m: float = _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M,
-    step_m: float = _OCCLUSION_DIRECTED_DISTANCE_STEP_M,
-    reach_margin_m: float = _OCCLUSION_DIRECTED_REACH_MARGIN_M,
+    step_m: float | None = None,
+    reach_margin_m: float | None = None,
 ) -> "_SelectedObjectMoveState | None":
     """Scan magnitudes along *unit_direction* for the first one where
     *obj_ref* would actually occlude the (hypothetically moved) *query_obj*,
@@ -2574,8 +2623,23 @@ def _find_occlusion_directed_delta_for_occluder(
     ray-casting; (2) otherwise start the scan a bit before ``along`` (not
     from ``min_magnitude_m``) since any shorter magnitude is known to still
     be in front of *obj_ref*.
+
+    ``step_m``/``reach_margin_m`` default to ``None``, which computes both
+    from ``_adaptive_occlusion_directed_step`` (scaled to how thick *obj_ref*
+    is along ``unit_direction`` -- query_obj's size doesn't matter here,
+    since each scanned magnitude already tests query_obj's full translated
+    surface samples) instead of a fixed distance -- a fixed step could skip
+    over the occlusion window entirely for a thin occluder, or waste
+    ray-casts for a thick one. Pass an explicit value to override (e.g. for
+    deterministic tests).
     """
     unit_direction = np.asarray(unit_direction, dtype=np.float64)
+    if step_m is None or reach_margin_m is None:
+        adaptive_step = _adaptive_occlusion_directed_step(obj_ref, unit_direction)
+        if step_m is None:
+            step_m = adaptive_step
+        if reach_margin_m is None:
+            reach_margin_m = adaptive_step
     along = float(
         np.dot(
             np.asarray(obj_ref["center"], dtype=np.float64)

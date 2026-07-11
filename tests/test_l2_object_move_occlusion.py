@@ -8,6 +8,8 @@ import numpy as np
 from src.qa_generator import (
     DISTANCE_MOVE_DIRECTIONS,
     MOVEMENT_CANDIDATES,
+    _aabb_extent_along_direction,
+    _adaptive_occlusion_directed_step,
     _bbox_has_min_in_frame_corners,
     _bbox_fully_in_frame,
     _counterfactual_occlusion_backend,
@@ -1455,11 +1457,14 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
         unit_direction = DISTANCE_MOVE_DIRECTIONS[0]
         moved_objects = [query_obj, obj_ref]
 
-        # obj_ref is 1.0m away along the matched direction, so the scan now
-        # starts at max(0.2, 1.0 - reach_margin(0.3)) = 0.7, not at
-        # min_magnitude_m -- 0.7 and 1.0 must fail here to actually exercise
-        # "picks the smallest PASSING magnitude" rather than just the first
-        # one tried.
+        # obj_ref is 1.0m away along the matched direction; step_m/
+        # reach_margin_m are passed explicitly (0.3, matching the old fixed
+        # defaults) so this test's scan sequence stays deterministic and
+        # independent of the adaptive, object-size-based step computation
+        # (covered separately below) -- scan starts at
+        # max(0.2, 1.0 - 0.3) = 0.7, so 0.7 and 1.0 must fail here to
+        # actually exercise "picks the smallest PASSING magnitude" rather
+        # than just the first one tried.
         def fake_blocks(*, target_delta, **kwargs):
             return float(np.linalg.norm(target_delta)) >= 1.3 - 1e-9
 
@@ -1486,12 +1491,113 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
                 room_min=np.array([-10.0, -10.0, -10.0]),
                 room_max=np.array([10.0, 10.0, 10.0]),
                 collision_objects=None,
+                step_m=0.3,
+                reach_margin_m=0.3,
             )
 
         self.assertIsNotNone(selected_state)
         self.assertAlmostEqual(float(np.linalg.norm(selected_state.delta)), 1.3, places=6)
         self.assertEqual(blocks_mock.call_count, 3)
         self.assertGreater(blocks_mock.call_count, 0)
+
+    def test_aabb_extent_along_direction_sums_projected_axis_extents(self) -> None:
+        obj = {
+            "bbox_min": [-1.0, -2.0, -0.5],
+            "bbox_max": [1.0, 2.0, 0.5],
+        }
+
+        # Pure +X: extent is just the X-axis size (2.0).
+        self.assertAlmostEqual(
+            _aabb_extent_along_direction(obj, np.array([1.0, 0.0, 0.0])), 2.0, places=6
+        )
+        # 45-degree diagonal in XY: sums both axes' extents (2.0 + 4.0).
+        diag = np.array([1.0, 1.0, 0.0]) / math.sqrt(2.0)
+        self.assertAlmostEqual(
+            _aabb_extent_along_direction(obj, diag), (2.0 + 4.0) / math.sqrt(2.0), places=6
+        )
+
+    def test_aabb_extent_along_direction_handles_missing_bbox(self) -> None:
+        self.assertEqual(_aabb_extent_along_direction({}, np.array([1.0, 0.0, 0.0])), 0.0)
+
+    def test_adaptive_occlusion_directed_step_scales_with_obj_ref_size_only_and_clamps(self) -> None:
+        # query_obj's own size must NOT affect the step (each scanned
+        # magnitude already tests query_obj's full translated surface
+        # samples) -- only obj_ref's extent matters, and the step must
+        # never exceed it (kept well below it via `fraction`). Note
+        # _adaptive_occlusion_directed_step doesn't even take a query_obj
+        # argument, so there's nothing for it to depend on.
+        unit_direction = np.array([1.0, 0.0, 0.0])
+        tiny_ref = {"bbox_min": [-0.01, -0.01, -0.01], "bbox_max": [0.01, 0.01, 0.01]}
+        huge_ref = {"bbox_min": [-5.0, -5.0, -5.0], "bbox_max": [5.0, 5.0, 5.0]}
+        typical_ref = {"bbox_min": [-0.15, -0.15, -0.15], "bbox_max": [0.15, 0.15, 0.15]}
+
+        tiny_step = _adaptive_occlusion_directed_step(tiny_ref, unit_direction)
+        huge_step = _adaptive_occlusion_directed_step(huge_ref, unit_direction)
+        typical_step = _adaptive_occlusion_directed_step(typical_ref, unit_direction)
+
+        # Tiny occluder: clamped to the minimum, not scaled down to ~0.
+        self.assertAlmostEqual(tiny_step, 0.05, places=6)
+        # Huge occluder (10m extent along +X): clamped to the maximum (1.0m),
+        # not scaled up to half its own size (5.0m).
+        self.assertAlmostEqual(huge_step, 1.0, places=6)
+        # Typical furniture-sized occluder: between the two clamps, and
+        # never larger than the occluder's own extent (0.3m along +X here).
+        self.assertLess(typical_step, 1.0)
+        self.assertGreater(typical_step, 0.05)
+        self.assertLessEqual(
+            typical_step, _aabb_extent_along_direction(typical_ref, unit_direction)
+        )
+
+    def test_find_occlusion_directed_delta_for_occluder_uses_adaptive_step_by_default(self) -> None:
+        # Both objects are tiny (0.02m cubes), so the adaptive step/margin
+        # clamp to the minimum (0.05m) -- much finer than the old fixed
+        # 0.3m, which would have skipped straight past this narrow window.
+        query_obj = {
+            "id": 1, "label": "pin", "center": [0.0, 0.0, 2.0],
+            "bbox_min": [-0.01, -0.01, -0.01], "bbox_max": [0.01, 0.01, 0.01],
+        }
+        obj_ref = {
+            "id": 2, "label": "pin_ref", "center": [1.0, 0.0, 2.0],
+            "bbox_min": [-0.01, -0.01, -0.01], "bbox_max": [0.01, 0.01, 0.01],
+        }
+        moved_objects = [query_obj, obj_ref]
+
+        # Only the narrow band [1.02, 1.07] blocks -- a 0.3m fixed step
+        # starting at max(0.2, 1.0-0.3)=0.7 would jump 0.7, 1.0, 1.3 and
+        # miss it entirely.
+        def fake_blocks(*, target_delta, **kwargs):
+            magnitude = float(np.linalg.norm(target_delta))
+            return 1.02 <= magnitude <= 1.07
+
+        with (
+            patch(
+                "src.qa_generator._occluder_blocks_translated_query_object",
+                side_effect=fake_blocks,
+            ),
+            patch("src.qa_generator.apply_movement", return_value=moved_objects),
+            patch("src.qa_generator.is_within_room", return_value=True),
+            patch("src.qa_generator.has_terminal_bbox_collision", return_value=False),
+        ):
+            selected_state = _find_occlusion_directed_delta_for_occluder(
+                query_obj=query_obj,
+                obj_ref=obj_ref,
+                unit_direction=DISTANCE_MOVE_DIRECTIONS[0],
+                move_source_id=1,
+                moved_ids={1},
+                movement_scene_objects=[query_obj, obj_ref],
+                attachment_graph={},
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=object(),
+                room_min=np.array([-10.0, -10.0, -10.0]),
+                room_max=np.array([10.0, 10.0, 10.0]),
+                collision_objects=None,
+            )
+
+        self.assertIsNotNone(selected_state)
+        magnitude = float(np.linalg.norm(selected_state.delta))
+        self.assertGreaterEqual(magnitude, 1.02)
+        self.assertLessEqual(magnitude, 1.07)
 
     def test_find_occlusion_directed_delta_for_occluder_returns_none_when_no_magnitude_passes(self) -> None:
         query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
