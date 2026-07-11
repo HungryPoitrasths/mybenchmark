@@ -186,6 +186,17 @@ _VLM_CALL_FAILURE_COUNT = 0
 _VLM_CALL_FAILURE_COUNT_LOCK = threading.Lock()
 _VLM_REQUEST_SEMAPHORE: threading.BoundedSemaphore | None = None
 _VLM_THREAD_LOCAL_CLIENTS = threading.local()
+_EXTRA_BODY_UNSUPPORTED = False
+# One retry (with thinking forced off) if a call comes back empty/unparsable,
+# so a single truncated-thinking response doesn't silently become `default`.
+VLM_PARSE_FAILURE_MAX_ATTEMPTS = 2
+# temperature=0 means an identical retry reproduces an identical truncation
+# (e.g. if the server silently ignores enable_thinking=False and the model
+# spends the whole budget still inside <think>...</think>), so retries must
+# not resend the exact same request. Each retry adds this much extra
+# max_tokens on top of the caller's budget, giving the thinking block real
+# room to finish before the JSON answer.
+VLM_PARSE_RETRY_EXTRA_HEADROOM = 8000
 
 
 @dataclass
@@ -1795,6 +1806,46 @@ def _with_no_think_directive(content: list[dict]) -> list[dict]:
     return updated
 
 
+def _call_vlm_json_once(
+    client,
+    model: str,
+    content: list[dict],
+    max_tokens: int,
+) -> tuple[dict[str, Any] | None, str, bool]:
+    """Single VLM call attempt. Returns (parsed_or_None, raw_text, had_thinking)."""
+    global _EXTRA_BODY_UNSUPPORTED
+    content = _with_no_think_directive(content)
+    kwargs = dict(model=model, messages=[{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0)
+    # Belt-and-suspenders against reasoning-mode backends (e.g. Qwen3 "-a3b"
+    # thinking variants) emitting a long <think>...</think> block before the
+    # JSON answer: ask the server to skip thinking via the real API-level
+    # switch, in addition to the /no_think prompt convention above. This was
+    # previously dropped over a suspected throughput regression, but an
+    # unparsable/empty response is worse than being slower, so it's back —
+    # if the server rejects the field, remember that and stop sending it.
+    if not _EXTRA_BODY_UNSUPPORTED:
+        try:
+            resp = client.chat.completions.create(
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                **kwargs,
+            )
+        except Exception as exc:
+            _EXTRA_BODY_UNSUPPORTED = True
+            logger.warning("VLM server rejected enable_thinking=False extra_body, disabling it for the rest of this run: %s", exc)
+            resp = client.chat.completions.create(**kwargs)
+    else:
+        resp = client.chat.completions.create(**kwargs)
+    message = resp.choices[0].message
+    text = (message.content or "").strip()
+    # Some servers strip <think> blocks out of `content` and surface them in
+    # a separate `reasoning_content` field instead of inlining them, so check
+    # both to know whether our enable_thinking=False / /no_think attempts
+    # actually took effect.
+    had_thinking = bool(getattr(message, "reasoning_content", None)) or "<think" in text.lower()
+    parsed = _extract_json_object(text)
+    return parsed, text, had_thinking
+
+
 def _call_vlm_json_impl(
     client,
     model: str,
@@ -1802,42 +1853,42 @@ def _call_vlm_json_impl(
     default: dict[str, Any],
     max_tokens: int = 512 + VLM_REASONING_TOKEN_HEADROOM,
 ) -> tuple[dict[str, Any], str]:
-    content = _with_no_think_directive(content)
-    kwargs = dict(model=model, messages=[{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0)
-    try:
-        # Reasoning-mode backends (e.g. Qwen3 "-a3b" thinking variants) emit a
-        # long <think>...</think> block before the JSON answer by default.
-        # The /no_think directive appended to the prompt above is Qwen3's own
-        # chat-template convention for disabling this and needs no server-side
-        # support; we previously also sent an extra_body enable_thinking=False
-        # kwarg, but that appears to force some servers onto a slower,
-        # non-cached prompt-template render path (throughput dropped ~60%
-        # once it was added), so it's been dropped in favor of /no_think alone.
-        resp = client.chat.completions.create(**kwargs)
-        message = resp.choices[0].message
-        text = (message.content or "").strip()
-        # Some servers strip <think> blocks out of `content` and surface them
-        # in a separate `reasoning_content` field instead of inlining them,
-        # so check both to know whether our enable_thinking=False / /no_think
-        # attempts actually took effect.
-        had_thinking = bool(getattr(message, "reasoning_content", None)) or "<think" in text.lower()
-        parsed = _extract_json_object(text)
+    last_text = ""
+    last_had_thinking = False
+    for attempt in range(1, VLM_PARSE_FAILURE_MAX_ATTEMPTS + 1):
+        attempt_max_tokens = max_tokens + VLM_PARSE_RETRY_EXTRA_HEADROOM * (attempt - 1)
+        try:
+            parsed, text, had_thinking = _call_vlm_json_once(client, model, content, attempt_max_tokens)
+        except Exception as exc:
+            _record_vlm_call_failure()
+            logger.warning("VLM call failed (attempt %d/%d): %s", attempt, VLM_PARSE_FAILURE_MAX_ATTEMPTS, exc)
+            _log_vlm_parse_failure(model, "", exception=str(exc))
+            last_text, last_had_thinking = "", False
+            continue
+        last_text, last_had_thinking = text, had_thinking
         logger.info(
-            "VLM response parsed=%s had_thinking=%s (model=%s, response_chars=%d)",
+            "VLM response parsed=%s had_thinking=%s (model=%s, response_chars=%d, attempt=%d/%d, max_tokens=%d)",
             parsed is not None,
             had_thinking,
             model,
             len(text),
+            attempt,
+            VLM_PARSE_FAILURE_MAX_ATTEMPTS,
+            attempt_max_tokens,
         )
-        if parsed is None:
-            _log_vlm_parse_failure(model, text, exception=None)
-            return default, text
-        return parsed, text
-    except Exception as exc:
-        _record_vlm_call_failure()
-        logger.warning("VLM call failed: %s", exc)
-        _log_vlm_parse_failure(model, "", exception=str(exc))
-        return default, ""
+        if parsed is not None:
+            return parsed, text
+        _log_vlm_parse_failure(model, text, exception=None)
+    if not last_text and last_had_thinking:
+        logger.warning(
+            "VLM response stayed empty after %d attempts up to max_tokens=%d while still thinking "
+            "(model=%s) - enable_thinking=False is likely not honored by this server; "
+            "consider raising VLM_PARSE_RETRY_EXTRA_HEADROOM or checking server-side reasoning config",
+            VLM_PARSE_FAILURE_MAX_ATTEMPTS,
+            max_tokens + VLM_PARSE_RETRY_EXTRA_HEADROOM * (VLM_PARSE_FAILURE_MAX_ATTEMPTS - 1),
+            model,
+        )
+    return default, last_text
 
 
 def _call_vlm_json(
