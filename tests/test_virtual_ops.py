@@ -136,6 +136,38 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         rotated = apply_coordinate_rotation([], 90.0)
         self.assertEqual(rotated, [])
 
+    def test_apply_coordinate_rotation_custom_pivot_preserves_relative_vector_and_height(
+        self,
+    ) -> None:
+        obj_a = make_object(1, (0.0, 0.0, 1.5), (-0.1, -0.1, 1.4), (0.1, 0.1, 1.6))
+        obj_b = make_object(2, (2.0, 0.0, 0.5), (1.9, -0.1, 0.4), (2.1, 0.1, 0.6))
+
+        room_center_rotated = apply_coordinate_rotation([obj_a, obj_b], 90.0)
+        # A camera pivot far from the objects' own centroid, at a very different height.
+        camera_pivot = np.array([10.0, -5.0, 3.0], dtype=np.float64)
+        camera_rotated = apply_coordinate_rotation(
+            [obj_a, obj_b], 90.0, rotation_center=camera_pivot
+        )
+
+        rel_room = (
+            np.array(room_center_rotated[0]["center"])
+            - np.array(room_center_rotated[1]["center"])
+        )
+        rel_camera = (
+            np.array(camera_rotated[0]["center"])
+            - np.array(camera_rotated[1]["center"])
+        )
+        # The relative vector between the two rotated points is pivot-invariant.
+        np.testing.assert_allclose(rel_room, rel_camera, atol=1e-9)
+
+        # Absolute positions differ between the two pivots...
+        self.assertFalse(
+            np.allclose(room_center_rotated[0]["center"], camera_rotated[0]["center"])
+        )
+        # ...but height (z) is preserved regardless of the pivot's own z value.
+        self.assertAlmostEqual(camera_rotated[0]["center"][2], obj_a["center"][2], places=9)
+        self.assertAlmostEqual(camera_rotated[1]["center"][2], obj_b["center"][2], places=9)
+
     def test_apply_movement_translates_runtime_distance_surface_geometry(self) -> None:
         obj = make_object(
             1,

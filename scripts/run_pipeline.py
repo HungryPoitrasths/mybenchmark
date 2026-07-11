@@ -57,9 +57,12 @@ from src.qa_generator import (
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
     _apply_attachment_surface_text_overrides,
-    find_auxiliary_frames_for_occlusion_question_v2,
+    build_multi_frame_split_note,
+    find_two_frame_split_v2,
     generate_all_questions,
+    recompute_coordinate_rotation_agent_answer,
 )
+from src.relation_engine import camera_cardinal_direction
 from src.referability_checks import (
     QUESTION_MENTION_FIELDS,
     build_question_referability_audit as _shared_build_question_referability_audit,
@@ -121,6 +124,193 @@ REFERABLE_OCCLUSION_VETO_DENSE_MAX_SAMPLE_COUNT = 4096
 REFERABLE_OCCLUSION_VETO_MIN_VISIBLE_RATIO = 0.35
 REFERABLE_OCCLUSION_VETO_DENSE_CHUNK_SIZE = 64
 _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = False
+
+# ---- generalized two-frame split (route-continuity beyond object_move_occlusion) ----
+#
+# Maps each eligible question type to which of its already-present id fields form
+# group A (-> frame 1 / image_name) vs group B (-> frame 2), plus optional "bonus"
+# ids (soft preference only, e.g. obj_face -- never required to land in either frame).
+# attachment_chain and object_remove are deliberately absent and always stay single-
+# frame: attachment_chain's support-chain answer needs the pair co-visible in one
+# frame, and object_remove was decided to stay single-frame rather than attempt a
+# split (unlike every other type here, which tries a split and falls back to the
+# single shared image_name if none is found).
+TWO_FRAME_SPLIT_ID_FIELDS: dict[str, dict[str, list[str]]] = {
+    "object_move_occlusion": {
+        "group_a": ["moved_obj_id"],
+        "group_b": ["target_obj_id"],
+    },
+    "object_move_agent": {
+        "group_a": ["moved_obj_id", "query_obj_id"],
+        "group_b": ["obj_c_id"],
+    },
+    "object_move_distance": {
+        "group_a": ["moved_obj_id", "query_obj_id"],
+        "group_b": ["obj_c_id"],
+    },
+    "object_move_object_centric": {
+        "group_a": ["moved_obj_id", "query_obj_id"],
+        "group_b": ["obj_ref_id"],
+    },
+    "object_move_allocentric": {
+        "group_a": ["moved_obj_id", "query_obj_id"],
+        "group_b": ["obj_ref_id"],
+    },
+    "object_rotate_object_centric": {
+        "group_a": ["moved_obj_id", "query_obj_id"],
+        "group_b": ["obj_ref_id"],
+        "bonus": ["obj_face_id"],
+    },
+    # Covers all 3 reference_frame variants (agent/object_centric/allocentric) --
+    # they share the "type": "attachment_move" tag and the same object roles.
+    "attachment_move": {
+        "group_a": ["root_id", "query_obj_id"],
+        "group_b": ["obj_ref_id"],
+    },
+    "coordinate_rotation_agent": {
+        "group_a": ["obj_a_id"],
+        "group_b": ["obj_b_id"],
+    },
+    "coordinate_rotation_allocentric": {
+        "group_a": ["obj_a_id"],
+        "group_b": ["obj_b_id"],
+    },
+    "coordinate_rotation_object_centric": {
+        "group_a": ["obj_ref_id"],
+        "group_b": ["obj_target_id"],
+        "bonus": ["obj_face_id"],
+    },
+}
+
+# coordinate_rotation_agent/_allocentric use frame_1's camera as both the rotation
+# pivot and the front/back/left/right (or cardinal-text) reference, so a GT/text
+# recompute is needed whenever _apply_two_frame_split reassigns frame_1 away from
+# the scene's original shared camera. coordinate_rotation_object_centric's GT only
+# depends on object-defined facing geometry, never the camera, so it needs no
+# recompute branch.
+_COORDINATE_ROTATION_CAMERA_ANCHORED_TYPES = frozenset(
+    {"coordinate_rotation_agent", "coordinate_rotation_allocentric"}
+)
+
+
+def _recompute_coordinate_rotation_gt_for_new_anchor(
+    q: dict[str, Any],
+    *,
+    objects_by_id: dict[int, dict[str, Any]],
+    all_poses: dict[str, Any],
+) -> None:
+    """Re-derive answer/options (agent) or the camera_cardinal text (allocentric)
+    after _apply_two_frame_split reassigned frame_1 to a real camera other than the
+    scene's original shared one.
+    """
+    new_pose = all_poses.get(q.get("image_name"))
+    if new_pose is None:
+        return
+
+    if q.get("type") == "coordinate_rotation_agent":
+        obj_a = objects_by_id.get(int(q["obj_a_id"]))
+        obj_b = objects_by_id.get(int(q["obj_b_id"]))
+        if obj_a is None or obj_b is None:
+            return
+        new_dir, options, answer_letter = recompute_coordinate_rotation_agent_answer(
+            obj_a, obj_b, q["rotation_angle"], new_pose,
+        )
+        q["options"] = options
+        q["answer"] = answer_letter
+        q["correct_value"] = new_dir
+        q["new_direction"] = new_dir
+        q["relation_unchanged"] = q.get("old_direction") == new_dir
+    elif q.get("type") == "coordinate_rotation_allocentric":
+        old_cardinal = q.get("camera_cardinal")
+        new_cardinal = camera_cardinal_direction(new_pose)
+        if old_cardinal and new_cardinal != old_cardinal and isinstance(q.get("question"), str):
+            q["question"] = re.sub(
+                rf"\b{re.escape(str(old_cardinal))}\b", new_cardinal, q["question"]
+            )
+        q["camera_cardinal"] = new_cardinal
+
+
+def _resolve_objects_for_ids(
+    id_values: list[Any],
+    objects_by_id: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Look up distinct, present object dicts for a list of (possibly duplicate/None) ids."""
+    resolved: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for raw_id in id_values:
+        if raw_id is None:
+            continue
+        try:
+            obj_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if obj_id in seen:
+            continue
+        obj = objects_by_id.get(obj_id)
+        if obj is None:
+            continue
+        seen.add(obj_id)
+        resolved.append(obj)
+    return resolved
+
+
+def _apply_two_frame_split(
+    q: dict[str, Any],
+    *,
+    objects_by_id: dict[int, dict[str, Any]],
+    all_poses: dict[str, Any] | None,
+    color_intrinsics: Any,
+    camera_pose: Any,
+) -> None:
+    """Split a question's referenced objects across two real frames, in place.
+
+    No-op (keeps the single shared image_name) if the type isn't in
+    TWO_FRAME_SPLIT_ID_FIELDS, if either group resolves empty, or if no valid
+    frame split + continuity chain can be found.
+    """
+    split_spec = TWO_FRAME_SPLIT_ID_FIELDS.get(q.get("type"))
+    if split_spec is None or color_intrinsics is None or not all_poses:
+        return
+
+    group_a_objects = _resolve_objects_for_ids(
+        [q.get(field) for field in split_spec["group_a"]], objects_by_id
+    )
+    group_b_objects = _resolve_objects_for_ids(
+        [q.get(field) for field in split_spec["group_b"]], objects_by_id
+    )
+    if not group_a_objects or not group_b_objects:
+        return
+    bonus_objects = _resolve_objects_for_ids(
+        [q.get(field) for field in split_spec.get("bonus", [])], objects_by_id
+    )
+
+    split = find_two_frame_split_v2(
+        group_a_objects=group_a_objects,
+        group_b_objects=group_b_objects,
+        all_poses=all_poses,
+        color_intrinsics=color_intrinsics,
+        preferred_camera_pose=camera_pose,
+        bonus_objects=bonus_objects,
+    )
+    if split is None:
+        return
+
+    frame_a_name, frame_b_name, chain = split
+    q["image_name"] = frame_a_name
+    q["reasoning_frame_2"] = frame_b_name
+    q["auxiliary_image_names"] = chain
+    q["object_frame_groups"] = {
+        "frame_1": [int(o["id"]) for o in group_a_objects],
+        "frame_2": [int(o["id"]) for o in group_b_objects],
+    }
+    # Lead with the note (not append it) so the model learns before reading the
+    # question that it's getting a photo series, and which named objects are in
+    # the first vs. last frame -- every split type gets this, including
+    # coordinate_rotation_agent/_allocentric, whose own template text only names
+    # the rotation-pivot camera, not which object ends up in which frame.
+    if isinstance(q.get("question"), str):
+        note = build_multi_frame_split_note(group_a_objects, group_b_objects)
+        q["question"] = f"{note} {q['question']}"
 
 
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
@@ -5351,53 +5541,21 @@ def run_pipeline(
                 for q in questions:
                     q["scene_id"] = scene_id
                     q["image_name"] = image_name
+                    _apply_two_frame_split(
+                        q,
+                        objects_by_id=objects_by_id,
+                        all_poses=poses,
+                        color_intrinsics=color_intrinsics,
+                        camera_pose=camera_pose,
+                    )
                     if (
-                        q.get("type") == "object_move_occlusion"
-                        and color_intrinsics is not None
-                        and instance_mesh_data is not None
-                        and ray_caster is not None
+                        q.get("type") in _COORDINATE_ROTATION_CAMERA_ANCHORED_TYPES
+                        and q.get("image_name") != image_name
+                        and poses is not None
                     ):
-                        _orig_obj = next(
-                            (o for o in scene["objects"] if int(o["id"]) == int(q["target_obj_id"])),
-                            None,
+                        _recompute_coordinate_rotation_gt_for_new_anchor(
+                            q, objects_by_id=objects_by_id, all_poses=poses,
                         )
-                        if _orig_obj is not None:
-                            _delta = np.asarray(q["delta"], dtype=np.float64)
-                            _moved_tgt = dict(_orig_obj)
-                            _moved_tgt["bbox_min"] = (
-                                np.asarray(_orig_obj["bbox_min"], dtype=np.float64) + _delta
-                            ).tolist()
-                            _moved_tgt["bbox_max"] = (
-                                np.asarray(_orig_obj["bbox_max"], dtype=np.float64) + _delta
-                            ).tolist()
-                            if "center" in _orig_obj:
-                                _moved_tgt["center"] = (
-                                    np.asarray(_orig_obj["center"], dtype=np.float64) + _delta
-                                ).tolist()
-                            _orig_center = np.asarray(
-                                _orig_obj.get("center", [
-                                    (_orig_obj["bbox_min"][i] + _orig_obj["bbox_max"][i]) / 2
-                                    for i in range(3)
-                                ]),
-                                dtype=np.float64,
-                            )
-                            _moved_center = np.asarray(
-                                _moved_tgt.get("center", [
-                                    (_moved_tgt["bbox_min"][i] + _moved_tgt["bbox_max"][i]) / 2
-                                    for i in range(3)
-                                ]),
-                                dtype=np.float64,
-                            )
-                            _aux = find_auxiliary_frames_for_occlusion_question_v2(
-                                original_center=_orig_center,
-                                moved_center=_moved_center,
-                                moved_target=_moved_tgt,
-                                orig_camera_pose=camera_pose,
-                                all_poses=poses,
-                                color_intrinsics=color_intrinsics,
-                            )
-                            if _aux:
-                                q["auxiliary_image_names"] = _aux
 
                 with _timed_frame_phase(frame_ctx, "referability_post_filter"):
                     kept_questions, audited_questions = _apply_question_referability_filter(

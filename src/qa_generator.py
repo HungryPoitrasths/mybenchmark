@@ -6002,10 +6002,12 @@ def build_multi_frame_split_note(
     group_a_objects: list[dict[str, Any]],
     group_b_objects: list[dict[str, Any]],
 ) -> str:
-    """Build the note appended to a question's text when find_two_frame_split_v2
-    found a valid split -- names which real objects end up in the first image vs.
-    the last, since the model can no longer read their relative position off a
-    single shared photo.
+    """Build the note led with (not appended to) a question's text when
+    find_two_frame_split_v2 found a valid split -- announces that a photo series
+    is provided and names which real objects end up in the first frame vs. the
+    last, since the model can no longer read their relative position off a single
+    shared photo. Placed at the front so the model learns this before it even
+    reads the question.
     """
     def _labels(objs: list[dict[str, Any]]) -> str:
         names = [_the(obj.get("label", "object")) for obj in objs]
@@ -6014,9 +6016,9 @@ def build_multi_frame_split_note(
         return ", ".join(names[:-1]) + f" and {names[-1]}"
 
     return (
-        f"Note: the images below are connected by a continuous path through the room -- "
-        f"the first image shows {_labels(group_a_objects)}, and the last image shows "
-        f"{_labels(group_b_objects)}."
+        f"A series of photos is provided below, connected by a continuous camera "
+        f"path through the room: the first photo shows {_labels(group_a_objects)}, "
+        f"and the last photo shows {_labels(group_b_objects)}."
     )
 
 

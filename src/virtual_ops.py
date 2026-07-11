@@ -542,18 +542,29 @@ def apply_counterfactual_placement(
 def apply_coordinate_rotation(
     objects: list[dict],
     rotation_angle_deg: float,
+    rotation_center: np.ndarray | None = None,
 ) -> list[dict]:
-    """Rotate all objects around the room centre by *rotation_angle_deg* about z.
+    """Rotate all objects around *rotation_center* by *rotation_angle_deg* about z.
 
     Simulates: "if the room had been oriented differently…".
     All relative positions are preserved; absolute coordinates change.
+
+    *rotation_center* defaults to the mean of the given objects' centers (the
+    original "room centre" pivot) when not provided, for backward compatibility.
+    Callers reasoning about a specific anchor camera (e.g. a coordinate_rotation
+    question's chosen frame_1) should pass that camera's world position instead --
+    the pivot only shifts absolute coordinates, never the relative vector between
+    any two rotated points, and rotation_matrix_z leaves the z component untouched
+    regardless of the pivot's own height, so this never introduces height tilt.
 
     Returns a new (deep-copied) object list.
     """
     if not objects:
         return []
 
-    room_center = np.mean([np.array(o["center"]) for o in objects], axis=0)
+    if rotation_center is None:
+        rotation_center = np.mean([np.array(o["center"]) for o in objects], axis=0)
+    room_center = np.asarray(rotation_center, dtype=np.float64)
     R = rotation_matrix_z(rotation_angle_deg)
 
     rotated = copy.deepcopy(objects)
