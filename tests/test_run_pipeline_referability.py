@@ -3351,6 +3351,18 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             "version": "20.0",
             "frames": {
                 scene_id: {
+                    # lamp (id 3) IS listed as referable here: the referability
+                    # "backstop" filter (_apply_question_referability_filter) checks
+                    # every mentioned object against THIS frame's referable ids
+                    # regardless of where the two-frame split ends up putting them,
+                    # since it's a generation-time precondition (obj_ref_id must be
+                    # referable in the frame a question is generated for) that's
+                    # independent of which real frame the split later assigns as
+                    # frame_1. image_name's own camera is placed far from chair/
+                    # table/lamp (see load_scannet_poses below) so it never becomes
+                    # a two-frame-split candidate at all -- frame_1 ends up being
+                    # "anchor.jpg", which has no referability_cache entry, so the
+                    # mutual-exclusivity referability check can't fire against it.
                     image_name: {
                         "frame_usable": True,
                         "candidate_visible_object_ids": [1, 2, 3],
@@ -3433,13 +3445,24 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 run_pipeline_module,
                 "load_scannet_poses",
                 return_value={
-                    image_name: make_camera_pose(image_name),
-                    # Bridge poses providing route-continuity between the chair/table
-                    # frame (x=0) and a real frame that fully frames the far-off lamp
-                    # (x=1.6), so _apply_two_frame_split finds a valid split instead
-                    # of dropping this question (verified in isolation: with just
-                    # these 4 poses, find_two_frame_split_v2 returns
-                    # ("000123.jpg", "000456.jpg", ["bridge1.jpg", "bridge2.jpg"])).
+                    # image_name's own camera is placed far away (x=100) so it does
+                    # NOT geometrically frame chair/table at all -- this deliberately
+                    # decouples it from the two-frame-split's frame_1 choice. Its
+                    # referability_cache entry (all 3 objects "referable") reflects a
+                    # generation-time precondition on the ORIGINAL processing frame,
+                    # independent of geometry or of which real frame the split later
+                    # picks -- see the long comment on the referability_cache literal
+                    # above. anchor.jpg is the real geometric stand-in for frame_1
+                    # (frames chair/table, has no referability_cache entry, so the
+                    # mutual-exclusivity referability check can't fire against it).
+                    image_name: make_camera_pose_at(image_name, 100.0),
+                    "anchor.jpg": make_camera_pose_at("anchor.jpg", 0.3),
+                    # Bridge poses providing route-continuity between anchor.jpg and
+                    # a real frame that fully frames the far-off lamp (x=1.6), so
+                    # _apply_two_frame_split finds a valid split instead of dropping
+                    # this question (verified in isolation: with just these poses,
+                    # find_two_frame_split_v2 returns
+                    # ("anchor.jpg", "000456.jpg", ["bridge1.jpg", "bridge2.jpg"])).
                     "bridge1.jpg": make_camera_pose_at("bridge1.jpg", 0.5),
                     "bridge2.jpg": make_camera_pose_at("bridge2.jpg", 1.0),
                     "000456.jpg": make_camera_pose_at("000456.jpg", 1.6),

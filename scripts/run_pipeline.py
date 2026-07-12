@@ -256,6 +256,55 @@ def _resolve_objects_for_ids(
     return resolved
 
 
+def _reasoning_frame_pair_violates_referability(
+    *,
+    frame_a_name: str,
+    frame_b_name: str,
+    group_a_ids: list[int],
+    group_b_ids: list[int],
+    scene_frames: dict[str, dict] | None,
+) -> bool:
+    """True if either final reasoning frame also refers-in the OTHER frame's group,
+    per VLM referability_cache data (when available for that frame).
+
+    Deliberately takes the UNION of referable_object_ids and
+    attachment_referable_object_ids, regardless of question type -- unlike
+    _effective_question_referability_ids (which picks one set based on question type
+    for the "is this frame good enough to source this question" positive-filter use
+    case), this is a negative/rejection check: ANY signal that an object is uniquely
+    identifiable in a frame contradicts the question's "this photo doesn't show it"
+    premise. attachment_referable_object_ids uses a looser geometric threshold but is
+    also filtered by human review, so an object can be in referable_object_ids
+    without being in attachment_referable_object_ids (or vice versa) -- picking only
+    one set based on question type would silently ignore the other's signal.
+
+    Only evaluated against the two frames find_two_frame_split_v2 actually chose --
+    not a per-candidate filter during its search. No-ops (returns False) when
+    scene_frames is empty or a frame has no cache entry: referability_cache only
+    covers the narrow subset of frames actually run through run_vlm_referability.py,
+    and the geometric exclusivity check (_group_visible_at_all, in
+    find_two_frame_split_v2) already guards every candidate, referability-audited or
+    not, so absence of data here is not a gap.
+    """
+    if not scene_frames:
+        return False
+
+    def _group_is_referable_in(entry: dict | None, group_ids: list[int]) -> bool:
+        if not entry or not group_ids:
+            return False
+        referable_ids = set(int(obj_id) for obj_id in (entry.get("referable_object_ids") or []))
+        referable_ids.update(
+            int(obj_id) for obj_id in (entry.get("attachment_referable_object_ids") or [])
+        )
+        return all(int(obj_id) in referable_ids for obj_id in group_ids)
+
+    if _group_is_referable_in(scene_frames.get(frame_b_name), group_a_ids):
+        return True
+    if _group_is_referable_in(scene_frames.get(frame_a_name), group_b_ids):
+        return True
+    return False
+
+
 def _apply_two_frame_split(
     q: dict[str, Any],
     *,
@@ -263,6 +312,7 @@ def _apply_two_frame_split(
     all_poses: dict[str, Any] | None,
     color_intrinsics: Any,
     camera_pose: Any,
+    scene_frames: dict[str, dict] | None = None,
 ) -> bool:
     """Split a question's referenced objects across two real frames, in place.
 
@@ -275,6 +325,12 @@ def _apply_two_frame_split(
     either group resolves empty, or no valid split + continuity chain can be found,
     this returns False and the caller must drop the question (its "first photo shows
     A, last photo shows B" premise cannot be satisfied by any real frame pair).
+
+    scene_frames (the scene's referability_cache entries, keyed by image_name) is an
+    optional extra safeguard on top of find_two_frame_split_v2's purely geometric
+    check: once a candidate split is found, it's also rejected if VLM referability
+    data says the OTHER group is referable (visible + uniquely labeled) in either
+    chosen frame -- see _reasoning_frame_pair_violates_referability.
     """
     split_spec = TWO_FRAME_SPLIT_ID_FIELDS.get(q.get("type"))
     if split_spec is None or color_intrinsics is None or not all_poses:
@@ -304,6 +360,14 @@ def _apply_two_frame_split(
         return False
 
     frame_a_name, frame_b_name, chain = split
+    if _reasoning_frame_pair_violates_referability(
+        frame_a_name=frame_a_name,
+        frame_b_name=frame_b_name,
+        group_a_ids=[int(o["id"]) for o in group_a_objects],
+        group_b_ids=[int(o["id"]) for o in group_b_objects],
+        scene_frames=scene_frames,
+    ):
+        return False
     q["image_name"] = frame_a_name
     q["reasoning_frame_2"] = frame_b_name
     q["auxiliary_image_names"] = chain
@@ -5592,6 +5656,7 @@ def run_pipeline(
                         all_poses=poses,
                         color_intrinsics=color_intrinsics,
                         camera_pose=camera_pose,
+                        scene_frames=scene_frames,
                     ):
                         continue
                     if (

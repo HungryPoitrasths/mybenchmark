@@ -63,7 +63,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         )
         return q
 
-    def _apply_kept(self, q: dict) -> tuple[dict, bool]:
+    def _apply_kept(self, q: dict, *, scene_frames: dict | None = None) -> tuple[dict, bool]:
         q = dict(q)
         kept = run_pipeline_module._apply_two_frame_split(
             q,
@@ -71,6 +71,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
             all_poses=self.all_poses,
             color_intrinsics=self.color_intrinsics,
             camera_pose=self.cam_orig,
+            scene_frames=scene_frames,
         )
         return q, kept
 
@@ -184,6 +185,89 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         self.assertEqual(result["image_name"], "orig.jpg")
         self.assertNotIn("reasoning_frame_2", result)
         self.assertNotIn("object_frame_groups", result)
+
+    def test_scene_frames_with_no_entry_for_either_frame_does_not_reject(self):
+        # scene_frames is present but has no data for orig.jpg/far.jpg (referability
+        # was only run on some other frame) -- the referability check must no-op and
+        # the geometrically-valid split still stands.
+        q = {
+            "type": "object_move_agent",
+            "image_name": "orig.jpg",
+            "moved_obj_id": 1,
+            "query_obj_id": 1,
+            "obj_c_id": 3,
+        }
+        result, kept = self._apply_kept(
+            q, scene_frames={"some_other.jpg": {"referable_object_ids": [1]}}
+        )
+        self.assertTrue(kept)
+        self.assertEqual(result["reasoning_frame_2"], "far.jpg")
+
+    def test_referability_cache_rejects_split_where_frame_b_also_refers_group_a(self):
+        # Geometrically far.jpg is a valid frame_b (obj1 isn't visible there at all),
+        # but VLM referability data says obj1 IS referable in far.jpg anyway (e.g. a
+        # duplicate/lookalike was judged unique there) -- the question's "first photo
+        # shows obj1" premise would still be contradicted, so this must be rejected
+        # even though the geometric check alone would have accepted it.
+        q = {
+            "type": "object_move_agent",
+            "image_name": "orig.jpg",
+            "moved_obj_id": 1,
+            "query_obj_id": 1,
+            "obj_c_id": 3,
+        }
+        result, kept = self._apply_kept(
+            q,
+            scene_frames={
+                "far.jpg": {"referable_object_ids": [1], "attachment_referable_object_ids": []},
+            },
+        )
+        self.assertFalse(kept)
+        self.assertNotIn("reasoning_frame_2", result)
+
+    def test_referability_rejection_uses_attachment_referable_ids_for_attachment_types(self):
+        # attachment_move is a pure attachment type; obj1/obj2 are only in the relaxed
+        # attachment_referable_object_ids set here (referable_object_ids is empty) --
+        # the rejection check must still catch it via that set.
+        q = {
+            "type": "attachment_move",
+            "image_name": "orig.jpg",
+            "root_id": 1,
+            "query_obj_id": 2,
+            "obj_ref_id": 3,
+        }
+        result, kept = self._apply_kept(
+            q,
+            scene_frames={
+                "far.jpg": {"referable_object_ids": [], "attachment_referable_object_ids": [1, 2]},
+            },
+        )
+        self.assertFalse(kept)
+        self.assertNotIn("reasoning_frame_2", result)
+
+    def test_referability_rejection_unions_both_id_sets_regardless_of_question_type(self):
+        # object_move_agent is NOT an attachment type, but the rejection check must
+        # still catch obj1 via attachment_referable_object_ids (not just
+        # referable_object_ids) -- an object can pass the looser attachment threshold
+        # without being in the plain set (or vice versa, e.g. failing the human
+        # review filter attachment_referable_object_ids applies), and either signal
+        # is enough to prove it's identifiable in that frame, regardless of which
+        # question type is asking.
+        q = {
+            "type": "object_move_agent",
+            "image_name": "orig.jpg",
+            "moved_obj_id": 1,
+            "query_obj_id": 1,
+            "obj_c_id": 3,
+        }
+        result, kept = self._apply_kept(
+            q,
+            scene_frames={
+                "far.jpg": {"referable_object_ids": [], "attachment_referable_object_ids": [1]},
+            },
+        )
+        self.assertFalse(kept)
+        self.assertNotIn("reasoning_frame_2", result)
 
 
 if __name__ == "__main__":
