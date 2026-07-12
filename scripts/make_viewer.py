@@ -1355,6 +1355,13 @@ def _collect_aux_image_names(question: dict) -> list[str]:
         single = str(question.get("aux_image_name") or question.get("image_name_2") or "").strip()
         if single:
             names.append(single)
+    # Two-frame-split questions (_apply_two_frame_split in run_pipeline.py) store the
+    # bridge chain in auxiliary_image_names but the destination frame separately in
+    # reasoning_frame_2 -- it must be appended last so the "last photo" the question
+    # text refers to actually gets rendered.
+    reasoning_frame_2 = str(question.get("reasoning_frame_2") or "").strip()
+    if reasoning_frame_2 and reasoning_frame_2 not in names:
+        names.append(reasoning_frame_2)
     return names
 
 

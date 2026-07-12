@@ -76,6 +76,8 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     Image = None
 
+from scripts.make_viewer import _collect_aux_image_names
+
 
 SYSTEM_PROMPT = (
     "You are a careful vision-language assistant solving multiple-choice "
@@ -558,6 +560,33 @@ def resolve_image(
     return ImageResolution(None, tuple(checked))
 
 
+def resolve_question_images(
+    question: dict[str, Any],
+    *,
+    scannet_roots: list[Path],
+    scannetpp_roots: list[Path],
+    scannetpp_sensor: str,
+) -> list[ImageResolution]:
+    """Resolve every frame a question needs, in the order its text describes
+    them: the primary image_name, then any reasoning_frame_2 /
+    auxiliary_image_names frames from a two-frame-split question
+    (_apply_two_frame_split in run_pipeline.py; see _collect_aux_image_names)."""
+    names = [str(question.get("image_name") or "")]
+    names.extend(_collect_aux_image_names(question))
+    resolutions = []
+    for i, name in enumerate(names):
+        sub_question = question if i == 0 else {**question, "image_name": name, "image_path": None}
+        resolutions.append(
+            resolve_image(
+                sub_question,
+                scannet_roots=scannet_roots,
+                scannetpp_roots=scannetpp_roots,
+                scannetpp_sensor=scannetpp_sensor,
+            )
+        )
+    return resolutions
+
+
 def _resolve_scannet_geometry_root(image_roots: list[str]) -> str:
     for root_text in image_roots:
         root = Path(root_text)
@@ -887,7 +916,7 @@ def call_model(
     *,
     api_provider: str,
     model: str,
-    image_path: Path,
+    image_paths: list[Path],
     prompt: str,
     max_tokens: int,
     temperature: float,
@@ -895,13 +924,14 @@ def call_model(
     blind: bool = False,
 ) -> str:
     omit_temperature = _should_omit_temperature(model)
+    encoded: list[tuple[str, str]] = []
     if not blind:
-        b64, mime = _encode_image(image_path, api_image_max_px)
-        data_url = f"data:{mime};base64,{b64}"
+        encoded = [_encode_image(path, api_image_max_px) for path in image_paths]
     if api_provider == "openai_responses":
-        user_content: list[Any] = (
-            [] if blind else [{"type": "input_image", "image_url": data_url}]
-        ) + [{"type": "input_text", "text": prompt}]
+        user_content: list[Any] = [
+            {"type": "input_image", "image_url": f"data:{mime};base64,{b64}"}
+            for b64, mime in encoded
+        ] + [{"type": "input_text", "text": prompt}]
         response_kwargs: dict[str, Any] = {
             "model": model,
             "input": [
@@ -934,12 +964,10 @@ def call_model(
         )
 
     if api_provider == "anthropic":
-        anthropic_user_content: list[Any] = []
-        if not blind:
-            anthropic_user_content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": mime, "data": b64},
-            })
+        anthropic_user_content: list[Any] = [
+            {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
+            for b64, mime in encoded
+        ]
         anthropic_user_content.append({"type": "text", "text": prompt})
         message_kwargs: dict[str, Any] = {
             "model": model,
@@ -967,14 +995,10 @@ def call_model(
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": (
-                    [{"type": "text", "text": prompt}]
-                    if blind else
-                    [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ]
-                ),
+                "content": [{"type": "text", "text": prompt}] + [
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                    for b64, mime in encoded
+                ],
             },
         ],
     }
@@ -1038,10 +1062,12 @@ def save_results(
 def result_from_question(
     question: dict[str, Any],
     *,
-    image_resolution: ImageResolution,
+    image_resolutions: list[ImageResolution],
     raw_response: str | None,
     error: str | None,
 ) -> dict[str, Any]:
+    primary_resolution = image_resolutions[0]
+    aux_resolutions = image_resolutions[1:]
     letters = allowed_letters(question)
     multi_select = is_multi_select_question(question)
     gt_answers = normalize_answer_letters(
@@ -1063,8 +1089,12 @@ def result_from_question(
         "source_benchmark": question.get("_source_benchmark"),
         "scene_id": question.get("scene_id"),
         "image_name": question.get("image_name"),
-        "image_path": str(image_resolution.path) if image_resolution.path else None,
-        "checked_image_paths": list(image_resolution.checked_paths),
+        "image_path": str(primary_resolution.path) if primary_resolution.path else None,
+        "aux_image_names": _collect_aux_image_names(question),
+        "aux_image_paths": [str(r.path) if r.path else None for r in aux_resolutions],
+        "checked_image_paths": [
+            p for r in image_resolutions for p in r.checked_paths
+        ],
         "level": question.get("level"),
         "type": question.get("type"),
         "question": question.get("question"),
@@ -1158,18 +1188,17 @@ def _option_html(row: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
-def _image_html(row: dict[str, Any], html_image_max_px: int) -> str:
-    image_path_text = row.get("image_path")
-    if not image_path_text:
-        checked = row.get("checked_image_paths") or []
-        first_checked = checked[0] if checked else ""
+def _single_image_html(
+    path_text: str | None, html_image_max_px: int, *, missing_hint: str
+) -> str:
+    if not path_text:
         return (
             '<div class="missing-image">'
             "image not found"
-            f"<small>{html.escape(str(first_checked))}</small>"
+            f"<small>{html.escape(str(missing_hint))}</small>"
             "</div>"
         )
-    path = Path(str(image_path_text))
+    path = Path(str(path_text))
     if not path.exists():
         return (
             '<div class="missing-image">'
@@ -1179,6 +1208,26 @@ def _image_html(row: dict[str, Any], html_image_max_px: int) -> str:
         )
     b64, mime = _encode_image(path, html_image_max_px)
     return f'<img src="data:{mime};base64,{b64}" alt="">'
+
+
+def _image_html(row: dict[str, Any], html_image_max_px: int) -> str:
+    checked = row.get("checked_image_paths") or []
+    primary_html = _single_image_html(
+        row.get("image_path"), html_image_max_px, missing_hint=checked[0] if checked else ""
+    )
+    aux_paths = row.get("aux_image_paths") or []
+    if not aux_paths:
+        return primary_html
+
+    total = len(aux_paths)
+    blocks = [f'<div class="img-label">original</div>{primary_html}']
+    for i, aux_path_text in enumerate(aux_paths, start=1):
+        label = "auxiliary" if total == 1 else f"auxiliary {i}/{total}"
+        aux_html = _single_image_html(
+            aux_path_text, html_image_max_px, missing_hint=f"{label} not found"
+        )
+        blocks.append(f'<div class="img-label">{html.escape(label)}</div>{aux_html}')
+    return '<div class="multi-img">' + "".join(blocks) + '</div>'
 
 
 def build_html(results: list[dict[str, Any]], *, title: str, html_image_max_px: int) -> str:
@@ -1342,6 +1391,17 @@ main {{
   display: block;
   margin-top: 8px;
   overflow-wrap: anywhere;
+}}
+.multi-img {{
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}}
+.multi-img .img-label {{
+  font-size: 0.75em;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }}
 .meta {{
   display: flex;
@@ -1642,14 +1702,16 @@ def run_api_question(
     idx: int,
     total: int,
     question: dict[str, Any],
-    resolution: ImageResolution,
+    resolutions: list[ImageResolution],
 ) -> dict[str, Any]:
     raw_response: str | None = None
     error: str | None = None
     prompt = build_prompt(question, direct=getattr(args, "direct", False), oracle=getattr(args, "oracle", False))
+    aux_names = _collect_aux_image_names(question)
+    frame_note = f" (+{len(aux_names)} more frame(s))" if aux_names else ""
     print(
         f"[{idx}/{total}] {question.get('type')} "
-        f"{question.get('scene_id')}/{question.get('image_name')} -> API",
+        f"{question.get('scene_id')}/{question.get('image_name')}{frame_note} -> API",
         flush=True,
     )
     for attempt in range(args.retries + 1):
@@ -1658,7 +1720,7 @@ def run_api_question(
                 client_factory.get_client(),
                 api_provider=args.api_provider,
                 model=args.model,
-                image_path=resolution.path,
+                image_paths=[r.path for r in resolutions],
                 prompt=prompt,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
@@ -1686,7 +1748,7 @@ def run_api_question(
 
     return result_from_question(
         question,
-        image_resolution=resolution,
+        image_resolutions=resolutions,
         raw_response=raw_response,
         error=error,
     )
@@ -1778,7 +1840,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     )
 
     api_call_count = 0
-    api_work: list[tuple[int, dict[str, Any], ImageResolution]] = []
+    api_work: list[tuple[int, dict[str, Any], list[ImageResolution]]] = []
     for idx, question in enumerate(selected, 1):
         uid = str(question["question_uid"])
         qtype = str(question.get("type") or "")
@@ -1796,9 +1858,9 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             continue
 
         if getattr(args, "blind", False):
-            resolution = ImageResolution(None, ())
+            resolutions = [ImageResolution(None, ())]
         else:
-            resolution = resolve_image(
+            resolutions = resolve_question_images(
                 question,
                 scannet_roots=[Path(p) for p in args.scannet_image_root],
                 scannetpp_roots=[Path(p) for p in args.scannetpp_image_root],
@@ -1807,17 +1869,20 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
 
         raw_response: str | None = None
         error: str | None = None
-        if not getattr(args, "blind", False) and resolution.path is None:
+        # Fail closed: a two-frame-split question's text promises a photo series
+        # ("the last photo shows Y") -- if any required frame (primary or aux) is
+        # missing, don't silently send fewer frames than promised.
+        if not getattr(args, "blind", False) and any(r.path is None for r in resolutions):
             error = "image_not_found"
         elif args.skip_api:
             error = "api_skipped"
         else:
-            api_work.append((idx, question, resolution))
+            api_work.append((idx, question, resolutions))
             continue
 
         results_by_uid[uid] = result_from_question(
             question,
-            image_resolution=resolution,
+            image_resolutions=resolutions,
             raw_response=raw_response,
             error=error,
         )
@@ -1857,7 +1922,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
                 print(f"checkpoint: {len(ordered_rows)}/{len(selected)} results saved")
 
         if workers == 1:
-            for idx, question, resolution in api_work:
+            for idx, question, resolutions in api_work:
                 _store_result(
                     run_api_question(
                         args=args,
@@ -1865,7 +1930,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
                         idx=idx,
                         total=len(selected),
                         question=question,
-                        resolution=resolution,
+                        resolutions=resolutions,
                     )
                 )
         else:
@@ -1878,9 +1943,9 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
                         idx=idx,
                         total=len(selected),
                         question=question,
-                        resolution=resolution,
+                        resolutions=resolutions,
                     )
-                    for idx, question, resolution in api_work
+                    for idx, question, resolutions in api_work
                 ]
                 for future in as_completed(futures):
                     _store_result(future.result())

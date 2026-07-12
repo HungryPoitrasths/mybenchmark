@@ -15,6 +15,7 @@ from scripts.run_sampled_type_vlm_eval import (
     call_model,
     load_questions,
     parse_answers,
+    resolve_question_images,
     result_from_question,
 )
 
@@ -37,7 +38,7 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
             FakeClient(),
             api_provider="openai_chat",
             model="claude-sonnet-4-6",
-            image_path=Path("unused.jpg"),
+            image_paths=[Path("unused.jpg")],
             prompt="Question?",
             max_tokens=16,
             temperature=0.0,
@@ -60,7 +61,7 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
                 FakeClient(),
                 api_provider="openai_chat",
                 model="claude-sonnet-4-6",
-                image_path=Path("unused.jpg"),
+                image_paths=[Path("unused.jpg")],
                 prompt="Question?",
                 max_tokens=16,
                 temperature=0.0,
@@ -149,7 +150,7 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
 
         row = result_from_question(
             question,
-            image_resolution=ImageResolution(path=None, checked_paths=()),
+            image_resolutions=[ImageResolution(path=None, checked_paths=())],
             raw_response="Answer: C,A\nReasoning: both move.",
             error=None,
         )
@@ -173,7 +174,7 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
 
         row = result_from_question(
             question,
-            image_resolution=ImageResolution(path=None, checked_paths=()),
+            image_resolutions=[ImageResolution(path=None, checked_paths=())],
             raw_response="Answer: A\nReasoning: only one.",
             error=None,
         )
@@ -224,6 +225,112 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
             questions, _metadata = load_questions([root])
 
         self.assertEqual(questions[0]["_dataset"], "scannetpp")
+
+    def test_resolve_question_images_returns_single_resolution_for_ordinary_question(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scene0000_00" / "color").mkdir(parents=True)
+            (root / "scene0000_00" / "color" / "000.jpg").write_bytes(b"fake")
+
+            resolutions = resolve_question_images(
+                {"scene_id": "scene0000_00", "image_name": "000.jpg"},
+                scannet_roots=[root],
+                scannetpp_roots=[],
+                scannetpp_sensor="iphone",
+            )
+
+        self.assertEqual(len(resolutions), 1)
+        self.assertEqual(resolutions[0].path.name, "000.jpg")
+
+    def test_resolve_question_images_appends_reasoning_frame_2(self) -> None:
+        # Two-frame-split questions (_apply_two_frame_split in run_pipeline.py)
+        # store the destination frame in reasoning_frame_2 -- the model must
+        # actually receive it, not just the primary image_name.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "scene0000_00" / "color").mkdir(parents=True)
+            (root / "scene0000_00" / "color" / "frame_a.jpg").write_bytes(b"fake")
+            (root / "scene0000_00" / "color" / "frame_b.jpg").write_bytes(b"fake")
+
+            resolutions = resolve_question_images(
+                {
+                    "scene_id": "scene0000_00",
+                    "image_name": "frame_a.jpg",
+                    "reasoning_frame_2": "frame_b.jpg",
+                    "auxiliary_image_names": [],
+                },
+                scannet_roots=[root],
+                scannetpp_roots=[],
+                scannetpp_sensor="iphone",
+            )
+
+        self.assertEqual(len(resolutions), 2)
+        self.assertEqual(resolutions[0].path.name, "frame_a.jpg")
+        self.assertEqual(resolutions[1].path.name, "frame_b.jpg")
+
+    def test_call_model_openai_chat_sends_one_image_block_per_path(self) -> None:
+        captured_kwargs = {}
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return iter([{"choices": [{"delta": {"content": "Answer: A"}}]}])
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with TemporaryDirectory() as tmp:
+            path_a = Path(tmp) / "a.jpg"
+            path_b = Path(tmp) / "b.jpg"
+            path_a.write_bytes(b"fake-a")
+            path_b.write_bytes(b"fake-b")
+
+            call_model(
+                FakeClient(),
+                api_provider="openai_chat",
+                model="claude-sonnet-4-6",
+                image_paths=[path_a, path_b],
+                prompt="Question?",
+                max_tokens=16,
+                temperature=0.0,
+                api_image_max_px=0,
+            )
+
+        user_content = captured_kwargs["messages"][1]["content"]
+        image_blocks = [b for b in user_content if b["type"] == "image_url"]
+        self.assertEqual(len(image_blocks), 2)
+
+    def test_result_from_question_populates_aux_image_fields(self) -> None:
+        question = {
+            "question_uid": "q1",
+            "type": "object_move_agent",
+            "question": "Where is the microwave?",
+            "options": ["a", "b"],
+            "answer": "A",
+            "correct_value": "a",
+            "image_name": "frame_a.jpg",
+            "reasoning_frame_2": "frame_b.jpg",
+            "auxiliary_image_names": [],
+        }
+
+        row = result_from_question(
+            question,
+            image_resolutions=[
+                ImageResolution(path=Path("/tmp/frame_a.jpg"), checked_paths=("/tmp/frame_a.jpg",)),
+                ImageResolution(path=Path("/tmp/frame_b.jpg"), checked_paths=("/tmp/frame_b.jpg",)),
+            ],
+            raw_response="Answer: A",
+            error=None,
+        )
+
+        self.assertEqual(row["image_path"], str(Path("/tmp/frame_a.jpg")))
+        self.assertEqual(row["aux_image_names"], ["frame_b.jpg"])
+        self.assertEqual(row["aux_image_paths"], [str(Path("/tmp/frame_b.jpg"))])
+        self.assertEqual(
+            row["checked_image_paths"], ["/tmp/frame_a.jpg", "/tmp/frame_b.jpg"]
+        )
 
 
 if __name__ == "__main__":

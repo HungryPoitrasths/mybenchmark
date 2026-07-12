@@ -5,6 +5,7 @@ import unittest
 from unittest import mock
 
 from scripts.make_viewer import (
+    _collect_aux_image_names,
     build_simple_viewer_html,
     build_viewer_html,
     build_task_summary_v2,
@@ -896,6 +897,42 @@ class MakeViewerTests(unittest.TestCase):
         assert_simple_field(self, html_text, "moved", "cart")
         assert_simple_field(self, html_text, "query", "box")
         assert_simple_field(self, html_text, "reference", "wall")
+
+
+class CollectAuxImageNamesTest(unittest.TestCase):
+    def test_appends_reasoning_frame_2_when_chain_is_empty(self) -> None:
+        # _apply_two_frame_split (run_pipeline.py) sets an empty auxiliary_image_names
+        # chain when frame_a and frame_b are already route-continuous, but the
+        # destination frame still lives in reasoning_frame_2 and must be rendered.
+        question = {
+            "image_name": "frame_000400.jpg",
+            "reasoning_frame_2": "frame_000390.jpg",
+            "auxiliary_image_names": [],
+        }
+        self.assertEqual(_collect_aux_image_names(question), ["frame_000390.jpg"])
+
+    def test_appends_reasoning_frame_2_after_non_empty_chain(self) -> None:
+        question = {
+            "image_name": "frame_a.jpg",
+            "reasoning_frame_2": "frame_c.jpg",
+            "auxiliary_image_names": ["frame_b.jpg"],
+        }
+        self.assertEqual(_collect_aux_image_names(question), ["frame_b.jpg", "frame_c.jpg"])
+
+    def test_does_not_duplicate_reasoning_frame_2_already_in_chain(self) -> None:
+        question = {
+            "image_name": "frame_a.jpg",
+            "reasoning_frame_2": "frame_b.jpg",
+            "auxiliary_image_names": ["frame_b.jpg"],
+        }
+        self.assertEqual(_collect_aux_image_names(question), ["frame_b.jpg"])
+
+    def test_no_reasoning_frame_2_leaves_occlusion_style_aux_list_untouched(self) -> None:
+        question = {
+            "image_name": "frame_a.jpg",
+            "auxiliary_image_names": ["frame_b.jpg", "frame_c.jpg"],
+        }
+        self.assertEqual(_collect_aux_image_names(question), ["frame_b.jpg", "frame_c.jpg"])
 
 
 if __name__ == "__main__":
