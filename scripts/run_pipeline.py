@@ -61,6 +61,7 @@ from src.qa_generator import (
     find_two_frame_split_v2,
     generate_all_questions,
     recompute_coordinate_rotation_agent_answer,
+    MAX_OCCLUSION_OBJECTS_AUTO,
 )
 from src.relation_engine import camera_cardinal_direction
 from src.referability_checks import (
@@ -133,8 +134,9 @@ _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = False
 # attachment_chain and object_remove are deliberately absent and always stay single-
 # frame: attachment_chain's support-chain answer needs the pair co-visible in one
 # frame, and object_remove was decided to stay single-frame rather than attempt a
-# split (unlike every other type here, which tries a split and falls back to the
-# single shared image_name if none is found).
+# split. Every other type here REQUIRES a valid mutually-exclusive split -- if
+# find_two_frame_split_v2 can't find one, the question is dropped entirely rather
+# than falling back to the single shared image_name (see _apply_two_frame_split).
 TWO_FRAME_SPLIT_ID_FIELDS: dict[str, dict[str, list[str]]] = {
     "object_move_occlusion": {
         "group_a": ["moved_obj_id"],
@@ -261,16 +263,22 @@ def _apply_two_frame_split(
     all_poses: dict[str, Any] | None,
     color_intrinsics: Any,
     camera_pose: Any,
-) -> None:
+) -> bool:
     """Split a question's referenced objects across two real frames, in place.
 
-    No-op (keeps the single shared image_name) if the type isn't in
-    TWO_FRAME_SPLIT_ID_FIELDS, if either group resolves empty, or if no valid
-    frame split + continuity chain can be found.
+    Returns True if the question should be kept, False if it must be dropped.
+
+    Always returns True (no-op, keeps the single shared image_name) if the type isn't
+    in TWO_FRAME_SPLIT_ID_FIELDS or required pose/intrinsics infra is missing -- those
+    types/cases were never meant to split. For every type that IS in
+    TWO_FRAME_SPLIT_ID_FIELDS, a valid mutually-exclusive frame split is required: if
+    either group resolves empty, or no valid split + continuity chain can be found,
+    this returns False and the caller must drop the question (its "first photo shows
+    A, last photo shows B" premise cannot be satisfied by any real frame pair).
     """
     split_spec = TWO_FRAME_SPLIT_ID_FIELDS.get(q.get("type"))
     if split_spec is None or color_intrinsics is None or not all_poses:
-        return
+        return True
 
     group_a_objects = _resolve_objects_for_ids(
         [q.get(field) for field in split_spec["group_a"]], objects_by_id
@@ -279,7 +287,7 @@ def _apply_two_frame_split(
         [q.get(field) for field in split_spec["group_b"]], objects_by_id
     )
     if not group_a_objects or not group_b_objects:
-        return
+        return False
     bonus_objects = _resolve_objects_for_ids(
         [q.get(field) for field in split_spec.get("bonus", [])], objects_by_id
     )
@@ -293,7 +301,7 @@ def _apply_two_frame_split(
         bonus_objects=bonus_objects,
     )
     if split is None:
-        return
+        return False
 
     frame_a_name, frame_b_name, chain = split
     q["image_name"] = frame_a_name
@@ -311,6 +319,7 @@ def _apply_two_frame_split(
     if isinstance(q.get("question"), str):
         note = build_multi_frame_split_note(group_a_objects, group_b_objects)
         q["question"] = f"{note} {q['question']}"
+    return True
 
 
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
@@ -4697,7 +4706,7 @@ def run_pipeline(
     frame_type_cap: int = 2,
     frame_type_object_cap: int = 1,
     max_questions_per_scene_type: int | None = None,
-    max_occlusion_objects: int | None = 20,
+    max_occlusion_objects: int | str | None = MAX_OCCLUSION_OBJECTS_AUTO,
     max_move_sources: int | None = None,
 ):
     """Execute the full PSR-Bench data generation pipeline."""
@@ -4723,7 +4732,7 @@ def run_pipeline(
         raise ValueError("frame_type_cap must be >= 0")
     if frame_type_object_cap < 0:
         raise ValueError("frame_type_object_cap must be >= 0")
-    if max_occlusion_objects is not None:
+    if max_occlusion_objects is not None and max_occlusion_objects != MAX_OCCLUSION_OBJECTS_AUTO:
         max_occlusion_objects = int(max_occlusion_objects)
         if max_occlusion_objects < 0:
             raise ValueError("max_occlusion_objects must be >= 0 or None")
@@ -5538,16 +5547,18 @@ def run_pipeline(
                         raise
                 frame_raw_generated_count = len(questions)
 
+                kept_after_split = []
                 for q in questions:
                     q["scene_id"] = scene_id
                     q["image_name"] = image_name
-                    _apply_two_frame_split(
+                    if not _apply_two_frame_split(
                         q,
                         objects_by_id=objects_by_id,
                         all_poses=poses,
                         color_intrinsics=color_intrinsics,
                         camera_pose=camera_pose,
-                    )
+                    ):
+                        continue
                     if (
                         q.get("type") in _COORDINATE_ROTATION_CAMERA_ANCHORED_TYPES
                         and q.get("image_name") != image_name
@@ -5556,6 +5567,8 @@ def run_pipeline(
                         _recompute_coordinate_rotation_gt_for_new_anchor(
                             q, objects_by_id=objects_by_id, all_poses=poses,
                         )
+                    kept_after_split.append(q)
+                questions = kept_after_split
 
                 with _timed_frame_phase(frame_ctx, "referability_post_filter"):
                     kept_questions, audited_questions = _apply_question_referability_filter(
@@ -6192,8 +6205,13 @@ def main():
     parser.add_argument(
         "--max_occlusion_objects",
         type=int,
-        default=20,
-        help="Maximum number of movement objects per frame that run expensive L2 object-move occlusion mesh-ray visibility checks. Use 0 to disable the cap.",
+        default=None,
+        help=(
+            "Maximum number of movement objects per frame that run expensive L2 "
+            "object-move occlusion mesh-ray visibility checks. Defaults to an "
+            "adaptive per-scene cap when not specified; use 0 to disable the cap "
+            "entirely, or a positive integer for a fixed hard cap."
+        ),
     )
     parser.add_argument(
         "--max_move_sources",
@@ -6214,7 +6232,7 @@ def main():
         parser.error("--frame_type_cap must be >= 0")
     if int(args.frame_type_object_cap) < 0:
         parser.error("--frame_type_object_cap must be >= 0")
-    if int(args.max_occlusion_objects) < 0:
+    if args.max_occlusion_objects is not None and int(args.max_occlusion_objects) < 0:
         parser.error("--max_occlusion_objects must be >= 0")
     if args.skip_question_vlm_check:
         args.question_presence_review = False
@@ -6260,7 +6278,11 @@ def main():
         frame_type_cap=args.frame_type_cap,
         frame_type_object_cap=args.frame_type_object_cap,
         max_questions_per_scene_type=args.max_questions_per_scene_type,
-        max_occlusion_objects=(None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects)),
+        max_occlusion_objects=(
+            MAX_OCCLUSION_OBJECTS_AUTO
+            if args.max_occlusion_objects is None
+            else (None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects))
+        ),
         max_move_sources=(None if int(args.max_move_sources) == 0 else int(args.max_move_sources)),
     )
 

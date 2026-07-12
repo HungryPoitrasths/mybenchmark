@@ -7,9 +7,11 @@ import numpy as np
 
 from src.qa_generator import (
     DISTANCE_MOVE_DIRECTIONS,
+    MAX_OCCLUSION_OBJECTS_AUTO,
     MOVEMENT_CANDIDATES,
     _aabb_extent_along_direction,
     _adaptive_occlusion_directed_step,
+    _adaptive_scene_scaled_cap,
     _bbox_has_min_in_frame_corners,
     _bbox_fully_in_frame,
     _counterfactual_occlusion_backend,
@@ -1298,6 +1300,23 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
     def test_match_world_xy_direction_bin_rejects_zero_vector(self) -> None:
         self.assertIsNone(_match_world_xy_direction_bin(np.zeros(3)))
 
+    def test_adaptive_scene_scaled_cap_scales_linearly_and_clamps(self) -> None:
+        # Below min_cap: clamps up to min_cap.
+        self.assertEqual(
+            _adaptive_scene_scaled_cap(5, fraction=1.0, min_cap=20, max_cap=100), 20
+        )
+        # Within range: scales linearly (rounded).
+        self.assertEqual(
+            _adaptive_scene_scaled_cap(40, fraction=1.0, min_cap=20, max_cap=100), 40
+        )
+        self.assertEqual(
+            _adaptive_scene_scaled_cap(41, fraction=0.5, min_cap=20, max_cap=100), 20
+        )
+        # Above max_cap: clamps down to max_cap.
+        self.assertEqual(
+            _adaptive_scene_scaled_cap(500, fraction=1.0, min_cap=20, max_cap=100), 100
+        )
+
     def test_select_occlusion_directed_occluder_candidates_filters_and_sorts(self) -> None:
         query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
         near_big = make_object(2, "shelf", (0.5, 0.0, 2.0))
@@ -1376,6 +1395,30 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
         )
 
         self.assertEqual([int(obj["id"]) for obj in candidates], [2])
+
+    def test_select_occlusion_directed_occluder_candidates_default_cap_scales_with_pool_size(self) -> None:
+        # With max_candidates left unset, a pool bigger than the old fixed
+        # cap of 20 should no longer be truncated to 20 -- the adaptive
+        # default should scale with the pool size instead.
+        query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        occluders = [
+            make_object(idx, f"obj{idx}", (float(idx) * 0.1, 0.0, 2.0))
+            for idx in range(2, 32)  # 30 candidates, all within range
+        ]
+        original_visibility = {
+            int(obj["id"]): (None, "mesh_ray", "", make_l1_metrics("occluded"))
+            for obj in occluders
+        }
+
+        candidates = _select_occlusion_directed_occluder_candidates(
+            query_obj=query_obj,
+            moved_ids=set(),
+            occlusion_source_objects=occluders,
+            original_visibility=original_visibility,
+        )
+
+        self.assertEqual(len(candidates), 30)
+        self.assertGreater(len(candidates), 20)
 
     def test_occluder_blocks_translated_query_object_true_when_occluder_is_closer(self) -> None:
         query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
@@ -1987,6 +2030,117 @@ class OcclusionDirectedIntegrationTests(unittest.TestCase):
         occlusion_questions = [q for q in questions if q.get("type") == "object_move_occlusion"]
         self.assertEqual(len(occlusion_questions), 1)
         self.assertEqual(directed_mock.call_count, 1)
+
+    def test_generate_l2_object_move_occlusion_directed_budget_scales_with_scene_size(self) -> None:
+        # A scene with more movement objects than the old fixed budget of 20
+        # should get a correspondingly larger occluder-directed search
+        # budget (max_candidates_tried) instead of being capped at 20.
+        sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
+        cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
+        filler = [
+            make_object(idx, f"filler{idx}", (10.0 + idx, 10.0, 2.0))
+            for idx in range(3, 26)
+        ]
+        objects = [sofa, cushion] + filler  # 25 movement objects total
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=None),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                return_value=(make_l1_metrics("not occluded"), "mesh_ray"),
+            ),
+            patch("src.qa_generator._bbox_fully_in_frame", return_value=True),
+            patch("src.qa_generator._bbox_in_frame_corner_count", return_value=(8, 8)),
+            patch("src.qa_generator._iter_additional_object_move_states", return_value=[]),
+            patch(
+                "src.qa_generator._iter_occlusion_directed_object_move_states",
+                return_value=[],
+            ) as directed_mock,
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ),
+        ):
+            generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                enabled_l2_object_move_types={"object_move_occlusion"},
+            )
+
+        self.assertTrue(directed_mock.called)
+        _, kwargs = directed_mock.call_args
+        self.assertEqual(kwargs["max_candidates_tried"], 25)
+
+    def test_generate_l2_object_move_max_occlusion_objects_auto_scales_source_pool(self) -> None:
+        # With max_occlusion_objects=MAX_OCCLUSION_OBJECTS_AUTO, a scene with
+        # more movement objects than the old fixed default of 20 should get
+        # an adaptively larger (but still capped) occlusion source pool,
+        # instead of always truncating to 20.
+        sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
+        cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
+        filler = [
+            make_object(idx, f"filler{idx}", (10.0 + idx, 10.0, 2.0))
+            for idx in range(3, 73)
+        ]
+        objects = [sofa, cushion] + filler  # 72 movement objects total
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=None),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator._compute_l1_style_visibility_metrics_for_static_target",
+                return_value=(make_l1_metrics("not occluded"), "mesh_ray"),
+            ) as visibility_mock,
+            patch("src.qa_generator._bbox_fully_in_frame", return_value=True),
+            patch("src.qa_generator._bbox_in_frame_corner_count", return_value=(8, 8)),
+            patch("src.qa_generator._iter_additional_object_move_states", return_value=[]),
+            patch(
+                "src.qa_generator._iter_occlusion_directed_object_move_states",
+                return_value=[],
+            ),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ),
+        ):
+            generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "move {obj_a} {direction_with_camera_hint} by {distance}: what is the occlusion status of {obj_b}?"
+                    ]
+                },
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                color_intrinsics=make_camera_intrinsics(),
+                occlusion_backend="mesh_ray",
+                ray_caster=object(),
+                instance_mesh_data=object(),
+                enabled_l2_object_move_types={"object_move_occlusion"},
+                max_occlusion_objects=MAX_OCCLUSION_OBJECTS_AUTO,
+            )
+
+        # 72 movement objects clamp to the AUTO cap's max_cap of 50 (not the
+        # old fixed 20), so exactly 50 objects should have gone through the
+        # per-object visibility precompute.
+        self.assertEqual(visibility_mock.call_count, 50)
 
     def test_generate_l2_object_move_skips_occlusion_directed_search_when_original_status_not_not_occluded(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))

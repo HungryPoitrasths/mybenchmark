@@ -2360,7 +2360,15 @@ def _removed_object_occludes_target_mesh(
 # query object's *hypothetical* translated position would be blocked.
 # ---------------------------------------------------------------------------
 
-_OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES = 20
+# Occluder-candidate pool size for a single query_obj: clamp(round(fraction *
+# len(occlusion_source_objects)), min, max) via _adaptive_scene_scaled_cap, so
+# a bigger multi-frame movement-object pool isn't diluted by one fixed
+# constant. min=20 keeps today's behavior unchanged for scenes with <=20
+# movement objects; max=100 bounds cost (this step is a cheap sort+slice, not
+# a ray-cast, so the ceiling can be generous).
+_OCCLUSION_DIRECTED_OCCLUDER_CANDIDATES_FRACTION = 1.0
+_OCCLUSION_DIRECTED_MIN_OCCLUDER_CANDIDATES = 20
+_OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES = 100
 _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT = 128
 _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO = 0.15
 _OCCLUSION_DIRECTED_HIT_EPSILON_M = 0.05
@@ -2399,7 +2407,15 @@ _OCCLUSION_DIRECTED_MAX_DISTANCE_STEP_M = 1.0
 # "changed" object_move_occlusion questions and total occluder attempts per
 # scene to bound generation cost.
 OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE = 40
-OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE = 20
+# Scene-wide try budget: clamp(round(fraction * len(movement_scene_objects)),
+# min, max) via _adaptive_scene_scaled_cap, so a larger multi-frame candidate
+# pool gets proportionally more attempts instead of being diluted by one
+# fixed constant. min=20 keeps today's behavior for scenes with <=20
+# movement objects unchanged; max=100 bounds cost since each attempt runs a
+# ray-cast scan (the most expensive of the three occlusion-directed caps).
+_OCCLUSION_DIRECTED_CANDIDATES_TRIED_FRACTION = 1.0
+_OCCLUSION_DIRECTED_MIN_CANDIDATES_TRIED_PER_SCENE = 20
+OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE = 100
 
 
 def _aabb_extent_along_direction(obj: dict[str, Any], unit_direction: np.ndarray) -> float:
@@ -2438,13 +2454,32 @@ def _adaptive_occlusion_directed_step(
     return float(np.clip(step, float(min_step_m), float(max_step_m)))
 
 
+def _adaptive_scene_scaled_cap(
+    scene_object_count: int,
+    *,
+    fraction: float,
+    min_cap: int,
+    max_cap: int,
+) -> int:
+    """Integer cap that scales linearly with *scene_object_count*, clamped to
+    ``[min_cap, max_cap]``: ``clamp(round(fraction * scene_object_count), min_cap, max_cap)``.
+
+    Generic counterpart to ``_adaptive_occlusion_directed_step`` above --
+    used by the occlusion-directed-search budgets below so a larger
+    multi-frame movement-object pool gets proportionally more search budget
+    instead of being diluted by one fixed constant.
+    """
+    raw = float(fraction) * float(scene_object_count)
+    return int(np.clip(round(raw), int(min_cap), int(max_cap)))
+
+
 def _select_occlusion_directed_occluder_candidates(
     *,
     query_obj: dict[str, Any],
     moved_ids: set[int],
     occlusion_source_objects: list[dict[str, Any]],
     original_visibility: dict[int, tuple[str | None, str, str, "_L1OcclusionMetrics"]],
-    max_candidates: int = _OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES,
+    max_candidates: int | None = None,
     min_projected_area_px: float = MIN_PROJECTED_AREA_PX,
     max_distance_m: float = _OCCLUSION_DIRECTED_MAX_CANDIDATE_DISTANCE_M,
 ) -> list[dict[str, Any]]:
@@ -2455,7 +2490,18 @@ def _select_occlusion_directed_occluder_candidates(
     anything; this keeps the pre-filter cheap. Candidates farther than
     ``max_distance_m`` are dropped outright -- moving *query_obj* that far is
     outside the search range anyway (see ``_find_occlusion_directed_delta_for_occluder``).
+
+    ``max_candidates=None`` (the default) picks an adaptive cap from
+    ``len(occlusion_source_objects)`` via ``_adaptive_scene_scaled_cap``
+    instead of a fixed constant.
     """
+    if max_candidates is None:
+        max_candidates = _adaptive_scene_scaled_cap(
+            len(occlusion_source_objects),
+            fraction=_OCCLUSION_DIRECTED_OCCLUDER_CANDIDATES_FRACTION,
+            min_cap=_OCCLUSION_DIRECTED_MIN_OCCLUDER_CANDIDATES,
+            max_cap=_OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES,
+        )
     query_center = np.asarray(query_obj["center"], dtype=np.float64)
     candidates: list[tuple[float, dict[str, Any]]] = []
     for obj in occlusion_source_objects:
@@ -5912,9 +5958,13 @@ def find_two_frame_split_v2(
     max_backtrack: int = _ROUTE_MAX_BACKTRACK,
     max_primary_candidates: int = _ROUTE_MAX_PRIMARY_CANDIDATES,
 ) -> tuple[str, str, list[str]] | None:
-    """Find two real frames -- frame_a fully framing group_a, frame_b fully framing
-    group_b -- bridged by a route-continuity chain along the straight line between the
-    two groups' centroids.
+    """Find two real frames -- frame_a fully framing group_a but NOT group_b, frame_b
+    fully framing group_b but NOT group_a -- bridged by a route-continuity chain along
+    the straight line between the two groups' centroids.
+
+    The mutual-exclusivity requirement (each frame shows only its own group) matches the
+    question text's premise ("the first photo shows A, the last photo shows B") -- without
+    it, a cheap/nearby frame_b could still show group_a too, making that premise false.
 
     Both groups are real objects at their real, current positions; no hypothetical
     "moved to" point is involved (unlike find_auxiliary_frames_for_occlusion_question_v2).
@@ -5942,6 +5992,11 @@ def find_two_frame_split_v2(
 
     for frame_a_name in frame_a_candidates:
         frame_a_pose = all_poses[frame_a_name]
+        # Mutual exclusivity: frame_a must show group_a but NOT also fully frame
+        # group_b -- otherwise the question's "first photo shows A, last photo shows
+        # B" premise is false (both groups visible in the same photo).
+        if _group_fully_in_frame(group_b_objects, frame_a_pose, color_intrinsics):
+            continue
 
         candidate_names = [name for name in all_poses if name != frame_a_name]
         runs_by_frame: dict[str, list[tuple[float, float]]] = {}
@@ -5957,6 +6012,9 @@ def find_two_frame_split_v2(
         for name in candidate_names:
             pose = all_poses[name]
             if not _group_fully_in_frame(group_b_objects, pose, color_intrinsics):
+                continue
+            # Symmetric exclusivity check: frame_b must not also fully frame group_a.
+            if _group_fully_in_frame(group_a_objects, pose, color_intrinsics):
                 continue
             runs = runs_by_frame.get(name)
             if not runs:
@@ -6506,6 +6564,17 @@ def _generate_l2_distance_questions_for_object(
     return questions
 
 
+# Sentinel for max_occlusion_objects: "caller didn't explicitly request a
+# hard cap or 'unlimited' -- pick an adaptive cap from movement_scene_objects
+# size instead of the old fixed default." Distinct from `None` (which already
+# means "no cap, explicitly requested unlimited" and must keep that meaning)
+# and from any non-negative int (an explicit hard cap).
+MAX_OCCLUSION_OBJECTS_AUTO = "auto"
+_MAX_OCCLUSION_OBJECTS_AUTO_FRACTION = 1.0
+_MAX_OCCLUSION_OBJECTS_MIN_CAP = 20
+_MAX_OCCLUSION_OBJECTS_MAX_CAP = 50
+
+
 def generate_l2_object_move(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -6526,7 +6595,7 @@ def generate_l2_object_move(
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
     enabled_l2_object_move_types: set[str] | None = None,
-    max_occlusion_objects: int | None = None,
+    max_occlusion_objects: int | str | None = None,
     max_move_sources: int | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
@@ -6568,6 +6637,13 @@ def generate_l2_object_move(
         movement_objects if movement_objects is not None else objects,
         collision_objects if collision_objects is not None else [],
     )
+    if max_occlusion_objects == MAX_OCCLUSION_OBJECTS_AUTO:
+        max_occlusion_objects = _adaptive_scene_scaled_cap(
+            len(movement_scene_objects),
+            fraction=_MAX_OCCLUSION_OBJECTS_AUTO_FRACTION,
+            min_cap=_MAX_OCCLUSION_OBJECTS_MIN_CAP,
+            max_cap=_MAX_OCCLUSION_OBJECTS_MAX_CAP,
+        )
     relation_scene_objects = _merge_scene_objects_by_id(objects, movement_scene_objects)
     obj_map = {int(o["id"]): o for o in relation_scene_objects}
     if object_map is not None:
@@ -6586,6 +6662,7 @@ def generate_l2_object_move(
         _debug_log: dict[str, object] = {
             "scene_id": None,  # filled below
             "objects_count": len(objects),
+            "max_occlusion_objects_resolved": max_occlusion_objects,
             "movement_scene_count": len(movement_scene_objects),
             "relation_scene_count": len(relation_scene_objects),
             "base_relations_count": len(base_relations),
@@ -6631,6 +6708,8 @@ def generate_l2_object_move(
             remaining = max_occlusion_objects - len(occlusion_source_objects)
             if remaining > 0:
                 occlusion_source_objects.extend(no_chain[:remaining])
+        if _debug_log is not None:
+            _debug_log["occlusion_source_count"] = len(occlusion_source_objects)
         occlusion_allowed_ids = {int(o["id"]) for o in occlusion_source_objects}
         compare_backend = _counterfactual_occlusion_backend(
             occlusion_backend,
@@ -6681,6 +6760,12 @@ def generate_l2_object_move(
     # channel just for the counter.
     _occlusion_directed_changed_count = 0
     _occlusion_directed_candidates_tried = [0]
+    _occlusion_directed_max_candidates_tried = _adaptive_scene_scaled_cap(
+        len(movement_scene_objects),
+        fraction=_OCCLUSION_DIRECTED_CANDIDATES_TRIED_FRACTION,
+        min_cap=_OCCLUSION_DIRECTED_MIN_CANDIDATES_TRIED_PER_SCENE,
+        max_cap=OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE,
+    )
 
     logger.info("L2 object_move: precompute done, entering main loop (%d source objects, max_move_sources=%s)",
                 len(movement_scene_objects), max_move_sources)
@@ -7094,7 +7179,7 @@ def generate_l2_object_move(
                     occlusion_state is None
                     and original_visibility.get(query_obj_id, (None,))[0] == "not occluded"
                     and _occlusion_directed_changed_count < OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE
-                    and _occlusion_directed_candidates_tried[0] < OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE
+                    and _occlusion_directed_candidates_tried[0] < _occlusion_directed_max_candidates_tried
                 ):
                     # Phase 1.5: occluder-directed search, aimed at a specific
                     # nearby object's geometry instead of a blind grid walk.
@@ -7119,7 +7204,7 @@ def generate_l2_object_move(
                         room_max=occlusion_directed_room_max,
                         collision_objects=collision_objects,
                         candidates_tried_counter=_occlusion_directed_candidates_tried,
-                        max_candidates_tried=OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE,
+                        max_candidates_tried=_occlusion_directed_max_candidates_tried,
                     ):
                         target_ok, visible_corners, total_corners = _target_in_frame_for_state(candidate_state)
                         if not target_ok:
@@ -7406,6 +7491,8 @@ def generate_l2_object_move(
         _types = _Counter(q['type'] for q in result)
         _debug_log["final_count"] = len(result)
         _debug_log["final_types"] = dict(_types)
+        _debug_log["occlusion_directed_max_candidates_tried_resolved"] = _occlusion_directed_max_candidates_tried
+        _debug_log["occlusion_directed_candidates_tried_actual"] = _occlusion_directed_candidates_tried[0]
         _debug_log["frame"] = str(camera_pose.image_name) if hasattr(camera_pose, 'image_name') else "unknown"
         # scene_id from first object if available
         _scene_id = objects[0].get("scene_id", "") if objects else ""
@@ -10236,7 +10323,7 @@ def generate_all_questions(
     slow_generator_warn_seconds: float = 60.0,
     only_question_types: list[str] | None = None,
     question_type_budgets: dict[str, int] | None = None,
-    max_occlusion_objects: int | None = None,
+    max_occlusion_objects: int | str | None = None,
     max_move_sources: int | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
