@@ -271,6 +271,17 @@ def _write_json_payload(path: Path, payload: object) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
+def _write_json_payload_atomic(path: Path, payload: object) -> None:
+    """Write JSON via temp-file + os.replace so a killed process can't leave
+    a truncated file behind. Used for the frame sidecar cache, which is now
+    written far more often (per-frame) than a plain overwrite would tolerate."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, path)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -715,8 +726,7 @@ def _write_frame_sidecar_scene_cache(
     frame_records: dict[str, dict[str, Any]],
 ) -> None:
     sidecar_path = _frame_cache_sidecar_path(output_path, scene_id)
-    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_json_payload(
+    _write_json_payload_atomic(
         sidecar_path,
         _build_frame_sidecar_scene_doc(
             scene_id=scene_id,
@@ -9498,6 +9508,16 @@ def main():
             if changed:
                 scene_frame_sidecar_cache[image_name] = updated_record
                 sidecar_dirty = True
+                # Flush per-frame instead of waiting for the whole scene to
+                # finish, so a mid-scene crash doesn't lose already-completed
+                # frame reviews (frame-level, not scene-level, resume).
+                _write_frame_sidecar_scene_cache(
+                    output_path=output_path,
+                    scene_id=scene_id,
+                    model_name=model_name,
+                    referability_backend=REFERABILITY_BACKEND,
+                    frame_records=scene_frame_sidecar_cache,
+                )
 
         def _get_scene_visibility_by_obj_id(
             image_name: str,

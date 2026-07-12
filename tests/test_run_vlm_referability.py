@@ -6029,6 +6029,210 @@ class RunVlmReferabilityTests(unittest.TestCase):
             first_cache_doc["frames"]["scene0001_00"],
         )
 
+    def test_main_persists_partial_frame_sidecar_after_mid_scene_crash(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_crash_{uuid.uuid4().hex}"
+        data_root = root / "data"
+        scene_dir = data_root / "scene0001_00"
+        depth_dir = scene_dir / "depth"
+        (scene_dir / "pose").mkdir(parents=True, exist_ok=True)
+        depth_dir.mkdir(parents=True, exist_ok=True)
+        (depth_dir / "000101.png").write_bytes(b"depth")
+        (depth_dir / "000102.png").write_bytes(b"depth")
+        output_path = root / "output" / "referability_cache.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        scene = {
+            "objects": [
+                make_object(1, "table"),
+                make_object(2, "book"),
+                make_object(3, "lamp"),
+            ],
+        }
+
+        def fake_enrich(scene_dict: dict) -> dict:
+            scene_dict["attachment_graph"] = {"1": [2]}
+            scene_dict["attached_by"] = {"2": 1}
+            scene_dict["attachment_edges"] = [{"parent_id": 1, "child_id": 2, "type": "supported_by"}]
+            scene_dict["support_chain_graph"] = {"1": [2]}
+            scene_dict["support_chain_by"] = {"2": 1}
+            return scene_dict
+
+        computed_entry = make_debug_cache_entry()
+        computed_entry["selector_visible_object_ids"] = [3]
+        computed_entry["candidate_visible_object_ids"] = [3]
+
+        clarity_result = {
+            "000101.jpg": {"clear": True, "clarity_score": 84, "frame_usable": True, "reason": "clear"},
+            "000102.jpg": {"clear": True, "clarity_score": 84, "frame_usable": True, "reason": "clear"},
+        }
+
+        def fake_select_and_rerank_frames(**kwargs):
+            frames = [dict(frame) for frame in kwargs["frame_candidates"]]
+            reviewed_by_name = kwargs["frame_review_batch_getter"](frames)
+            accepted = []
+            for frame in frames:
+                image_name = frame["image_name"]
+                reviewed_frame = reviewed_by_name.get(image_name)
+                self.assertIsInstance(reviewed_frame, dict)
+                built_entry = kwargs["referability_entry_builder"](frame, reviewed_frame)
+                self.assertIsInstance(built_entry, dict)
+                accepted.append(
+                    {
+                        "image_name": image_name,
+                        "visible_object_ids": list(frame["visible_object_ids"]),
+                        "selector_score": int(frame["score"]),
+                        "frame_info": dict(reviewed_frame["frame_info"]),
+                        "frame_selection_score": int(reviewed_frame["frame_selection_score"]),
+                    }
+                )
+            debug_output = kwargs["debug_output"]
+            debug_output["reranked_accepted_frame_image_names"] = [f["image_name"] for f in accepted]
+            debug_output["selected_before_attachment_slots_image_names"] = [f["image_name"] for f in accepted]
+            debug_output["selected_before_attachment_slots_count"] = len(accepted)
+            debug_output["accepted_frame_count_after_group_scan"] = len(accepted)
+            debug_output["non_attachment_processed_group_count"] = 1
+            debug_output["groups"] = []
+            return accepted
+
+        def run(*, entry_side_effect) -> None:
+            argv = [
+                "run_vlm_referability.py",
+                "--data_root",
+                str(data_root),
+                "--output",
+                str(output_path),
+                "--max_scenes",
+                "1",
+                "--max_frames",
+                "2",
+                "--no-write_attachment_review",
+                "--no-write_attachment_pair_salvage_review",
+            ]
+            with (
+                patch.dict(sys.modules, {"openai": make_fake_openai_module()}),
+                patch.object(
+                    referability_module,
+                    "_resolve_scannet_scene_dirs",
+                    return_value=[("train", scene_dir)],
+                ),
+                patch("src.scene_parser.parse_scene", return_value=scene),
+                patch("src.support_graph.enrich_scene_with_attachment", side_effect=fake_enrich),
+                patch("src.support_graph.build_attachment_candidates", return_value=[]),
+                patch.object(
+                    referability_module,
+                    "select_frames",
+                    return_value=[
+                        {
+                            "image_name": "000101.jpg",
+                            "visible_object_ids": [3],
+                            "score": 9,
+                            "attachment_viewpoint_exempt": False,
+                        },
+                        {
+                            "image_name": "000102.jpg",
+                            "visible_object_ids": [3],
+                            "score": 8,
+                            "attachment_viewpoint_exempt": False,
+                        },
+                    ],
+                ),
+                patch.object(referability_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
+                patch.object(
+                    referability_module,
+                    "load_scannet_poses",
+                    return_value={
+                        "000101.jpg": make_camera_pose(image_name="000101.jpg"),
+                        "000102.jpg": make_camera_pose(image_name="000102.jpg"),
+                    },
+                ),
+                patch.object(referability_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+                patch.object(referability_module, "load_scannet_depth_intrinsics", return_value=make_camera_intrinsics()),
+                patch.object(
+                    referability_module.cv2,
+                    "imread",
+                    return_value=np.zeros((120, 120, 3), dtype=np.uint8),
+                ),
+                patch.object(
+                    referability_module,
+                    "load_depth_image",
+                    return_value=np.ones((120, 120), dtype=np.uint16),
+                ),
+                patch.object(
+                    referability_module,
+                    "_frame_decision_batch",
+                    side_effect=lambda *args, **kwargs: dict(clarity_result),
+                ),
+                patch.object(
+                    referability_module,
+                    "_compute_frame_referability_entry",
+                    side_effect=entry_side_effect,
+                ),
+                patch.object(
+                    referability_module,
+                    "_enrich_final_scene_entries_out_of_frame",
+                    side_effect=lambda **kwargs: kwargs["final_scene_entries"],
+                ),
+                patch.object(
+                    referability_module,
+                    "_select_and_rerank_frames",
+                    side_effect=fake_select_and_rerank_frames,
+                ),
+                patch.object(sys, "argv", argv),
+            ):
+                referability_module.main()
+
+        def entry_side_effect_crash(**kwargs):
+            image_name = Path(kwargs["image_path"]).name
+            if image_name == "000102.jpg":
+                raise RuntimeError("simulated crash mid-scene, after frame 000101.jpg finished")
+            entry = dict(computed_entry)
+            entry["image_name"] = image_name
+            return entry
+
+        with self.assertRaisesRegex(RuntimeError, "simulated crash mid-scene"):
+            run(entry_side_effect=entry_side_effect_crash)
+
+        # The scene never finished, so the batch cache/scene_status commit
+        # (_commit_scene_result) never ran for it.
+        self.assertEqual(list_batch_cache_paths(output_path), [])
+
+        # But the frame sidecar should already hold what finished before the
+        # crash: 000101.jpg's full referability entry, and clarity info (but
+        # no referability entry yet) for 000102.jpg, since that's exactly
+        # where the simulated crash happened.
+        sidecar_path = referability_module._frame_cache_sidecar_path(output_path, "scene0001_00")
+        self.assertTrue(sidecar_path.exists())
+        sidecar_doc = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        self.assertIsNotNone(sidecar_doc["frames"]["000101.jpg"]["referability_entry"])
+        self.assertIsNone(sidecar_doc["frames"]["000102.jpg"]["referability_entry"])
+
+        call_log: list[str] = []
+
+        def entry_side_effect_resume(**kwargs):
+            image_name = Path(kwargs["image_path"]).name
+            call_log.append(image_name)
+            if image_name == "000101.jpg":
+                raise AssertionError("frame 000101.jpg should be reused from the sidecar, not recomputed")
+            entry = dict(computed_entry)
+            entry["image_name"] = image_name
+            return entry
+
+        run(entry_side_effect=entry_side_effect_resume)
+
+        # Only the frame that hadn't finished before the crash was recomputed.
+        self.assertEqual(call_log, ["000102.jpg"])
+
+        batch_paths = list_batch_cache_paths(output_path)
+        self.assertEqual(len(batch_paths), 1)
+        final_cache_doc = json.loads(batch_paths[0].read_text(encoding="utf-8"))
+        self.assertEqual(
+            sorted(final_cache_doc["frames"]["scene0001_00"].keys()),
+            ["000101.jpg", "000102.jpg"],
+        )
+        scene_status_doc = load_scene_status_doc_for_output(output_path)
+        self.assertIn("scene0001_00", scene_status_doc.get("completed_scenes", {}))
+
     def test_main_writes_review_outputs_once_per_batch(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"review_write_once_{uuid.uuid4().hex}"
         output_path = root / "output" / "referability_cache.json"
