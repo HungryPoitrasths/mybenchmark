@@ -5905,6 +5905,25 @@ def _group_fully_in_frame(
     return True
 
 
+def _group_visible_at_all(
+    objects: list[dict[str, Any]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> bool:
+    """True iff every object in the group has at least some part of its bbox in-frame.
+
+    A much weaker test than _group_fully_in_frame (min_corners=1 instead of 8, no
+    projected-area floor) -- purely geometric, no occlusion is considered. Used to
+    reject a candidate two-frame-split frame for the *other* group: even a sliver of
+    an object appearing contradicts the question's "this photo doesn't show it"
+    premise, so the bar for rejecting must be much lower than the bar for accepting.
+    """
+    for obj in objects:
+        if not _bbox_has_min_in_frame_corners(obj, camera_pose, color_intrinsics, min_corners=1):
+            return False
+    return True
+
+
 def _rank_candidate_anchor_frames(
     objects: list[dict[str, Any]],
     all_poses: dict[str, CameraPose],
@@ -5958,13 +5977,17 @@ def find_two_frame_split_v2(
     max_backtrack: int = _ROUTE_MAX_BACKTRACK,
     max_primary_candidates: int = _ROUTE_MAX_PRIMARY_CANDIDATES,
 ) -> tuple[str, str, list[str]] | None:
-    """Find two real frames -- frame_a fully framing group_a but NOT group_b, frame_b
-    fully framing group_b but NOT group_a -- bridged by a route-continuity chain along
-    the straight line between the two groups' centroids.
+    """Find two real frames -- frame_a fully framing group_a with group_b not visible
+    at all, frame_b fully framing group_b with group_a not visible at all -- bridged by
+    a route-continuity chain along the straight line between the two groups' centroids.
 
     The mutual-exclusivity requirement (each frame shows only its own group) matches the
     question text's premise ("the first photo shows A, the last photo shows B") -- without
     it, a cheap/nearby frame_b could still show group_a too, making that premise false.
+    The bar for rejecting a frame is deliberately much lower than the bar for accepting
+    one: the assigned group must be *fully* in frame, but the other group is rejected on
+    any partial visibility at all (see _group_visible_at_all) -- no occlusion is
+    considered either way, this is purely geometric.
 
     Both groups are real objects at their real, current positions; no hypothetical
     "moved to" point is involved (unlike find_auxiliary_frames_for_occlusion_question_v2).
@@ -5992,10 +6015,12 @@ def find_two_frame_split_v2(
 
     for frame_a_name in frame_a_candidates:
         frame_a_pose = all_poses[frame_a_name]
-        # Mutual exclusivity: frame_a must show group_a but NOT also fully frame
-        # group_b -- otherwise the question's "first photo shows A, last photo shows
-        # B" premise is false (both groups visible in the same photo).
-        if _group_fully_in_frame(group_b_objects, frame_a_pose, color_intrinsics):
+        # Mutual exclusivity: frame_a must show group_a but must not show group_b AT
+        # ALL (even partially) -- otherwise the question's "first photo shows A, last
+        # photo shows B" premise is false. This is deliberately a much weaker bar than
+        # "fully in frame": a sliver of a group_b object peeking into frame_a is
+        # enough to reject it, no occlusion is considered.
+        if _group_visible_at_all(group_b_objects, frame_a_pose, color_intrinsics):
             continue
 
         candidate_names = [name for name in all_poses if name != frame_a_name]
@@ -6013,8 +6038,8 @@ def find_two_frame_split_v2(
             pose = all_poses[name]
             if not _group_fully_in_frame(group_b_objects, pose, color_intrinsics):
                 continue
-            # Symmetric exclusivity check: frame_b must not also fully frame group_a.
-            if _group_fully_in_frame(group_a_objects, pose, color_intrinsics):
+            # Symmetric exclusivity check: frame_b must not show group_a at all.
+            if _group_visible_at_all(group_a_objects, pose, color_intrinsics):
                 continue
             runs = runs_by_frame.get(name)
             if not runs:

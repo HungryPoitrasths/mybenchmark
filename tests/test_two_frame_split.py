@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from src.qa_generator import find_two_frame_split_v2
+from src.qa_generator import (
+    _bbox_fully_in_frame,
+    _bbox_has_min_in_frame_corners,
+    find_two_frame_split_v2,
+)
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 
 
@@ -105,6 +109,33 @@ class TestFindTwoFrameSplitV2(unittest.TestCase):
         self.assertEqual(frame_a_name, "far.jpg")
         self.assertEqual(frame_b_name, "frame_b.jpg")
         self.assertNotEqual(frame_b_name, frame_a_name)
+
+    def test_rejects_frame_a_where_group_b_is_only_partially_visible(self):
+        # obj_b straddles the edge of cam_orig's frame (some bbox corners in, some
+        # out) -- not "fully in frame", but still clearly visible. The exclusion
+        # check must reject on ANY visibility, not just full visibility, or a sliver
+        # of group_b peeking into frame_a would still contradict the question's
+        # "this photo doesn't show it" premise. No occlusion is considered here,
+        # purely geometric in-frame-or-not.
+        color_intrinsics = make_intrinsics()
+        cam_orig = make_pose("orig.jpg", position_x=0.0)
+        all_poses = {"orig.jpg": cam_orig}
+
+        obj_a = make_object(1, x=0.0)
+        obj_b = make_object(2, x=1.65)  # bbox spans [1.55, 1.75]; window edge is 1.6
+        self.assertFalse(_bbox_fully_in_frame(obj_b, cam_orig, color_intrinsics))
+        self.assertTrue(
+            _bbox_has_min_in_frame_corners(obj_b, cam_orig, color_intrinsics, min_corners=1)
+        )
+
+        result = find_two_frame_split_v2(
+            group_a_objects=[obj_a],
+            group_b_objects=[obj_b],
+            all_poses=all_poses,
+            color_intrinsics=color_intrinsics,
+            preferred_camera_pose=cam_orig,
+        )
+        self.assertIsNone(result)
 
     def test_valid_split_with_bridge_chain_when_groups_are_genuinely_separated(self):
         # group_a (x=0) and group_b (x=8) are far enough apart that no single camera
