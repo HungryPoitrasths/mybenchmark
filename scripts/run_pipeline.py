@@ -4251,6 +4251,20 @@ _ALL_CANONICAL_QUESTION_TYPES = {
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 }
+# scene_type_cap / frame_type_cap / frame_type_object_cap only bound L1
+# (perception) question types. L2/L3 candidate pools are already scarce
+# (structural gating, attachment sparsity, multi-frame split requirements)
+# and a per-scene cap unrelated to candidate pool size would throw away
+# valid intervention/counterfactual questions for no reason -- unlike L1,
+# where the cap exists purely to keep near-duplicate perception questions
+# from dominating a scene's question mix.
+_SCENE_TYPE_CAP_ELIGIBLE_TYPES = {
+    "direction_agent",
+    "occlusion",
+    "distance",
+    "direction_object_centric",
+    "direction_allocentric",
+}
 _PUBLIC_TO_CANONICAL_QUESTION_TYPES = {
     "L1_direction_agent": "direction_agent",
     "L2_object_move_agent": "object_move_agent",
@@ -4429,13 +4443,20 @@ def _apply_incremental_question_caps(
         pair_key = _question_pair_key(question)
         frame_key = (image_name, canonical_type)
         frame_object_key = (image_name, canonical_type, object_id)
-        if scene_type_cap > 0 and scene_counts[canonical_type] >= scene_type_cap:
+        # scene_type_cap/frame_type_cap/frame_type_object_cap only bound L1
+        # types (see _SCENE_TYPE_CAP_ELIGIBLE_TYPES) -- L2/L3 questions are
+        # never capped here regardless of the passed-in cap values.
+        type_is_cap_eligible = canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES
+        effective_scene_type_cap = scene_type_cap if type_is_cap_eligible else 0
+        effective_frame_type_cap = frame_type_cap if type_is_cap_eligible else 0
+        effective_frame_type_object_cap = frame_type_object_cap if type_is_cap_eligible else 0
+        if effective_scene_type_cap > 0 and scene_counts[canonical_type] >= effective_scene_type_cap:
             continue
-        if frame_type_cap > 0 and frame_counts[frame_key] >= frame_type_cap:
+        if effective_frame_type_cap > 0 and frame_counts[frame_key] >= effective_frame_type_cap:
             continue
         if (
-            frame_type_object_cap > 0
-            and frame_object_counts[frame_object_key] >= frame_type_object_cap
+            effective_frame_type_object_cap > 0
+            and frame_object_counts[frame_object_key] >= effective_frame_type_object_cap
         ):
             continue
         if pair_key is not None and pair_counter[pair_key] >= 1:
@@ -4490,12 +4511,19 @@ def _remaining_scene_type_budgets(
     scene_type_cap: int,
     allowed_types: set[str] | None = None,
 ) -> dict[str, int] | None:
+    # scene_type_cap only bounds L1 types (see _SCENE_TYPE_CAP_ELIGIBLE_TYPES);
+    # L2/L3 types are omitted entirely so callers that treat a missing key as
+    # "no budget limit" (e.g. generate_all_questions' question_type_budgets)
+    # never throttle them.
     if scene_type_cap <= 0:
         return None
     target_types = set(allowed_types) if allowed_types else set(_ALL_CANONICAL_QUESTION_TYPES)
+    capped_types = target_types & _SCENE_TYPE_CAP_ELIGIBLE_TYPES
+    if not capped_types:
+        return None
     return {
         question_type: max(scene_type_cap - int(type_counts[question_type]), 0)
-        for question_type in sorted(target_types)
+        for question_type in sorted(capped_types)
     }
 
 
@@ -5239,7 +5267,14 @@ def run_pipeline(
             color_intrinsics = None
 
         for frame_index, frame in enumerate(frames, start=1):
-            if scene_type_cap > 0:
+            # Only short-circuit frame scanning once every *targeted* type is
+            # L1 (cap-eligible) -- L2/L3 types are never capped and can
+            # always benefit from more frames, so their presence in the
+            # target set means the scene is never "done" on cap grounds
+            # alone.
+            if scene_type_cap > 0 and not (
+                target_scene_question_types - _SCENE_TYPE_CAP_ELIGIBLE_TYPES
+            ):
                 remaining_scene_type_budgets = _remaining_scene_type_budgets(
                     scene_question_type_counts,
                     scene_type_cap=scene_type_cap,

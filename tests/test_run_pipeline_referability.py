@@ -297,6 +297,58 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(budgets, {"occlusion": 2, "viewpoint_move": 0})
 
+    def test_apply_scene_type_cap_only_bounds_l1_types(self) -> None:
+        # scene_type_cap/frame_type_cap/frame_type_object_cap only bound L1
+        # (perception) types -- L2/L3 candidate pools are already scarce and
+        # unrelated to a fixed per-scene cap, so they must never be capped
+        # here regardless of the passed-in cap values.
+        questions = [
+            {"scene_id": "scene0000_00", "type": "occlusion", "question": f"o {idx}"}
+            for idx in range(7)
+        ] + [
+            {"scene_id": "scene0000_00", "type": "object_move_object_centric", "question": f"move {idx}"}
+            for idx in range(7)
+        ] + [
+            {"scene_id": "scene0000_00", "type": "attachment_chain", "question": f"chain {idx}"}
+            for idx in range(7)
+        ]
+
+        kept = run_pipeline_module._apply_scene_type_cap(
+            questions,
+            scene_type_cap=5,
+        )
+
+        self.assertEqual(
+            [q["question"] for q in kept if q["type"] == "occlusion"],
+            [f"o {idx}" for idx in range(5)],
+        )
+        self.assertEqual(
+            [q["question"] for q in kept if q["type"] == "object_move_object_centric"],
+            [f"move {idx}" for idx in range(7)],
+        )
+        self.assertEqual(
+            [q["question"] for q in kept if q["type"] == "attachment_chain"],
+            [f"chain {idx}" for idx in range(7)],
+        )
+
+    def test_remaining_scene_type_budgets_omits_l2_l3_types(self) -> None:
+        budgets = run_pipeline_module._remaining_scene_type_budgets(
+            Counter({"occlusion": 3, "object_move_agent": 99, "attachment_chain": 99}),
+            scene_type_cap=5,
+            allowed_types={"occlusion", "object_move_agent", "attachment_chain"},
+        )
+
+        self.assertEqual(budgets, {"occlusion": 2})
+
+    def test_remaining_scene_type_budgets_returns_none_when_no_l1_types_targeted(self) -> None:
+        budgets = run_pipeline_module._remaining_scene_type_budgets(
+            Counter({"object_move_agent": 99}),
+            scene_type_cap=5,
+            allowed_types={"object_move_agent"},
+        )
+
+        self.assertIsNone(budgets)
+
     def test_apply_question_dinox_audit_records_all_unique_mentioned_labels(self) -> None:
         chair_mask = np.zeros((20, 30), dtype=bool)
         chair_mask[2:10, 3:11] = True
