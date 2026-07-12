@@ -25,6 +25,15 @@ def make_camera_pose(image_name: str) -> CameraPose:
     )
 
 
+def make_camera_pose_at(image_name: str, position_x: float) -> CameraPose:
+    """Like make_camera_pose, but translated along world x (still forward=+z)."""
+    return CameraPose(
+        image_name=image_name,
+        rotation=np.eye(3, dtype=np.float64),
+        translation=np.array([-position_x, 0.0, 0.0], dtype=np.float64),
+    )
+
+
 def make_camera_intrinsics() -> CameraIntrinsics:
     return CameraIntrinsics(
         width=640,
@@ -3313,12 +3322,25 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 }
             },
         }
+        def make_positioned_object(obj_id: int, label: str, x: float) -> dict:
+            # attachment_move requires a valid two-frame split (root/query in one
+            # frame, ref in another): chair/table sit near x=0, lamp far enough away
+            # (x=1.6, past the ~0.64 half-FOV window at z=1 with this test's
+            # intrinsics) that no single pose fully frames both groups.
+            return {
+                "id": obj_id,
+                "label": label,
+                "center": [x, 0.0, 1.0],
+                "bbox_min": [x - 0.1, -0.1, 0.9],
+                "bbox_max": [x + 0.1, 0.1, 1.1],
+            }
+
         scene = {
             "scene_id": scene_id,
             "objects": [
-                make_object(1, "chair"),
-                make_object(2, "table"),
-                make_object(3, "lamp"),
+                make_positioned_object(1, "chair", x=0.0),
+                make_positioned_object(2, "table", x=0.1),
+                make_positioned_object(3, "lamp", x=1.6),
             ],
             "attachment_edges": [
                 {"parent_id": 3, "child_id": 2, "type": "attachment"},
@@ -3339,6 +3361,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     "type": "attachment_move",
                     "level": "L3",
                     "reference_frame": "agent",
+                    "root_id": 2,
+                    "query_obj_id": 1,
+                    "obj_ref_id": 3,
                 }
             ]
 
@@ -3352,7 +3377,22 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
             patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
             patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
-            patch.object(run_pipeline_module, "load_scannet_poses", return_value={image_name: make_camera_pose(image_name)}),
+            patch.object(
+                run_pipeline_module,
+                "load_scannet_poses",
+                return_value={
+                    image_name: make_camera_pose(image_name),
+                    # Bridge poses providing route-continuity between the chair/table
+                    # frame (x=0) and a real frame that fully frames the far-off lamp
+                    # (x=1.6), so _apply_two_frame_split finds a valid split instead
+                    # of dropping this question (verified in isolation: with just
+                    # these 4 poses, find_two_frame_split_v2 returns
+                    # ("000123.jpg", "000456.jpg", ["bridge1.jpg", "bridge2.jpg"])).
+                    "bridge1.jpg": make_camera_pose_at("bridge1.jpg", 0.5),
+                    "bridge2.jpg": make_camera_pose_at("bridge2.jpg", 1.0),
+                    "000456.jpg": make_camera_pose_at("000456.jpg", 1.6),
+                },
+            ),
             patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
             patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
             patch.object(
