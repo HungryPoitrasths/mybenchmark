@@ -19,6 +19,7 @@ def make_camera_pose(
     *,
     image_name: str = "000000.jpg",
     yaw_deg: float = 0.0,
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> CameraPose:
     yaw_rad = np.deg2rad(float(yaw_deg))
     cos_yaw = float(np.cos(yaw_rad))
@@ -31,10 +32,12 @@ def make_camera_pose(
         ],
         dtype=np.float64,
     )
+    # translation is world-to-camera: t = -R @ C, where C is world position
+    translation = -rotation @ np.asarray(position, dtype=np.float64)
     return CameraPose(
         image_name=image_name,
         rotation=rotation,
-        translation=np.zeros(3, dtype=np.float64),
+        translation=translation,
     )
 
 
@@ -3548,7 +3551,10 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(groups[0]["visible_object_ids"], [1, 2])
         self.assertEqual(groups[1]["visible_object_ids"], [1, 2, 9])
 
-    def test_build_visible_object_pose_merged_groups_keeps_separate_groups_when_visible_symmetric_diff_is_too_large(self) -> None:
+    def test_build_visible_object_pose_merged_groups_merges_despite_large_visible_symmetric_diff_when_pose_close(self) -> None:
+        # Pose-priority: position and angle both within threshold means "same
+        # viewpoint", so a large visible-object-id disagreement (likely
+        # detector flicker) no longer blocks the merge.
         frames = [
             {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
             {"image_name": "000010.jpg", "visible_object_ids": [1, 2, 9, 10, 11, 12]},
@@ -3559,6 +3565,22 @@ class RunVlmReferabilityTests(unittest.TestCase):
             poses={
                 "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
                 "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=10.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+
+    def test_build_visible_object_pose_merged_groups_keeps_separate_groups_when_position_distance_exceeds_threshold(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2]},
+        ]
+
+        groups = referability_module._build_visible_object_pose_merged_groups(
+            frames=frames,
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=0.0, position=(2.0, 0.0, 0.0)),
             },
         )
 
@@ -3716,6 +3738,23 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ["000000.jpg", "000010.jpg"],
         )
         self.assertEqual(groups[0]["visible_object_ids"], [1, 2, 9, 10, 11, 12])
+
+    def test_build_attachment_frame_groups_keeps_separate_groups_when_position_distance_exceeds_threshold(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "visible_object_ids": [1, 2]},
+        ]
+
+        groups = referability_module._build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph={1: [2]},
+            poses={
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=0.0, position=(2.0, 0.0, 0.0)),
+            },
+        )
+
+        self.assertEqual(len(groups), 2)
 
     def test_build_attachment_frame_groups_never_merges_different_pair_sets(self) -> None:
         frames = [

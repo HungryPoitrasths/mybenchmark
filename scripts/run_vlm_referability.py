@@ -133,8 +133,8 @@ FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
 # appears.
 VLM_REASONING_TOKEN_HEADROOM = 2048
 DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 70
-VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF = 3
 ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
+POSE_GROUP_MAX_POSITION_DISTANCE_M = 0.3
 DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE = 70
 DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST = 3
 NON_ATTACHMENT_GROUP_EARLY_STOP_REFERABLE_COUNT = 2
@@ -3305,6 +3305,24 @@ def _attachment_frame_pose_angle_deg(
     return float(np.degrees(np.arccos(cosine)))
 
 
+def _attachment_frame_pose_position_distance_m(
+    frame_a: dict[str, Any],
+    frame_b: dict[str, Any],
+    poses: dict[str, CameraPose] | None,
+) -> float | None:
+    if not poses:
+        return None
+    image_name_a = _frame_image_name(frame_a)
+    image_name_b = _frame_image_name(frame_b)
+    if not image_name_a or not image_name_b:
+        return None
+    pose_a = poses.get(image_name_a)
+    pose_b = poses.get(image_name_b)
+    if pose_a is None or pose_b is None:
+        return None
+    return float(np.linalg.norm(np.asarray(pose_a.position) - np.asarray(pose_b.position)))
+
+
 def _visible_object_frame_merge_metrics(
     anchor_frame: dict[str, Any],
     candidate_frame: dict[str, Any],
@@ -3316,16 +3334,27 @@ def _visible_object_frame_merge_metrics(
         return None
 
     symmetric_diff_size = len(set(anchor_visible_ids) ^ set(candidate_visible_ids))
-    if symmetric_diff_size > VISIBLE_OBJECT_GROUP_MAX_VISIBLE_SYMMETRIC_DIFF:
-        return None
 
     angle_deg = _attachment_frame_pose_angle_deg(anchor_frame, candidate_frame, poses)
     if angle_deg is None:
+        # No pose data to compare viewpoints geometrically — fall back to
+        # requiring an exact visible-object match.
         if symmetric_diff_size == 0:
             return None, symmetric_diff_size
         return None
-    if angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG:
+
+    position_distance_m = _attachment_frame_pose_position_distance_m(
+        anchor_frame, candidate_frame, poses
+    )
+    if (
+        position_distance_m is None
+        or position_distance_m > POSE_GROUP_MAX_POSITION_DISTANCE_M
+        or angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG
+    ):
         return None
+    # Pose-priority: frames close in position and orientation are treated as
+    # the same viewpoint and merged regardless of visible-object-id drift
+    # (detector flicker as the camera pans slightly should not fragment groups).
     return angle_deg, symmetric_diff_size
 
 
@@ -3339,7 +3368,14 @@ def _attachment_frame_merge_metrics(
         if _frame_image_name(anchor_frame) and _frame_image_name(anchor_frame) == _frame_image_name(candidate_frame):
             return None, 0
         return None
-    if angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG:
+    position_distance_m = _attachment_frame_pose_position_distance_m(
+        anchor_frame, candidate_frame, poses
+    )
+    if (
+        position_distance_m is None
+        or position_distance_m > POSE_GROUP_MAX_POSITION_DISTANCE_M
+        or angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG
+    ):
         return None
     return angle_deg, 0
 
