@@ -81,6 +81,8 @@ from src.utils.colmap_loader import (
 from src.utils.depth_occlusion import load_depth_image
 from src.utils import RayCaster
 from scripts.run_vlm_referability import (
+    SCANNET_METADATA_SPLIT_FILES,
+    SCANNETPP_METADATA_SPLIT_FILES,
     SEGMENTATION_EXTREME_NOISE_MIN_SCORE as QUESTION_DINOX_LOOSE_MIN_SCORE,
     SEGMENTATION_STRONG_MIN_SCORE as QUESTION_DINOX_STRONG_MIN_SCORE,
     _apply_attachment_pair_salvage_html_review,
@@ -4774,6 +4776,7 @@ def run_pipeline(
     output_dir: Path,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    split: str | None = None,
     scannetpp_split_file: str | None = None,
     scannetpp_frame_root: str | None = None,
     max_scenes: int = 300,
@@ -4847,16 +4850,28 @@ def run_pipeline(
         if scannetpp_split_file is not None:
             split_ids = [l.strip() for l in Path(scannetpp_split_file).read_text(encoding="utf-8").splitlines() if l.strip()]
             discovered_scene_dirs = [data_root / sid for sid in split_ids if (data_root / sid).is_dir()]
+        elif split is not None and split in SCANNETPP_METADATA_SPLIT_FILES:
+            resolved_split_file = SCANNETPP_METADATA_SPLIT_FILES[split]
+            split_ids = [l.strip() for l in resolved_split_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+            discovered_scene_dirs = [data_root / sid for sid in split_ids if (data_root / sid).is_dir()]
         else:
             from src.datasets.scannetpp import has_scannetpp_geometry
             discovered_scene_dirs = sorted(p for p in data_root.iterdir() if p.is_dir() and has_scannetpp_geometry(p))
         if scannetpp_frame_root is None:
             scannetpp_frame_root = str(Path(data_root).parent / "iphone_frames")
     else:
-        discovered_scene_dirs = sorted(
-            p for p in data_root.iterdir()
-            if p.is_dir() and (p / "pose").exists()
-        )
+        if split is not None and split in SCANNET_METADATA_SPLIT_FILES:
+            resolved_split_file = SCANNET_METADATA_SPLIT_FILES[split]
+            split_scene_ids = {l.strip() for l in resolved_split_file.read_text(encoding="utf-8").splitlines() if l.strip()}
+            discovered_scene_dirs = sorted(
+                p for p in data_root.iterdir()
+                if p.is_dir() and (p / "pose").exists() and p.name in split_scene_ids
+            )
+        else:
+            discovered_scene_dirs = sorted(
+                p for p in data_root.iterdir()
+                if p.is_dir() and (p / "pose").exists()
+            )
     cached_scene_ids = _get_referability_scene_ids(referability_cache)
     scene_dirs = [p for p in discovered_scene_dirs if p.name in cached_scene_ids]
     scene_limit = max(0, int(max_scenes))
@@ -6140,9 +6155,16 @@ def main():
         help="Sensor to use when dataset=scannetpp",
     )
     parser.add_argument(
+        "--split", type=str, choices=("train", "val", "all"), default=None,
+        help="Dataset split. ScanNet v2: filters discovered scene dirs by the matching "
+        "SCANNET_METADATA_SPLIT_FILES entry. ScanNet++: selects the matching "
+        "SCANNETPP_METADATA_SPLIT_FILES entry; overridden by --scannetpp_split_file. "
+        "'all' or omitted scans every scene directory under --data_root.",
+    )
+    parser.add_argument(
         "--scannetpp_split_file", type=str,
         default=None,
-        help="Path to scene-ID list (one per line) for scannetpp; if omitted, all scenes with geometry in data_root are used",
+        help="Path to scene-ID list (one per line) for scannetpp; overrides --split. If both are omitted, all scenes with geometry in data_root are used",
     )
     parser.add_argument(
         "--scannetpp_frame_root", type=str,
@@ -6354,6 +6376,7 @@ def main():
         output_dir=Path(args.output_dir),
         dataset=args.dataset,
         scannetpp_sensor=args.scannetpp_sensor,
+        split=args.split,
         scannetpp_split_file=args.scannetpp_split_file,
         scannetpp_frame_root=args.scannetpp_frame_root,
         max_scenes=args.max_scenes,
