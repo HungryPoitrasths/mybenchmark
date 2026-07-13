@@ -8655,7 +8655,9 @@ def main():
         "--split",
         choices=("train", "val", "all"),
         default=None,
-        help="ScanNet v2 split; ignored for scannetpp (default: train for v2, unused for scannetpp)",
+        help="Dataset split. ScanNet v2: default train. ScanNet++: selects the matching "
+        "SCANNETPP_METADATA_SPLIT_FILES entry (default train); 'all' or an unmapped split "
+        "scans every scene directory under --data_root instead of using a split file.",
     )
     parser.add_argument(
         "--output", type=str, required=True,
@@ -8886,8 +8888,8 @@ def main():
         selected_split = args.split or "train"
         if args.scannetpp_split_file:
             split_file = Path(args.scannetpp_split_file)
-        elif selected_split == "train":
-            split_file = SCANNETPP_METADATA_SPLIT_FILES.get("train")
+        elif selected_split in SCANNETPP_METADATA_SPLIT_FILES:
+            split_file = SCANNETPP_METADATA_SPLIT_FILES.get(selected_split)
         else:
             split_file = None
         if split_file is not None:
