@@ -3800,6 +3800,97 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(merged_groups[0]["visible_object_ids"], [1, 2, 9])
         self.assertEqual(len(split_groups), 2)
 
+    def test_build_and_classify_frame_groups_merges_across_attachment_and_non_attachment_pools(self) -> None:
+        # Same viewpoint: one frame has a well-cropped attachment pair, one
+        # doesn't. Previously these would be pre-split into separate pools
+        # before grouping and could never merge; now they're grouped together
+        # and the whole group is classified from its combined content.
+        frames = [
+            {"image_name": "000000.jpg", "score": 5, "visible_object_ids": [1, 2]},
+            {"image_name": "000010.jpg", "score": 20, "visible_object_ids": [1, 2, 9]},
+        ]
+
+        groups = referability_module._build_and_classify_frame_groups(
+            frames,
+            {1: [2]},
+            {
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=5.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertTrue(groups[0]["is_attachment_group"])
+        self.assertEqual(groups[0]["group_pairs"], [(1, 2)])
+        self.assertEqual(
+            [frame["image_name"] for frame in groups[0]["frames"]],
+            ["000010.jpg", "000000.jpg"],
+        )
+
+    def test_build_and_classify_frame_groups_marks_non_attachment_when_no_pair_visible(self) -> None:
+        frames = [
+            {"image_name": "000000.jpg", "score": 5, "visible_object_ids": [3]},
+            {"image_name": "000010.jpg", "score": 20, "visible_object_ids": [3, 9]},
+        ]
+
+        groups = referability_module._build_and_classify_frame_groups(
+            frames,
+            {1: [2]},
+            {
+                "000000.jpg": make_camera_pose(image_name="000000.jpg", yaw_deg=0.0),
+                "000010.jpg": make_camera_pose(image_name="000010.jpg", yaw_deg=5.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertFalse(groups[0]["is_attachment_group"])
+        self.assertEqual(groups[0]["group_pairs"], [])
+
+    def test_build_and_classify_frame_groups_orders_frames_by_richness_score_descending(self) -> None:
+        frames = [
+            {"image_name": "low.jpg", "score": 3, "visible_object_ids": [1]},
+            {"image_name": "high.jpg", "score": 50, "visible_object_ids": [1]},
+            {"image_name": "mid.jpg", "score": 10, "visible_object_ids": [1]},
+        ]
+
+        groups = referability_module._build_and_classify_frame_groups(
+            frames,
+            None,
+            {
+                "low.jpg": make_camera_pose(image_name="low.jpg"),
+                "high.jpg": make_camera_pose(image_name="high.jpg"),
+                "mid.jpg": make_camera_pose(image_name="mid.jpg"),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(
+            [frame["image_name"] for frame in groups[0]["frames"]],
+            ["high.jpg", "mid.jpg", "low.jpg"],
+        )
+
+    def test_build_and_classify_frame_groups_does_not_synthesize_pair_across_frames(self) -> None:
+        # Frame A shows only the parent, frame B (same pose) shows only the
+        # child -- neither frame shows both together, so the pair must not
+        # be synthesized from the union of visible-object ids across frames.
+        frames = [
+            {"image_name": "parent_only.jpg", "score": 5, "visible_object_ids": [1]},
+            {"image_name": "child_only.jpg", "score": 5, "visible_object_ids": [2]},
+        ]
+
+        groups = referability_module._build_and_classify_frame_groups(
+            frames,
+            {1: [2]},
+            {
+                "parent_only.jpg": make_camera_pose(image_name="parent_only.jpg", yaw_deg=0.0),
+                "child_only.jpg": make_camera_pose(image_name="child_only.jpg", yaw_deg=0.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertFalse(groups[0]["is_attachment_group"])
+        self.assertEqual(groups[0]["group_pairs"], [])
+
     def test_select_attachment_group_representatives_merges_near_duplicate_visible_groups_when_pair_set_and_pose_match(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
@@ -6475,7 +6566,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_module,
                 "load_scannet_poses",
                 return_value={
-                    "000001.jpg": make_camera_pose(),
+                    # Distinct pose from the other two frames so unified
+                    # pose-priority grouping keeps this attachment-pair frame
+                    # in its own group rather than merging it with the
+                    # unrelated non-attachment frames below.
+                    "000001.jpg": make_camera_pose(yaw_deg=90.0),
                     "000101.jpg": make_camera_pose(),
                     "000102.jpg": make_camera_pose(),
                 },

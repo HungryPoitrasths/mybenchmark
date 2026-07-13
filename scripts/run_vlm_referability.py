@@ -3486,6 +3486,56 @@ def _build_attachment_frame_groups(
     return merged_groups
 
 
+def _frame_richness_score(frame: dict[str, Any]) -> float:
+    return float(frame.get("score", frame.get("base_score", 0)) or 0)
+
+
+def _build_and_classify_frame_groups(
+    frames: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]] | None,
+    poses: dict[str, CameraPose] | None,
+) -> list[dict[str, Any]]:
+    """Pose-merge the full candidate frame list once, then classify each
+    resulting group as attachment/non-attachment from its own content.
+
+    Replaces pre-splitting frames into separate attachment/non-attachment
+    pools before grouping — two frames from the same viewpoint no longer miss
+    a merge just because only one of them happens to have a well-cropped
+    attachment pair.
+    """
+    merged_groups = _build_visible_object_pose_merged_groups(
+        frames=frames,
+        poses=poses,
+    )
+    classified_groups: list[dict[str, Any]] = []
+    for group in merged_groups:
+        group_pairs_set: set[tuple[int, int]] = set()
+        for frame in group.get("frames", []):
+            frame_visible_ids = _visible_object_frame_group_key(frame)
+            if frame_visible_ids is None:
+                continue
+            group_pairs_set.update(
+                _attachment_pairs_for_visible_group(attachment_graph, frame_visible_ids)
+            )
+        group_pairs = sorted(group_pairs_set)
+        ordered_frames = sorted(
+            group.get("frames", []),
+            key=_frame_richness_score,
+            reverse=True,
+        )
+        classified_groups.append(
+            {
+                "anchor_frame": group.get("anchor_frame"),
+                "frames": ordered_frames,
+                "visible_object_ids": list(group.get("visible_object_ids", [])),
+                "group_pairs": group_pairs,
+                "pair_set_key": [list(pair) for pair in group_pairs],
+                "is_attachment_group": bool(group_pairs),
+            }
+        )
+    return classified_groups
+
+
 def _select_attachment_group_representatives(
     *,
     client,
@@ -3503,20 +3553,22 @@ def _select_attachment_group_representatives(
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
     attachment_clarity_min_score: int = DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
     failed_signatures_seen: set[tuple[int, ...]] | None = None,
+    precomputed_groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    if not frames:
+    if not frames and not precomputed_groups:
         return []
 
     color_dir = scene_dir / "color"
-    grouped_items = list(
-        enumerate(
-            _build_attachment_frame_groups(
-                frames=frames,
-                attachment_graph=attachment_graph,
-                poses=poses,
-            )
+    groups = (
+        precomputed_groups
+        if precomputed_groups is not None
+        else _build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph=attachment_graph,
+            poses=poses,
         )
     )
+    grouped_items = list(enumerate(groups))
     accepted_target: int | None = None
     if max_accepted_frame_count is not None:
         accepted_target = max(0, int(max_accepted_frame_count))
@@ -3529,13 +3581,24 @@ def _select_attachment_group_representatives(
     def _select_group(item: tuple[int, dict[str, Any]]) -> dict[str, Any] | None:
         group_id, group_doc = item
         group_frames = list(group_doc.get("frames", []))
-        sampled_frames, _group_frame_stride = _sample_group_frames(group_frames)
-        scored_frames = _score_group_frames_by_brisque(
-            sampled_frames=sampled_frames,
-            color_dir=color_dir,
-            scene_image_getter=scene_image_getter,
-        )
-        ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
+        if precomputed_groups is not None:
+            # Frames already ordered by richness (descending) in
+            # _build_and_classify_frame_groups; review in that order rather
+            # than re-sampling/re-ordering by BRISQUE clarity.
+            scored_frames = _score_group_frames_by_brisque(
+                sampled_frames=group_frames,
+                color_dir=color_dir,
+                scene_image_getter=scene_image_getter,
+            )
+            ordered_scored_frames = scored_frames
+        else:
+            sampled_frames, _group_frame_stride = _sample_group_frames(group_frames)
+            scored_frames = _score_group_frames_by_brisque(
+                sampled_frames=sampled_frames,
+                color_dir=color_dir,
+                scene_image_getter=scene_image_getter,
+            )
+            ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         accepted_frame: dict[str, Any] | None = None
 
         def _stop_on_reviewed_frame(
@@ -3777,15 +3840,20 @@ def _build_attachment_pair_salvage_scene_review(
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
     attachment_clarity_min_score: int = DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
     failed_signatures_seen: set[tuple[int, ...]] | None = None,
+    precomputed_groups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     relation_type_map = _attachment_edge_relation_type_map(attachment_edges)
     color_dir = scene_dir / "color"
     image_cache: dict[str, np.ndarray | None] = {}
     terminal_output_lines: list[str] = []
-    grouped_frames = _build_attachment_frame_groups(
-        frames=frames,
-        attachment_graph=attachment_graph,
-        poses=poses,
+    grouped_frames = (
+        precomputed_groups
+        if precomputed_groups is not None
+        else _build_attachment_frame_groups(
+            frames=frames,
+            attachment_graph=attachment_graph,
+            poses=poses,
+        )
     )
     scene_failed_signatures_seen = (
         failed_signatures_seen if failed_signatures_seen is not None else set()
@@ -3812,13 +3880,26 @@ def _build_attachment_pair_salvage_scene_review(
         if not group_pairs:
             continue
 
-        sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
-        scored_frames = _score_group_frames_by_brisque(
-            sampled_frames=sampled_frames,
-            color_dir=color_dir,
-            scene_image_getter=scene_image_getter,
-        )
-        ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
+        if precomputed_groups is not None:
+            # Frames already ordered by richness (descending) in
+            # _build_and_classify_frame_groups; review in that order rather
+            # than re-sampling/re-ordering by BRISQUE clarity.
+            sampled_frames = group_frames
+            group_frame_stride = 1
+            scored_frames = _score_group_frames_by_brisque(
+                sampled_frames=group_frames,
+                color_dir=color_dir,
+                scene_image_getter=scene_image_getter,
+            )
+            ordered_scored_frames = scored_frames
+        else:
+            sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
+            scored_frames = _score_group_frames_by_brisque(
+                sampled_frames=sampled_frames,
+                color_dir=color_dir,
+                scene_image_getter=scene_image_getter,
+            )
+            ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         clarity_pass_frames: list[dict[str, Any]] = []
         clarity_pass_image_names: list[str] = []
         frame_records_by_image_name: dict[str, dict[str, Any]] = {}
@@ -5015,14 +5096,19 @@ def _select_non_attachment_group_representatives(
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
     non_attachment_referability_shortlist: int = DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST,
     non_attachment_clarity_min_score: int = DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
+    precomputed_groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    if not frames:
+    if not frames and not precomputed_groups:
         return []
 
     color_dir = scene_dir / "color"
-    grouped_items = _build_visible_object_pose_merged_groups(
-        frames=frames,
-        poses=poses,
+    grouped_items = (
+        precomputed_groups
+        if precomputed_groups is not None
+        else _build_visible_object_pose_merged_groups(
+            frames=frames,
+            poses=poses,
+        )
     )
     if max_group_count is not None:
         grouped_items = grouped_items[:max(0, int(max_group_count))]
@@ -5047,13 +5133,26 @@ def _select_non_attachment_group_representatives(
         early_stop_image_name: str | None = None
         early_stop_reason: str | None = None
         stop_reason = "exhausted_group_frames"
-        sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
-        scored_frames = _score_group_frames_by_brisque(
-            sampled_frames=sampled_frames,
-            color_dir=color_dir,
-            scene_image_getter=scene_image_getter,
-        )
-        ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
+        if precomputed_groups is not None:
+            # Frames already ordered by richness (descending) in
+            # _build_and_classify_frame_groups; review in that order rather
+            # than re-sampling/re-ordering by BRISQUE clarity.
+            sampled_frames = group_frames
+            group_frame_stride = 1
+            scored_frames = _score_group_frames_by_brisque(
+                sampled_frames=group_frames,
+                color_dir=color_dir,
+                scene_image_getter=scene_image_getter,
+            )
+            ordered_scored_frames = scored_frames
+        else:
+            sampled_frames, group_frame_stride = _sample_group_frames(group_frames)
+            scored_frames = _score_group_frames_by_brisque(
+                sampled_frames=sampled_frames,
+                color_dir=color_dir,
+                scene_image_getter=scene_image_getter,
+            )
+            ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         referable_object_ids_by_image_name: dict[str, list[int]] = {}
         accepted_frames_by_image_name: dict[str, dict[str, Any]] = {}
         accepted_image_names: set[str] = set()
@@ -8534,15 +8633,20 @@ def _select_and_rerank_frames(
     frame_clarity_batch_size: int = FRAME_CLARITY_BATCH_SIZE,
     non_attachment_referability_shortlist: int = DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST,
     non_attachment_clarity_min_score: int = DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
+    precomputed_groups: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not frame_candidates or int(max_frames) <= 0:
         return []
 
     reranked: list[dict[str, Any]] = []
     accepted_frame_count = 0
-    group_count = _count_visible_object_frame_groups(
-        frame_candidates,
-        poses=poses,
+    group_count = (
+        len(precomputed_groups)
+        if precomputed_groups is not None
+        else _count_visible_object_frame_groups(
+            frame_candidates,
+            poses=poses,
+        )
     )
     group_limit = group_count
     if max_group_count is not None:
@@ -8572,6 +8676,7 @@ def _select_and_rerank_frames(
         frame_clarity_batch_size=frame_clarity_batch_size,
         non_attachment_referability_shortlist=non_attachment_referability_shortlist,
         non_attachment_clarity_min_score=non_attachment_clarity_min_score,
+        precomputed_groups=precomputed_groups,
     )
     for reviewed_frame in reviewed_frames:
         accepted_frame_count += 1
@@ -9820,31 +9925,41 @@ def main():
                 return None
             return _get_reviewed_frames([frame]).get(image_name)
 
+        all_candidate_groups = _build_and_classify_frame_groups(
+            frame_candidates,
+            attachment_graph,
+            poses,
+        )
+        attachment_groups = [
+            group for group in all_candidate_groups if group.get("is_attachment_group")
+        ]
+        non_attachment_groups_raw = [
+            group for group in all_candidate_groups if not group.get("is_attachment_group")
+        ]
+
+        non_attachment_groups: list[dict[str, Any]] = []
+        for group in non_attachment_groups_raw:
+            copied_frames = [dict(frame) for frame in group.get("frames", [])]
+            for frame in copied_frames:
+                image_name = str(frame.get("image_name", "")).strip()
+                visibility_by_obj_id = _get_scene_visibility_by_obj_id(image_name)
+                failed_signature_candidate = _geometry_signature_object_ids(
+                    visibility_by_obj_id,
+                    bbox_in_frame_ratio_min=REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
+                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                )
+                frame["failed_signature_candidate_object_ids"] = list(
+                    failed_signature_candidate
+                )
+            non_attachment_groups.append({**group, "frames": copied_frames})
+
         attachment_candidate_frames = [
-            frame
-            for frame in frame_candidates
-            if bool(frame.get("attachment_viewpoint_exempt"))
+            frame for group in attachment_groups for frame in group.get("frames", [])
         ]
         non_attachment_candidate_frames = [
-            dict(frame)
-            for frame in frame_candidates
-            if not bool(frame.get("attachment_viewpoint_exempt"))
+            frame for group in non_attachment_groups for frame in group.get("frames", [])
         ]
-        for frame in non_attachment_candidate_frames:
-            image_name = str(frame.get("image_name", "")).strip()
-            visibility_by_obj_id = _get_scene_visibility_by_obj_id(image_name)
-            failed_signature_candidate = _geometry_signature_object_ids(
-                visibility_by_obj_id,
-                bbox_in_frame_ratio_min=REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
-                projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
-            )
-            frame["failed_signature_candidate_object_ids"] = list(
-                failed_signature_candidate
-            )
-        non_attachment_group_count = _count_visible_object_frame_groups(
-            non_attachment_candidate_frames,
-            poses=poses,
-        )
+        non_attachment_group_count = len(non_attachment_groups)
         logger.info(
             "Selected %d attachment-qualified and %d non-attachment frame candidates across %d visible-object groups for %s before VLM review",
             len(attachment_candidate_frames),
@@ -9883,6 +9998,7 @@ def main():
                 frame_clarity_batch_size=int(args.frame_clarity_batch_size),
                 non_attachment_referability_shortlist=int(args.non_attachment_referability_shortlist),
                 non_attachment_clarity_min_score=int(args.non_attachment_clarity_min_score),
+                precomputed_groups=non_attachment_groups,
             ) if (non_attachment_candidate_frames and not bool(args.attachment_only)) else []
         except MeshRayRequiredError as exc:
             return _build_mesh_ray_failure_result(exc)
@@ -9911,6 +10027,7 @@ def main():
                 frame_clarity_batch_size=int(args.frame_clarity_batch_size),
                 attachment_clarity_min_score=int(args.attachment_clarity_min_score),
                 failed_signatures_seen=attachment_failed_signatures_seen,
+                precomputed_groups=attachment_groups,
             ) if attachment_candidate_frames else []
             if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
                 attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
@@ -9936,6 +10053,7 @@ def main():
                     frame_clarity_batch_size=int(args.frame_clarity_batch_size),
                     attachment_clarity_min_score=int(args.attachment_clarity_min_score),
                     failed_signatures_seen=attachment_failed_signatures_seen,
+                    precomputed_groups=attachment_groups,
                 )
         except MeshRayRequiredError as exc:
             return _build_mesh_ray_failure_result(exc)
