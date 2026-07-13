@@ -3323,6 +3323,30 @@ def _attachment_frame_pose_position_distance_m(
     return float(np.linalg.norm(np.asarray(pose_a.position) - np.asarray(pose_b.position)))
 
 
+def _is_pose_duplicate_of_accepted(
+    frame: dict[str, Any],
+    accepted_frames: list[dict[str, Any]],
+    poses: dict[str, CameraPose] | None,
+) -> bool:
+    """Whether *frame* is pose-close to any already-accepted frame.
+
+    Used to skip a candidate before it's ever sent to the VLM for clarity
+    review, when its viewpoint is already represented by a frame that's
+    already been accepted for question generation elsewhere in the scene.
+    """
+    for accepted_frame in accepted_frames:
+        angle_deg = _attachment_frame_pose_angle_deg(frame, accepted_frame, poses)
+        if angle_deg is None or angle_deg > ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG:
+            continue
+        position_distance_m = _attachment_frame_pose_position_distance_m(
+            frame, accepted_frame, poses
+        )
+        if position_distance_m is None or position_distance_m > POSE_GROUP_MAX_POSITION_DISTANCE_M:
+            continue
+        return True
+    return False
+
+
 def _visible_object_frame_merge_metrics(
     anchor_frame: dict[str, Any],
     candidate_frame: dict[str, Any],
@@ -3510,19 +3534,34 @@ def _build_and_classify_frame_groups(
     classified_groups: list[dict[str, Any]] = []
     for group in merged_groups:
         group_pairs_set: set[tuple[int, int]] = set()
+        has_own_pair_by_frame_id: dict[int, bool] = {}
         for frame in group.get("frames", []):
             frame_visible_ids = _visible_object_frame_group_key(frame)
             if frame_visible_ids is None:
+                has_own_pair_by_frame_id[id(frame)] = False
                 continue
-            group_pairs_set.update(
-                _attachment_pairs_for_visible_group(attachment_graph, frame_visible_ids)
-            )
+            frame_pairs = _attachment_pairs_for_visible_group(attachment_graph, frame_visible_ids)
+            has_own_pair_by_frame_id[id(frame)] = bool(frame_pairs)
+            group_pairs_set.update(frame_pairs)
         group_pairs = sorted(group_pairs_set)
-        ordered_frames = sorted(
-            group.get("frames", []),
-            key=_frame_richness_score,
-            reverse=True,
-        )
+        is_attachment_group = bool(group_pairs)
+        if is_attachment_group:
+            # Hard guarantee: frames that themselves show a valid attachment
+            # pair are tried before same-group frames that don't, regardless
+            # of richness score (richness only correlates, doesn't guarantee).
+            ordered_frames = sorted(
+                group.get("frames", []),
+                key=lambda frame: (
+                    not has_own_pair_by_frame_id.get(id(frame), False),
+                    -_frame_richness_score(frame),
+                ),
+            )
+        else:
+            ordered_frames = sorted(
+                group.get("frames", []),
+                key=_frame_richness_score,
+                reverse=True,
+            )
         classified_groups.append(
             {
                 "anchor_frame": group.get("anchor_frame"),
@@ -3530,7 +3569,7 @@ def _build_and_classify_frame_groups(
                 "visible_object_ids": list(group.get("visible_object_ids", [])),
                 "group_pairs": group_pairs,
                 "pair_set_key": [list(pair) for pair in group_pairs],
-                "is_attachment_group": bool(group_pairs),
+                "is_attachment_group": is_attachment_group,
             }
         )
     return classified_groups
@@ -3554,6 +3593,7 @@ def _select_attachment_group_representatives(
     attachment_clarity_min_score: int = DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
     failed_signatures_seen: set[tuple[int, ...]] | None = None,
     precomputed_groups: list[dict[str, Any]] | None = None,
+    scene_accepted_frames: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not frames and not precomputed_groups:
         return []
@@ -3600,6 +3640,17 @@ def _select_attachment_group_representatives(
             )
             ordered_scored_frames = _sort_group_frames_for_clarity_review(scored_frames)
         accepted_frame: dict[str, Any] | None = None
+        if scene_accepted_frames is not None:
+            ordered_scored_frames = [
+                scored_frame
+                for scored_frame in ordered_scored_frames
+                if not (
+                    isinstance(scored_frame.get("frame"), dict)
+                    and _is_pose_duplicate_of_accepted(
+                        scored_frame["frame"], scene_accepted_frames, poses
+                    )
+                )
+            ]
 
         def _stop_on_reviewed_frame(
             scored_frame: dict[str, Any],
@@ -3640,6 +3691,8 @@ def _select_attachment_group_representatives(
                 attachment_graph,
                 attachment_view_group_id=group_id,
             )
+            if scene_accepted_frames is not None:
+                scene_accepted_frames.append(frame)
             return "accepted_attachment_referable_frame"
 
         _review_group_frames_until_stop(
@@ -5097,6 +5150,7 @@ def _select_non_attachment_group_representatives(
     non_attachment_referability_shortlist: int = DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST,
     non_attachment_clarity_min_score: int = DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
     precomputed_groups: list[dict[str, Any]] | None = None,
+    scene_accepted_frames: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not frames and not precomputed_groups:
         return []
@@ -5159,6 +5213,7 @@ def _select_non_attachment_group_representatives(
         failed_signature_object_ids_by_image_name: dict[str, list[int]] = {}
         duplicate_failed_signature_image_names: set[str] = set()
         skipped_before_clarity_duplicate_failed_signature_image_names: set[str] = set()
+        skipped_pose_duplicate_image_names: list[str] = []
         ordered_scored_frames_for_review: list[dict[str, Any]] = []
         for scored_frame in ordered_scored_frames:
             frame = scored_frame.get("frame")
@@ -5166,6 +5221,11 @@ def _select_non_attachment_group_representatives(
                 ordered_scored_frames_for_review.append(scored_frame)
                 continue
             image_name = str(scored_frame.get("image_name", "")).strip()
+            if scene_accepted_frames is not None and _is_pose_duplicate_of_accepted(
+                frame, scene_accepted_frames, poses
+            ):
+                skipped_pose_duplicate_image_names.append(image_name)
+                continue
             failed_signature_candidate = tuple(
                 _normalize_cached_object_ids(
                     frame.get("failed_signature_candidate_object_ids")
@@ -5223,6 +5283,8 @@ def _select_non_attachment_group_representatives(
                 accepted_frame["_referability_entry"] = referable_entry
                 accepted_frame["referable_object_ids"] = referable_object_ids
             accepted_frames_by_image_name[image_name] = accepted_frame
+            if scene_accepted_frames is not None:
+                scene_accepted_frames.append(frame)
             return "accepted_frame_has_min_referable_objects"
 
         review_result = _review_group_frames_until_stop(
@@ -5372,6 +5434,7 @@ def _select_non_attachment_group_representatives(
             "early_stop_image_name": early_stop_image_name,
             "early_stop_reason": early_stop_reason,
             "stop_reason": stop_reason,
+            "skipped_pose_duplicate_image_names": skipped_pose_duplicate_image_names,
             "_accepted_frames": accepted,
         }
 
@@ -8634,6 +8697,7 @@ def _select_and_rerank_frames(
     non_attachment_referability_shortlist: int = DEFAULT_NON_ATTACHMENT_REFERABILITY_SHORTLIST,
     non_attachment_clarity_min_score: int = DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
     precomputed_groups: list[dict[str, Any]] | None = None,
+    scene_accepted_frames: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not frame_candidates or int(max_frames) <= 0:
         return []
@@ -8677,6 +8741,7 @@ def _select_and_rerank_frames(
         non_attachment_referability_shortlist=non_attachment_referability_shortlist,
         non_attachment_clarity_min_score=non_attachment_clarity_min_score,
         precomputed_groups=precomputed_groups,
+        scene_accepted_frames=scene_accepted_frames,
     )
     for reviewed_frame in reviewed_frames:
         accepted_frame_count += 1
@@ -9925,6 +9990,7 @@ def main():
                 return None
             return _get_reviewed_frames([frame]).get(image_name)
 
+        scene_accepted_frames: list[dict[str, Any]] = []
         all_candidate_groups = _build_and_classify_frame_groups(
             frame_candidates,
             attachment_graph,
@@ -9999,6 +10065,7 @@ def main():
                 non_attachment_referability_shortlist=int(args.non_attachment_referability_shortlist),
                 non_attachment_clarity_min_score=int(args.non_attachment_clarity_min_score),
                 precomputed_groups=non_attachment_groups,
+                scene_accepted_frames=scene_accepted_frames,
             ) if (non_attachment_candidate_frames and not bool(args.attachment_only)) else []
         except MeshRayRequiredError as exc:
             return _build_mesh_ray_failure_result(exc)
@@ -10028,6 +10095,7 @@ def main():
                 attachment_clarity_min_score=int(args.attachment_clarity_min_score),
                 failed_signatures_seen=attachment_failed_signatures_seen,
                 precomputed_groups=attachment_groups,
+                scene_accepted_frames=scene_accepted_frames,
             ) if attachment_candidate_frames else []
             if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
                 attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(

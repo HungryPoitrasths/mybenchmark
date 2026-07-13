@@ -3827,6 +3827,30 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ["000010.jpg", "000000.jpg"],
         )
 
+    def test_build_and_classify_frame_groups_prioritizes_own_pair_over_richness(self) -> None:
+        # has_pair.jpg has lower richness than no_pair.jpg but itself shows
+        # the full attachment pair -- it must still be tried first.
+        frames = [
+            {"image_name": "no_pair.jpg", "score": 50, "visible_object_ids": [9]},
+            {"image_name": "has_pair.jpg", "score": 1, "visible_object_ids": [1, 2]},
+        ]
+
+        groups = referability_module._build_and_classify_frame_groups(
+            frames,
+            {1: [2]},
+            {
+                "no_pair.jpg": make_camera_pose(image_name="no_pair.jpg", yaw_deg=0.0),
+                "has_pair.jpg": make_camera_pose(image_name="has_pair.jpg", yaw_deg=5.0),
+            },
+        )
+
+        self.assertEqual(len(groups), 1)
+        self.assertTrue(groups[0]["is_attachment_group"])
+        self.assertEqual(
+            [frame["image_name"] for frame in groups[0]["frames"]],
+            ["has_pair.jpg", "no_pair.jpg"],
+        )
+
     def test_build_and_classify_frame_groups_marks_non_attachment_when_no_pair_visible(self) -> None:
         frames = [
             {"image_name": "000000.jpg", "score": 5, "visible_object_ids": [3]},
@@ -3890,6 +3914,199 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(len(groups), 1)
         self.assertFalse(groups[0]["is_attachment_group"])
         self.assertEqual(groups[0]["group_pairs"], [])
+
+    def test_is_pose_duplicate_of_accepted_true_within_both_thresholds(self) -> None:
+        frame = {"image_name": "candidate.jpg"}
+        accepted = [{"image_name": "accepted.jpg"}]
+        poses = {
+            "candidate.jpg": make_camera_pose(image_name="candidate.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+            "accepted.jpg": make_camera_pose(image_name="accepted.jpg", yaw_deg=5.0, position=(0.1, 0.0, 0.0)),
+        }
+
+        self.assertTrue(
+            referability_module._is_pose_duplicate_of_accepted(frame, accepted, poses)
+        )
+
+    def test_is_pose_duplicate_of_accepted_false_when_position_exceeds_threshold(self) -> None:
+        frame = {"image_name": "candidate.jpg"}
+        accepted = [{"image_name": "accepted.jpg"}]
+        poses = {
+            "candidate.jpg": make_camera_pose(image_name="candidate.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+            "accepted.jpg": make_camera_pose(image_name="accepted.jpg", yaw_deg=0.0, position=(2.0, 0.0, 0.0)),
+        }
+
+        self.assertFalse(
+            referability_module._is_pose_duplicate_of_accepted(frame, accepted, poses)
+        )
+
+    def test_is_pose_duplicate_of_accepted_false_when_angle_exceeds_threshold(self) -> None:
+        frame = {"image_name": "candidate.jpg"}
+        accepted = [{"image_name": "accepted.jpg"}]
+        poses = {
+            "candidate.jpg": make_camera_pose(image_name="candidate.jpg", yaw_deg=0.0),
+            "accepted.jpg": make_camera_pose(image_name="accepted.jpg", yaw_deg=90.0),
+        }
+
+        self.assertFalse(
+            referability_module._is_pose_duplicate_of_accepted(frame, accepted, poses)
+        )
+
+    def test_is_pose_duplicate_of_accepted_false_for_empty_accepted_list(self) -> None:
+        frame = {"image_name": "candidate.jpg"}
+        poses = {"candidate.jpg": make_camera_pose(image_name="candidate.jpg")}
+
+        self.assertFalse(
+            referability_module._is_pose_duplicate_of_accepted(frame, [], poses)
+        )
+
+    def test_select_and_rerank_frames_skips_pose_duplicate_of_scene_accepted_frame(self) -> None:
+        frame_candidates = [
+            {"image_name": "candidate.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [3, 4]},
+        ]
+        accepted_frame = {"image_name": "already_accepted.jpg", "visible_object_ids": [5]}
+        poses = {
+            "candidate.jpg": make_camera_pose(image_name="candidate.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+            "already_accepted.jpg": make_camera_pose(image_name="already_accepted.jpg", yaw_deg=5.0, position=(0.1, 0.0, 0.0)),
+        }
+        review_calls: list[str] = []
+
+        def frame_review_batch_getter(frames: list[dict]) -> dict[str, dict]:
+            review_calls.extend(frame["image_name"] for frame in frames)
+            return {
+                frame["image_name"]: {
+                    "image_name": frame["image_name"],
+                    "frame_info": {"clear": True, "clarity_score": 90, "frame_usable": True, "reason": "clear"},
+                    "frame_selection_score": 100090,
+                }
+                for frame in frames
+            }
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"pose_dedup_non_attachment_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        with patch.object(referability_module.cv2, "imread", return_value=np.zeros((32, 32, 3), dtype=np.uint8)):
+            selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=make_scene_dir(root, "scene0000_00"),
+                frame_candidates=frame_candidates,
+                max_frames=1,
+                poses=poses,
+                frame_review_batch_getter=frame_review_batch_getter,
+                referability_entry_builder=lambda frame, reviewed_frame: {"referable_object_ids": [3, 4]},
+                scene_accepted_frames=[accepted_frame],
+            )
+
+        self.assertEqual(review_calls, [])
+        self.assertEqual(selected, [])
+
+    def test_select_attachment_group_representatives_skips_pose_duplicate_of_scene_accepted_frame(self) -> None:
+        frames = [
+            {"image_name": "candidate.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
+        ]
+        accepted_frame = {"image_name": "already_accepted.jpg", "visible_object_ids": [1, 2]}
+        poses = {
+            "candidate.jpg": make_camera_pose(image_name="candidate.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+            "already_accepted.jpg": make_camera_pose(image_name="already_accepted.jpg", yaw_deg=5.0, position=(0.1, 0.0, 0.0)),
+        }
+        review_calls: list[str] = []
+
+        def frame_review_getter(frame: dict) -> dict:
+            review_calls.append(frame["image_name"])
+            return {
+                "image_name": frame["image_name"],
+                "frame_info": {"clear": True, "clarity_score": 90, "frame_usable": True, "reason": "clear"},
+            }
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"pose_dedup_attachment_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+
+        with patch.object(referability_module.cv2, "imread", return_value=np.zeros((32, 32, 3), dtype=np.uint8)):
+            selected = referability_module._select_attachment_group_representatives(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=make_scene_dir(root, "scene0000_00"),
+                frames=frames,
+                attachment_graph={1: [2]},
+                poses=poses,
+                frame_review_getter=frame_review_getter,
+                attachment_entry_builder=lambda frame, reviewed_frame: {"attachment_referable_object_ids": [1, 2]},
+                max_accepted_frame_count=1,
+                scene_accepted_frames=[accepted_frame],
+            )
+
+        self.assertEqual(review_calls, [])
+        self.assertEqual(selected, [])
+
+    def test_scene_accepted_frames_shared_list_suppresses_pose_duplicate_across_stages(self) -> None:
+        # Simulates main()'s two-stage call order: non-attachment stage runs
+        # first and records its accepted frame into the shared list; the
+        # attachment stage then sees it and skips a pose-close candidate.
+        non_attachment_candidates = [
+            {"image_name": "na_frame.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [5, 6]},
+        ]
+        attachment_candidates = [
+            {"image_name": "att_frame.jpg", "score": 20, "n_visible": 2, "visible_object_ids": [1, 2]},
+        ]
+        poses = {
+            "na_frame.jpg": make_camera_pose(image_name="na_frame.jpg", yaw_deg=0.0, position=(0.0, 0.0, 0.0)),
+            "att_frame.jpg": make_camera_pose(image_name="att_frame.jpg", yaw_deg=5.0, position=(0.1, 0.0, 0.0)),
+        }
+        attachment_review_calls: list[str] = []
+
+        def non_attachment_batch_getter(frames: list[dict]) -> dict[str, dict]:
+            return {
+                frame["image_name"]: {
+                    "image_name": frame["image_name"],
+                    "frame_info": {"clear": True, "clarity_score": 90, "frame_usable": True, "reason": "clear"},
+                    "frame_selection_score": 100090,
+                }
+                for frame in frames
+            }
+
+        def attachment_review_getter(frame: dict) -> dict:
+            attachment_review_calls.append(frame["image_name"])
+            return {
+                "image_name": frame["image_name"],
+                "frame_info": {"clear": True, "clarity_score": 90, "frame_usable": True, "reason": "clear"},
+            }
+
+        root = Path(__file__).resolve().parent / "_tmp" / f"pose_dedup_cross_stage_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        self.addCleanup(shutil.rmtree, root, True)
+        scene_dir = make_scene_dir(root, "scene0000_00")
+        scene_accepted_frames: list[dict] = []
+
+        with patch.object(referability_module.cv2, "imread", return_value=np.zeros((32, 32, 3), dtype=np.uint8)):
+            non_attachment_selected = referability_module._select_and_rerank_frames(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frame_candidates=non_attachment_candidates,
+                max_frames=1,
+                poses=poses,
+                frame_review_batch_getter=non_attachment_batch_getter,
+                referability_entry_builder=lambda frame, reviewed_frame: {"referable_object_ids": [5, 6]},
+                scene_accepted_frames=scene_accepted_frames,
+            )
+            attachment_selected = referability_module._select_attachment_group_representatives(
+                client=object(),
+                model_name="fake-vlm",
+                scene_dir=scene_dir,
+                frames=attachment_candidates,
+                attachment_graph={1: [2]},
+                poses=poses,
+                frame_review_getter=attachment_review_getter,
+                attachment_entry_builder=lambda frame, reviewed_frame: {"attachment_referable_object_ids": [1, 2]},
+                max_accepted_frame_count=1,
+                scene_accepted_frames=scene_accepted_frames,
+            )
+
+        self.assertEqual([entry["image_name"] for entry in non_attachment_selected], ["na_frame.jpg"])
+        self.assertEqual(attachment_review_calls, [])
+        self.assertEqual(attachment_selected, [])
 
     def test_select_attachment_group_representatives_merges_near_duplicate_visible_groups_when_pair_set_and_pose_match(self) -> None:
         frames = [
