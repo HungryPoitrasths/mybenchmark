@@ -558,6 +558,54 @@ def _find_completed_scenes_with_failed_review_attempts(
     return flagged_scene_ids
 
 
+def _find_completed_scenes_needing_more_frames(
+    scene_status_doc: dict[str, Any],
+    *,
+    scene_status_path: Path,
+    target_max_frames: int,
+) -> list[str]:
+    """Scan every already-completed scene's recorded batch file for how many frames were
+    actually cached last time. If that count is below this run's --max_frames, the scene is
+    flagged so it gets reprocessed — the per-frame sidecar cache
+    (_get_referability_entry_by_image_name) means only genuinely new frames trigger fresh
+    VLM calls. Used by --extend_frames to find scenes to reprocess."""
+    completed_scenes = scene_status_doc.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        return []
+    loaded_batch_docs: dict[str, dict[str, Any]] = {}
+    flagged_scene_ids: list[str] = []
+    for scene_id, record in completed_scenes.items():
+        if not isinstance(record, dict):
+            continue
+        batch_file = str(record.get("batch_file", "")).strip()
+        if not batch_file:
+            continue
+        batch_doc = loaded_batch_docs.get(batch_file)
+        if batch_doc is None:
+            batch_path = scene_status_path.parent / batch_file
+            if not batch_path.exists():
+                continue
+            with open(batch_path, "r", encoding="utf-8") as f:
+                batch_doc = json.load(f)
+            if not isinstance(batch_doc, dict):
+                continue
+            loaded_batch_docs[batch_file] = batch_doc
+        scene_status_field = batch_doc.get("scene_status")
+        status_record = (
+            scene_status_field.get(str(scene_id))
+            if isinstance(scene_status_field, dict)
+            else None
+        )
+        cached_frame_count = (
+            int(status_record.get("final_cacheable_frame_count", 0) or 0)
+            if isinstance(status_record, dict)
+            else 0
+        )
+        if cached_frame_count < int(target_max_frames):
+            flagged_scene_ids.append(str(scene_id))
+    return flagged_scene_ids
+
+
 def _mark_scene_completed(
     scene_status_doc: dict[str, Any],
     *,
@@ -8879,7 +8927,8 @@ def main():
     )
     parser.add_argument(
         "--max_frames", type=int, default=5,
-        help="Maximum frames per scene",
+        help="Maximum frames per scene. To raise this for scenes already completed in a "
+        "prior run, combine with --extend_frames instead of just --resume.",
     )
     parser.add_argument(
         "--label_map", type=str, default=None,
@@ -8913,6 +8962,17 @@ def main():
             "call failed all in-call retries (review_status=review_failed_or_missing_image). "
             "Any such scene is treated as not-yet-completed for this run and reprocessed from "
             "scratch, re-issuing fresh VLM calls. Combine with --resume."
+        ),
+    )
+    parser.add_argument(
+        "--extend_frames", action="store_true",
+        help=(
+            "Before resuming, rescan every already-completed scene's recorded batch file and "
+            "compare its cached frame count against this run's --max_frames. Any scene cached "
+            "with fewer frames than the current --max_frames is treated as not-yet-completed "
+            "and reprocessed: frames already reviewed are pulled from the per-frame sidecar "
+            "cache (no VLM re-call), only newly-selected frames trigger fresh VLM calls. "
+            "Combine with --resume and a larger --max_frames than the prior run used."
         ),
     )
     parser.add_argument(
@@ -9187,6 +9247,28 @@ def main():
         else:
             logger.info(
                 "--retry_failed_reviews: no previously-completed scene had a failed VLM review attempt"
+            )
+    if args.extend_frames:
+        stale_frame_count_scene_ids = _find_completed_scenes_needing_more_frames(
+            scene_status_doc,
+            scene_status_path=scene_status_path,
+            target_max_frames=int(args.max_frames),
+        )
+        if stale_frame_count_scene_ids:
+            completed_scene_ids -= set(stale_frame_count_scene_ids)
+            logger.warning(
+                "--extend_frames: found %d previously-completed scene(s) cached with fewer "
+                "frames than max_frames=%d; will reprocess (cached frames reused via sidecar, "
+                "only new frames call the VLM): %s",
+                len(stale_frame_count_scene_ids),
+                int(args.max_frames),
+                ", ".join(sorted(stale_frame_count_scene_ids)),
+            )
+        else:
+            logger.info(
+                "--extend_frames: no previously-completed scene has fewer cached frames than "
+                "max_frames=%d",
+                int(args.max_frames),
             )
     if args.resume and completed_scene_ids:
         logger.info(
