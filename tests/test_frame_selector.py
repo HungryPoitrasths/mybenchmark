@@ -898,7 +898,7 @@ class FrameSelectorTests(unittest.TestCase):
             patch.object(
                 frame_selector,
                 "_read_image_quality_metrics",
-                return_value=make_quality_metrics(79.0, 20.0),
+                return_value=make_quality_metrics(readable=False),
             ),
             patch.object(
                 frame_selector,
@@ -954,51 +954,6 @@ class FrameSelectorTests(unittest.TestCase):
             results = frame_selector.select_frames(scene_dir, objects, max_frames=7)
 
         self.assertEqual([entry["image_name"] for entry in results], processed_names[:5])
-
-    def test_select_frames_stage2_rejects_survivors_without_backfill(self) -> None:
-        root = make_case_dir("frame_selector_quality_stage2")
-        self.addCleanup(shutil.rmtree, root, True)
-        scene_dir = root / "scene0000_00"
-        (scene_dir / "pose").mkdir(parents=True)
-        (scene_dir / "color").mkdir(parents=True)
-        (scene_dir / "intrinsic_color.txt").write_text("stub", encoding="utf-8")
-        image_names = [f"{idx:06d}.jpg" for idx in range(21)]
-        for image_name in image_names:
-            (scene_dir / "color" / image_name).write_bytes(b"jpg")
-
-        processed_names = [image_names[idx] for idx in range(0, len(image_names), frame_selector.FRAME_STRIDE)]
-        objects = [make_object(1, "cup"), make_object(2, "table"), make_object(3, "lamp")]
-
-        with (
-            patch.object(frame_selector, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
-            patch.object(frame_selector, "load_axis_alignment", return_value=np.eye(4, dtype=np.float64)),
-            patch.object(
-                frame_selector,
-                "load_scannet_poses",
-                return_value={image_name: make_camera_pose(image_name) for image_name in image_names},
-            ),
-            patch.object(frame_selector, "get_visible_objects", side_effect=[objects] * 4),
-            patch.object(
-                frame_selector,
-                "_read_image_quality_metrics",
-                side_effect=[
-                    make_quality_metrics(200.0, 18.0),
-                    make_quality_metrics(190.0, 17.0),
-                    make_quality_metrics(180.0, 16.0),
-                    make_quality_metrics(170.0, 15.0),
-                    make_quality_metrics(79.0, 20.0),
-                    make_quality_metrics(60.0, 13.0),
-                    make_quality_metrics(50.0, 12.0),
-                ],
-            ),
-            patch.object(frame_selector, "_count_attachment_objects", return_value=0),
-            patch.object(frame_selector, "_count_well_cropped_visible_objects", return_value=1),
-            patch.object(frame_selector, "_count_visible_objects_with_min_bbox_in_frame_ratio", return_value=3),
-            patch.object(frame_selector, "_count_well_cropped_attachment_pairs", return_value=0),
-        ):
-            results = frame_selector.select_frames(scene_dir, objects, max_frames=7)
-
-        self.assertEqual([entry["image_name"] for entry in results], processed_names[:4])
 
     def test_select_frames_does_not_drop_small_readable_sets_in_stage1(self) -> None:
         root = make_case_dir("frame_selector_quality_small_set")

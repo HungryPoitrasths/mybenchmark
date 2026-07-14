@@ -757,13 +757,17 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertIn("high_under_coverage", quality["reason_codes"])
 
     def test_build_object_review_crop_requires_projected_area_of_at_least_800px(self) -> None:
+        # Threshold scales with the source image's resolution (120x120 here,
+        # not the ScanNet v2 640x480 it was calibrated against), so compute
+        # the boundary rather than hardcoding the old flat 800px value.
+        min_area = referability_module.question_review_crop_min_projected_area_px(120, 120)
         tiny_crop = referability_module._build_object_review_crop(
             np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=799.0, bbox_in_frame_ratio=0.1),
+            make_visibility_meta(projected_area_px=min_area - 1.0, bbox_in_frame_ratio=0.1),
         )
         valid_crop = referability_module._build_object_review_crop(
             np.zeros((120, 120, 3), dtype=np.uint8),
-            make_visibility_meta(projected_area_px=800.0, bbox_in_frame_ratio=0.1),
+            make_visibility_meta(projected_area_px=min_area, bbox_in_frame_ratio=0.1),
         )
 
         self.assertEqual(tiny_crop["local_outcome"], "excluded")
@@ -1468,8 +1472,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
     def test_compute_frame_referability_entry_excludes_unique_object_below_projected_area_threshold(self) -> None:
         scene_objects = [make_object(1, "chair")]
         objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+        # Threshold scales with the source image's resolution (120x120 here,
+        # not the ScanNet v2 640x480 it was calibrated against).
+        min_area = referability_module.question_review_crop_min_projected_area_px(120, 120)
         visibility = {
-            1: make_visibility_meta(projected_area_px=799.0),
+            1: make_visibility_meta(projected_area_px=min_area - 1.0),
         }
 
         with (

@@ -26,7 +26,7 @@ from .utils.colmap_loader import (
     load_scannet_intrinsics,
     load_scannet_poses,
 )
-from .utils.coordinate_transform import is_in_image
+from .utils.coordinate_transform import default_edge_margin_px, is_in_image
 
 logger = logging.getLogger(__name__)
 
@@ -154,22 +154,16 @@ def _filter_sampled_frames_by_quality(
     stage1_survivors = ranked_frames[: len(ranked_frames) - stage1_rejected_count]
     stage1_survivors.sort(key=lambda entry: int(entry["sampled_index"]))
 
-    final_survivors: list[dict[str, Any]] = []
-    stage2_rejected_count = 0
-    for entry in stage1_survivors:
-        if _passes_absolute_image_quality_gate(
-            float(entry["laplacian_variance"]),
-            float(entry["tenengrad"]),
-        ):
-            final_survivors.append(entry)
-            continue
-        stage2_rejected_count += 1
-
-    return final_survivors, {
+    # Stage 2 (absolute Laplacian/Tenengrad thresholds) removed: those
+    # constants were tuned for ScanNet v2's 640x480 sensor and rejected the
+    # majority of ScanNet++ iPhone frames (82.8% below QUALITY_STAGE2_LAPLACIAN_MIN
+    # on scene c50d2d1d42) despite the relative Stage 1 cut already discarding
+    # the worst 30%.
+    return stage1_survivors, {
         "unreadable_count": unreadable_count,
         "stage1_rejected_count": stage1_rejected_count,
-        "stage2_rejected_count": stage2_rejected_count,
-        "final_quality_kept_count": len(final_survivors),
+        "stage2_rejected_count": 0,
+        "final_quality_kept_count": len(stage1_survivors),
     }
 
 
@@ -373,12 +367,15 @@ def compute_frame_object_visibility(
     depth_image=None,
     depth_intrinsics: CameraIntrinsics | None = None,
     instance_mesh_data: InstanceMeshData | None = None,
-    margin: int = 80,
+    margin: int | None = None,
     min_depth: float = 0.3,
     max_depth: float = 8.0,
 ) -> dict[int, dict[str, Any]]:
     """Compute per-object visibility metadata for a single frame."""
     from .utils.depth_occlusion import compute_depth_occlusion
+
+    if margin is None:
+        margin = default_edge_margin_px(color_intrinsics)
 
     gray = None
     if image_path is not None and image_path.exists():
@@ -539,7 +536,10 @@ VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 # Denser sampling gives the later VLM rerank a broader candidate pool.
 FRAME_STRIDE = 3
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
-VISIBLE_PROJECTED_AREA_MIN = 800.0
+# Calibrated against ScanNet v2's 640x480 sensor; scaled per-frame by
+# visible_projected_area_px() so higher-resolution sensors (e.g. ScanNet++
+# iPhone at 1920x1440) get a proportionally larger floor.
+VISIBLE_PROJECTED_AREA_RATIO = 800.0 / (640 * 480)
 FRAME_CROP_BONUS_IN_FRAME_RATIO_MIN = 0.70
 NON_ATTACHMENT_VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.70
 NON_ATTACHMENT_MIN_VISIBLE_BBOX_COUNT = 2
@@ -547,15 +547,21 @@ ATTACHMENT_PAIR_BBOX_IN_FRAME_RATIO_MIN = 0.50
 ATTACHMENT_PAIR_BONUS_WEIGHT = 15
 
 
+def visible_projected_area_px(width: int, height: int) -> float:
+    return VISIBLE_PROJECTED_AREA_RATIO * float(width) * float(height)
+
+
 def build_selector_visibility_audit_from_meta(
     meta: dict[str, Any],
     intrinsics: CameraIntrinsics,
     *,
-    margin: int = 80,
+    margin: int | None = None,
     min_depth: float = 0.3,
     max_depth: float = 8.0,
 ) -> dict[str, Any]:
     """Explain whether an object passes selector visibility gating."""
+    if margin is None:
+        margin = default_edge_margin_px(intrinsics)
     center_uv_px = meta.get("center_uv_px")
     uv = None
     if isinstance(center_uv_px, (list, tuple)) and len(center_uv_px) == 2:
@@ -581,7 +587,7 @@ def build_selector_visibility_audit_from_meta(
         selector_passed = True
     elif (
         bbox_in_frame_ratio >= VISIBLE_BBOX_IN_FRAME_RATIO_MIN
-        and projected_area_px >= VISIBLE_PROJECTED_AREA_MIN
+        and projected_area_px >= visible_projected_area_px(intrinsics.width, intrinsics.height)
     ):
         decision = "selected_roi_fallback"
         selector_passed = True
@@ -589,7 +595,7 @@ def build_selector_visibility_audit_from_meta(
         rejection_reasons.append("center_not_in_margin")
         if bbox_in_frame_ratio < VISIBLE_BBOX_IN_FRAME_RATIO_MIN:
             rejection_reasons.append("bbox_in_frame_ratio_below_threshold")
-        if projected_area_px < VISIBLE_PROJECTED_AREA_MIN:
+        if projected_area_px < visible_projected_area_px(intrinsics.width, intrinsics.height):
             rejection_reasons.append("projected_area_below_threshold")
 
     return {
@@ -611,13 +617,15 @@ def _build_selector_visibility_meta(
     intrinsics: CameraIntrinsics,
     *,
     instance_mesh_data: InstanceMeshData | None = None,
-    margin: int = 80,
+    margin: int | None = None,
     min_depth: float = 0.3,
     max_depth: float = 8.0,
     include_roi_metrics: bool = False,
 ) -> dict[str, Any]:
     from .utils.coordinate_transform import project_camera_points_to_image
 
+    if margin is None:
+        margin = default_edge_margin_px(intrinsics)
     center = np.array(obj["center"], dtype=np.float64)
     point_cam = pose.world_to_camera_point(center)
     uv_all, depths = project_camera_points_to_image(point_cam.reshape(1, 3), intrinsics)
@@ -645,7 +653,7 @@ def build_selector_visibility_audit(
     intrinsics: CameraIntrinsics,
     *,
     instance_mesh_data: InstanceMeshData | None = None,
-    margin: int = 80,
+    margin: int | None = None,
     min_depth: float = 0.3,
     max_depth: float = 8.0,
     include_roi_metrics: bool = False,
@@ -675,7 +683,7 @@ def get_visible_objects(
     pose: CameraPose,
     intrinsics: CameraIntrinsics,
     instance_mesh_data: InstanceMeshData | None = None,
-    margin: int = 80,
+    margin: int | None = None,
     min_depth: float = 0.3,
     max_depth: float = 8.0,
     return_audits: bool = False,

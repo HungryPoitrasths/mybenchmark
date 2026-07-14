@@ -186,6 +186,17 @@ def is_in_image(
     )
 
 
+# Calibrated against ScanNet v2's 640x480 sensor (min dim = 480). Uses
+# min(width, height) rather than a fixed axis so a higher-resolution sensor
+# (e.g. ScanNet++ iPhone at 1920x1440) gets a proportionally larger margin
+# instead of the same 80px on a much larger frame.
+_EDGE_MARGIN_RATIO = 80.0 / 480.0
+
+
+def default_edge_margin_px(intrinsics: CameraIntrinsics) -> int:
+    return round(_EDGE_MARGIN_RATIO * min(intrinsics.width, intrinsics.height))
+
+
 # ---- Camera axis helpers (world-space directions) ----
 
 def get_camera_right(pose: CameraPose) -> np.ndarray:

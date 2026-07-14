@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.find_occlusion_auxiliary_frames import _obj_center, load_scene_resources
 from src.qa_generator import (
-    MIN_PROJECTED_AREA_PX,
+    _resolution_scaled_min_projected_area_px,
     _route_runs_for_pose,
     _route_sample_points,
     find_auxiliary_frames_for_occlusion_question_v2,
@@ -69,7 +69,9 @@ def _diagnose(
         if name == orig_camera_pose.image_name:
             continue
         area, in_frame_ratio = quick_moved_bbox_projection(moved_target, pose, color_intrinsics)
-        if in_frame_ratio < 1.0 or area < MIN_PROJECTED_AREA_PX:
+        if in_frame_ratio < 1.0 or area < _resolution_scaled_min_projected_area_px(
+            color_intrinsics.width, color_intrinsics.height
+        ):
             continue
         runs = _route_runs_for_pose(route_points, ts, pose, color_intrinsics)
         if runs and runs[-1][1] >= 1.0 - 1e-6:

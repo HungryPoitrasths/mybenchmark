@@ -32,11 +32,18 @@ from .colmap_loader import CameraIntrinsics, CameraPose
 from .coordinate_transform import world_to_camera
 
 
-MIN_PROJECTED_AREA_PX = 400.0
+# Calibrated against ScanNet v2's 640x480 sensor. Scenes shot at a higher
+# resolution (e.g. ScanNet++ iPhone at 1920x1440) get a proportionally larger
+# effective floor instead of the same 400px on ~6x more image area.
+MIN_PROJECTED_AREA_RATIO = 400.0 / (640 * 480)
 MIN_IN_FRAME_RATIO = 0.10
 FULLY_VISIBLE_RATIO_MIN = 0.65
 PARTIALLY_VISIBLE_RATIO_MIN = 0.20
 FACE_SAMPLE_STEPS = 5
+
+
+def min_projected_area_px(width: int, height: int) -> float:
+    return MIN_PROJECTED_AREA_RATIO * float(width) * float(height)
 
 
 def load_depth_image(depth_path: Path | str) -> np.ndarray:
@@ -182,7 +189,10 @@ def compute_depth_occlusion(
 
     projected_area = float(metrics["projected_area"])
     in_frame_ratio = float(metrics["in_frame_ratio"])
-    if projected_area < MIN_PROJECTED_AREA_PX or in_frame_ratio < MIN_IN_FRAME_RATIO:
+    if (
+        projected_area < min_projected_area_px(intrinsics.width, intrinsics.height)
+        or in_frame_ratio < MIN_IN_FRAME_RATIO
+    ):
         return "not visible", 0.0
 
     ratio = float(metrics["visible_ratio_in_frame"])

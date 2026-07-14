@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.run_vlm_referability import (
-    QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+    question_review_crop_min_projected_area_px,
     REFERABILITY_MESH_RAY_STAGE1_BASE_SAMPLE_COUNT,
     REFERABILITY_MESH_RAY_STAGE2_BASE_SAMPLE_COUNT,
     SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX,
@@ -788,7 +788,7 @@ def main() -> None:
             int(obj_id)
             for obj_id in visible_matching_object_ids
             if float(visibility_by_obj_id.get(int(obj_id), {}).get("projected_area_px", 0.0) or 0.0)
-            >= QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+            >= question_review_crop_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
             and str(topology_quality_by_obj_id.get(int(obj_id), {}).get("status", "")).strip().lower() != "fail"
         ]
 

@@ -69,6 +69,7 @@ from .virtual_ops import (
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
 from .utils.coordinate_transform import (
+    default_edge_margin_px,
     get_camera_forward,
     is_in_image,
     project_camera_points_to_image,
@@ -78,12 +79,18 @@ from .utils.coordinate_transform import (
 )
 from .utils.depth_occlusion import (
     MIN_IN_FRAME_RATIO,
-    MIN_PROJECTED_AREA_PX,
+    MIN_PROJECTED_AREA_RATIO,
     FULLY_VISIBLE_RATIO_MIN,
     PARTIALLY_VISIBLE_RATIO_MIN,
     compute_mesh_depth_occlusion,
     compute_mesh_depth_occlusion_metrics,
+    min_projected_area_px as _resolution_scaled_min_projected_area_px,
 )
+
+# Fallback used only where a real CameraIntrinsics isn't available at the call
+# site (e.g. a trivial zero-area sentinel) -- reproduces the pre-scaling 400px
+# value calibrated against ScanNet v2's 640x480 sensor.
+_DEFAULT_MIN_PROJECTED_AREA_PX = MIN_PROJECTED_AREA_RATIO * 640.0 * 480.0
 
 _DEBUG_VERIFY_BATCH = (
     os.environ.get("_DEBUG_VERIFY_BATCH")
@@ -484,6 +491,7 @@ class _L1OcclusionMetrics:
     sufficient_evidence: bool
     decision: str
     backend: str
+    min_projected_area_px: float
 
 
 @dataclass
@@ -780,6 +788,7 @@ def _make_l1_occlusion_metrics(
     not_visible_probe_sample_count: int = 0,
     not_visible_probe_valid_count: int = 0,
     not_visible_probe_visible_count: int = 0,
+    min_projected_area_px: float = _DEFAULT_MIN_PROJECTED_AREA_PX,
 ) -> _L1OcclusionMetrics:
     valid_in_frame_count = int(valid_in_frame_count)
     if visible_in_frame_count is None:
@@ -816,6 +825,7 @@ def _make_l1_occlusion_metrics(
         sufficient_evidence=bool(sufficient_evidence),
         decision="skip",
         backend=str(backend),
+        min_projected_area_px=float(min_projected_area_px),
     )
     return _L1OcclusionMetrics(
         projected_area=metrics.projected_area,
@@ -833,6 +843,7 @@ def _make_l1_occlusion_metrics(
         sufficient_evidence=metrics.sufficient_evidence,
         decision=_classify_l1_occlusion_metrics(metrics),
         backend=metrics.backend,
+        min_projected_area_px=metrics.min_projected_area_px,
     )
 
 
@@ -1155,7 +1166,7 @@ def _build_visible_wall_anchor(
         uv, depth = project_to_image(center, camera_pose, color_intrinsics)
         if not (0.3 < depth <= 6.0):
             continue
-        if not is_in_image(uv, color_intrinsics, margin=80):
+        if not is_in_image(uv, color_intrinsics, margin=default_edge_margin_px(color_intrinsics)):
             continue
 
         u = float(uv[0]) / width
@@ -2480,7 +2491,7 @@ def _select_occlusion_directed_occluder_candidates(
     occlusion_source_objects: list[dict[str, Any]],
     original_visibility: dict[int, tuple[str | None, str, str, "_L1OcclusionMetrics"]],
     max_candidates: int | None = None,
-    min_projected_area_px: float = MIN_PROJECTED_AREA_PX,
+    min_projected_area_px: float = _DEFAULT_MIN_PROJECTED_AREA_PX,
     max_distance_m: float = _OCCLUSION_DIRECTED_MAX_CANDIDATE_DISTANCE_M,
 ) -> list[dict[str, Any]]:
     """Return nearby, on-screen-sized candidate occluders for *query_obj*.
@@ -2759,6 +2770,10 @@ def _iter_occlusion_directed_object_move_states(
         moved_ids=moved_ids,
         occlusion_source_objects=occlusion_source_objects,
         original_visibility=original_visibility,
+        min_projected_area_px=(
+            _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+            if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+        ),
     )
     query_center = np.asarray(query_obj["center"], dtype=np.float64)
     for obj_ref in occluder_candidates:
@@ -2796,7 +2811,7 @@ def _iter_occlusion_directed_object_move_states(
 
 def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
     if (
-        metrics.projected_area < MIN_PROJECTED_AREA_PX
+        metrics.projected_area < metrics.min_projected_area_px
         or metrics.in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
         or metrics.in_frame_sample_count <= 0
     ):
@@ -2827,7 +2842,7 @@ def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
 
 def _is_l1_occlusion_frame_skip(metrics: _L1OcclusionMetrics) -> bool:
     return (
-        metrics.projected_area < MIN_PROJECTED_AREA_PX
+        metrics.projected_area < metrics.min_projected_area_px
         or metrics.in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
         or metrics.in_frame_sample_count <= 0
     )
@@ -2920,7 +2935,7 @@ def _evaluate_absent_label_strict_not_visible_candidate(
     )
     in_frame_sample_count = int(len(in_frame_points))
     if (
-        projected_area < MIN_PROJECTED_AREA_PX
+        projected_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
         or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
         or in_frame_sample_count <= 0
     ):
@@ -3015,6 +3030,10 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=0,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     obj_id = int(obj["id"])
@@ -3034,6 +3053,10 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     projected_records = _project_sample_point_records(
@@ -3045,7 +3068,7 @@ def _compute_l1_occlusion_metrics(
     in_frame_records = [rec for rec in projected_records if bool(rec["in_frame"])]
     in_frame_sample_count = len(in_frame_records)
     if (
-        projected_area < MIN_PROJECTED_AREA_PX
+        projected_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
         or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
         or in_frame_sample_count <= 0
     ):
@@ -3057,6 +3080,10 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     in_frame_indices = np.asarray(
@@ -3114,6 +3141,10 @@ def _compute_l1_occlusion_metrics(
                 sampled_point_count=sampled_point_count,
                 in_frame_sample_count=in_frame_sample_count,
                 backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
                 not_visible_probe_sample_count=probe_sample_count,
                 not_visible_probe_valid_count=probe_valid_count,
                 not_visible_probe_visible_count=probe_visible_count,
@@ -3136,6 +3167,10 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
             visible_in_frame_count=int(depth_metrics["visible_in_frame_count"]),
             not_visible_probe_sample_count=probe_sample_count,
             not_visible_probe_valid_count=probe_valid_count,
@@ -3164,6 +3199,10 @@ def _compute_l1_occlusion_metrics(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
             visible_in_frame_count=visible_count,
             not_visible_probe_sample_count=probe_sample_count,
             not_visible_probe_valid_count=probe_valid_count,
@@ -3178,6 +3217,10 @@ def _compute_l1_occlusion_metrics(
         sampled_point_count=sampled_point_count,
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         not_visible_probe_sample_count=probe_sample_count,
         not_visible_probe_valid_count=probe_valid_count,
         not_visible_probe_visible_count=probe_visible_count,
@@ -3227,6 +3270,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
             sampled_point_count=0,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     obj_id = int(obj["id"])
@@ -3246,6 +3293,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     (
@@ -3263,7 +3314,7 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
     )
     in_frame_sample_count = int(len(in_frame_points))
     if (
-        projected_area < MIN_PROJECTED_AREA_PX
+        projected_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
         or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
         or in_frame_sample_count <= 0
     ):
@@ -3275,6 +3326,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     if modified_scene is None:
@@ -3292,6 +3347,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
@@ -3334,6 +3393,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
         sampled_point_count=sampled_point_count,
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         visible_in_frame_count=int(visible_count),
         not_visible_probe_sample_count=probe_sample_count,
         not_visible_probe_valid_count=probe_valid_count,
@@ -3366,6 +3429,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
             sampled_point_count=0,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     target_obj_id = int(target_obj_id)
@@ -3381,6 +3448,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
             sampled_point_count=0,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     sample_points = _instance_surface_samples(instance_mesh_data, target_obj_id)
@@ -3399,6 +3470,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     moved_scene_context = _build_modified_scene(
@@ -3415,6 +3490,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=0,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     moved_deltas: dict[int, np.ndarray] = {}
@@ -3450,7 +3529,7 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
     )
     in_frame_sample_count = int(len(in_frame_points))
     if (
-        projected_area < MIN_PROJECTED_AREA_PX
+        projected_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
         or in_frame_ratio < L1_OCCLUSION_MIN_IN_FRAME_RATIO
         or in_frame_sample_count <= 0
     ):
@@ -3462,6 +3541,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
             sampled_point_count=sampled_point_count,
             in_frame_sample_count=in_frame_sample_count,
             backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         )
 
     moved_blocker_deltas = {
@@ -3549,6 +3632,10 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
         sampled_point_count=sampled_point_count,
         in_frame_sample_count=in_frame_sample_count,
         backend=backend,
+            min_projected_area_px=(
+                _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                if color_intrinsics is not None else _DEFAULT_MIN_PROJECTED_AREA_PX
+            ),
         visible_in_frame_count=int(visible_count),
         not_visible_probe_sample_count=probe_sample_count,
         not_visible_probe_valid_count=probe_valid_count,
@@ -3641,7 +3728,7 @@ def _resolve_counterfactual_l1_visibility_status(
             "not_visible_out_of_frame",
             "object falls outside the image after applying L1 occlusion framing",
         )
-    if metrics.projected_area < MIN_PROJECTED_AREA_PX:
+    if metrics.projected_area < metrics.min_projected_area_px:
         return (
             None,
             "projected_area_too_small",
@@ -4969,7 +5056,7 @@ def _compute_visibility_status_per_object(
         if (
             len(sample_points) == 0
             or not target_tri_ids
-            or projected_area < MIN_PROJECTED_AREA_PX
+            or projected_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
             or in_frame_ratio < MIN_IN_FRAME_RATIO
             or len(in_frame_points) == 0
         ):
@@ -5082,7 +5169,7 @@ def _compute_movement_visibility_status_per_object(
         if (
             len(sample_points) == 0
             or not target_tri_ids
-            or projected_area < MIN_PROJECTED_AREA_PX
+            or projected_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
             or in_frame_ratio < MIN_IN_FRAME_RATIO
             or len(in_frame_points) == 0
         ):
@@ -5429,7 +5516,7 @@ def _find_object_move_occlusion_changes(
                 camera_pose,
                 color_intrinsics,
             )
-            if 0.0 < quick_area < MIN_PROJECTED_AREA_PX:
+            if 0.0 < quick_area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height):
                 continue
 
         new_metrics, new_source = _compute_l1_style_visibility_metrics_for_moved_target(
@@ -5576,7 +5663,7 @@ def find_auxiliary_frame_for_occlusion_question(
 
         # Condition 1: all 8 moved-target bbox corners must fall inside F'
         area, in_frame_ratio = quick_moved_bbox_projection(moved_target, frame_pose, color_intrinsics)
-        if in_frame_ratio < 1.0 or area < MIN_PROJECTED_AREA_PX:
+        if in_frame_ratio < 1.0 or area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height):
             continue
 
         # Condition 2: at least one orig-visible object also projects into F'
@@ -5819,7 +5906,7 @@ def find_auxiliary_frames_for_occlusion_question_v2(
     for name in candidate_names:
         pose = all_poses[name]
         area, in_frame_ratio = quick_moved_bbox_projection(moved_target, pose, color_intrinsics)
-        if in_frame_ratio < 1.0 or area < MIN_PROJECTED_AREA_PX:
+        if in_frame_ratio < 1.0 or area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height):
             continue
         runs = runs_by_frame.get(name)
         if not runs:
@@ -5900,7 +5987,7 @@ def _group_fully_in_frame(
             return False
         if not color_intrinsics.is_distorted:
             area, _ratio = quick_moved_bbox_projection(obj, camera_pose, color_intrinsics)
-            if area < MIN_PROJECTED_AREA_PX:
+            if area < _resolution_scaled_min_projected_area_px(color_intrinsics.width, color_intrinsics.height):
                 return False
     return True
 

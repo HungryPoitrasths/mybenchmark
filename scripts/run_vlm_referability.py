@@ -107,7 +107,10 @@ QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
-QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
+# Calibrated against ScanNet v2's 640x480 sensor; scaled per-frame so
+# higher-resolution sensors (e.g. ScanNet++ iPhone at 1920x1440) get a
+# proportionally larger floor instead of the same 800px on ~6x more area.
+QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_RATIO = 800.0 / (640 * 480)
 REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.70
 ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN = 0.50
 SEGMENTATION_EXTREME_NOISE_MIN_AREA_PX = 100
@@ -197,6 +200,16 @@ VLM_PARSE_FAILURE_MAX_ATTEMPTS = 2
 # max_tokens on top of the caller's budget, giving the thinking block real
 # room to finish before the JSON answer.
 VLM_PARSE_RETRY_EXTRA_HEADROOM = 8000
+
+
+def question_review_crop_min_projected_area_px(width: int, height: int) -> float:
+    return QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_RATIO * float(width) * float(height)
+
+
+# Fallback used only where a real CameraIntrinsics isn't threaded through to the
+# call site -- reproduces the pre-scaling 800px value calibrated against
+# ScanNet v2's 640x480 sensor.
+_DEFAULT_QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = question_review_crop_min_projected_area_px(640, 480)
 
 
 @dataclass
@@ -3642,6 +3655,7 @@ def _select_attachment_group_representatives(
     failed_signatures_seen: set[tuple[int, ...]] | None = None,
     precomputed_groups: list[dict[str, Any]] | None = None,
     scene_accepted_frames: list[dict[str, Any]] | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
 ) -> list[dict[str, Any]]:
     if not frames and not precomputed_groups:
         return []
@@ -3726,7 +3740,11 @@ def _select_attachment_group_representatives(
                 failed_signature = _failed_referability_object_id_signature(
                     combined,
                     bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
-                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                    projected_area_px_min=(
+                        question_review_crop_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                        if color_intrinsics is not None
+                        else _DEFAULT_QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+                    ),
                 )
                 if failed_signature:
                     if failed_signature in scene_failed_signatures_seen:
@@ -3942,6 +3960,7 @@ def _build_attachment_pair_salvage_scene_review(
     attachment_clarity_min_score: int = DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE,
     failed_signatures_seen: set[tuple[int, ...]] | None = None,
     precomputed_groups: list[dict[str, Any]] | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
 ) -> dict[str, Any]:
     relation_type_map = _attachment_edge_relation_type_map(attachment_edges)
     color_dir = scene_dir / "color"
@@ -4033,7 +4052,11 @@ def _build_attachment_pair_salvage_scene_review(
                 failed_signature = _failed_referability_object_id_signature(
                     entry,
                     bbox_in_frame_ratio_min=ATTACHMENT_REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
-                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                    projected_area_px_min=(
+                        question_review_crop_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                        if color_intrinsics is not None
+                        else _DEFAULT_QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+                    ),
                 )
                 if failed_signature:
                     if failed_signature in scene_failed_signatures_seen:
@@ -5199,6 +5222,7 @@ def _select_non_attachment_group_representatives(
     non_attachment_clarity_min_score: int = DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
     precomputed_groups: list[dict[str, Any]] | None = None,
     scene_accepted_frames: list[dict[str, Any]] | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
 ) -> list[dict[str, Any]]:
     if not frames and not precomputed_groups:
         return []
@@ -5319,7 +5343,11 @@ def _select_non_attachment_group_representatives(
                 failed_signature = _failed_referability_object_id_signature(
                     referable_entry,
                     bbox_in_frame_ratio_min=REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
-                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                    projected_area_px_min=(
+                        question_review_crop_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                        if color_intrinsics is not None
+                        else _DEFAULT_QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+                    ),
                 )
                 if failed_signature:
                     failed_signature_object_ids_by_image_name[image_name] = list(failed_signature)
@@ -6401,7 +6429,10 @@ def _normalize_alias_variants(values: list[str] | tuple[str, ...] | set[str] | N
 def _strong_detection_min_area(image_shape: tuple[int, ...]) -> int:
     height = int(image_shape[0]) if len(image_shape) >= 1 else 0
     width = int(image_shape[1]) if len(image_shape) >= 2 else 0
-    return int(max(QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX, round(SEGMENTATION_STRONG_MIN_AREA_RATIO * width * height)))
+    return int(max(
+        question_review_crop_min_projected_area_px(width, height),
+        round(SEGMENTATION_STRONG_MIN_AREA_RATIO * width * height),
+    ))
 
 
 def _extract_sdk_field(obj: object, *names: str, default: Any = None) -> Any:
@@ -7188,7 +7219,9 @@ def _build_object_review_crop(
         result["local_outcome"] = LOCAL_OUTCOME_EXCLUDED
         result["reason"] = "crop_too_small"
         return result
-    if projected_area_px < QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX:
+    if projected_area_px < question_review_crop_min_projected_area_px(
+        int(image.shape[1]), int(image.shape[0])
+    ):
         result["local_outcome"] = LOCAL_OUTCOME_EXCLUDED
         result["reason"] = "projected_area_too_small"
         return result
@@ -8746,6 +8779,7 @@ def _select_and_rerank_frames(
     non_attachment_clarity_min_score: int = DEFAULT_NON_ATTACHMENT_CLARITY_MIN_SCORE,
     precomputed_groups: list[dict[str, Any]] | None = None,
     scene_accepted_frames: list[dict[str, Any]] | None = None,
+    color_intrinsics: CameraIntrinsics | None = None,
 ) -> list[dict[str, Any]]:
     if not frame_candidates or int(max_frames) <= 0:
         return []
@@ -8790,6 +8824,7 @@ def _select_and_rerank_frames(
         non_attachment_clarity_min_score=non_attachment_clarity_min_score,
         precomputed_groups=precomputed_groups,
         scene_accepted_frames=scene_accepted_frames,
+        color_intrinsics=color_intrinsics,
     )
     for reviewed_frame in reviewed_frames:
         accepted_frame_count += 1
@@ -9059,7 +9094,7 @@ def main():
     parser.add_argument(
         "--attachment_pair_salvage_projected_area_hard_fail_min",
         type=float,
-        default=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+        default=_DEFAULT_QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
         help="Object-level projected_area_px hard-fail threshold for attachment pair salvage review",
     )
     parser.add_argument(
@@ -10094,7 +10129,11 @@ def main():
                 failed_signature_candidate = _geometry_signature_object_ids(
                     visibility_by_obj_id,
                     bbox_in_frame_ratio_min=REFERABLE_BBOX_IN_FRAME_RATIO_MIN,
-                    projected_area_px_min=QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX,
+                    projected_area_px_min=(
+                        question_review_crop_min_projected_area_px(color_intrinsics.width, color_intrinsics.height)
+                        if color_intrinsics is not None
+                        else _DEFAULT_QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+                    ),
                 )
                 frame["failed_signature_candidate_object_ids"] = list(
                     failed_signature_candidate
@@ -10148,6 +10187,7 @@ def main():
                 non_attachment_clarity_min_score=int(args.non_attachment_clarity_min_score),
                 precomputed_groups=non_attachment_groups,
                 scene_accepted_frames=scene_accepted_frames,
+                color_intrinsics=color_intrinsics,
             ) if (non_attachment_candidate_frames and not bool(args.attachment_only)) else []
         except MeshRayRequiredError as exc:
             return _build_mesh_ray_failure_result(exc)
@@ -10178,6 +10218,7 @@ def main():
                 failed_signatures_seen=attachment_failed_signatures_seen,
                 precomputed_groups=attachment_groups,
                 scene_accepted_frames=scene_accepted_frames,
+                color_intrinsics=color_intrinsics,
             ) if attachment_candidate_frames else []
             if args.write_attachment_pair_salvage_review and attachment_candidate_frames:
                 attachment_pair_salvage_scene_review = _build_attachment_pair_salvage_scene_review(
@@ -10204,6 +10245,7 @@ def main():
                     attachment_clarity_min_score=int(args.attachment_clarity_min_score),
                     failed_signatures_seen=attachment_failed_signatures_seen,
                     precomputed_groups=attachment_groups,
+                    color_intrinsics=color_intrinsics,
                 )
         except MeshRayRequiredError as exc:
             return _build_mesh_ray_failure_result(exc)

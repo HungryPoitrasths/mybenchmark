@@ -118,8 +118,15 @@ QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
 QUESTION_REVIEW_CROP_MIN_PADDING_PX = 12
 QUESTION_REVIEW_CROP_MAX_PADDING_PX = 80
 QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
-QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX = 800.0
+# Calibrated against ScanNet v2's 640x480 sensor; scaled per-frame so
+# higher-resolution sensors (e.g. ScanNet++ iPhone at 1920x1440) get a
+# proportionally larger floor instead of the same 800px on ~6x more area.
+QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_RATIO = 800.0 / (640 * 480)
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
+
+
+def question_review_crop_min_projected_area_px(width: int, height: int) -> float:
+    return QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_RATIO * float(width) * float(height)
 QUESTION_MENTION_FALLBACK_FIELDS = QUESTION_MENTION_FIELDS
 REFERABLE_OCCLUSION_VETO_DENSE_BASE_SAMPLE_COUNT = 512
 REFERABLE_OCCLUSION_VETO_DENSE_BASE_PROJECTED_AREA_PX = 400.0
@@ -1930,7 +1937,9 @@ def _build_question_review_crop(
     if (
         crop_width < QUESTION_REVIEW_CROP_MIN_DIM_PX
         or crop_height < QUESTION_REVIEW_CROP_MIN_DIM_PX
-        or projected_area_px < QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_PX
+        or projected_area_px < question_review_crop_min_projected_area_px(
+            int(image.shape[1]), int(image.shape[0])
+        )
         or bbox_in_frame_ratio < QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO
     ):
         result["reason"] = "invalid_crop"
