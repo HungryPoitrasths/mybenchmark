@@ -6058,6 +6058,8 @@ def find_two_frame_split_v2(
     color_intrinsics: CameraIntrinsics,
     preferred_camera_pose: CameraPose | None = None,
     bonus_objects: list[dict[str, Any]] | None = None,
+    frame_a_candidate_pool: dict[str, CameraPose] | None = None,
+    frame_b_candidate_pool: dict[str, CameraPose] | None = None,
     max_start_candidates: int = _ROUTE_MAX_PRIMARY_CANDIDATES,
     orientation_threshold_deg: float = _ROUTE_ORIENTATION_THRESHOLD_DEG,
     min_overlap_frac: float = _ROUTE_MIN_OVERLAP_FRAC,
@@ -6081,13 +6083,23 @@ def find_two_frame_split_v2(
     bonus_objects (e.g. an obj_face anchor that only needs to be *somewhere* visible) are
     a soft preference on the frame_a search, never a hard requirement.
 
+    frame_a_candidate_pool / frame_b_candidate_pool (both optional, default None =
+    unrestricted, i.e. every name in all_poses is eligible) narrow which frames can be
+    picked as frame_a / frame_b themselves -- e.g. to only frames a referability audit
+    has confirmed actually show that group's objects, since the purely-geometric checks
+    above don't catch occlusion or blur. When provided, both must be subsets of
+    all_poses's keys. The route-continuity bridge search always searches over the full
+    all_poses, regardless of these pools -- auxiliary bridge frames are never directly
+    reasoned about, only frame_a and frame_b are.
+
     Returns (frame_a_name, frame_b_name, chain) where chain is the ordered bridge
     (excluding frame_a and frame_b themselves; empty if they're already continuous), or
     None if no valid split + chain exists.
     """
+    frame_a_search_space = frame_a_candidate_pool if frame_a_candidate_pool is not None else all_poses
     frame_a_candidates = _rank_candidate_anchor_frames(
         group_a_objects,
-        all_poses,
+        frame_a_search_space,
         color_intrinsics,
         preferred_pose=preferred_camera_pose,
         bonus_objects=bonus_objects,
@@ -6122,6 +6134,8 @@ def find_two_frame_split_v2(
 
         frame_b_candidates: list[tuple[float, str]] = []
         for name in candidate_names:
+            if frame_b_candidate_pool is not None and name not in frame_b_candidate_pool:
+                continue
             pose = all_poses[name]
             if not _group_fully_in_frame(group_b_objects, pose, color_intrinsics):
                 continue

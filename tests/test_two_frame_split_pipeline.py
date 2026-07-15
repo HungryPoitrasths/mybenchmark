@@ -51,6 +51,14 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
             2: make_object(2, x=0.1),
             3: make_object(3, x=8.0),
         }
+        # frame_a/frame_b are now required to come from the referability cache (a
+        # positive gate, not just an optional post-hoc safeguard) -- this fixture
+        # covers both real frames for every group used across the tests below so
+        # existing single-call tests don't need per-test scene_frames wiring.
+        self.scene_frames = {
+            "orig.jpg": {"referable_object_ids": [1, 2]},
+            "far.jpg": {"referable_object_ids": [3]},
+        }
 
     def _apply(self, q: dict) -> dict:
         q = dict(q)
@@ -60,6 +68,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
             all_poses=self.all_poses,
             color_intrinsics=self.color_intrinsics,
             camera_pose=self.cam_orig,
+            scene_frames=self.scene_frames,
         )
         return q
 
@@ -186,10 +195,15 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         self.assertNotIn("reasoning_frame_2", result)
         self.assertNotIn("object_frame_groups", result)
 
-    def test_scene_frames_with_no_entry_for_either_frame_does_not_reject(self):
+    def test_scene_frames_with_no_entry_for_either_frame_rejects_the_split(self):
         # scene_frames is present but has no data for orig.jpg/far.jpg (referability
-        # was only run on some other frame) -- the referability check must no-op and
-        # the geometrically-valid split still stands.
+        # was only run on some other frame) -- frame_a/frame_b can no longer be
+        # confirmed referable, so the split must be rejected even though the
+        # geometric check alone would have accepted it. This is a fail-closed
+        # requirement, not an optional safeguard: a bbox can project fully in-frame
+        # while the object is actually occluded or the frame is too blurry to make
+        # out (the real-world bug this guards against), so absence of referability
+        # data means absence of proof, not proof of absence.
         q = {
             "type": "object_move_agent",
             "image_name": "orig.jpg",
@@ -199,6 +213,26 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         }
         result, kept = self._apply_kept(
             q, scene_frames={"some_other.jpg": {"referable_object_ids": [1]}}
+        )
+        self.assertFalse(kept)
+        self.assertNotIn("reasoning_frame_2", result)
+
+    def test_scene_frames_covering_both_groups_allows_the_split(self):
+        # Happy-path precedent: when scene_frames properly covers both frame_a and
+        # frame_b with each frame's own group referable there, the split proceeds.
+        q = {
+            "type": "object_move_agent",
+            "image_name": "orig.jpg",
+            "moved_obj_id": 1,
+            "query_obj_id": 1,
+            "obj_c_id": 3,
+        }
+        result, kept = self._apply_kept(
+            q,
+            scene_frames={
+                "orig.jpg": {"referable_object_ids": [1]},
+                "far.jpg": {"referable_object_ids": [3]},
+            },
         )
         self.assertTrue(kept)
         self.assertEqual(result["reasoning_frame_2"], "far.jpg")
@@ -219,6 +253,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         result, kept = self._apply_kept(
             q,
             scene_frames={
+                "orig.jpg": {"referable_object_ids": [1]},
                 "far.jpg": {"referable_object_ids": [1], "attachment_referable_object_ids": []},
             },
         )
@@ -239,6 +274,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         result, kept = self._apply_kept(
             q,
             scene_frames={
+                "orig.jpg": {"referable_object_ids": [], "attachment_referable_object_ids": [1, 2]},
                 "far.jpg": {"referable_object_ids": [], "attachment_referable_object_ids": [1, 2]},
             },
         )
@@ -263,6 +299,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         result, kept = self._apply_kept(
             q,
             scene_frames={
+                "orig.jpg": {"referable_object_ids": [], "attachment_referable_object_ids": [1]},
                 "far.jpg": {"referable_object_ids": [], "attachment_referable_object_ids": [1]},
             },
         )

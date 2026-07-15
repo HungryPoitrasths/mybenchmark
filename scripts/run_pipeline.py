@@ -265,6 +265,51 @@ def _resolve_objects_for_ids(
     return resolved
 
 
+def _group_is_referable_in(entry: dict | None, group_ids: list[int]) -> bool:
+    """True iff every id in *group_ids* is in *entry*'s referable object ids.
+
+    Deliberately takes the UNION of referable_object_ids and
+    attachment_referable_object_ids, regardless of question type -- unlike
+    _effective_question_referability_ids (which picks one set based on question type
+    for the "is this frame good enough to source this question" positive-filter use
+    case), this checks "is this object identifiable in this frame at all," so either
+    signal counts. attachment_referable_object_ids uses a looser geometric threshold
+    but is also filtered by human review, so an object can be in referable_object_ids
+    without being in attachment_referable_object_ids (or vice versa) -- picking only
+    one set based on question type would silently ignore the other's signal.
+    """
+    if not entry or not group_ids:
+        return False
+    referable_ids = set(int(obj_id) for obj_id in (entry.get("referable_object_ids") or []))
+    referable_ids.update(
+        int(obj_id) for obj_id in (entry.get("attachment_referable_object_ids") or [])
+    )
+    return all(int(obj_id) in referable_ids for obj_id in group_ids)
+
+
+def _referable_frame_names_for_group(
+    scene_frames: dict[str, dict] | None,
+    group_ids: list[int],
+) -> set[str]:
+    """Frame names where *group_ids* are all referable and the frame is usable.
+
+    This is the positive gate for picking a two-frame-split's frame_a/frame_b: only
+    frames that scannetpp_flash/run_vlm_referability.py actually reviewed (clarity
+    pass + per-object referability) and kept as usable are eligible -- frames that
+    were rejected for blur/etc (frame_usable=False) or never reviewed at all (absent
+    from scene_frames) are never candidates, no matter what pure geometry says.
+    """
+    names: set[str] = set()
+    for image_name, entry in (scene_frames or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("frame_usable") is False:
+            continue
+        if _group_is_referable_in(entry, group_ids):
+            names.add(image_name)
+    return names
+
+
 def _reasoning_frame_pair_violates_referability(
     *,
     frame_a_name: str,
@@ -276,16 +321,10 @@ def _reasoning_frame_pair_violates_referability(
     """True if either final reasoning frame also refers-in the OTHER frame's group,
     per VLM referability_cache data (when available for that frame).
 
-    Deliberately takes the UNION of referable_object_ids and
-    attachment_referable_object_ids, regardless of question type -- unlike
-    _effective_question_referability_ids (which picks one set based on question type
-    for the "is this frame good enough to source this question" positive-filter use
-    case), this is a negative/rejection check: ANY signal that an object is uniquely
-    identifiable in a frame contradicts the question's "this photo doesn't show it"
-    premise. attachment_referable_object_ids uses a looser geometric threshold but is
-    also filtered by human review, so an object can be in referable_object_ids
-    without being in attachment_referable_object_ids (or vice versa) -- picking only
-    one set based on question type would silently ignore the other's signal.
+    This is a negative/rejection check on top of the positive gate in
+    _referable_frame_names_for_group: ANY signal that the other group's object is
+    also uniquely identifiable in a chosen frame contradicts the question's "this
+    photo doesn't show it" premise.
 
     Only evaluated against the two frames find_two_frame_split_v2 actually chose --
     not a per-candidate filter during its search. No-ops (returns False) when
@@ -297,15 +336,6 @@ def _reasoning_frame_pair_violates_referability(
     """
     if not scene_frames:
         return False
-
-    def _group_is_referable_in(entry: dict | None, group_ids: list[int]) -> bool:
-        if not entry or not group_ids:
-            return False
-        referable_ids = set(int(obj_id) for obj_id in (entry.get("referable_object_ids") or []))
-        referable_ids.update(
-            int(obj_id) for obj_id in (entry.get("attachment_referable_object_ids") or [])
-        )
-        return all(int(obj_id) in referable_ids for obj_id in group_ids)
 
     if _group_is_referable_in(scene_frames.get(frame_b_name), group_a_ids):
         return True
@@ -335,11 +365,20 @@ def _apply_two_frame_split(
     this returns False and the caller must drop the question (its "first photo shows
     A, last photo shows B" premise cannot be satisfied by any real frame pair).
 
-    scene_frames (the scene's referability_cache entries, keyed by image_name) is an
-    optional extra safeguard on top of find_two_frame_split_v2's purely geometric
-    check: once a candidate split is found, it's also rejected if VLM referability
-    data says the OTHER group is referable (visible + uniquely labeled) in either
-    chosen frame -- see _reasoning_frame_pair_violates_referability.
+    scene_frames (the scene's referability_cache entries, keyed by image_name) is now
+    a REQUIRED positive gate, not just an optional safeguard: frame_a and frame_b are
+    the two frames the question is actually about, so each is only a valid candidate
+    if scannetpp_flash/run_vlm_referability.py reviewed it, kept it as usable, and
+    found that frame's own group of objects referable there (see
+    _referable_frame_names_for_group). Pure geometric in-frame projection is not
+    enough on its own -- a bbox can project fully in-frame while the object is
+    actually occluded or the frame is too blurry to make out, which referability
+    review already screens for. Only the auxiliary bridging/continuity frames may
+    still come from the full raw scene pose set (all_poses), since those are never
+    directly reasoned about by the model. Once a candidate split is found, it's also
+    rejected if VLM referability data says the OTHER group is referable (visible +
+    uniquely labeled) in either chosen frame -- see
+    _reasoning_frame_pair_violates_referability.
     """
     split_spec = TWO_FRAME_SPLIT_ID_FIELDS.get(q.get("type"))
     if split_spec is None or color_intrinsics is None or not all_poses:
@@ -357,6 +396,21 @@ def _apply_two_frame_split(
         [q.get(field) for field in split_spec.get("bonus", [])], objects_by_id
     )
 
+    group_a_ids = [int(o["id"]) for o in group_a_objects]
+    group_b_ids = [int(o["id"]) for o in group_b_objects]
+    frame_a_pool = {
+        name: all_poses[name]
+        for name in _referable_frame_names_for_group(scene_frames, group_a_ids)
+        if name in all_poses
+    }
+    frame_b_pool = {
+        name: all_poses[name]
+        for name in _referable_frame_names_for_group(scene_frames, group_b_ids)
+        if name in all_poses
+    }
+    if not frame_a_pool or not frame_b_pool:
+        return False
+
     split = find_two_frame_split_v2(
         group_a_objects=group_a_objects,
         group_b_objects=group_b_objects,
@@ -364,6 +418,8 @@ def _apply_two_frame_split(
         color_intrinsics=color_intrinsics,
         preferred_camera_pose=camera_pose,
         bonus_objects=bonus_objects,
+        frame_a_candidate_pool=frame_a_pool,
+        frame_b_candidate_pool=frame_b_pool,
     )
     if split is None:
         return False
@@ -372,8 +428,8 @@ def _apply_two_frame_split(
     if _reasoning_frame_pair_violates_referability(
         frame_a_name=frame_a_name,
         frame_b_name=frame_b_name,
-        group_a_ids=[int(o["id"]) for o in group_a_objects],
-        group_b_ids=[int(o["id"]) for o in group_b_objects],
+        group_a_ids=group_a_ids,
+        group_b_ids=group_b_ids,
         scene_frames=scene_frames,
     ):
         return False
@@ -381,8 +437,8 @@ def _apply_two_frame_split(
     q["reasoning_frame_2"] = frame_b_name
     q["auxiliary_image_names"] = chain
     q["object_frame_groups"] = {
-        "frame_1": [int(o["id"]) for o in group_a_objects],
-        "frame_2": [int(o["id"]) for o in group_b_objects],
+        "frame_1": group_a_ids,
+        "frame_2": group_b_ids,
     }
     # Lead with the note (not append it) so the model learns before reading the
     # question that it's getting a photo series, and which named objects are in
