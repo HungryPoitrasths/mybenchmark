@@ -176,6 +176,8 @@ _OTHERPROP_ALLOWLIST: set[str] = {
     "subwoofer",
     "vacuum cleaner",
     "fire extinguisher",
+    "mouse",
+    "toilet paper",
 }
 _OTHERFURNITURE_ALLOWLIST: set[str] = {
     "radiator",
