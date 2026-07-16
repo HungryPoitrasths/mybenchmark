@@ -84,6 +84,26 @@ def normalize_label_to_object_ids(value: object) -> dict[str, list[int]]:
     return dict(sorted(label_to_object_ids.items()))
 
 
+def normalize_attachment_pairs(value: object) -> list[tuple[int, int]]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    pairs: set[tuple[int, int]] = set()
+    for item in value:
+        if isinstance(item, dict):
+            parent_raw = item.get("parent_id")
+            child_raw = item.get("child_id")
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            parent_raw, child_raw = item[0], item[1]
+        else:
+            continue
+        parent_id = coerce_object_id(parent_raw)
+        child_id = coerce_object_id(child_raw)
+        if parent_id is None or child_id is None or parent_id == child_id:
+            continue
+        pairs.add((parent_id, child_id))
+    return sorted(pairs)
+
+
 def collect_question_mentions(
     question: dict[str, Any],
     objects_by_id: dict[int, dict[str, Any]],
@@ -307,6 +327,189 @@ def _allows_same_object_multi_role(
     return False
 
 
+def _question_uses_attachment_referability(question: dict[str, Any]) -> bool:
+    question_type = str(question.get("type", "")).strip().lower()
+    if question_type == "attachment_chain" or question_type.startswith("attachment"):
+        return True
+    if not bool(question.get("attachment_remapped", False)):
+        return False
+    moved_obj_id = coerce_object_id(question.get("moved_obj_id"))
+    query_obj_id = coerce_object_id(question.get("query_obj_id"))
+    return (
+        moved_obj_id is not None
+        and query_obj_id is not None
+        and moved_obj_id != query_obj_id
+    )
+
+
+def _question_referability_role_ids(
+    question: dict[str, Any],
+) -> tuple[set[int], set[int]]:
+    """Return (attachment-role ids, ordinary-role ids) for a question."""
+    if not _question_uses_attachment_referability(question):
+        return set(), set()
+
+    question_type = str(question.get("type", "")).strip().lower()
+    if question_type == "attachment_chain":
+        attachment_fields = ("grandparent_id", "parent_id", "grandchild_id")
+        ordinary_fields = ("neighbor_id",)
+    elif question_type == "attachment_move":
+        attachment_fields = (
+            "root_id",
+            "parent_id",
+            "grandchild_id",
+            "query_obj_id",
+        )
+        ordinary_fields = ("obj_ref_id",)
+    elif question_type == "object_move_occlusion":
+        attachment_fields = ("moved_obj_id", "query_obj_id", "target_obj_id")
+        ordinary_fields = ()
+    elif question_type in {
+        "object_move_object_centric",
+        "object_move_allocentric",
+        "object_rotate_object_centric",
+    }:
+        attachment_fields = ("moved_obj_id", "query_obj_id")
+        ordinary_fields = ("obj_ref_id", "obj_face_id")
+    else:
+        # Agent/distance questions use obj_b as an alias for the moved query;
+        # obj_c is the independent ordinary reference object.
+        attachment_fields = ("moved_obj_id", "query_obj_id")
+        ordinary_fields = ("obj_c_id",)
+
+    def _ids(fields: tuple[str, ...]) -> set[int]:
+        values: set[int] = set()
+        for field in fields:
+            obj_id = coerce_object_id(question.get(field))
+            if obj_id is not None:
+                values.add(obj_id)
+        return values
+
+    return _ids(attachment_fields), _ids(ordinary_fields)
+
+
+def _required_referability_pool(
+    question: dict[str, Any],
+    mention: dict[str, Any],
+    *,
+    attachment_role_ids: set[int],
+    ordinary_role_ids: set[int],
+) -> str:
+    mention_obj_id = coerce_object_id(mention.get("obj_id"))
+    if mention_obj_id in attachment_role_ids and mention_obj_id not in ordinary_role_ids:
+        return "attachment"
+    if mention_obj_id in ordinary_role_ids:
+        return "ordinary"
+
+    role = str(mention.get("role", "")).strip().lower()
+    question_type = str(question.get("type", "")).strip().lower()
+    if question_type == "attachment_chain" and role in {
+        "grandparent",
+        "parent",
+        "grandchild",
+    }:
+        return "attachment"
+    if question_type == "attachment_move" and role in {
+        "root",
+        "parent",
+        "grandchild",
+        "query_object",
+    }:
+        return "attachment"
+    if _question_uses_attachment_referability(question) and role in {
+        "moved_object",
+        "query_object",
+        "target_object",
+        "relation_obj_b",
+    }:
+        return "attachment"
+    return "ordinary"
+
+
+def _attachment_pair_checks(
+    question: dict[str, Any],
+    attachment_pairs: set[tuple[int, int]],
+) -> list[dict[str, Any]]:
+    if not _question_uses_attachment_referability(question):
+        return []
+
+    question_type = str(question.get("type", "")).strip().lower()
+    required_edges: list[tuple[int | None, int | None]] = []
+    path_checks: list[tuple[int | None, int | None]] = []
+    if question_type == "attachment_chain":
+        required_edges = [
+            (
+                coerce_object_id(question.get("grandparent_id")),
+                coerce_object_id(question.get("parent_id")),
+            ),
+            (
+                coerce_object_id(question.get("parent_id")),
+                coerce_object_id(question.get("grandchild_id")),
+            ),
+        ]
+    elif question_type == "attachment_move":
+        required_edges = [
+            (
+                coerce_object_id(question.get("root_id")),
+                coerce_object_id(question.get("parent_id")),
+            ),
+            (
+                coerce_object_id(question.get("parent_id")),
+                coerce_object_id(question.get("grandchild_id")),
+            ),
+        ]
+    else:
+        root_id = coerce_object_id(question.get("moved_obj_id"))
+        query_id = coerce_object_id(
+            question.get("query_obj_id") or question.get("target_obj_id")
+        )
+        if root_id is not None or query_id is not None:
+            path_checks = [(root_id, query_id)]
+
+    checks: list[dict[str, Any]] = []
+    for parent_id, child_id in required_edges:
+        passes = (
+            parent_id is not None
+            and child_id is not None
+            and (parent_id, child_id) in attachment_pairs
+        )
+        checks.append(
+            {
+                "kind": "edge",
+                "parent_id": parent_id,
+                "child_id": child_id,
+                "passes": passes,
+            }
+        )
+
+    adjacency: dict[int, set[int]] = defaultdict(set)
+    for parent_id, child_id in attachment_pairs:
+        adjacency[parent_id].add(child_id)
+    for root_id, query_id in path_checks:
+        reachable = False
+        if root_id is not None and query_id is not None:
+            pending = [root_id]
+            visited: set[int] = set()
+            while pending:
+                current_id = pending.pop()
+                if current_id in visited:
+                    continue
+                visited.add(current_id)
+                if current_id == query_id:
+                    reachable = True
+                    break
+                pending.extend(adjacency.get(current_id, set()) - visited)
+        checks.append(
+            {
+                "kind": "path",
+                "root_id": root_id,
+                "query_id": query_id,
+                "passes": reachable,
+            }
+        )
+    return checks
+
+
 def build_question_referability_audit(
     question: dict[str, Any],
     *,
@@ -314,11 +517,20 @@ def build_question_referability_audit(
     label_statuses: dict[str, Any] | None,
     label_to_object_ids: dict[str, Any] | None,
     frame_referable_ids: list[int] | None,
+    attachment_frame_referable_ids: list[int] | None = None,
+    attachment_referable_pairs: object | None = None,
 ) -> dict[str, Any]:
     referable_set = set(normalize_object_ids(frame_referable_ids))
+    attachment_referable_set = set(
+        normalize_object_ids(attachment_frame_referable_ids)
+    )
+    normalized_attachment_pairs = set(
+        normalize_attachment_pairs(attachment_referable_pairs)
+    )
     normalized_statuses = normalize_label_statuses(label_statuses)
     normalized_label_to_ids = normalize_label_to_object_ids(label_to_object_ids)
     mentions = collect_question_mentions(question, objects_by_id)
+    attachment_role_ids, ordinary_role_ids = _question_referability_role_ids(question)
 
     role_signatures: dict[str, set[tuple[object, str]]] = defaultdict(set)
     object_explicit_roles: dict[int, set[str]] = defaultdict(set)
@@ -379,9 +591,20 @@ def build_question_referability_audit(
         mention_obj_id = coerce_object_id(mention.get("obj_id"))
         label_status = normalized_statuses.get(label_key)
         candidate_ids = normalized_label_to_ids.get(label_key, [])
+        required_pool = _required_referability_pool(
+            question,
+            mention,
+            attachment_role_ids=attachment_role_ids,
+            ordinary_role_ids=ordinary_role_ids,
+        )
+        required_referable_set = (
+            attachment_referable_set
+            if required_pool == "attachment"
+            else referable_set
+        )
         referable_label_ids = [
             obj_id for obj_id in candidate_ids
-            if int(obj_id) in referable_set
+            if int(obj_id) in required_referable_set
         ]
         mention_reasons: list[str] = []
         exempt = is_static_occlusion_absent_target(
@@ -403,13 +626,13 @@ def build_question_referability_audit(
         if not exempt:
             if bool(mention.get("obj_id_parse_failed", False)):
                 _add_reason("mentioned_label_not_resolved", mention_reasons)
-            if mention_obj_id is not None and mention_obj_id not in referable_set:
+            if mention_obj_id is not None and mention_obj_id not in required_referable_set:
                 _add_reason("mentioned_nonreferable_object", mention_reasons)
 
             if label_key:
                 explicit_referable_obj_id = (
                     mention_obj_id is not None
-                    and mention_obj_id in referable_set
+                    and mention_obj_id in required_referable_set
                     and not bool(mention.get("obj_id_parse_failed", False))
                 )
                 if not explicit_referable_obj_id:
@@ -434,6 +657,7 @@ def build_question_referability_audit(
                 "label_status": label_status,
                 "candidate_object_ids": candidate_ids,
                 "referable_object_ids": referable_label_ids,
+                "required_referability_pool": required_pool,
                 "passes_referability_check": not mention_reasons,
                 "reason_codes": mention_reasons,
                 "exempt": exempt,
@@ -445,9 +669,26 @@ def build_question_referability_audit(
             }
         )
 
+    pair_checks: list[dict[str, Any]] = []
+    if attachment_referable_pairs is not None:
+        pair_checks = _attachment_pair_checks(
+            question,
+            normalized_attachment_pairs,
+        )
+        if any(not bool(check.get("passes")) for check in pair_checks):
+            if "attachment_pair_not_referable" not in seen_reasons:
+                seen_reasons.add("attachment_pair_not_referable")
+                reason_codes.append("attachment_pair_not_referable")
+
     return {
         "decision": "drop" if reason_codes else "pass",
         "reason_codes": reason_codes,
         "mentioned_objects": audited_mentions,
         "frame_referable_object_ids": sorted(referable_set),
+        "frame_attachment_referable_object_ids": sorted(attachment_referable_set),
+        "frame_attachment_referable_pairs": [
+            [parent_id, child_id]
+            for parent_id, child_id in sorted(normalized_attachment_pairs)
+        ],
+        "attachment_pair_checks": pair_checks,
     }

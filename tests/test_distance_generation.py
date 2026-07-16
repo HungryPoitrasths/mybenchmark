@@ -679,6 +679,113 @@ class DistanceMovementSearchTests(unittest.TestCase):
         self.assertEqual(questions[0]["old_correct_value"], "close (1.0-2.0m)")
         self.assertEqual(questions[0]["new_distance_bin_id"], "very_close")
 
+    def test_fixed_distance_delta_reuses_prevalidated_move_without_search(self) -> None:
+        mover = make_object(1, "box", (0.0, 0.0, 0.0))
+        ref = make_object(2, "chair", (1.4, 0.0, 0.0))
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "close (1.0-2.0m)",
+            "distance_bin_id": "close",
+        }
+
+        with patch(
+            "src.qa_generator._find_stable_distance_move_for_relation",
+            side_effect=AssertionError("fixed delta must bypass pair-specific search"),
+        ):
+            questions = _generate_l2_distance_questions_for_object(
+                query_obj=mover,
+                move_source=mover,
+                move_source_id=1,
+                attachment_remapped=False,
+                relations=[relation],
+                movement_scene_objects=[mover, ref],
+                attachment_graph={},
+                camera_pose=make_camera_pose(),
+                templates=_default_templates(),
+                obj_map={1: mover, 2: ref},
+                fixed_delta=np.array([-1.1, 0.0, 0.0], dtype=np.float64),
+            )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["old_correct_value"], "close (1.0-2.0m)")
+        self.assertEqual(questions[0]["correct_value"], "moderate (2.0-3.3m)")
+        self.assertEqual(questions[0]["delta"], [-1.1, 0.0, 0.0])
+
+    def test_fixed_distance_delta_keeps_unchanged_only_when_fallback_allowed(self) -> None:
+        mover = make_object(1, "box", (0.0, 0.0, 0.0))
+        ref = make_object(2, "chair", (1.6, 0.0, 0.0))
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "close (1.0-2.0m)",
+            "distance_bin_id": "close",
+        }
+        kwargs = dict(
+            query_obj=mover,
+            move_source=mover,
+            move_source_id=1,
+            attachment_remapped=False,
+            relations=[relation],
+            movement_scene_objects=[mover, ref],
+            attachment_graph={},
+            camera_pose=make_camera_pose(),
+            templates=_default_templates(),
+            obj_map={1: mover, 2: ref},
+            fixed_delta=np.array([0.0, 0.2, 0.0], dtype=np.float64),
+        )
+
+        self.assertEqual(_generate_l2_distance_questions_for_object(**kwargs), [])
+        questions = _generate_l2_distance_questions_for_object(
+            **kwargs,
+            allow_unchanged_fallback=True,
+        )
+        self.assertEqual(len(questions), 1)
+        self.assertTrue(questions[0]["relation_unchanged"])
+
+    def test_cross_frame_distance_reuse_skips_meaningful_movement_search(self) -> None:
+        source = make_object(1, "table", (0.0, 0.0, 0.0))
+        query = make_object(2, "book", (0.2, 0.0, 0.2))
+        ref = make_object(3, "chair", (2.0, 0.0, 0.0))
+        collision_only = make_object(4, "cabinet", (-3.0, -3.0, 0.0))
+
+        with (
+            patch(
+                "src.qa_generator._select_object_move_state",
+                side_effect=AssertionError("cross-frame reuse must skip meaningful movement search"),
+            ),
+            patch(
+                "src.qa_generator._generate_l2_distance_questions_for_object",
+                return_value=[],
+            ) as distance_mock,
+            patch("src.qa_generator.compute_all_relations", return_value=[]) as relations_mock,
+        ):
+            generate_l2_object_move(
+                objects=[source, query, ref],
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates=_default_templates(),
+                movement_objects=[source, query, ref, collision_only],
+                object_map={1: source, 2: query, 3: ref, 4: collision_only},
+                room_bounds={
+                    "bbox_min": [-5.0, -5.0, -1.0],
+                    "bbox_max": [5.0, 5.0, 1.0],
+                },
+                move_source_object_ids={1},
+                reference_object_ids={3},
+                enabled_l2_object_move_types={"object_move_distance"},
+                reuse_move_state_for_distance=True,
+            )
+
+        self.assertTrue(distance_mock.called)
+        self.assertIsNotNone(distance_mock.call_args.kwargs["fixed_delta"])
+        relation_object_ids = {
+            int(obj["id"])
+            for obj in relations_mock.call_args.args[0]
+        }
+        self.assertEqual(relation_object_ids, {1, 2, 3})
+
 
 if __name__ == "__main__":
     unittest.main()

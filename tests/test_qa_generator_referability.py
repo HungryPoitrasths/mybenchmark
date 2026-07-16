@@ -392,6 +392,96 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         self.assertEqual(question["query_obj_id"], 1)
         self.assertEqual(question["obj_ref_id"], 3)
 
+    def test_generate_l2_object_move_skips_state_search_when_pair_budget_exhausted(self) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        objects = [parent, child]
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator._select_object_move_state") as select_mock,
+            patch("src.qa_generator._find_object_move_occlusion_changes") as find_mock,
+            patch("src.qa_generator._generate_l2_distance_questions_for_object") as distance_mock,
+        ):
+            questions = generate_l2_object_move(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                pair_budget_remaining=lambda canonical_type, id_a, id_b: False,
+            )
+
+        self.assertEqual(questions, [])
+        select_mock.assert_not_called()
+        find_mock.assert_not_called()
+        distance_mock.assert_not_called()
+
+    def test_generate_l2_object_move_object_centric_skips_state_search_when_pair_budget_exhausted(self) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        objects = [parent, child]
+
+        with patch("src.qa_generator._iter_valid_object_move_states") as states_mock:
+            questions = generate_l2_object_move_object_centric(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                pair_budget_remaining=lambda canonical_type, id_a, id_b: False,
+            )
+
+        self.assertEqual(questions, [])
+        states_mock.assert_not_called()
+
+    def test_generate_l2_object_rotate_object_centric_skips_rotation_search_when_pair_budget_exhausted(
+        self,
+    ) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        face = make_object(3, "lamp")
+        objects = [parent, child, face]
+
+        with patch("src.qa_generator.find_meaningful_orbit_rotation") as rotation_mock:
+            questions = generate_l2_object_rotate_object_centric(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                pair_budget_remaining=lambda canonical_type, id_a, id_b: False,
+            )
+
+        self.assertEqual(questions, [])
+        rotation_mock.assert_not_called()
+
+    def test_generate_l2_object_move_allocentric_skips_state_search_when_pair_budget_exhausted(self) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        objects = [parent, child]
+
+        with patch("src.qa_generator._select_object_move_state") as select_mock:
+            questions = generate_l2_object_move_allocentric(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=objects,
+                object_map={obj["id"]: obj for obj in objects},
+                pair_budget_remaining=lambda canonical_type, id_a, id_b: False,
+            )
+
+        self.assertEqual(questions, [])
+        select_mock.assert_not_called()
+
     def test_generate_all_questions_keeps_salvage_only_attachment_pairs_in_attachment_path(self) -> None:
         objects = [
             make_object(9, "desk"),
@@ -861,10 +951,14 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
     def test_l3_support_chain_only_sees_fully_referable_subgraph(self) -> None:
         captured: dict[str, object] = {}
 
-        def capture_l3(objects, attachment_graph, attached_by, camera_pose, templates):
+        def capture_l3(objects, attachment_graph, attached_by, camera_pose, templates, **kwargs):
             captured["object_ids"] = [int(o["id"]) for o in objects]
             captured["attachment_graph"] = attachment_graph
             captured["attached_by"] = attached_by
+            captured["ordinary_reference_ids"] = [
+                int(o["id"])
+                for o in kwargs.get("ordinary_reference_objects", [])
+            ]
             return []
 
         objects = [
@@ -906,8 +1000,242 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             )
 
         self.assertEqual(captured["object_ids"], [1, 3])
+        self.assertEqual(captured["ordinary_reference_ids"], [1, 3])
         self.assertEqual(captured["attachment_graph"], {})
         self.assertEqual(captured["attached_by"], {})
+
+    def test_l3_attachment_chain_uses_ordinary_referable_neighbor(self) -> None:
+        attachment_objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "cup"),
+        ]
+        ordinary_neighbor = make_object(4, "chair")
+
+        questions = generate_l3_attachment_chain(
+            attachment_objects,
+            {1: [2], 2: [3]},
+            {2: 1, 3: 2},
+            make_camera_pose(),
+            {},
+            ordinary_reference_objects=[ordinary_neighbor],
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["grandparent_id"], 1)
+        self.assertEqual(questions[0]["parent_id"], 2)
+        self.assertEqual(questions[0]["grandchild_id"], 3)
+        self.assertEqual(questions[0]["neighbor_id"], 4)
+
+    def test_generate_all_questions_separates_pair_graph_from_physics_context(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "chair"),
+        ]
+        captured: dict[str, object] = {}
+
+        def capture_move(objects_arg, attachment_graph_arg, *_args, **kwargs):
+            captured["ordinary_ids"] = [int(obj["id"]) for obj in objects_arg]
+            captured["physics_graph"] = attachment_graph_arg
+            captured["candidate_graph"] = kwargs.get("candidate_attachment_graph")
+            captured["attachment_query_ids"] = [
+                int(obj["id"])
+                for obj in kwargs.get("attachment_query_objects", [])
+            ]
+            return []
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_move", side_effect=capture_move),
+        ):
+            generate_all_questions(
+                objects=objects,
+                attachment_graph={1: [2], 2: [3]},
+                attached_by={2: 1, 3: 2},
+                support_chain_graph={1: [2], 2: [3]},
+                support_chain_by={2: 1, 3: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3],
+                referable_object_ids=[3],
+                attachment_referable_object_ids=[1, 2],
+                attachment_referable_pairs=[[1, 2]],
+                attachment_edges=[
+                    {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                    {"parent_id": 2, "child_id": 3, "type": "supported_by"},
+                ],
+                only_question_types=["L2_object_move_agent"],
+            )
+
+        self.assertEqual(captured["ordinary_ids"], [3])
+        self.assertEqual(captured["attachment_query_ids"], [1, 2])
+        self.assertEqual(captured["candidate_graph"], {1: [2]})
+        self.assertEqual(captured["physics_graph"], {1: [2], 2: [3]})
+
+    def test_generate_all_questions_raises_instead_of_filtering_role_pool_leak(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "chair"),
+        ]
+        leaked_question = {
+            "level": "L2",
+            "type": "object_move_agent",
+            "question": "If the table moves, where is the box relative to the chair?",
+            "options": ["left", "right", "front", "back"],
+            "answer": "A",
+            "correct_value": "left",
+            "moved_obj_id": 1,
+            "moved_obj_label": "table",
+            "query_obj_id": 2,
+            "query_obj_label": "box",
+            "obj_c_id": 3,
+            "obj_c_label": "chair",
+            "attachment_remapped": True,
+            "mentioned_objects": [
+                {"role": "moved_object", "obj_id": 1, "label": "table"},
+                {"role": "query_object", "obj_id": 2, "label": "box"},
+                {"role": "reference_object", "obj_id": 3, "label": "chair"},
+            ],
+        }
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator.generate_l2_object_move",
+                return_value=[leaked_question],
+            ),
+        ):
+            with self.assertRaisesRegex(AssertionError, "Referability invariant"):
+                generate_all_questions(
+                    objects=objects,
+                    attachment_graph={1: [2]},
+                    attached_by={2: 1},
+                    support_chain_graph={1: [2]},
+                    support_chain_by={2: 1},
+                    camera_pose=make_camera_pose(),
+                    templates={},
+                    visible_object_ids=[1, 2, 3],
+                    referable_object_ids=[],
+                    attachment_referable_object_ids=[1, 2, 3],
+                    attachment_referable_pairs=[[1, 2]],
+                    attachment_edges=[
+                        {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                    ],
+                    only_question_types=["L2_object_move_agent"],
+                )
+
+    def test_generate_all_questions_object_remove_uses_only_ordinary_pool(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "chair"),
+            make_object(4, "sofa"),
+        ]
+        captured: dict[str, object] = {}
+
+        def capture_remove(objects_arg, *_args, **kwargs):
+            captured["object_ids"] = [int(obj["id"]) for obj in objects_arg]
+            captured["attachment_query_objects"] = kwargs.get("attachment_query_objects")
+            return []
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l2_object_remove", side_effect=capture_remove),
+        ):
+            generate_all_questions(
+                objects=objects,
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                support_chain_graph={1: [2]},
+                support_chain_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3, 4],
+                referable_object_ids=[3, 4],
+                attachment_referable_object_ids=[1, 2],
+                attachment_referable_pairs=[[1, 2]],
+                attachment_edges=[
+                    {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                ],
+                only_question_types=["L2_object_remove"],
+            )
+
+        self.assertEqual(captured["object_ids"], [3, 4])
+        self.assertIsNone(captured["attachment_query_objects"])
+
+    def test_generate_all_questions_l3_attachment_move_gets_ordinary_references(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "cup"),
+            make_object(4, "chair"),
+        ]
+        captured: dict[str, object] = {}
+
+        def capture_attachment_move(objects_arg, attachment_graph_arg, *_args, **kwargs):
+            captured["ordinary_ids"] = [int(obj["id"]) for obj in objects_arg]
+            captured["physics_graph"] = attachment_graph_arg
+            captured["candidate_graph"] = kwargs.get("candidate_attachment_graph")
+            captured["attachment_query_ids"] = [
+                int(obj["id"])
+                for obj in kwargs.get("attachment_query_objects", [])
+            ]
+            return []
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator.generate_l3_attachment_move",
+                side_effect=capture_attachment_move,
+            ),
+        ):
+            generate_all_questions(
+                objects=objects,
+                attachment_graph={1: [2], 2: [3]},
+                attached_by={2: 1, 3: 2},
+                support_chain_graph={1: [2], 2: [3]},
+                support_chain_by={2: 1, 3: 2},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3, 4],
+                referable_object_ids=[4],
+                attachment_referable_object_ids=[1, 2, 3],
+                attachment_referable_pairs=[[1, 2], [2, 3]],
+                attachment_edges=[
+                    {"parent_id": 1, "child_id": 2, "type": "supported_by"},
+                    {"parent_id": 2, "child_id": 3, "type": "supported_by"},
+                ],
+                only_question_types=["L3_attachment_move"],
+            )
+
+        self.assertEqual(captured["ordinary_ids"], [4])
+        self.assertEqual(captured["attachment_query_ids"], [1, 2, 3])
+        self.assertEqual(captured["candidate_graph"], {1: [2], 2: [3]})
+        self.assertEqual(captured["physics_graph"], {1: [2], 2: [3]})
+
+    def test_l2_move_skips_state_search_without_referable_pair(self) -> None:
+        parent = make_object(1, "table")
+        child = make_object(2, "box")
+        reference = make_object(3, "chair")
+
+        with patch("src.qa_generator._select_object_move_state") as state_mock:
+            questions = generate_l2_object_move(
+                objects=[reference],
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={},
+                movement_objects=[parent, child, reference],
+                object_map={1: parent, 2: child, 3: reference},
+                attachment_referable_object_ids=[1, 2],
+                attachment_query_objects=[parent, child],
+                candidate_attachment_graph={},
+            )
+
+        self.assertEqual(questions, [])
+        state_mock.assert_not_called()
 
     def test_generate_all_questions_keeps_attachment_chain_with_attachment_referable_ids(self) -> None:
         objects = [
@@ -1783,6 +2111,35 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(questions, [])
+
+    def test_l1_occlusion_never_computes_geometry_for_nonreferable_objects(self) -> None:
+        with (
+            patch(
+                "src.qa_generator._compute_l1_occlusion_metrics",
+                return_value=object(),
+            ) as metrics_mock,
+            patch(
+                "src.qa_generator._resolve_l1_occlusion_decision",
+                return_value=(None, "geometry_from_vlm_unique", False),
+            ),
+        ):
+            questions = generate_l1_occlusion_questions(
+                objects=[make_object(1, "chair"), make_object(2, "cabinet")],
+                camera_pose=make_camera_pose(),
+                color_intrinsics=None,
+                depth_image=None,
+                depth_intrinsics=None,
+                occlusion_backend="mesh_ray",
+                ray_caster=None,
+                instance_mesh_data=None,
+                templates={},
+                label_statuses={"chair": "unique", "cabinet": "unique"},
+                referable_object_ids=[1],
+            )
+
+        self.assertEqual(questions, [])
+        self.assertEqual(metrics_mock.call_count, 1)
+        self.assertEqual(int(metrics_mock.call_args.kwargs["obj"]["id"]), 1)
 
     def test_l1_occlusion_generates_not_visible_from_out_of_frame_label_review(self) -> None:
         questions = generate_l1_occlusion_questions(

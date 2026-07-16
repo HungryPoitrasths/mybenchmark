@@ -56,7 +56,10 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         # covers both real frames for every group used across the tests below so
         # existing single-call tests don't need per-test scene_frames wiring.
         self.scene_frames = {
-            "orig.jpg": {"referable_object_ids": [1, 2]},
+            "orig.jpg": {
+                "referable_object_ids": [1, 2],
+                "attachment_referable_object_ids": [1, 2],
+            },
             "far.jpg": {"referable_object_ids": [3]},
         }
 
@@ -128,7 +131,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         }
         result = self._apply(q)
         self.assertTrue(result["question"].endswith(q["question"]))
-        self.assertTrue(result["question"].startswith("A series of photos is provided"))
+        self.assertTrue(result["question"].startswith("A sequence of views follows"))
         self.assertIn("obj1", result["question"])
         self.assertIn("obj3", result["question"])
 
@@ -143,7 +146,7 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         result = self._apply(q)
         # Its own template only names the rotation-pivot camera, not which object
         # ends up in which frame, so it needs the note just like every other type.
-        self.assertTrue(result["question"].startswith("A series of photos is provided"))
+        self.assertTrue(result["question"].startswith("A sequence of views follows"))
         self.assertTrue(result["question"].endswith(q["question"]))
         self.assertEqual(result["reasoning_frame_2"], "far.jpg")
 
@@ -159,6 +162,51 @@ class TestApplyTwoFrameSplit(unittest.TestCase):
         self.assertEqual(result["reasoning_frame_2"], "far.jpg")
         self.assertEqual(sorted(result["object_frame_groups"]["frame_1"]), [1, 2])
         self.assertEqual(result["object_frame_groups"]["frame_2"], [3])
+
+    def test_attachment_move_split_uses_role_specific_frame_pools(self):
+        q = {
+            "type": "attachment_move",
+            "image_name": "orig.jpg",
+            "root_id": 1,
+            "query_obj_id": 2,
+            "obj_ref_id": 3,
+        }
+        scene_frames = {
+            "orig.jpg": {
+                "referable_object_ids": [],
+                "attachment_referable_object_ids": [1, 2],
+            },
+            "far.jpg": {
+                "referable_object_ids": [3],
+                "attachment_referable_object_ids": [],
+            },
+        }
+
+        result, kept = self._apply_kept(q, scene_frames=scene_frames)
+
+        self.assertTrue(kept)
+        self.assertEqual(result["reasoning_frame_2"], "far.jpg")
+
+    def test_attachment_move_split_rejects_attachment_only_ordinary_reference(self):
+        q = {
+            "type": "attachment_move",
+            "image_name": "orig.jpg",
+            "root_id": 1,
+            "query_obj_id": 2,
+            "obj_ref_id": 3,
+        }
+        scene_frames = {
+            "orig.jpg": {"attachment_referable_object_ids": [1, 2]},
+            "far.jpg": {
+                "referable_object_ids": [],
+                "attachment_referable_object_ids": [3],
+            },
+        }
+
+        result, kept = self._apply_kept(q, scene_frames=scene_frames)
+
+        self.assertFalse(kept)
+        self.assertNotIn("reasoning_frame_2", result)
 
     def test_object_remove_is_excluded_and_stays_single_frame(self):
         q = {

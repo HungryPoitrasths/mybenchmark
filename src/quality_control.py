@@ -75,6 +75,13 @@ def _object_id_signature(q: dict[str, Any]) -> tuple:
     )
 
 
+def _cross_frame_view_key(q: dict[str, Any]) -> tuple[str, ...]:
+    reasoning_frame_2 = str(q.get("reasoning_frame_2", "")).strip()
+    if not reasoning_frame_2:
+        return ()
+    return str(q.get("image_name", "")).strip(), reasoning_frame_2
+
+
 def _rotation_angle_key(q: dict[str, Any]) -> int | str:
     """Distinguishing counterfactual rotation angle, or "" when not applicable."""
     angle = q.get("rotation_angle")
@@ -135,6 +142,7 @@ def _near_duplicate_key(q: dict[str, Any]) -> tuple:
     base = (
         q.get("scene_id"),
         q.get("image_name"),
+        q.get("reasoning_frame_2"),
         qtype,
     )
     # rotation_angle legitimately distinguishes otherwise-identical
@@ -172,6 +180,7 @@ def _near_duplicate_signature(q: dict[str, Any]) -> dict[str, Any]:
     signature: dict[str, Any] = {
         "scene_id": q.get("scene_id"),
         "image_name": q.get("image_name"),
+        "reasoning_frame_2": q.get("reasoning_frame_2"),
         "type": qtype,
     }
     rotation_angle = _rotation_angle_key(q)
@@ -325,7 +334,12 @@ def quality_filter(
     seen_text: dict[tuple, dict] = {}
     final: list[dict] = []
     for q in deduped:
-        text_key = (q.get("scene_id"), q.get("question"), _object_id_signature(q))
+        text_key = (
+            q.get("scene_id"),
+            q.get("question"),
+            _object_id_signature(q),
+            _cross_frame_view_key(q),
+        )
         kept_question = seen_text.get(text_key)
         if kept_question is not None:
             removed_counts["cross_frame_duplicate"] += 1
@@ -563,7 +577,7 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
             else:
                 unattached.append(idx)
 
-        seen_changed_keys: set[tuple[str, str, tuple[int | str, ...]]] = set()
+        seen_changed_keys: set[tuple[object, ...]] = set()
         changed_kept: list[int] = []
         for idx in changed:
             scene_id = str(questions[idx].get("scene_id", ""))
@@ -573,7 +587,12 @@ def balance_l2_attachment_per_scene(questions: list[dict]) -> list[dict]:
                 continue
             pair_object_ids = _attachment_pair_object_ids(pair_id)
             other_object_ids = _other_attachment_object_ids(questions[idx], pair_object_ids)
-            dedup_key = (scene_id, pair_id, other_object_ids)
+            dedup_key = (
+                scene_id,
+                pair_id,
+                other_object_ids,
+                _cross_frame_view_key(questions[idx]),
+            )
             if dedup_key in seen_changed_keys:
                 continue
             seen_changed_keys.add(dedup_key)

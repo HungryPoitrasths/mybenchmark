@@ -57,9 +57,12 @@ from src.qa_generator import (
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
     _apply_attachment_surface_text_overrides,
+    _annotate_cross_frame_questions,
     build_multi_frame_split_note,
     find_two_frame_split_v2,
     generate_all_questions,
+    generate_cross_frame_questions,
+    ReasoningFrameContext,
     recompute_coordinate_rotation_agent_answer,
     MAX_OCCLUSION_OBJECTS_AUTO,
 )
@@ -69,8 +72,10 @@ from src.referability_checks import (
     build_question_referability_audit as _shared_build_question_referability_audit,
     collect_question_mentions as _shared_collect_question_mentions,
     coerce_object_id as _shared_coerce_object_id,
+    normalize_attachment_pairs as _shared_normalize_attachment_pairs,
     normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
 )
+from src.auxiliary_path import MAX_AUXILIARY_FRAMES, VisualPoseGraph
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
     load_axis_alignment,
@@ -105,13 +110,36 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 1
+PIPELINE_SCENE_STATUS_VERSION = 2
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
 QUESTION_REVIEW_MAX_TOKENS_CAP = 1024
+
+SINGLE_FRAME_PUBLIC_QUESTION_TYPES = frozenset({
+    "L1_direction_agent",
+    "L1_occlusion",
+    "L1_distance",
+    "L1_direction_object_centric",
+    "L1_direction_allocentric",
+    "L2_object_remove",
+    "L3_attachment_chain",
+})
+CROSS_FRAME_PUBLIC_QUESTION_TYPES = frozenset({
+    "L2_object_move_agent",
+    "L2_object_move_distance",
+    "L2_object_move_occlusion",
+    "L2_object_move_object_centric",
+    "L2_object_rotate_object_centric",
+    "L2_object_move_allocentric",
+    "L3_attachment_move",
+    "L3_coordinate_rotation_agent",
+    "L3_coordinate_rotation_object_centric",
+    "L3_coordinate_rotation_allocentric",
+})
+CROSS_FRAME_MAX_MAIN_PAIRS_PER_SEMANTIC_QUESTION = 3
 VLM_API_KEY_ENV_NAMES = ("DASHSCOPE_API_KEY", "OPENAI_API_KEY")
 PLACEHOLDER_VLM_API_KEY = "EMPTY"
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
@@ -123,6 +151,24 @@ QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 # proportionally larger floor instead of the same 800px on ~6x more area.
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_RATIO = 800.0 / (640 * 480)
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
+
+
+def _scene_resource_requirements(
+    *,
+    single_frame_requested_types: list[str],
+    cross_frame_requested_types: list[str],
+    occlusion_backend: str,
+) -> tuple[bool, bool]:
+    cross_only_mode = bool(cross_frame_requested_types) and not single_frame_requested_types
+    needs_mesh_resources = (
+        occlusion_backend in ("depth", "mesh_ray")
+        and (
+            not cross_only_mode
+            or "L2_object_move_occlusion" in cross_frame_requested_types
+        )
+    )
+    needs_instance_mesh_data = needs_mesh_resources
+    return needs_mesh_resources, needs_instance_mesh_data
 
 
 def question_review_crop_min_projected_area_px(width: int, height: int) -> float:
@@ -265,31 +311,36 @@ def _resolve_objects_for_ids(
     return resolved
 
 
-def _group_is_referable_in(entry: dict | None, group_ids: list[int]) -> bool:
-    """True iff every id in *group_ids* is in *entry*'s referable object ids.
-
-    Deliberately takes the UNION of referable_object_ids and
-    attachment_referable_object_ids, regardless of question type -- unlike
-    _effective_question_referability_ids (which picks one set based on question type
-    for the "is this frame good enough to source this question" positive-filter use
-    case), this checks "is this object identifiable in this frame at all," so either
-    signal counts. attachment_referable_object_ids uses a looser geometric threshold
-    but is also filtered by human review, so an object can be in referable_object_ids
-    without being in attachment_referable_object_ids (or vice versa) -- picking only
-    one set based on question type would silently ignore the other's signal.
-    """
+def _group_is_referable_in(
+    entry: dict | None,
+    group_ids: list[int],
+    *,
+    pool: str = "ordinary",
+) -> bool:
+    """True iff every group id belongs to the requested frame candidate pool."""
     if not entry or not group_ids:
         return False
-    referable_ids = set(int(obj_id) for obj_id in (entry.get("referable_object_ids") or []))
-    referable_ids.update(
-        int(obj_id) for obj_id in (entry.get("attachment_referable_object_ids") or [])
+    ordinary_ids = set(
+        int(obj_id) for obj_id in (entry.get("referable_object_ids") or [])
     )
+    attachment_ids = set(
+        int(obj_id)
+        for obj_id in (entry.get("attachment_referable_object_ids") or [])
+    )
+    if pool == "attachment":
+        referable_ids = attachment_ids
+    elif pool == "any":
+        referable_ids = ordinary_ids | attachment_ids
+    else:
+        referable_ids = ordinary_ids
     return all(int(obj_id) in referable_ids for obj_id in group_ids)
 
 
 def _referable_frame_names_for_group(
     scene_frames: dict[str, dict] | None,
     group_ids: list[int],
+    *,
+    pool: str = "ordinary",
 ) -> set[str]:
     """Frame names where *group_ids* are all referable and the frame is usable.
 
@@ -305,7 +356,7 @@ def _referable_frame_names_for_group(
             continue
         if entry.get("frame_usable") is False:
             continue
-        if _group_is_referable_in(entry, group_ids):
+        if _group_is_referable_in(entry, group_ids, pool=pool):
             names.add(image_name)
     return names
 
@@ -337,9 +388,13 @@ def _reasoning_frame_pair_violates_referability(
     if not scene_frames:
         return False
 
-    if _group_is_referable_in(scene_frames.get(frame_b_name), group_a_ids):
+    if _group_is_referable_in(
+        scene_frames.get(frame_b_name), group_a_ids, pool="any"
+    ):
         return True
-    if _group_is_referable_in(scene_frames.get(frame_a_name), group_b_ids):
+    if _group_is_referable_in(
+        scene_frames.get(frame_a_name), group_b_ids, pool="any"
+    ):
         return True
     return False
 
@@ -398,14 +453,24 @@ def _apply_two_frame_split(
 
     group_a_ids = [int(o["id"]) for o in group_a_objects]
     group_b_ids = [int(o["id"]) for o in group_b_objects]
+    group_a_pool = "ordinary"
+    group_b_pool = "ordinary"
+    if _question_uses_attachment_referability(q):
+        group_a_pool = "attachment"
+        if str(q.get("type", "")).strip().lower() == "object_move_occlusion":
+            group_b_pool = "attachment"
     frame_a_pool = {
         name: all_poses[name]
-        for name in _referable_frame_names_for_group(scene_frames, group_a_ids)
+        for name in _referable_frame_names_for_group(
+            scene_frames, group_a_ids, pool=group_a_pool
+        )
         if name in all_poses
     }
     frame_b_pool = {
         name: all_poses[name]
-        for name in _referable_frame_names_for_group(scene_frames, group_b_ids)
+        for name in _referable_frame_names_for_group(
+            scene_frames, group_b_ids, pool=group_b_pool
+        )
         if name in all_poses
     }
     if not frame_a_pool or not frame_b_pool:
@@ -451,6 +516,98 @@ def _apply_two_frame_split(
     return True
 
 
+def _build_reasoning_frame_contexts(
+    *,
+    frames: list[dict[str, object]],
+    scene_frames: dict[str, dict],
+    poses: dict[str, object],
+) -> list[ReasoningFrameContext]:
+    contexts: list[ReasoningFrameContext] = []
+    for frame in frames:
+        image_name = str(frame.get("image_name", "")).strip()
+        entry = scene_frames.get(image_name)
+        pose = poses.get(image_name)
+        if not image_name or not isinstance(entry, dict) or pose is None:
+            continue
+        if entry.get("frame_usable") is False:
+            continue
+        regular_ids = frozenset(_normalize_object_ids(entry.get("referable_object_ids")))
+        attachment_ids = frozenset(
+            _normalize_object_ids(entry.get("attachment_referable_object_ids"))
+        )
+        if not regular_ids and not attachment_ids:
+            continue
+        contexts.append(
+            ReasoningFrameContext(
+                image_name=image_name,
+                camera_pose=pose,
+                regular_referable_ids=regular_ids,
+                attachment_referable_ids=attachment_ids,
+                cache_entry=entry,
+            )
+        )
+    return contexts
+
+
+def _restrict_context_for_semantic_exclusivity(
+    own: ReasoningFrameContext,
+    other: ReasoningFrameContext,
+) -> ReasoningFrameContext:
+    return ReasoningFrameContext(
+        image_name=own.image_name,
+        camera_pose=own.camera_pose,
+        regular_referable_ids=frozenset(own.regular_referable_ids - other.any_referable_ids),
+        attachment_referable_ids=frozenset(
+            own.attachment_referable_ids - other.any_referable_ids
+        ),
+        cache_entry=own.cache_entry,
+    )
+
+
+def _cross_frame_semantic_key(question: dict[str, object]) -> tuple[object, ...]:
+    groups = question.get("object_frame_groups")
+    groups = groups if isinstance(groups, dict) else {}
+    delta = question.get("delta")
+    normalized_delta = tuple(
+        round(float(value), 4) for value in delta
+    ) if isinstance(delta, list) else ()
+    return (
+        question.get("type"),
+        question.get("reference_frame"),
+        question.get("cross_frame_layout"),
+        tuple(groups.get("frame_1", [])),
+        tuple(groups.get("frame_2", [])),
+        normalized_delta,
+        question.get("rotation_angle"),
+        question.get("rotation_direction"),
+        question.get("correct_value"),
+    )
+
+
+def _retain_best_cross_frame_views(
+    questions: list[dict],
+    *,
+    max_views: int = CROSS_FRAME_MAX_MAIN_PAIRS_PER_SEMANTIC_QUESTION,
+) -> list[dict]:
+    grouped: dict[tuple[object, ...], list[dict]] = defaultdict(list)
+    for question in questions:
+        grouped[_cross_frame_semantic_key(question)].append(question)
+    kept: list[dict] = []
+    for key in sorted(grouped, key=lambda value: repr(value)):
+        ranked = sorted(
+            grouped[key],
+            key=lambda question: (
+                float(question.get("_cross_frame_pair_score", float("inf"))),
+                str(question.get("image_name", "")),
+                str(question.get("reasoning_frame_2", "")),
+            ),
+        )[:max(1, int(max_views))]
+        for question in ranked:
+            question.pop("_cross_frame_pair_score", None)
+            kept.append(question)
+    return kept
+
+
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
     if not isinstance(mask, np.ndarray):
         return None
@@ -492,6 +649,11 @@ def _call_generate_all_questions_compat(**kwargs):
                 if "attachment_priority_pairs" not in compat_kwargs:
                     raise
                 compat_kwargs.pop("attachment_priority_pairs", None)
+                continue
+            if "attachment_referable_pairs" in message:
+                if "attachment_referable_pairs" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("attachment_referable_pairs", None)
                 continue
             if "question_type_budgets" in message:
                 if "question_type_budgets" not in compat_kwargs:
@@ -590,6 +752,7 @@ def _get_question_dinox_cache_entry(
     image_shape_cache: dict[tuple[str, str], tuple[int, ...] | None],
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_frame_root: str | None = None,
 ) -> dict[str, object]:
     cache_key = (scene_id, image_name, label)
     cached = detection_cache.get(cache_key)
@@ -900,6 +1063,7 @@ def _build_question_post_dinox_label_review(
         image_shape_cache=image_shape_cache,
         dataset=dataset,
         scannetpp_sensor=scannetpp_sensor,
+        scannetpp_frame_root=scannetpp_frame_root,
     )
     strong_detections = [
         detection for detection in cached.get("strong_detections", [])
@@ -1270,6 +1434,13 @@ def _apply_question_post_generation_audit(
     topology_cache: dict[tuple[str, int], dict[str, object]] = {}
 
     for question in questions:
+        if question.get("cross_frame_layout"):
+            question["question_post_generation_review"] = {
+                "decision": "pass",
+                "mode": "cross_frame_flash_role_referability",
+                "reason_codes": [],
+            }
+            continue
         scene_id = str(question.get("scene_id", "")).strip()
         image_name = str(question.get("image_name", "")).strip()
         frame_context = frame_context_by_key.get((scene_id, image_name), {})
@@ -1838,32 +2009,6 @@ def _question_uses_attachment_referability(question: dict[str, object]) -> bool:
     return moved_obj_id is not None and query_obj_id is not None and moved_obj_id != query_obj_id
 
 
-MIXED_ATTACHMENT_OBJECT_MOVE_TYPES = {
-    "object_move_agent",
-    "object_move_distance",
-}
-
-
-def _effective_question_referability_ids(
-    question: dict[str, object],
-    *,
-    frame_referable_ids: list[int],
-    attachment_frame_referable_ids: list[int] | None = None,
-) -> list[int]:
-    if (
-        attachment_frame_referable_ids is None
-        or not _question_uses_attachment_referability(question)
-    ):
-        return list(frame_referable_ids)
-    question_type = str(question.get("type", "")).strip().lower()
-    if question_type in MIXED_ATTACHMENT_OBJECT_MOVE_TYPES:
-        return sorted(
-            set(int(obj_id) for obj_id in frame_referable_ids)
-            | set(int(obj_id) for obj_id in attachment_frame_referable_ids)
-        )
-    return list(attachment_frame_referable_ids)
-
-
 def _build_question_referability_audit(
     question: dict[str, object],
     *,
@@ -1871,18 +2016,24 @@ def _build_question_referability_audit(
     referability_entry: dict[str, object] | None,
     frame_referable_ids: list[int],
     attachment_frame_referable_ids: list[int] | None = None,
+    attachment_frame_referable_pairs: list[tuple[int, int]] | None = None,
 ) -> dict[str, object]:
-    effective_frame_referable_ids = _effective_question_referability_ids(
-        question,
-        frame_referable_ids=frame_referable_ids,
-        attachment_frame_referable_ids=attachment_frame_referable_ids,
-    )
     return _shared_build_question_referability_audit(
         question,
         objects_by_id=objects_by_id,
         label_statuses=(referability_entry or {}).get("label_statuses"),
         label_to_object_ids=(referability_entry or {}).get("label_to_object_ids"),
-        frame_referable_ids=effective_frame_referable_ids,
+        frame_referable_ids=frame_referable_ids,
+        attachment_frame_referable_ids=attachment_frame_referable_ids,
+        attachment_referable_pairs=(
+            attachment_frame_referable_pairs
+            if attachment_frame_referable_pairs is not None
+            else (
+                (referability_entry or {}).get("attachment_referable_pairs")
+                if referability_entry is not None
+                else None
+            )
+        ),
     )
 
 
@@ -1893,6 +2044,7 @@ def _apply_question_referability_filter(
     referability_entry: dict[str, object] | None,
     frame_referable_ids: list[int],
     attachment_frame_referable_ids: list[int] | None = None,
+    attachment_frame_referable_pairs: list[tuple[int, int]] | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     kept_questions: list[dict[str, object]] = []
     audited_questions: list[dict[str, object]] = []
@@ -1906,6 +2058,7 @@ def _apply_question_referability_filter(
             referability_entry=referability_entry,
             frame_referable_ids=frame_referable_ids,
             attachment_frame_referable_ids=attachment_frame_referable_ids,
+            attachment_frame_referable_pairs=attachment_frame_referable_pairs,
         )
         audited_question["question_referability_audit"] = audit
         audited_questions.append(audited_question)
@@ -1926,7 +2079,7 @@ def _apply_question_referability_filter(
     if dropped_summaries:
         raise AssertionError(
             "Referability backstop detected "
-            f"{len(dropped_summaries)} question(s) that should have been filtered by the generator "
+            f"{len(dropped_summaries)} question(s) that should have been prevented by the generator "
             "(generator bug):\n"
             + "\n".join(dropped_summaries)
         )
@@ -2205,12 +2358,16 @@ def _prebuild_question_review_frame_contexts(
     seen: set[tuple[str, str]] = set()
     for question in questions:
         scene_id = str(question.get("scene_id", "")).strip()
-        image_name = str(question.get("image_name", "")).strip()
-        key = (scene_id, image_name)
-        if key in seen:
-            continue
-        seen.add(key)
-        frame_keys.append(key)
+        image_names = [str(question.get("image_name", "")).strip()]
+        reasoning_frame_2 = str(question.get("reasoning_frame_2", "")).strip()
+        if reasoning_frame_2:
+            image_names.append(reasoning_frame_2)
+        for image_name in image_names:
+            key = (scene_id, image_name)
+            if not image_name or key in seen:
+                continue
+            seen.add(key)
+            frame_keys.append(key)
 
     scene_contexts: dict[str, dict[str, object]] = {}
     frame_contexts: dict[tuple[str, str], dict[str, object]] = {}
@@ -2732,15 +2889,26 @@ def _review_question_object_presence(
     scene_id = str(question.get("scene_id", "")).strip()
     image_name = str(question.get("image_name", "")).strip()
     frame_context = frame_context_by_key.get((scene_id, image_name))
+    reasoning_frame_2 = str(question.get("reasoning_frame_2", "")).strip()
+    frame_2_context = (
+        frame_context_by_key.get((scene_id, reasoning_frame_2))
+        if reasoning_frame_2 else None
+    )
 
     objects_by_id = (
         dict(frame_context.get("objects_by_id", {}))
         if isinstance(frame_context, dict) else {}
     )
+    if isinstance(frame_2_context, dict):
+        objects_by_id.update(dict(frame_2_context.get("objects_by_id", {})))
     targets = _collect_question_presence_targets(question, objects_by_id)
     object_reviews: list[dict[str, object]] = []
-    raw_response = ""
-    valid_targets: list[dict[str, object]] = []
+    raw_responses: list[str] = []
+    valid_targets_by_frame: dict[str, tuple[dict[str, object], list[dict[str, object]]]] = {}
+    object_frame_groups = question.get("object_frame_groups")
+    frame_2_ids = {
+        int(value) for value in object_frame_groups.get("frame_2", [])
+    } if isinstance(object_frame_groups, dict) else set()
 
     for target in targets:
         obj_id = _coerce_object_id(target.get("obj_id"))
@@ -2753,7 +2921,8 @@ def _review_question_object_presence(
                 )
             )
             continue
-        if not isinstance(frame_context, dict):
+        target_context = frame_2_context if obj_id in frame_2_ids else frame_context
+        if not isinstance(target_context, dict):
             object_reviews.append(
                 _build_presence_review_entry(
                     target,
@@ -2762,7 +2931,7 @@ def _review_question_object_presence(
                 )
             )
             continue
-        if not bool(frame_context.get("image_exists", False)):
+        if not bool(target_context.get("image_exists", False)):
             object_reviews.append(
                 _build_presence_review_entry(
                     target,
@@ -2781,8 +2950,8 @@ def _review_question_object_presence(
             )
             continue
         if (
-            not bool(frame_context.get("has_projection_context", False))
-            or not str(frame_context.get("image_b64", "") or "")
+            not bool(target_context.get("has_projection_context", False))
+            or not str(target_context.get("image_b64", "") or "")
         ):
             object_reviews.append(
                 _build_presence_review_entry(
@@ -2793,7 +2962,7 @@ def _review_question_object_presence(
             )
             continue
 
-        crop_entry = frame_context.get("crop_by_obj_id", {}).get(obj_id)
+        crop_entry = target_context.get("crop_by_obj_id", {}).get(obj_id)
         if not isinstance(crop_entry, dict):
             object_reviews.append(
                 _build_presence_review_entry(
@@ -2816,7 +2985,12 @@ def _review_question_object_presence(
             )
             continue
 
-        valid_targets.append(
+        target_image_name = str(target_context.get("image_name", "")).strip()
+        grouped_context, grouped_targets = valid_targets_by_frame.setdefault(
+            target_image_name,
+            (target_context, []),
+        )
+        grouped_targets.append(
             {
                 **target,
                 "roi_bounds_px": crop_entry.get("roi_bounds_px"),
@@ -2825,10 +2999,12 @@ def _review_question_object_presence(
             }
         )
 
-    if valid_targets:
+    for target_context, valid_targets in valid_targets_by_frame.values():
         try:
-            vlm_review = review_fn(frame_context, question, valid_targets)
+            vlm_review = review_fn(target_context, question, valid_targets)
             raw_response = str(vlm_review.get("raw_response", "") or "")
+            if raw_response:
+                raw_responses.append(raw_response)
             object_reviews.extend(list(vlm_review.get("object_reviews", [])))
         except Exception as e:
             object_reviews.extend(
@@ -2840,7 +3016,10 @@ def _review_question_object_presence(
                 for target in valid_targets
             )
 
-    review = _finalize_presence_review(object_reviews, raw_response=raw_response)
+    review = _finalize_presence_review(
+        object_reviews,
+        raw_response="\n".join(raw_responses),
+    )
     if not targets:
         review = _finalize_presence_review([], raw_response="")
         review["decision"] = "pass"
@@ -3340,14 +3519,40 @@ def _frame_has_l3_attachment_chain(
         for parent_id, child_ids in (support_chain_graph or {}).items()
     }
     eligible_ids = visible_ids & attachment_referable_ids
+    raw_pairs = (
+        referability_entry.get("attachment_referable_pairs")
+        if referability_entry is not None
+        and "attachment_referable_pairs" in referability_entry
+        else None
+    )
+    if raw_pairs is None:
+        eligible_pairs = {
+            (parent_id, child_id)
+            for parent_id, child_ids in graph.items()
+            for child_id in child_ids
+            if parent_id in eligible_ids and child_id in eligible_ids
+        }
+    else:
+        eligible_pairs = {
+            (parent_id, child_id)
+            for parent_id, child_id in _shared_normalize_attachment_pairs(raw_pairs)
+            if parent_id in eligible_ids and child_id in eligible_ids
+        }
     for grandparent_id, parent_ids in graph.items():
         if grandparent_id not in eligible_ids:
             continue
         for parent_id in parent_ids:
             parent_id = int(parent_id)
-            if parent_id not in eligible_ids:
+            if (
+                parent_id not in eligible_ids
+                or (grandparent_id, parent_id) not in eligible_pairs
+            ):
                 continue
-            if any(int(grandchild_id) in eligible_ids for grandchild_id in graph.get(parent_id, [])):
+            if any(
+                int(grandchild_id) in eligible_ids
+                and (parent_id, int(grandchild_id)) in eligible_pairs
+                for grandchild_id in graph.get(parent_id, [])
+            ):
                 return True
     return False
 
@@ -3362,6 +3567,40 @@ def _normalize_object_ids(value: object) -> list[int]:
         except (TypeError, ValueError):
             continue
     return sorted(set(object_ids))
+
+
+def _frame_attachment_referable_pairs(
+    *,
+    referability_entry: dict[str, object] | None,
+    attachment_graph: dict[int, list[int]] | dict[str, list[int]],
+    attachment_referable_ids: list[int],
+    visible_object_ids: list[int],
+) -> list[tuple[int, int]]:
+    graph_pairs = {
+        (int(parent_id), int(child_id))
+        for parent_id, child_ids in (attachment_graph or {}).items()
+        for child_id in (child_ids or [])
+    }
+    attachment_ids = set(_normalize_object_ids(attachment_referable_ids))
+    visible_ids = set(_normalize_object_ids(visible_object_ids))
+    raw_pairs = (
+        referability_entry.get("attachment_referable_pairs")
+        if referability_entry is not None
+        and "attachment_referable_pairs" in referability_entry
+        else None
+    )
+    if raw_pairs is None:
+        candidate_pairs = graph_pairs
+    else:
+        candidate_pairs = set(_shared_normalize_attachment_pairs(raw_pairs))
+    return sorted(
+        (parent_id, child_id)
+        for parent_id, child_id in candidate_pairs
+        if (parent_id, child_id) in graph_pairs
+        and parent_id in attachment_ids
+        and child_id in attachment_ids
+        and (not visible_ids or (parent_id in visible_ids and child_id in visible_ids))
+    )
 
 
 def _build_visible_object_in_frame_ratio_map(
@@ -4006,6 +4245,7 @@ def _build_frame_debug_entry(
     occlusion_eligible_object_ids: list[int] | None,
     pipeline_referable_object_ids: list[int] | None = None,
     pipeline_attachment_referable_object_ids: list[int] | None = None,
+    pipeline_attachment_referable_pairs: list[tuple[int, int]] | None = None,
     referability_entry: dict | None = None,
     frame_attachment_rows: list[dict[str, object]] | None = None,
     referable_occlusion_veto: dict[str, object] | None = None,
@@ -4029,6 +4269,14 @@ def _build_frame_debug_entry(
         "pipeline_attachment_referable_object_ids_used_for_generation": _normalize_object_ids(
             pipeline_attachment_referable_object_ids
         ),
+        "pipeline_attachment_referable_pairs_used_for_generation": [
+            [parent_id, child_id]
+            for parent_id, child_id in sorted(
+                _shared_normalize_attachment_pairs(
+                    pipeline_attachment_referable_pairs
+                )
+            )
+        ],
         "candidate_visibility_source": (referability_entry or {}).get("candidate_visibility_source"),
         "candidate_visible_label_counts": _normalize_label_counts(
             (referability_entry or {}).get("candidate_visible_label_counts")
@@ -4400,6 +4648,7 @@ _PUBLIC_TO_CANONICAL_QUESTION_TYPES = {
     "L1_direction_agent": "direction_agent",
     "L2_object_move_agent": "object_move_agent",
     "L2_object_move_distance": "object_move_distance",
+    "L2_object_move_occlusion": "object_move_occlusion",
     "L2_object_move_object_centric": "object_move_object_centric",
     "L2_object_rotate_object_centric": "object_rotate_object_centric",
     "L2_object_move_allocentric": "object_move_allocentric",
@@ -4476,6 +4725,18 @@ def _question_pair_key(question: dict) -> tuple[str, str, str] | None:
     # all key off the same ("moved_obj_id", "query_obj_id") fields, so without
     # per-type scoping they would collide with each other too.
     canonical_type = _canonical_scene_question_type(question)
+    if question.get("cross_frame_layout"):
+        groups = question.get("object_frame_groups")
+        if isinstance(groups, dict):
+            frame_1_ids = ",".join(str(value) for value in groups.get("frame_1", []))
+            frame_2_ids = ",".join(str(value) for value in groups.get("frame_2", []))
+            if frame_1_ids and frame_2_ids:
+                role_signature = f"{frame_1_ids}->{frame_2_ids}"
+                return (
+                    canonical_type,
+                    str(question.get("cross_frame_layout")),
+                    role_signature,
+                )
     field_pair = _PAIR_KEY_FIELDS_BY_TYPE.get(canonical_type)
     if field_pair is not None:
         left = question.get(field_pair[0])
@@ -4526,27 +4787,23 @@ def _frame_has_attachment_pair(
     referability_entry: dict[str, object] | None,
     attachment_graph: dict[int, list[int]] | dict[str, list[int]],
 ) -> bool:
-    if int(frame.get("attachment_referable_pair_count", 0) or 0) > 0:
-        return True
-
     if referability_entry is not None:
         visible_ids = set(_normalize_object_ids(frame.get("visible_object_ids")))
         if not visible_ids:
             visible_ids = set(
                 _normalize_object_ids((referability_entry or {}).get("candidate_visible_object_ids"))
             )
-        for pair in (referability_entry.get("attachment_referable_pairs") or []):
-            if not isinstance(pair, dict):
-                continue
-            parent_id = pair.get("parent_id")
-            child_id = pair.get("child_id")
-            try:
-                parent_id = int(parent_id)
-                child_id = int(child_id)
-            except (TypeError, ValueError):
-                continue
-            if not visible_ids or (parent_id in visible_ids and child_id in visible_ids):
-                return True
+        if "attachment_referable_pairs" in referability_entry:
+            return any(
+                not visible_ids
+                or (parent_id in visible_ids and child_id in visible_ids)
+                for parent_id, child_id in _shared_normalize_attachment_pairs(
+                    referability_entry.get("attachment_referable_pairs")
+                )
+            )
+
+    if int(frame.get("attachment_referable_pair_count", 0) or 0) > 0:
+        return True
 
     graph = {
         int(parent_id): [int(child_id) for child_id in (child_ids or [])]
@@ -4593,11 +4850,17 @@ def _apply_incremental_question_caps(
             kept.append(question)
             continue
         image_name = str(question.get("image_name", "")).strip()
+        reasoning_frame_2 = str(question.get("reasoning_frame_2", "")).strip()
+        frame_identity = (
+            f"{image_name}\0{reasoning_frame_2}"
+            if reasoning_frame_2
+            else image_name
+        )
         object_id = _question_cap_object_id(question)
         pair_key = _question_pair_key(question)
-        frame_key = (image_name, canonical_type)
-        frame_object_key = (image_name, canonical_type, object_id)
-        frame_pair_key = (image_name, *pair_key) if pair_key is not None else None
+        frame_key = (frame_identity, canonical_type)
+        frame_object_key = (frame_identity, canonical_type, object_id)
+        frame_pair_key = (frame_identity, *pair_key) if pair_key is not None else None
         # scene_type_cap/frame_type_cap/frame_type_object_cap only bound L1
         # types (see _SCENE_TYPE_CAP_ELIGIBLE_TYPES) -- L2/L3 questions are
         # never capped here regardless of the passed-in cap values.
@@ -4709,7 +4972,13 @@ def _make_dedup_key(q: dict) -> tuple:
         if val is not None:
             ids.append(str(val))
     ids_sorted = tuple(sorted(ids))
-    return (q.get("scene_id"), q.get("question"), ids_sorted)
+    reasoning_frame_2 = str(q.get("reasoning_frame_2", "")).strip()
+    main_frame_pair = (
+        (str(q.get("image_name", "")).strip(), reasoning_frame_2)
+        if reasoning_frame_2
+        else ()
+    )
+    return (q.get("scene_id"), q.get("question"), ids_sorted, main_frame_pair)
 
 
 def _load_cached_scene_questions(
@@ -4795,6 +5064,7 @@ def _rebuild_pipeline_outputs(
     frame_type_object_cap: int,
     dataset: str = "scannet",
     scannetpp_sensor: str = "iphone",
+    scannetpp_frame_root: str | None = None,
 ) -> list[dict]:
     all_questions, raw_question_count = _load_cached_scene_questions(
         raw_questions_dir,
@@ -4938,15 +5208,31 @@ def run_pipeline(
     l3_attachment_chain_only = only_question_types == ["L3_attachment_chain"]
     l3_attachment_move_only = only_question_types == ["L3_attachment_move"]
     target_scene_question_types = _scene_question_target_types(only_question_types)
-    attachment_only_l2_mode = _only_l2_attachment_types_requested(only_question_types)
+    requested_public_types = (
+        SINGLE_FRAME_PUBLIC_QUESTION_TYPES | CROSS_FRAME_PUBLIC_QUESTION_TYPES
+        if only_question_types is None
+        else {str(value).strip() for value in only_question_types}
+    )
+    single_frame_requested_types = sorted(
+        requested_public_types & SINGLE_FRAME_PUBLIC_QUESTION_TYPES
+    )
+    cross_frame_requested_types = sorted(
+        requested_public_types & CROSS_FRAME_PUBLIC_QUESTION_TYPES
+    )
+    attachment_only_l2_mode = False
 
     meta_dir = output_dir / "scene_metadata"
     questions_dir = output_dir / "questions"
     frame_debug_dir = output_dir / "frame_debug"
+    cross_frame_funnel_dir = output_dir / "cross_frame_funnel"
+    auxiliary_graph_cache_dir = output_dir / "auxiliary_graph_cache"
     meta_dir.mkdir(parents=True, exist_ok=True)
     questions_dir.mkdir(parents=True, exist_ok=True)
     if write_frame_debug:
         frame_debug_dir.mkdir(parents=True, exist_ok=True)
+    if cross_frame_requested_types:
+        cross_frame_funnel_dir.mkdir(parents=True, exist_ok=True)
+        auxiliary_graph_cache_dir.mkdir(parents=True, exist_ok=True)
 
     if dataset == "scannetpp":
         if scannetpp_split_file is not None:
@@ -5185,8 +5471,12 @@ def run_pipeline(
         scene_questions: list[dict] = []
         scene_frame_debug_entries: list[dict[str, object]] = []
         preloaded_geometry = None
-        needs_mesh_resources = occlusion_backend in ("depth", "mesh_ray")
-        if needs_mesh_resources:
+        needs_mesh_resources, needs_instance_mesh_data = _scene_resource_requirements(
+            single_frame_requested_types=single_frame_requested_types,
+            cross_frame_requested_types=cross_frame_requested_types,
+            occlusion_backend=occlusion_backend,
+        )
+        if needs_mesh_resources or needs_instance_mesh_data:
             try:
                 preloaded_geometry = _load_scene_geometry(scene_dir)
             except Exception as e:
@@ -5382,26 +5672,27 @@ def run_pipeline(
                 )
 
         instance_mesh_data = None
-        try:
-            instance_mesh_kwargs = {
-                "instance_ids": [int(o["id"]) for o in scene["objects"]],
-                "n_surface_samples": 512,
-                "preloaded_geometry": preloaded_geometry,
-            }
-            if dataset == "scannetpp":
-                instance_mesh_kwargs["dataset"] = "scannetpp"
-            instance_mesh_data = load_instance_mesh_data(scene_dir, **instance_mesh_kwargs)
-        except Exception as e:
-            if needs_mesh_resources:
-                raise RuntimeError(
-                    f"{occlusion_backend} backend requested for {scene_id}, "
-                    f"but instance mesh data could not be loaded: {e}"
-                ) from e
-            logger.warning(
-                "Instance mesh data load failed for %s; distance GT will fall back to AABB closest points: %s",
-                scene_id,
-                e,
-            )
+        if needs_instance_mesh_data:
+            try:
+                instance_mesh_kwargs = {
+                    "instance_ids": [int(o["id"]) for o in scene["objects"]],
+                    "n_surface_samples": 512,
+                    "preloaded_geometry": preloaded_geometry,
+                }
+                if dataset == "scannetpp":
+                    instance_mesh_kwargs["dataset"] = "scannetpp"
+                instance_mesh_data = load_instance_mesh_data(scene_dir, **instance_mesh_kwargs)
+            except Exception as e:
+                if needs_mesh_resources:
+                    raise RuntimeError(
+                        f"{occlusion_backend} backend requested for {scene_id}, "
+                        f"but instance mesh data could not be loaded: {e}"
+                    ) from e
+                logger.warning(
+                    "Instance mesh data load failed for %s; distance GT will fall back to AABB closest points: %s",
+                    scene_id,
+                    e,
+                )
 
         # Release preloaded geometry — vertices/faces are now owned by
         # instance_mesh_data and ray_caster; keeping this around wastes memory.
@@ -5448,6 +5739,12 @@ def run_pipeline(
             color_intrinsics = None
 
         for frame_index, frame in enumerate(frames, start=1):
+            if not single_frame_requested_types:
+                logger.info(
+                    "Skipping per-frame single-image generation for %s; only cross-frame types were requested",
+                    scene_id,
+                )
+                break
             # Only short-circuit frame scanning once every *targeted* type is
             # L1 (cap-eligible) -- L2/L3 types are never capped and can
             # always benefit from more frames, so their presence in the
@@ -5505,6 +5802,7 @@ def run_pipeline(
 
             referable_ids = None
             attachment_referable_ids = None
+            frame_attachment_pairs: list[tuple[int, int]] = []
             attachment_object_surface_text_by_id: dict[int, str] = {}
             attachment_priority_pairs: list[tuple[int, int]] = []
             label_statuses = None
@@ -5602,6 +5900,12 @@ def run_pipeline(
                             for obj_id in (raw_attachment_referable_ids or [])
                             if int(obj_id) in visible_id_set
                         ]
+                        frame_attachment_pairs = _frame_attachment_referable_pairs(
+                            referability_entry=referability_entry,
+                            attachment_graph=attachment_graph,
+                            attachment_referable_ids=attachment_referable_ids,
+                            visible_object_ids=visible_ids,
+                        )
                     else:
                         raw_referable_ids = []
                         attachment_object_surface_text_by_id = {}
@@ -5642,9 +5946,14 @@ def run_pipeline(
                         )
                         referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
 
-                if referability_entry is not None and not referable_ids and not _has_l1_visibility_candidates(
-                    label_statuses,
-                    out_of_frame_not_visible_labels,
+                if (
+                    referability_entry is not None
+                    and not referable_ids
+                    and not frame_attachment_pairs
+                    and not _has_l1_visibility_candidates(
+                        label_statuses,
+                        out_of_frame_not_visible_labels,
+                    )
                 ):
                     if write_frame_debug:
                         with _timed_frame_phase(frame_ctx, "frame_debug_assembly"):
@@ -5677,11 +5986,7 @@ def run_pipeline(
                     frame_skip_reason = "no_referable_objects_or_l1_candidates"
                     continue
 
-                if attachment_only_l2_mode and not _frame_has_attachment_pair(
-                    frame,
-                    referability_entry,
-                    attachment_graph,
-                ):
+                if attachment_only_l2_mode and not frame_attachment_pairs:
                     if write_frame_debug:
                         with _timed_frame_phase(frame_ctx, "frame_debug_assembly"):
                             frame_attachment_rows = _filter_frame_attachment_rows(
@@ -5710,11 +6015,15 @@ def run_pipeline(
 
                 with _timed_frame_phase(frame_ctx, "generate_all_questions"):
                     try:
-                        question_type_budgets = _remaining_scene_type_budgets(
-                            scene_question_type_counts,
-                            scene_type_cap=scene_type_cap,
-                            allowed_types=target_scene_question_types,
-                        )
+                        if not single_frame_requested_types:
+                            questions = []
+                            question_type_budgets = None
+                        else:
+                            question_type_budgets = _remaining_scene_type_budgets(
+                                scene_question_type_counts,
+                                scene_type_cap=scene_type_cap,
+                                allowed_types=target_scene_question_types,
+                            )
 
                         def _pair_budget_remaining(
                             canonical_type: str, id_a: int, id_b: int,
@@ -5740,7 +6049,8 @@ def run_pipeline(
                             )
                             return scene_pair_counts[(canonical_type, pair[0], pair[1])] < cap
 
-                        questions = _call_generate_all_questions_compat(
+                        if single_frame_requested_types:
+                            questions = _call_generate_all_questions_compat(
                             objects=scene["objects"],
                             attachment_graph=attachment_graph,
                             attached_by=attached_by,
@@ -5756,6 +6066,7 @@ def run_pipeline(
                             visible_object_ids=visible_ids,
                             referable_object_ids=referable_ids,
                             attachment_referable_object_ids=attachment_referable_ids,
+                            attachment_referable_pairs=frame_attachment_pairs,
                             attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
                             attachment_priority_pairs=attachment_priority_pairs,
                             occlusion_eligible_object_ids=occlusion_eligible_ids,
@@ -5770,12 +6081,12 @@ def run_pipeline(
                             attachment_edges=scene.get("attachment_edges", []),
                             generator_progress_log_seconds=generator_progress_log_seconds,
                             slow_generator_warn_seconds=slow_generator_warn_seconds,
-                            only_question_types=only_question_types,
+                            only_question_types=single_frame_requested_types,
                             question_type_budgets=question_type_budgets,
                             max_occlusion_objects=max_occlusion_objects,
                             max_move_sources=max_move_sources,
                             pair_budget_remaining=_pair_budget_remaining,
-                        )
+                            )
                     except Exception:
                         logger.exception(
                             "Question generation failed for %s/%s (visible=%d referable=%d attachment_referable=%d occlusion_eligible=%d)",
@@ -5789,37 +6100,18 @@ def run_pipeline(
                         raise
                 frame_raw_generated_count = len(questions)
 
-                kept_after_split = []
                 for q in questions:
                     q["scene_id"] = scene_id
                     q["image_name"] = image_name
-                    if not _apply_two_frame_split(
-                        q,
-                        objects_by_id=objects_by_id,
-                        all_poses=poses,
-                        color_intrinsics=color_intrinsics,
-                        camera_pose=camera_pose,
-                        scene_frames=scene_frames,
-                    ):
-                        continue
-                    if (
-                        q.get("type") in _COORDINATE_ROTATION_CAMERA_ANCHORED_TYPES
-                        and q.get("image_name") != image_name
-                        and poses is not None
-                    ):
-                        _recompute_coordinate_rotation_gt_for_new_anchor(
-                            q, objects_by_id=objects_by_id, all_poses=poses,
-                        )
-                    kept_after_split.append(q)
-                questions = kept_after_split
 
-                with _timed_frame_phase(frame_ctx, "referability_post_filter"):
+                with _timed_frame_phase(frame_ctx, "referability_invariant_check"):
                     kept_questions, audited_questions = _apply_question_referability_filter(
                         questions,
                         objects_by_id=objects_by_id,
                         referability_entry=referability_entry,
                         frame_referable_ids=referable_ids or [],
                         attachment_frame_referable_ids=attachment_referable_ids or [],
+                        attachment_frame_referable_pairs=frame_attachment_pairs,
                     )
                     frame_question_type_counts: Counter[tuple[str, str]] = Counter()
                     frame_question_type_object_counts: Counter[tuple[str, str, str]] = Counter()
@@ -5852,6 +6144,7 @@ def run_pipeline(
                                 occlusion_eligible_object_ids=occlusion_eligible_ids,
                                 pipeline_referable_object_ids=referable_ids,
                                 pipeline_attachment_referable_object_ids=attachment_referable_ids,
+                                pipeline_attachment_referable_pairs=frame_attachment_pairs,
                                 referability_entry=referability_entry,
                                 frame_attachment_rows=frame_attachment_rows,
                                 referable_occlusion_veto=referable_occlusion_veto,
@@ -5870,6 +6163,244 @@ def run_pipeline(
                     raw_generated_count=frame_raw_generated_count,
                     kept_count=frame_kept_count,
                 )
+
+        if cross_frame_requested_types:
+            flash_contexts = _build_reasoning_frame_contexts(
+                frames=frames,
+                scene_frames=scene_frames,
+                poses=poses,
+            )
+            funnel: dict[str, object] = {
+                "scene_id": scene_id,
+                "raw_pose_frame_count": len(poses),
+                "flash_frame_count": len(flash_contexts),
+                "ordered_frame_pair_count": len(flash_contexts) * max(len(flash_contexts) - 1, 0),
+                "requested_question_types": cross_frame_requested_types,
+                "pair_stage_counts": Counter(),
+                "question_type_generated_counts": Counter(),
+                "question_type_kept_counts": Counter(),
+                "pair_failures": [],
+            }
+            if ds is not None:
+                image_path_for = ds.image_path
+            else:
+                image_path_for = lambda name: scene_dir / "color" / name
+            route_graph = VisualPoseGraph(
+                poses=poses,
+                image_path_for=image_path_for,
+                flash_frame_names={context.image_name for context in flash_contexts},
+            )
+            route_graph_cache_path = auxiliary_graph_cache_dir / f"{scene_id}.json"
+            route_graph_cache_hit = route_graph.load_cache(route_graph_cache_path)
+            if not route_graph_cache_hit:
+                route_graph.build()
+                try:
+                    route_graph.save_cache(route_graph_cache_path)
+                except OSError as exc:
+                    logger.warning(
+                        "Could not persist visual-pose graph cache for %s: %s",
+                        scene_id,
+                        exc,
+                    )
+            funnel["auxiliary_graph"] = {
+                **route_graph.diagnostics(),
+                "cache_hit": route_graph_cache_hit,
+                "cache_path": str(route_graph_cache_path),
+            }
+            cross_candidates: list[dict] = []
+            pair_stage_counts: Counter = funnel["pair_stage_counts"]
+            generated_counts: Counter = funnel["question_type_generated_counts"]
+            routes_by_pair: dict[tuple[str, str], object] = {}
+            contexts_by_name = {context.image_name: context for context in flash_contexts}
+            for raw_frame_1 in flash_contexts:
+                for raw_frame_2 in flash_contexts:
+                    if raw_frame_1.image_name == raw_frame_2.image_name:
+                        continue
+                    pair_stage_counts["considered"] += 1
+                    route = route_graph.find_route(
+                        raw_frame_1.image_name,
+                        raw_frame_2.image_name,
+                        max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
+                    )
+                    if route is None:
+                        pair_stage_counts["auxiliary_path_rejected"] += 1
+                        failures = funnel["pair_failures"]
+                        if isinstance(failures, list) and len(failures) < 100:
+                            failures.append({
+                                "frame_1": raw_frame_1.image_name,
+                                "frame_2": raw_frame_2.image_name,
+                                "reason": "no_visual_pose_path_within_auxiliary_limit",
+                            })
+                        continue
+                    routes_by_pair[(raw_frame_1.image_name, raw_frame_2.image_name)] = route
+                    pair_stage_counts["path_accepted"] += 1
+
+            def _append_pair_questions(
+                pair_questions: list[dict],
+                frame_1: ReasoningFrameContext,
+                frame_2: ReasoningFrameContext,
+                route,
+            ) -> None:
+                surface_text_by_id: dict[int, str] = {}
+                for context in (frame_1, frame_2):
+                    surface_text_by_id.update(
+                        _attachment_human_review_surface_text_by_object_id(
+                            (context.cache_entry or {}).get("attachment_human_review_cards")
+                        )
+                    )
+                frame_1_rank = int((frame_1.cache_entry or {}).get("final_selection_rank", 1_000_000))
+                frame_2_rank = int((frame_2.cache_entry or {}).get("final_selection_rank", 1_000_000))
+                pair_score = float(route.cost) + 0.001 * (frame_1_rank + frame_2_rank)
+                for question in pair_questions:
+                    question.pop("_cross_frame_layout_hint", None)
+                    question["scene_id"] = scene_id
+                    question["auxiliary_image_names"] = list(route.auxiliary_image_names)
+                    question["auxiliary_route"] = {
+                        "method": "visual_pose_graph",
+                        "edge_count": route.edge_count,
+                        "cost": route.cost,
+                        "min_inliers": route.min_inliers,
+                        "min_inlier_ratio": route.min_inlier_ratio,
+                    }
+                    question["question_referability_audit"] = {
+                        "decision": "pass",
+                        "mode": "cross_frame_role_aware",
+                        "frame_1": frame_1.image_name,
+                        "frame_2": frame_2.image_name,
+                    }
+                    question["_cross_frame_pair_score"] = pair_score
+                    if surface_text_by_id:
+                        question = _apply_attachment_surface_text_overrides(
+                            question,
+                            surface_text_by_id,
+                        )
+                    generated_counts[str(question.get("type", ""))] += 1
+                    cross_candidates.append(question)
+
+            non_occlusion_types = [
+                question_type for question_type in cross_frame_requested_types
+                if question_type != "L2_object_move_occlusion"
+            ]
+            if non_occlusion_types:
+                for frame_1 in flash_contexts:
+                    destinations = [
+                        contexts_by_name[frame_2_name]
+                        for frame_1_name, frame_2_name in routes_by_pair
+                        if frame_1_name == frame_1.image_name
+                    ]
+                    if not destinations:
+                        continue
+                    deferred_regular_ids = frozenset().union(*(
+                        destination.regular_referable_ids - frame_1.any_referable_ids
+                        for destination in destinations
+                    ))
+                    if not deferred_regular_ids:
+                        continue
+                    deferred_frame_2 = ReasoningFrameContext(
+                        image_name="__deferred_frame_2__",
+                        camera_pose=destinations[0].camera_pose,
+                        regular_referable_ids=deferred_regular_ids,
+                        attachment_referable_ids=frozenset(),
+                        defer_annotation=True,
+                    )
+                    raw_questions = generate_cross_frame_questions(
+                        objects=scene["objects"],
+                        attachment_graph=attachment_graph,
+                        attached_by=attached_by,
+                        frame_1=frame_1,
+                        frame_2=deferred_frame_2,
+                        color_intrinsics=color_intrinsics,
+                        room_bounds=scene.get("room_bounds"),
+                        collision_objects=scene["objects"],
+                        ray_caster=ray_caster,
+                        instance_mesh_data=instance_mesh_data,
+                        occlusion_backend=occlusion_backend,
+                        only_question_types=non_occlusion_types,
+                        max_occlusion_objects=max_occlusion_objects,
+                        max_move_sources=max_move_sources,
+                    )
+                    for raw_question in raw_questions:
+                        layout_id = str(raw_question.get("_cross_frame_layout_hint", "")).strip() or None
+                        for frame_2 in destinations:
+                            route = routes_by_pair[(frame_1.image_name, frame_2.image_name)]
+                            annotated = _annotate_cross_frame_questions(
+                                [dict(raw_question)],
+                                frame_1=frame_1,
+                                frame_2=frame_2,
+                                objects_by_id=objects_by_id,
+                                layout_id=layout_id,
+                            )
+                            if annotated:
+                                _append_pair_questions(annotated, frame_1, frame_2, route)
+
+            if "L2_object_move_occlusion" in cross_frame_requested_types:
+                descendants_by_source: dict[int, set[int]] = {}
+                for source_id in attachment_graph:
+                    pending = list(attachment_graph.get(source_id, []))
+                    descendants: set[int] = set()
+                    while pending:
+                        child_id = int(pending.pop())
+                        if child_id in descendants:
+                            continue
+                        descendants.add(child_id)
+                        pending.extend(attachment_graph.get(child_id, []))
+                    descendants_by_source[int(source_id)] = descendants
+
+                for (frame_1_name, frame_2_name), route in routes_by_pair.items():
+                    frame_1 = _restrict_context_for_semantic_exclusivity(
+                        contexts_by_name[frame_1_name], contexts_by_name[frame_2_name],
+                    )
+                    frame_2 = _restrict_context_for_semantic_exclusivity(
+                        contexts_by_name[frame_2_name], contexts_by_name[frame_1_name],
+                    )
+                    has_source_target_pair = any(
+                        source_id in frame_1.attachment_capable_ids
+                        and bool(descendants & frame_2.regular_referable_ids)
+                        for source_id, descendants in descendants_by_source.items()
+                    )
+                    if not has_source_target_pair:
+                        pair_stage_counts["occlusion_role_infeasible"] += 1
+                        continue
+                    pair_questions = generate_cross_frame_questions(
+                        objects=scene["objects"],
+                        attachment_graph=attachment_graph,
+                        attached_by=attached_by,
+                        frame_1=frame_1,
+                        frame_2=frame_2,
+                        color_intrinsics=color_intrinsics,
+                        room_bounds=scene.get("room_bounds"),
+                        collision_objects=scene["objects"],
+                        ray_caster=ray_caster,
+                        instance_mesh_data=instance_mesh_data,
+                        occlusion_backend=occlusion_backend,
+                        only_question_types=["L2_object_move_occlusion"],
+                        max_occlusion_objects=max_occlusion_objects,
+                        max_move_sources=max_move_sources,
+                    )
+                    if pair_questions:
+                        pair_stage_counts["generated"] += 1
+                        _append_pair_questions(pair_questions, frame_1, frame_2, route)
+                    else:
+                        pair_stage_counts["gt_or_role_infeasible"] += 1
+
+            retained_cross_questions = _retain_best_cross_frame_views(cross_candidates)
+            retained_cross_questions = _apply_scene_type_cap(
+                retained_cross_questions,
+                scene_type_cap=scene_type_cap,
+                frame_type_cap=frame_type_cap,
+                frame_type_object_cap=frame_type_object_cap,
+                type_counts=scene_question_type_counts,
+                pair_counts=scene_pair_counts,
+            )
+            kept_counts: Counter = funnel["question_type_kept_counts"]
+            for question in retained_cross_questions:
+                kept_counts[str(question.get("type", ""))] += 1
+            funnel["pair_stage_counts"] = dict(sorted(pair_stage_counts.items()))
+            funnel["question_type_generated_counts"] = dict(sorted(generated_counts.items()))
+            funnel["question_type_kept_counts"] = dict(sorted(kept_counts.items()))
+            funnel["final_cross_frame_question_count"] = len(retained_cross_questions)
+            _write_json_file(cross_frame_funnel_dir / f"{scene_id}.json", funnel)
+            scene_questions.extend(retained_cross_questions)
 
         if write_frame_debug:
             _write_json_file(
@@ -5921,6 +6452,7 @@ def run_pipeline(
         frame_type_object_cap=frame_type_object_cap,
         dataset=dataset,
         scannetpp_sensor=scannetpp_sensor,
+        scannetpp_frame_root=scannetpp_frame_root,
     )
     """
         if not has_nontrivial_attachment(attachment_graph):
@@ -6422,6 +6954,7 @@ def main():
         help=(
             "If provided, only generate the listed question types. Valid values: "
             "L1_direction_agent, L2_object_move_agent, L2_object_move_distance, "
+            "L2_object_move_occlusion, "
             "L2_object_move_object_centric, L2_object_rotate_object_centric, "
             "L2_object_move_allocentric, L2_object_remove, "
             "L3_attachment_chain, L3_attachment_move, L3_coordinate_rotation_agent, L3_coordinate_rotation_object_centric, "

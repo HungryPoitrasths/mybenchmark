@@ -202,6 +202,32 @@ def make_attachment_pair_review_html(
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_cross_only_resource_requirements_follow_requested_types(self) -> None:
+        self.assertEqual(
+            run_pipeline_module._scene_resource_requirements(
+                single_frame_requested_types=[],
+                cross_frame_requested_types=["L3_coordinate_rotation_agent"],
+                occlusion_backend="mesh_ray",
+            ),
+            (False, False),
+        )
+        self.assertEqual(
+            run_pipeline_module._scene_resource_requirements(
+                single_frame_requested_types=[],
+                cross_frame_requested_types=["L2_object_move_distance"],
+                occlusion_backend="mesh_ray",
+            ),
+            (False, False),
+        )
+        self.assertEqual(
+            run_pipeline_module._scene_resource_requirements(
+                single_frame_requested_types=[],
+                cross_frame_requested_types=["L2_object_move_occlusion"],
+                occlusion_backend="mesh_ray",
+            ),
+            (True, True),
+        )
+
     def test_scene_type_cap_only_limits_l1_occlusion_and_l2_viewpoint_move(self) -> None:
         questions = [
             {"scene_id": "scene0000_00", "type": "direction", "question": f"d {idx}"}
@@ -833,6 +859,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             occlusion_eligible_object_ids=[9, 31],
             pipeline_referable_object_ids=[9],
             pipeline_attachment_referable_object_ids=[9, 31],
+            pipeline_attachment_referable_pairs=[(9, 31)],
             referability_entry={
                 "referable_object_ids": [9],
                 "attachment_referable_object_ids": [9, 31],
@@ -842,6 +869,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(entry["pipeline_attachment_referable_object_ids_used_for_generation"], [9, 31])
+        self.assertEqual(entry["pipeline_attachment_referable_pairs_used_for_generation"], [[9, 31]])
         self.assertEqual(entry["attachment_referable_object_ids"], [9, 31])
         self.assertEqual(entry["attachment_referable_pairs"], [[9, 31]])
 
@@ -1521,7 +1549,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             [],
         )
 
-    def test_apply_question_referability_filter_uses_attachment_referable_ids_for_attachment_questions(self) -> None:
+    def test_apply_question_referability_filter_uses_role_specific_attachment_pools(self) -> None:
         kept, audited = run_pipeline_module._apply_question_referability_filter(
             [
                 {
@@ -1529,6 +1557,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     "image_name": "000123.jpg",
                     "type": "attachment_chain",
                     "question": "If the table moves, which objects move with it?",
+                    "grandparent_id": 1,
+                    "grandparent_label": "table",
+                    "parent_id": 2,
+                    "parent_label": "box",
+                    "grandchild_id": 3,
+                    "grandchild_label": "cup",
+                    "neighbor_id": 4,
+                    "neighbor_label": "lamp",
                     "mentioned_objects": [
                         {"role": "grandparent", "label": "table", "obj_id": 1},
                         {"role": "parent", "label": "box", "obj_id": 2},
@@ -1557,8 +1593,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     "lamp": [4],
                 },
             },
-            frame_referable_ids=[1],
-            attachment_frame_referable_ids=[1, 2, 3, 4],
+            frame_referable_ids=[1, 4],
+            attachment_frame_referable_ids=[1, 2, 3],
+            attachment_frame_referable_pairs=[(1, 2), (2, 3)],
         )
 
         self.assertEqual(len(kept), 1)
@@ -1566,7 +1603,141 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(audited[0]["question_referability_audit"]["decision"], "pass")
         self.assertEqual(
             audited[0]["question_referability_audit"]["frame_referable_object_ids"],
-            [1, 2, 3, 4],
+            [1, 4],
+        )
+        self.assertEqual(
+            audited[0]["question_referability_audit"]["frame_attachment_referable_object_ids"],
+            [1, 2, 3],
+        )
+        pools = {
+            mention["role"]: mention["required_referability_pool"]
+            for mention in audited[0]["question_referability_audit"]["mentioned_objects"]
+        }
+        self.assertEqual(pools["grandparent"], "attachment")
+        self.assertEqual(pools["parent"], "attachment")
+        self.assertEqual(pools["grandchild"], "attachment")
+        self.assertEqual(pools["neighbor"], "ordinary")
+
+    def test_attachment_question_requires_ordinary_reference_to_pass_ordinary_pool(self) -> None:
+        question = {
+            "type": "object_move_agent",
+            "attachment_remapped": True,
+            "moved_obj_id": 1,
+            "moved_obj_label": "table",
+            "query_obj_id": 2,
+            "query_obj_label": "box",
+            "obj_c_id": 3,
+            "obj_c_label": "chair",
+            "mentioned_objects": [
+                {"role": "moved_object", "label": "table", "obj_id": 1},
+                {"role": "query_object", "label": "box", "obj_id": 2},
+                {"role": "reference_object", "label": "chair", "obj_id": 3},
+            ],
+        }
+        objects_by_id = {
+            1: make_object(1, "table"),
+            2: make_object(2, "box"),
+            3: make_object(3, "chair"),
+        }
+        referability_entry = {
+            "label_statuses": {
+                "table": "unique",
+                "box": "unique",
+                "chair": "unique",
+            },
+            "label_to_object_ids": {
+                "table": [1],
+                "box": [2],
+                "chair": [3],
+            },
+        }
+
+        passing = run_pipeline_module._build_question_referability_audit(
+            question,
+            objects_by_id=objects_by_id,
+            referability_entry=referability_entry,
+            frame_referable_ids=[3],
+            attachment_frame_referable_ids=[1, 2],
+            attachment_frame_referable_pairs=[(1, 2)],
+        )
+        failing = run_pipeline_module._build_question_referability_audit(
+            question,
+            objects_by_id=objects_by_id,
+            referability_entry=referability_entry,
+            frame_referable_ids=[],
+            attachment_frame_referable_ids=[1, 2, 3],
+            attachment_frame_referable_pairs=[(1, 2)],
+        )
+
+        self.assertEqual(passing["decision"], "pass")
+        self.assertEqual(failing["decision"], "drop")
+        reference_audit = next(
+            mention
+            for mention in failing["mentioned_objects"]
+            if mention["role"] == "reference_object"
+        )
+        self.assertEqual(reference_audit["required_referability_pool"], "ordinary")
+        self.assertIn("mentioned_nonreferable_object", reference_audit["reason_codes"])
+
+    def test_attachment_question_rejects_unreviewed_pair_path(self) -> None:
+        audit = run_pipeline_module._build_question_referability_audit(
+            {
+                "type": "object_move_agent",
+                "attachment_remapped": True,
+                "moved_obj_id": 1,
+                "moved_obj_label": "table",
+                "query_obj_id": 3,
+                "query_obj_label": "cup",
+                "obj_c_id": 4,
+                "obj_c_label": "chair",
+            },
+            objects_by_id={
+                1: make_object(1, "table"),
+                2: make_object(2, "box"),
+                3: make_object(3, "cup"),
+                4: make_object(4, "chair"),
+            },
+            referability_entry={
+                "label_statuses": {
+                    "table": "unique",
+                    "box": "unique",
+                    "cup": "unique",
+                    "chair": "unique",
+                },
+                "label_to_object_ids": {
+                    "table": [1],
+                    "box": [2],
+                    "cup": [3],
+                    "chair": [4],
+                },
+            },
+            frame_referable_ids=[4],
+            attachment_frame_referable_ids=[1, 2, 3],
+            attachment_frame_referable_pairs=[(1, 2)],
+        )
+
+        self.assertEqual(audit["decision"], "drop")
+        self.assertIn("attachment_pair_not_referable", audit["reason_codes"])
+
+    def test_frame_attachment_pairs_treats_explicit_empty_as_authoritative(self) -> None:
+        kwargs = {
+            "attachment_graph": {1: [2]},
+            "attachment_referable_ids": [1, 2],
+            "visible_object_ids": [1, 2],
+        }
+        self.assertEqual(
+            run_pipeline_module._frame_attachment_referable_pairs(
+                referability_entry={"attachment_referable_pairs": []},
+                **kwargs,
+            ),
+            [],
+        )
+        self.assertEqual(
+            run_pipeline_module._frame_attachment_referable_pairs(
+                referability_entry={},
+                **kwargs,
+            ),
+            [(1, 2)],
         )
 
     def test_apply_question_referability_filter_raises_on_nonreferable_mention(self) -> None:
@@ -3261,6 +3432,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             captured["attachment_referable_object_ids"] = list(
                 kwargs.get("attachment_referable_object_ids") or []
             )
+            captured["attachment_referable_pairs"] = list(
+                kwargs.get("attachment_referable_pairs") or []
+            )
             captured["attachment_object_surface_text_by_id"] = dict(
                 kwargs.get("attachment_object_surface_text_by_id") or {}
             )
@@ -3324,6 +3498,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(captured["visible_object_ids"], [1, 2])
         self.assertEqual(captured["referable_object_ids"], [1, 2])
         self.assertEqual(captured["attachment_referable_object_ids"], [1, 2])
+        self.assertEqual(captured["attachment_referable_pairs"], [(2, 1)])
         self.assertEqual(captured["attachment_object_surface_text_by_id"], {1: "blue cup", 2: "wooden table"})
         self.assertEqual(captured["attachment_priority_pairs"], [(2, 1)])
         self.assertEqual(captured["occlusion_eligible_object_ids"], [1, 2])
@@ -4431,6 +4606,269 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]["scene_id"], "scene0000_00")
         self.assertEqual(questions[0]["image_name"], "000001.jpg")
+
+    def test_run_pipeline_defers_non_occlusion_by_source_and_keeps_occlusion_per_pair(self) -> None:
+        root = make_case_dir("pipeline_cross_frame_orchestration")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        output_dir = root / "output"
+        scene_id = "scene0000_00"
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+        frame_names = ["000001.jpg", "000002.jpg", "000003.jpg"]
+
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "chair"),
+            make_object(3, "cabinet"),
+            make_object(5, "book"),
+            make_object(6, "lamp"),
+        ]
+        objects_by_id = {int(obj["id"]): obj for obj in objects}
+        scene = {
+            "scene_id": scene_id,
+            "objects": objects,
+            "attachment_edges": [
+                {"parent_id": 1, "child_id": 5, "type": "attachment"},
+                {"parent_id": 1, "child_id": 6, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+
+        def cache_entry(regular_ids: list[int], attachment_ids: list[int], rank: int) -> dict:
+            visible_ids = sorted(set(regular_ids) | set(attachment_ids))
+            regular_id_set = set(regular_ids)
+            crop_label_statuses = {
+                objects_by_id[obj_id]["label"]: (
+                    "unique" if obj_id in regular_id_set else "absent"
+                )
+                for obj_id in visible_ids
+            }
+            attachment_only_ids = sorted(set(attachment_ids) - regular_id_set)
+            attachment_cards = []
+            if attachment_only_ids and regular_ids:
+                attachment_cards.append({
+                    "pair_id": f"{attachment_only_ids[0]}->{regular_ids[0]}",
+                    "parent_id": attachment_only_ids[0],
+                    "parent_label": objects_by_id[attachment_only_ids[0]]["label"],
+                    "parent_surface_text": f"the {objects_by_id[attachment_only_ids[0]]['label']}",
+                    "child_id": regular_ids[0],
+                    "child_label": objects_by_id[regular_ids[0]]["label"],
+                    "child_surface_text": f"the {objects_by_id[regular_ids[0]]['label']}",
+                    "source": "human_salvage_html",
+                })
+            entry = {
+                "frame_usable": True,
+                "final_selection_rank": rank,
+                "candidate_visible_object_ids": visible_ids,
+                "label_to_object_ids": {
+                    objects_by_id[obj_id]["label"]: [obj_id] for obj_id in visible_ids
+                },
+                "crop_label_statuses": crop_label_statuses,
+                "crop_label_counts": {
+                    label: 1 if status == "unique" else 0
+                    for label, status in crop_label_statuses.items()
+                },
+                "crop_referable_object_ids": regular_ids,
+                "full_frame_label_statuses": {},
+                "full_frame_label_counts": {},
+                "attachment_human_review_cards": attachment_cards,
+                "out_of_frame_label_reviews": [],
+                "out_of_frame_not_visible_labels": [],
+                "out_of_frame_label_to_object_ids": {},
+                "out_of_frame_vlm_early_stop": False,
+            }
+            return referability_module._repair_final_referability_fields(entry)
+
+        referability_cache = {
+            "version": "20.0",
+            "frames": {
+                scene_id: {
+                    frame_names[0]: cache_entry([5], [1], 1),
+                    frame_names[1]: cache_entry([2, 6], [], 2),
+                    frame_names[2]: cache_entry([3, 6], [], 3),
+                }
+            },
+        }
+        poses = {
+            name: make_camera_pose_at(name, float(index) * 0.2)
+            for index, name in enumerate(frame_names)
+        }
+        non_occlusion_calls: list[tuple[str, str, tuple[str, ...]]] = []
+        occlusion_calls: list[tuple[str, str]] = []
+        occlusion_veto_call_count = 0
+
+        class FakeRoute:
+            auxiliary_image_names = ("bridge.jpg",)
+            cost = 1.0
+            edge_count = 2
+            min_inliers = 40
+            min_inlier_ratio = 0.5
+
+        class FakeVisualPoseGraph:
+            def __init__(self, **_kwargs):
+                pass
+
+            def load_cache(self, _cache_path):
+                return False
+
+            def build(self):
+                pass
+
+            def save_cache(self, _cache_path):
+                pass
+
+            def diagnostics(self):
+                return {
+                    "pose_count": 3,
+                    "readable_count": 3,
+                    "graph_node_count": 3,
+                    "graph_edge_count": 3,
+                    "rejected_edge_counts": {},
+                }
+
+            def find_route(self, start, end, **_kwargs):
+                return None if start == end else FakeRoute()
+
+        def fake_generate_cross_frame_questions(**kwargs):
+            frame_1 = kwargs["frame_1"]
+            frame_2 = kwargs["frame_2"]
+            requested = tuple(kwargs.get("only_question_types") or [])
+            if requested == ("L2_object_move_occlusion",):
+                occlusion_calls.append((frame_1.image_name, frame_2.image_name))
+                raw = {
+                    "level": "L2",
+                    "type": "object_move_occlusion",
+                    "question": "occlusion question",
+                    "options": ["visible", "occluded", "not visible"],
+                    "answer": "A",
+                    "correct_value": "visible",
+                    "moved_obj_id": 1,
+                    "target_obj_id": 6,
+                    "query_obj_id": 6,
+                }
+                return run_pipeline_module._annotate_cross_frame_questions(
+                    [raw],
+                    frame_1=frame_1,
+                    frame_2=frame_2,
+                    objects_by_id=objects_by_id,
+                )
+
+            non_occlusion_calls.append((frame_1.image_name, frame_2.image_name, requested))
+            if frame_1.image_name != frame_names[0]:
+                return []
+            return [
+                {
+                    "level": "L2",
+                    "type": "object_move_agent",
+                    "reference_frame": "agent",
+                    "question": f"agent question {ref_id}",
+                    "options": ["left", "right", "front", "back"],
+                    "answer": "A",
+                    "correct_value": "left",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 5,
+                    "obj_b_id": 5,
+                    "obj_c_id": ref_id,
+                    "delta": [0.5, 0.0, 0.0],
+                }
+                for ref_id in (2, 3)
+            ]
+
+        def fake_occlusion_veto(**kwargs):
+            nonlocal occlusion_veto_call_count
+            occlusion_veto_call_count += 1
+            referable_ids = list(kwargs["referable_object_ids"])
+            return {
+                "raw_object_ids": referable_ids,
+                "filtered_object_ids": referable_ids,
+                "low_visible_object_ids": [],
+                "not_visible_object_ids": [],
+                "skipped_object_ids": [],
+                "audit_by_object_id": {},
+            }
+
+        with (
+            patch.object(run_pipeline_module, "parse_scene", return_value=scene),
+            patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda _scene: None),
+            patch.object(run_pipeline_module, "get_scene_attachment_graph", return_value={1: [5, 6]}),
+            patch.object(run_pipeline_module, "get_scene_attached_by", return_value={5: 1, 6: 1}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_graph", return_value={1: [5, 6]}),
+            patch.object(run_pipeline_module, "get_scene_support_chain_by", return_value={5: 1, 6: 1}),
+            patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+            patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+            patch.object(run_pipeline_module, "load_axis_alignment", return_value=np.eye(4)),
+            patch.object(run_pipeline_module, "load_scannet_poses", return_value=poses),
+            patch.object(run_pipeline_module, "load_scannet_intrinsics", return_value=make_camera_intrinsics()),
+            patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+            patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=object()),
+            patch.object(
+                run_pipeline_module,
+                "_filter_referable_object_ids_with_occlusion_veto",
+                side_effect=fake_occlusion_veto,
+            ),
+            patch.object(run_pipeline_module, "VisualPoseGraph", FakeVisualPoseGraph),
+            patch.object(
+                run_pipeline_module,
+                "generate_cross_frame_questions",
+                side_effect=fake_generate_cross_frame_questions,
+            ),
+            patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
+            patch.object(
+                run_pipeline_module,
+                "compute_statistics",
+                side_effect=lambda questions: {"total": len(questions)},
+            ),
+        ):
+            questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=1,
+                max_frames=3,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                only_question_types=[
+                    "L2_object_move_agent",
+                    "L2_object_move_occlusion",
+                ],
+                scene_type_cap=0,
+                frame_type_cap=0,
+                frame_type_object_cap=0,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+            )
+
+        self.assertEqual(
+            [call[0] for call in non_occlusion_calls],
+            frame_names,
+        )
+        self.assertEqual(occlusion_veto_call_count, 0)
+        self.assertTrue(all(call[1] == "__deferred_frame_2__" for call in non_occlusion_calls))
+        self.assertEqual(
+            occlusion_calls,
+            [
+                (frame_names[0], frame_names[1]),
+                (frame_names[0], frame_names[2]),
+            ],
+        )
+        self.assertEqual(Counter(question["type"] for question in questions), {
+            "object_move_agent": 2,
+            "object_move_occlusion": 2,
+        })
+        self.assertEqual(
+            {question.get("reasoning_frame_2") for question in questions},
+            {frame_names[1], frame_names[2]},
+        )
+        funnel = json.loads(
+            (output_dir / "cross_frame_funnel" / f"{scene_id}.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(funnel["question_type_generated_counts"], {
+            "object_move_agent": 2,
+            "object_move_occlusion": 2,
+        })
+        self.assertFalse(funnel["auxiliary_graph"]["cache_hit"])
 
     def test_run_pipeline_finalizes_frame_debug_after_scene_level_flush(self) -> None:
         root = make_case_dir("pipeline_frame_debug_finalize")

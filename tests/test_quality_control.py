@@ -127,6 +127,49 @@ def test_quality_filter_dedups_non_coordinate_l3_questions_across_frames() -> No
     assert len(filtered) == 1
 
 
+def test_quality_filter_keeps_same_semantics_for_distinct_cross_frame_pairs() -> None:
+    questions = [
+        {
+            **_make_question("object_move_agent", idx, "left"),
+            "scene_id": "scene0001_00",
+            "image_name": "source.jpg",
+            "reasoning_frame_2": destination,
+            "question": "If the table moves, where is the book relative to the chair?",
+            "moved_obj_id": 1,
+            "query_obj_id": 2,
+            "obj_c_id": 3,
+        }
+        for idx, destination in enumerate(("target-a.jpg", "target-b.jpg"))
+    ]
+
+    filtered = quality_filter(questions)
+
+    assert len(filtered) == 2
+
+
+def test_full_quality_pipeline_keeps_attachment_change_across_main_frame_pairs() -> None:
+    questions = [
+        {
+            **_make_question("object_move_agent", idx, "left"),
+            "scene_id": "scene0001_00",
+            "image_name": "source.jpg",
+            "reasoning_frame_2": destination,
+            "question": "If the table moves, where is the book relative to the chair?",
+            "moved_obj_id": 1,
+            "query_obj_id": 2,
+            "obj_c_id": 3,
+            "attachment_remapped": True,
+            "relation_unchanged": False,
+            "attachment_pair_id": "1->2",
+        }
+        for idx, destination in enumerate(("target-a.jpg", "target-b.jpg"))
+    ]
+
+    filtered = full_quality_pipeline(questions)
+
+    assert len(filtered) == 2
+
+
 def test_full_quality_pipeline_caps_l1_occlusion_not_visible_ratio() -> None:
     questions = [
         {
