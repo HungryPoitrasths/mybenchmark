@@ -534,7 +534,11 @@ def refine_visible_ids_with_depth(
 MIN_VISIBLE_OBJECTS = 3
 VIEWPOINT_DIVERSITY_MIN_ANGLE = 20  # degrees
 # Denser sampling gives the later VLM rerank a broader candidate pool.
-FRAME_STRIDE = 3
+# ScanNet v2 poses are one-per-raw-frame (~30 fps); ScanNet++ iPhone poses are
+# already extracted at every 10th raw frame, so both end up sampled roughly
+# every 10 raw frames.
+FRAME_STRIDE_SCANNET = 10
+FRAME_STRIDE_SCANNETPP = 1
 VISIBLE_BBOX_IN_FRAME_RATIO_MIN = 0.35
 # Calibrated against ScanNet v2's 640x480 sensor; scaled per-frame by
 # visible_projected_area_px() so higher-resolution sensors (e.g. ScanNet++
@@ -913,14 +917,12 @@ def _legacy_select_frames(
             attachment_ids.update(children)
 
     # Score every frame — but stride to avoid processing thousands of frames.
-    # ScanNet captures ~30 fps; stride=30 samples every ~1s which is still
-    # dense enough to find diverse viewpoints while cutting runtime by ~30×.
     color_dir = scene_path / "color"
     n_quality_rejected = 0
     n_missing_images = 0
     frame_entries: list[dict[str, Any]] = []
     for i, (image_name, pose) in enumerate(loaded_poses.items()):
-        if i % FRAME_STRIDE != 0:
+        if i % FRAME_STRIDE_SCANNET != 0:
             continue
 
         # Coarse image-quality gate — only reject obviously blurry frames.
@@ -1175,11 +1177,13 @@ def select_frames(
             attachment_ids.add(int(parent_id))
             attachment_ids.update(children)
 
+    frame_stride = FRAME_STRIDE_SCANNETPP if data_source is not None else FRAME_STRIDE_SCANNET
+
     n_sampled_frames = 0
     n_missing_images = 0
     sampled_frames: list[dict[str, Any]] = []
     for i, (image_name, pose) in enumerate(loaded_poses.items()):
-        if i % FRAME_STRIDE != 0:
+        if i % frame_stride != 0:
             continue
 
         n_sampled_frames += 1
