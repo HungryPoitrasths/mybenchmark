@@ -4464,7 +4464,17 @@ def _question_cap_object_id(question: dict) -> str:
     return f"question:{question.get('question', '')}"
 
 
-def _question_pair_key(question: dict) -> tuple[str, str] | None:
+def _question_pair_key(question: dict) -> tuple[str, str, str] | None:
+    # Scoped by canonical_type so pair-level dedup only ever collapses two
+    # questions of the SAME type about the same object pair (e.g. two
+    # direction_agent questions about (table, keyboard)). Without the type in
+    # the key, an L1 direction_agent question and an unrelated L2
+    # object_move_agent question about the same two object ids would share a
+    # key and the L2 one would be silently dropped, even though L2/L3 types
+    # are meant to be entirely exempt from these caps (see
+    # _SCENE_TYPE_CAP_ELIGIBLE_TYPES) -- and the six L2 move/rotate subtypes
+    # all key off the same ("moved_obj_id", "query_obj_id") fields, so without
+    # per-type scoping they would collide with each other too.
     canonical_type = _canonical_scene_question_type(question)
     field_pair = _PAIR_KEY_FIELDS_BY_TYPE.get(canonical_type)
     if field_pair is not None:
@@ -4473,7 +4483,7 @@ def _question_pair_key(question: dict) -> tuple[str, str] | None:
         if left is not None and right is not None:
             pair = tuple(sorted((str(left), str(right))))
             if pair[0] != pair[1]:
-                return pair
+                return (canonical_type, pair[0], pair[1])
 
     unique_ids: list[str] = []
     for field in _QUESTION_CAP_OBJECT_ID_FIELDS:
@@ -4488,7 +4498,7 @@ def _question_pair_key(question: dict) -> tuple[str, str] | None:
     if len(unique_ids) == 2:
         pair = tuple(sorted(unique_ids))
         if pair[0] != pair[1]:
-            return pair
+            return (canonical_type, pair[0], pair[1])
     return None
 
 
@@ -4545,6 +4555,12 @@ def _frame_has_attachment_pair(
     return any(child_ids for child_ids in graph.values())
 
 
+# L2/L3 pair-dedup is looser than L1's: the same (type, object pair) may
+# recur across several viewpoints of the same scene, so instead of L1's
+# "one ever" rule, allow up to one per frame and up to this many scene-wide.
+_L2_L3_PAIR_SCENE_CAP = 3
+
+
 def _apply_incremental_question_caps(
     questions: list[dict],
     *,
@@ -4554,7 +4570,7 @@ def _apply_incremental_question_caps(
     scene_type_counts: Counter[str] | None = None,
     frame_type_counts: Counter[tuple[str, str]] | None = None,
     frame_type_object_counts: Counter[tuple[str, str, str]] | None = None,
-    pair_counts: Counter[tuple[str, str]] | None = None,
+    pair_counts: Counter[tuple[str, str, str]] | None = None,
 ) -> list[dict]:
     kept: list[dict] = []
     scene_counts = scene_type_counts if scene_type_counts is not None else Counter()
@@ -4563,6 +4579,13 @@ def _apply_incremental_question_caps(
         frame_type_object_counts if frame_type_object_counts is not None else Counter()
     )
     pair_counter = pair_counts if pair_counts is not None else Counter()
+    # Keyed by (image_name, *pair_key), so a single Counter created fresh per
+    # call correctly scopes "per frame" whether this call processes one
+    # frame's candidates (the live per-frame loop) or a whole scene's worth
+    # at once (the persist-time re-application) -- no external threading
+    # needed, unlike pair_counter which must survive across the per-frame
+    # loop's separate calls to enforce the scene-wide cap.
+    frame_pair_counter: Counter[tuple[str, ...]] = Counter()
 
     for question in questions:
         canonical_type = _canonical_scene_question_type(question)
@@ -4574,6 +4597,7 @@ def _apply_incremental_question_caps(
         pair_key = _question_pair_key(question)
         frame_key = (image_name, canonical_type)
         frame_object_key = (image_name, canonical_type, object_id)
+        frame_pair_key = (image_name, *pair_key) if pair_key is not None else None
         # scene_type_cap/frame_type_cap/frame_type_object_cap only bound L1
         # types (see _SCENE_TYPE_CAP_ELIGIBLE_TYPES) -- L2/L3 questions are
         # never capped here regardless of the passed-in cap values.
@@ -4590,14 +4614,27 @@ def _apply_incremental_question_caps(
             and frame_object_counts[frame_object_key] >= effective_frame_type_object_cap
         ):
             continue
-        if pair_key is not None and pair_counter[pair_key] >= 1:
-            continue
+        if type_is_cap_eligible:
+            # L1: at most one question per (type, object pair), scene-wide.
+            if pair_key is not None and pair_counter[pair_key] >= 1:
+                continue
+        else:
+            # L2/L3: at most one per (type, object pair) per frame, and at
+            # most _L2_L3_PAIR_SCENE_CAP per (type, object pair) scene-wide --
+            # lets the same counterfactual be asked from a few different
+            # viewpoints without one frame or one pair dominating the scene.
+            if frame_pair_key is not None and frame_pair_counter[frame_pair_key] >= 1:
+                continue
+            if pair_key is not None and pair_counter[pair_key] >= _L2_L3_PAIR_SCENE_CAP:
+                continue
         kept.append(question)
         scene_counts[canonical_type] += 1
         frame_counts[frame_key] += 1
         frame_object_counts[frame_object_key] += 1
         if pair_key is not None:
             pair_counter[pair_key] += 1
+        if frame_pair_key is not None:
+            frame_pair_counter[frame_pair_key] += 1
     return kept
 
 
@@ -4622,7 +4659,7 @@ def _apply_scene_type_cap(
     type_counts: Counter[str] | None = None,
     frame_type_counts: Counter[tuple[str, str]] | None = None,
     frame_type_object_counts: Counter[tuple[str, str, str]] | None = None,
-    pair_counts: Counter[tuple[str, str]] | None = None,
+    pair_counts: Counter[tuple[str, str, str]] | None = None,
 ) -> list[dict]:
     return _apply_incremental_question_caps(
         questions,
@@ -5137,7 +5174,7 @@ def run_pipeline(
     for scene_index, scene_dir in pending_scene_entries:
         scene_id = scene_dir.name
         scene_question_type_counts: Counter[str] = Counter()
-        scene_pair_counts: Counter[tuple[str, str]] = Counter()
+        scene_pair_counts: Counter[tuple[str, str, str]] = Counter()
         logger.info(
             "=== Processing scene %s (%d/%d) ===",
             scene_id,
@@ -5678,6 +5715,31 @@ def run_pipeline(
                             scene_type_cap=scene_type_cap,
                             allowed_types=target_scene_question_types,
                         )
+
+                        def _pair_budget_remaining(
+                            canonical_type: str, id_a: int, id_b: int,
+                        ) -> bool:
+                            # Soft early-exit hint for the L2 move/rotate
+                            # generators: mirrors the same (type, object pair)
+                            # cap enforced authoritatively afterward by
+                            # _apply_scene_type_cap(pair_counts=scene_pair_counts)
+                            # below, using scene_pair_counts as it stood BEFORE
+                            # this frame (each pair is visited at most once per
+                            # frame per generator, so this can't go stale
+                            # mid-frame). Lets expensive per-move-source
+                            # collision-search/ray-casting be skipped once a
+                            # pair has already hit its cap, instead of being
+                            # computed and discarded post-hoc.
+                            pair = tuple(sorted((str(id_a), str(id_b))))
+                            if pair[0] == pair[1]:
+                                return True
+                            cap = (
+                                1
+                                if canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES
+                                else _L2_L3_PAIR_SCENE_CAP
+                            )
+                            return scene_pair_counts[(canonical_type, pair[0], pair[1])] < cap
+
                         questions = _call_generate_all_questions_compat(
                             objects=scene["objects"],
                             attachment_graph=attachment_graph,
@@ -5712,6 +5774,7 @@ def run_pipeline(
                             question_type_budgets=question_type_budgets,
                             max_occlusion_objects=max_occlusion_objects,
                             max_move_sources=max_move_sources,
+                            pair_budget_remaining=_pair_budget_remaining,
                         )
                     except Exception:
                         logger.exception(

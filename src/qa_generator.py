@@ -6723,6 +6723,7 @@ def generate_l2_object_move(
     enabled_l2_object_move_types: set[str] | None = None,
     max_occlusion_objects: int | str | None = None,
     max_move_sources: int | None = None,
+    pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     if enabled_l2_object_move_types is None:
@@ -6936,6 +6937,35 @@ def generate_l2_object_move(
         has_attachment_chain = attachment_remapped
         if not has_attachment_chain:
             continue
+        query_objects = [
+            candidate_obj for candidate_obj in attachment_query_pool
+            if int(candidate_obj["id"]) in moved_ids
+            and int(candidate_obj["id"]) != move_source_id
+        ]
+        if not query_objects:
+            continue
+        if pair_budget_remaining is not None:
+            enabled_move_type_names = [
+                move_type
+                for move_type, enabled in (
+                    ("object_move_agent", enable_agent),
+                    ("object_move_distance", enable_distance),
+                    ("object_move_occlusion", enable_occlusion),
+                )
+                if enabled
+            ]
+            query_objects = [
+                candidate_obj for candidate_obj in query_objects
+                if any(
+                    pair_budget_remaining(move_type, move_source_id, int(candidate_obj["id"]))
+                    for move_type in enabled_move_type_names
+                )
+            ]
+            if not query_objects:
+                # Every enabled type for every query object under this
+                # move-source has already hit its pair cap -- skip the
+                # expensive collision-search state selection below entirely.
+                continue
         selected_state = None
         if enable_agent or enable_occlusion:
             selected_state = _select_object_move_state(
@@ -6975,13 +7005,6 @@ def generate_l2_object_move(
             ],
         ] = {}
         alternative_states: _LazyStateList | None = None
-        query_objects = [
-            candidate_obj for candidate_obj in attachment_query_pool
-            if int(candidate_obj["id"]) in moved_ids
-            and int(candidate_obj["id"]) != move_source_id
-        ]
-        if not query_objects:
-            continue
         priority_query_ids = {
             int(child_id)
             for child_id in attachment_priority_children_by_parent.get(move_source_id, set())
@@ -8059,6 +8082,7 @@ def generate_l2_object_rotate_object_centric(
     attachment_query_objects: list[dict] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
+    pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
 ) -> list[dict]:
     """L2 object-rotation questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -8107,6 +8131,15 @@ def generate_l2_object_rotate_object_centric(
         ]
         if not query_objects:
             continue
+        if pair_budget_remaining is not None:
+            query_objects = [
+                candidate_obj for candidate_obj in query_objects
+                if pair_budget_remaining(
+                    "object_rotate_object_centric", move_source_id, int(candidate_obj["id"])
+                )
+            ]
+            if not query_objects:
+                continue
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
@@ -8304,6 +8337,7 @@ def generate_l2_object_move_object_centric(
     attachment_query_objects: list[dict] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
+    pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in a query-centric object frame.
 
@@ -8358,6 +8392,18 @@ def generate_l2_object_move_object_centric(
         ]
         if not query_objects:
             continue
+        if pair_budget_remaining is not None:
+            query_objects = [
+                candidate_obj for candidate_obj in query_objects
+                if pair_budget_remaining(
+                    "object_move_object_centric", move_source_id, int(candidate_obj["id"])
+                )
+            ]
+            if not query_objects:
+                # Every query object under this move-source has already hit
+                # its pair cap -- skip the expensive collision-search state
+                # search below entirely.
+                continue
 
         valid_move_states: list[tuple[np.ndarray, dict[int, dict[str, Any]]]] = []
         for delta, moved_objects, _moved_ids in _iter_valid_object_move_states(
@@ -8544,6 +8590,7 @@ def generate_l2_object_move_allocentric(
     attachment_query_objects: list[dict] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
+    pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -8586,6 +8633,26 @@ def generate_l2_object_move_allocentric(
         if not has_attachment_chain:
             continue
 
+        query_objects = [
+            candidate_obj for candidate_obj in attachment_query_pool
+            if int(candidate_obj["id"]) in moved_ids
+            and int(candidate_obj["id"]) != move_source_id
+        ]
+        if not query_objects:
+            continue
+        if pair_budget_remaining is not None:
+            query_objects = [
+                candidate_obj for candidate_obj in query_objects
+                if pair_budget_remaining(
+                    "object_move_allocentric", move_source_id, int(candidate_obj["id"])
+                )
+            ]
+            if not query_objects:
+                # Every query object under this move-source has already hit
+                # its pair cap -- skip the expensive collision-search state
+                # selection below entirely.
+                continue
+
         selected_state = _select_object_move_state(
             movement_scene_objects,
             attachment_graph,
@@ -8602,13 +8669,6 @@ def generate_l2_object_move_allocentric(
         direction_desc = _delta_to_cardinal_description(delta)
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
         moved_map = {int(obj["id"]): obj for obj in selected_state.moved_objects}
-        query_objects = [
-            candidate_obj for candidate_obj in attachment_query_pool
-            if int(candidate_obj["id"]) in moved_ids
-            and int(candidate_obj["id"]) != move_source_id
-        ]
-        if not query_objects:
-            continue
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
@@ -10451,6 +10511,7 @@ def generate_all_questions(
     question_type_budgets: dict[str, int] | None = None,
     max_occlusion_objects: int | str | None = None,
     max_move_sources: int | None = None,
+    pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
 ) -> list[dict]:
     """Generate all question types for a single scene + frame.
 
@@ -10488,6 +10549,11 @@ def generate_all_questions(
     they are only used to construct allocentric wall-anchor wording.
     question_type_budgets: optional per-canonical-type generation budget used
     to avoid expensive work when the pipeline scene/type cap is already reached.
+    pair_budget_remaining: optional predicate (canonical_type, id_a, id_b) ->
+    bool, checked by the L2 object-move/rotate generators before running
+    per-move-source collision-search/ray-casting, so already-capped (type,
+    object pair) combinations skip expensive work instead of being generated
+    and discarded by the caller's post-hoc cap.
 
     Returns a list of question dicts.
     """
@@ -11355,6 +11421,7 @@ def generate_all_questions(
                         enabled_l2_object_move_types=enabled_l2_object_move_types,
                         max_occlusion_objects=max_occlusion_objects,
                         max_move_sources=max_move_sources,
+                        pair_budget_remaining=pair_budget_remaining,
                     ),
                 ),
             )
@@ -11436,6 +11503,7 @@ def generate_all_questions(
                     attachment_query_objects=attachment_query_objects_uniq,
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
+                    pair_budget_remaining=pair_budget_remaining,
                 ),
             ),
         )
@@ -11479,6 +11547,7 @@ def generate_all_questions(
                     attachment_query_objects=attachment_query_objects_uniq,
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
+                    pair_budget_remaining=pair_budget_remaining,
                 ),
             ),
         )
@@ -11522,6 +11591,7 @@ def generate_all_questions(
                     attachment_query_objects=attachment_query_objects_uniq,
                     trace_recorder=trace_recorder,
                     trace_detail=trace_detail,
+                    pair_budget_remaining=pair_budget_remaining,
                 ),
             ),
         )
