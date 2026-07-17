@@ -11136,6 +11136,18 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
     "L1_direction_agent": [
         "generate_l1_direction",
     ],
+    "L1_occlusion": [
+        "generate_l1_occlusion_questions",
+    ],
+    "L1_distance": [
+        "generate_l1_distance",
+    ],
+    "L1_direction_object_centric": [
+        "generate_l1_direction_object_centric",
+    ],
+    "L1_direction_allocentric": [
+        "generate_l1_direction_allocentric",
+    ],
     "L2_object_move_agent": [
         "generate_l2_object_move",
     ],
@@ -11177,6 +11189,10 @@ _QUESTION_TYPE_TO_GENERATORS: dict[str, list[str]] = {
 
 _QUESTION_TYPE_TO_LEVEL_TYPE: dict[str, tuple[str, str]] = {
     "L1_direction_agent": ("L1", "direction_agent"),
+    "L1_occlusion": ("L1", "occlusion"),
+    "L1_distance": ("L1", "distance"),
+    "L1_direction_object_centric": ("L1", "direction_object_centric"),
+    "L1_direction_allocentric": ("L1", "direction_allocentric"),
     "L2_object_move_agent": ("L2", "object_move_agent"),
     "L2_object_move_distance": ("L2", "object_move_distance"),
     "L2_object_move_occlusion": ("L2", "object_move_occlusion"),

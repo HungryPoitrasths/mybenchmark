@@ -155,6 +155,38 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             {"object_move_agent", "object_move_distance"},
         )
 
+    def test_generate_all_questions_accepts_all_single_frame_l1_types(self) -> None:
+        objects = [
+            make_object(1, "table"),
+            make_object(2, "box"),
+            make_object(3, "chair"),
+        ]
+
+        with (
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator.generate_l1_occlusion_questions", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_object_centric", return_value=[]),
+            patch("src.qa_generator.generate_l1_direction_allocentric", return_value=[]),
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                visible_object_ids=[1, 2, 3],
+                referable_object_ids=[1, 2, 3],
+                only_question_types=[
+                    "L1_direction_agent",
+                    "L1_occlusion",
+                    "L1_distance",
+                    "L1_direction_object_centric",
+                    "L1_direction_allocentric",
+                ],
+            )
+
+        self.assertEqual(questions, [])
+
     def test_generate_all_questions_only_question_types_accepts_new_reference_frame_types(self) -> None:
         objects = [
             make_object(1, "table"),

@@ -6953,7 +6953,9 @@ def main():
         default=None,
         help=(
             "If provided, only generate the listed question types. Valid values: "
-            "L1_direction_agent, L2_object_move_agent, L2_object_move_distance, "
+            "L1_direction_agent, L1_occlusion, L1_distance, "
+            "L1_direction_object_centric, L1_direction_allocentric, "
+            "L2_object_move_agent, L2_object_move_distance, "
             "L2_object_move_occlusion, "
             "L2_object_move_object_centric, L2_object_rotate_object_centric, "
             "L2_object_move_allocentric, L2_object_remove, "
