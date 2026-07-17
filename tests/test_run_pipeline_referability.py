@@ -323,19 +323,28 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(budgets, {"occlusion": 2, "viewpoint_move": 0})
 
-    def test_apply_scene_type_cap_only_bounds_l1_types(self) -> None:
-        # scene_type_cap/frame_type_cap/frame_type_object_cap only bound L1
-        # (perception) types -- L2/L3 candidate pools are already scarce and
-        # unrelated to a fixed per-scene cap, so they must never be capped
-        # here regardless of the passed-in cap values.
+    def test_scene_cap_only_bounds_l1_while_l2_l3_use_object_frame_caps(self) -> None:
+        # The configurable scene cap remains L1-only. L2/L3 instead use the
+        # fixed per-object/frame limits applied by the incremental cap helper.
         questions = [
             {"scene_id": "scene0000_00", "type": "occlusion", "question": f"o {idx}"}
             for idx in range(7)
         ] + [
-            {"scene_id": "scene0000_00", "type": "object_move_object_centric", "question": f"move {idx}"}
+            {
+                "scene_id": "scene0000_00",
+                "type": "object_move_object_centric",
+                "query_obj_id": 1,
+                "question": f"move {idx}",
+            }
             for idx in range(7)
         ] + [
-            {"scene_id": "scene0000_00", "type": "attachment_chain", "question": f"chain {idx}"}
+            {
+                "scene_id": "scene0000_00",
+                "type": "attachment_chain",
+                "grandparent_id": 1,
+                "parent_id": idx + 10,
+                "question": f"chain {idx}",
+            }
             for idx in range(7)
         ]
 
@@ -350,11 +359,11 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(
             [q["question"] for q in kept if q["type"] == "object_move_object_centric"],
-            [f"move {idx}" for idx in range(7)],
+            ["move 0", "move 1"],
         )
         self.assertEqual(
             [q["question"] for q in kept if q["type"] == "attachment_chain"],
-            [f"chain {idx}" for idx in range(7)],
+            ["chain 0"],
         )
 
     def test_remaining_scene_type_budgets_omits_l2_l3_types(self) -> None:

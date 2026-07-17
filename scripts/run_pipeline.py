@@ -4630,13 +4630,9 @@ _ALL_CANONICAL_QUESTION_TYPES = {
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 }
-# scene_type_cap / frame_type_cap / frame_type_object_cap only bound L1
-# (perception) question types. L2/L3 candidate pools are already scarce
-# (structural gating, attachment sparsity, multi-frame split requirements)
-# and a per-scene cap unrelated to candidate pool size would throw away
-# valid intervention/counterfactual questions for no reason -- unlike L1,
-# where the cap exists purely to keep near-duplicate perception questions
-# from dominating a scene's question mix.
+# scene_type_cap and frame_type_cap only bound L1 (perception) question types.
+# L2/L3 remain uncapped by type, but have fixed per-object limits within each
+# (scene, type, frame) below.
 _SCENE_TYPE_CAP_ELIGIBLE_TYPES = {
     "direction_agent",
     "occlusion",
@@ -4644,6 +4640,24 @@ _SCENE_TYPE_CAP_ELIGIBLE_TYPES = {
     "direction_object_centric",
     "direction_allocentric",
 }
+_L2_CANONICAL_QUESTION_TYPES = {
+    "object_move_agent",
+    "object_move_distance",
+    "object_move_occlusion",
+    "object_move_object_centric",
+    "object_rotate_object_centric",
+    "object_move_allocentric",
+    "object_remove",
+}
+_L3_CANONICAL_QUESTION_TYPES = {
+    "attachment_chain",
+    "attachment_move",
+    "coordinate_rotation_agent",
+    "coordinate_rotation_object_centric",
+    "coordinate_rotation_allocentric",
+}
+_L2_FRAME_TYPE_OBJECT_CAP = 2
+_L3_FRAME_TYPE_OBJECT_CAP = 1
 _PUBLIC_TO_CANONICAL_QUESTION_TYPES = {
     "L1_direction_agent": "direction_agent",
     "L2_object_move_agent": "object_move_agent",
@@ -4682,6 +4696,20 @@ _QUESTION_CAP_OBJECT_ID_FIELDS = [
     "neighbor_id",
     "obj_b_id",
 ]
+_QUESTION_CAP_OBJECT_ID_FIELD_BY_TYPE = {
+    "object_move_agent": "query_obj_id",
+    "object_move_distance": "query_obj_id",
+    "object_move_occlusion": "query_obj_id",
+    "object_move_object_centric": "query_obj_id",
+    "object_rotate_object_centric": "query_obj_id",
+    "object_move_allocentric": "query_obj_id",
+    "object_remove": "removed_obj_id",
+    "attachment_chain": "grandparent_id",
+    "attachment_move": "query_obj_id",
+    "coordinate_rotation_agent": "obj_a_id",
+    "coordinate_rotation_object_centric": "obj_target_id",
+    "coordinate_rotation_allocentric": "obj_a_id",
+}
 _PAIR_KEY_FIELDS_BY_TYPE: dict[str, tuple[str, str]] = {
     "direction_agent": ("obj_a_id", "obj_b_id"),
     "distance": ("obj_a_id", "obj_b_id"),
@@ -4703,6 +4731,10 @@ _PAIR_KEY_FIELDS_BY_TYPE: dict[str, tuple[str, str]] = {
 
 
 def _question_cap_object_id(question: dict) -> str:
+    canonical_type = _canonical_scene_question_type(question)
+    primary_field = _QUESTION_CAP_OBJECT_ID_FIELD_BY_TYPE.get(canonical_type)
+    if primary_field is not None and question.get(primary_field) is not None:
+        return str(question[primary_field])
     for field in _QUESTION_CAP_OBJECT_ID_FIELDS:
         value = question.get(field)
         if value is not None:
@@ -4719,11 +4751,9 @@ def _question_pair_key(question: dict) -> tuple[str, str, str] | None:
     # direction_agent questions about (table, keyboard)). Without the type in
     # the key, an L1 direction_agent question and an unrelated L2
     # object_move_agent question about the same two object ids would share a
-    # key and the L2 one would be silently dropped, even though L2/L3 types
-    # are meant to be entirely exempt from these caps (see
-    # _SCENE_TYPE_CAP_ELIGIBLE_TYPES) -- and the six L2 move/rotate subtypes
-    # all key off the same ("moved_obj_id", "query_obj_id") fields, so without
-    # per-type scoping they would collide with each other too.
+    # key and the L2 one would be silently dropped. The six L2 move/rotate
+    # subtypes all key off the same ("moved_obj_id", "query_obj_id") fields,
+    # so without per-type scoping they would collide with each other too.
     canonical_type = _canonical_scene_question_type(question)
     if question.get("cross_frame_layout"):
         groups = question.get("object_frame_groups")
@@ -4825,8 +4855,8 @@ def _apply_incremental_question_caps(
     frame_type_cap: int,
     frame_type_object_cap: int,
     scene_type_counts: Counter[str] | None = None,
-    frame_type_counts: Counter[tuple[str, str]] | None = None,
-    frame_type_object_counts: Counter[tuple[str, str, str]] | None = None,
+    frame_type_counts: Counter[tuple[str, str, str]] | None = None,
+    frame_type_object_counts: Counter[tuple[str, str, str, str]] | None = None,
     pair_counts: Counter[tuple[str, str, str]] | None = None,
 ) -> list[dict]:
     kept: list[dict] = []
@@ -4836,12 +4866,9 @@ def _apply_incremental_question_caps(
         frame_type_object_counts if frame_type_object_counts is not None else Counter()
     )
     pair_counter = pair_counts if pair_counts is not None else Counter()
-    # Keyed by (image_name, *pair_key), so a single Counter created fresh per
-    # call correctly scopes "per frame" whether this call processes one
-    # frame's candidates (the live per-frame loop) or a whole scene's worth
-    # at once (the persist-time re-application) -- no external threading
-    # needed, unlike pair_counter which must survive across the per-frame
-    # loop's separate calls to enforce the scene-wide cap.
+    # Keyed by (scene_id, frame_identity, *pair_key), so a single Counter
+    # created fresh per call correctly scopes pair dedup during live frame
+    # processing and persist-time re-application.
     frame_pair_counter: Counter[tuple[str, ...]] = Counter()
 
     for question in questions:
@@ -4849,6 +4876,7 @@ def _apply_incremental_question_caps(
         if not canonical_type:
             kept.append(question)
             continue
+        scene_id = str(question.get("scene_id", "")).strip()
         image_name = str(question.get("image_name", "")).strip()
         reasoning_frame_2 = str(question.get("reasoning_frame_2", "")).strip()
         frame_identity = (
@@ -4858,16 +4886,29 @@ def _apply_incremental_question_caps(
         )
         object_id = _question_cap_object_id(question)
         pair_key = _question_pair_key(question)
-        frame_key = (frame_identity, canonical_type)
-        frame_object_key = (frame_identity, canonical_type, object_id)
-        frame_pair_key = (frame_identity, *pair_key) if pair_key is not None else None
-        # scene_type_cap/frame_type_cap/frame_type_object_cap only bound L1
-        # types (see _SCENE_TYPE_CAP_ELIGIBLE_TYPES) -- L2/L3 questions are
-        # never capped here regardless of the passed-in cap values.
+        frame_key = (scene_id, frame_identity, canonical_type)
+        frame_object_key = (scene_id, frame_identity, canonical_type, object_id)
+        frame_pair_key = (
+            (scene_id, frame_identity, *pair_key)
+            if pair_key is not None
+            else None
+        )
+        # L1 keeps its configurable caps. L2/L3 have no per-type cap: only
+        # the target-object counter can stop later candidates for that object.
         type_is_cap_eligible = canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES
         effective_scene_type_cap = scene_type_cap if type_is_cap_eligible else 0
-        effective_frame_type_cap = frame_type_cap if type_is_cap_eligible else 0
-        effective_frame_type_object_cap = frame_type_object_cap if type_is_cap_eligible else 0
+        if type_is_cap_eligible:
+            effective_frame_type_cap = frame_type_cap
+            effective_frame_type_object_cap = frame_type_object_cap
+        elif canonical_type in _L2_CANONICAL_QUESTION_TYPES:
+            effective_frame_type_cap = 0
+            effective_frame_type_object_cap = _L2_FRAME_TYPE_OBJECT_CAP
+        elif canonical_type in _L3_CANONICAL_QUESTION_TYPES:
+            effective_frame_type_cap = 0
+            effective_frame_type_object_cap = _L3_FRAME_TYPE_OBJECT_CAP
+        else:
+            effective_frame_type_cap = 0
+            effective_frame_type_object_cap = 0
         if effective_scene_type_cap > 0 and scene_counts[canonical_type] >= effective_scene_type_cap:
             continue
         if effective_frame_type_cap > 0 and frame_counts[frame_key] >= effective_frame_type_cap:
@@ -4920,8 +4961,8 @@ def _apply_scene_type_cap(
     frame_type_cap: int = 0,
     frame_type_object_cap: int = 0,
     type_counts: Counter[str] | None = None,
-    frame_type_counts: Counter[tuple[str, str]] | None = None,
-    frame_type_object_counts: Counter[tuple[str, str, str]] | None = None,
+    frame_type_counts: Counter[tuple[str, str, str]] | None = None,
+    frame_type_object_counts: Counter[tuple[str, str, str, str]] | None = None,
     pair_counts: Counter[tuple[str, str, str]] | None = None,
 ) -> list[dict]:
     return _apply_incremental_question_caps(
@@ -5745,11 +5786,10 @@ def run_pipeline(
                     scene_id,
                 )
                 break
-            # Only short-circuit frame scanning once every *targeted* type is
-            # L1 (cap-eligible) -- L2/L3 types are never capped and can
-            # always benefit from more frames, so their presence in the
-            # target set means the scene is never "done" on cap grounds
-            # alone.
+            # Only short-circuit scene-wide frame scanning once every
+            # *targeted* type is L1 (scene-cap eligible). L2/L3 are capped
+            # within each frame, not across the scene, so later frames can
+            # still contribute questions of those types.
             if scene_type_cap > 0 and not (
                 target_scene_question_types - _SCENE_TYPE_CAP_ELIGIBLE_TYPES
             ):
@@ -6113,8 +6153,8 @@ def run_pipeline(
                         attachment_frame_referable_ids=attachment_referable_ids or [],
                         attachment_frame_referable_pairs=frame_attachment_pairs,
                     )
-                    frame_question_type_counts: Counter[tuple[str, str]] = Counter()
-                    frame_question_type_object_counts: Counter[tuple[str, str, str]] = Counter()
+                    frame_question_type_counts: Counter[tuple[str, str, str]] = Counter()
+                    frame_question_type_object_counts: Counter[tuple[str, str, str, str]] = Counter()
                     kept_questions = _apply_scene_type_cap(
                         kept_questions,
                         scene_type_cap=scene_type_cap,
@@ -6967,19 +7007,26 @@ def main():
         "--scene_type_cap",
         type=int,
         default=8,
-        help="Maximum kept questions per (dataset, scene, type). Use 0 to disable.",
+        help="Maximum kept L1 questions per (dataset, scene, type). Use 0 to disable.",
     )
     parser.add_argument(
         "--frame_type_cap",
         type=int,
         default=2,
-        help="Maximum kept questions per (dataset, scene, frame, type). Use 0 to disable.",
+        help=(
+            "Maximum kept L1 questions per (dataset, scene, frame, type). "
+            "L2/L3 have no per-frame type-total cap. Use 0 to disable the L1 cap."
+        ),
     )
     parser.add_argument(
         "--frame_type_object_cap",
         type=int,
         default=1,
-        help="Maximum kept questions per (dataset, scene, frame, type, obj). Use 0 to disable.",
+        help=(
+            "Maximum kept L1 questions per (dataset, scene, frame, type, obj). "
+            "L2 uses a fixed cap of 2 and L3 a fixed cap of 1. "
+            "Use 0 to disable the L1 cap."
+        ),
     )
     parser.add_argument(
         "--max_questions_per_scene_type",
