@@ -3,13 +3,19 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from src.auxiliary_path import AuxiliaryRoute, VisualPoseEdge, VisualPoseGraph
+from src.legacy_auxiliary_path import find_geometric_auxiliary_route, object_group_center
 from src.qa_generator import (
     ReasoningFrameContext,
     _annotate_cross_frame_questions,
 )
-from src.utils.colmap_loader import CameraPose
+from src.utils.colmap_loader import CameraIntrinsics, CameraPose
+
+
+def make_intrinsics() -> CameraIntrinsics:
+    return CameraIntrinsics(width=320, height=240, fx=200.0, fy=200.0, cx=160.0, cy=120.0)
 
 
 def make_pose(name: str, x: float = 0.0) -> CameraPose:
@@ -218,3 +224,70 @@ def test_visual_pose_graph_cache_round_trip_and_image_invalidation(tmp_path, mon
         flash_frame_names=set(names),
     )
     assert not invalidated.load_cache(cache_path)
+
+
+def test_geometric_route_starts_after_frame_a_coverage(monkeypatch) -> None:
+    names = ["main_a.jpg", "bridge.jpg", "main_b.jpg"]
+    poses = {name: make_pose(name) for name in names}
+    masks = {
+        "main_a.jpg": np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0], dtype=bool),
+        "bridge.jpg": np.array([0, 0, 1, 1, 1, 1, 1, 1, 0, 0], dtype=bool),
+        "main_b.jpg": np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1], dtype=bool),
+    }
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path.route_visibility_mask",
+        lambda _points, pose, _intrinsics: masks[pose.image_name],
+    )
+
+    route = find_geometric_auxiliary_route(
+        center_a=np.array([0.0, 0.0, 2.0]),
+        center_b=np.array([0.9, 0.0, 2.0]),
+        frame_a_name="main_a.jpg",
+        frame_b_name="main_b.jpg",
+        poses=poses,
+        intrinsics=make_intrinsics(),
+        min_overlap_frac=0.1,
+    )
+
+    assert route is not None
+    assert route.auxiliary_image_names == ("bridge.jpg",)
+    assert route.frame_a_coverage_end == pytest.approx(1.0 / 3.0)
+    assert route.frame_b_coverage_start == pytest.approx(2.0 / 3.0)
+    assert route.auxiliary_responsibility_fraction == pytest.approx(1.0 / 3.0)
+
+
+def test_geometric_route_group_center_falls_back_to_bbox() -> None:
+    center = object_group_center([
+        {"center": [0.0, 0.0, 2.0]},
+        {"bbox_min": [1.0, -1.0, 1.0], "bbox_max": [3.0, 1.0, 3.0]},
+    ])
+
+    assert center == pytest.approx(np.array([1.0, 0.0, 2.0]))
+
+
+def test_geometric_route_uses_no_auxiliary_when_main_frames_connect(monkeypatch) -> None:
+    names = ["main_a.jpg", "unused.jpg", "main_b.jpg"]
+    poses = {name: make_pose(name) for name in names}
+    masks = {
+        "main_a.jpg": np.array([1, 1, 1, 1, 1, 1, 1, 0, 0, 0], dtype=bool),
+        "unused.jpg": np.ones(10, dtype=bool),
+        "main_b.jpg": np.array([0, 0, 0, 0, 1, 1, 1, 1, 1, 1], dtype=bool),
+    }
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path.route_visibility_mask",
+        lambda _points, pose, _intrinsics: masks[pose.image_name],
+    )
+
+    route = find_geometric_auxiliary_route(
+        center_a=np.array([0.0, 0.0, 2.0]),
+        center_b=np.array([0.9, 0.0, 2.0]),
+        frame_a_name="main_a.jpg",
+        frame_b_name="main_b.jpg",
+        poses=poses,
+        intrinsics=make_intrinsics(),
+        min_overlap_frac=0.1,
+    )
+
+    assert route is not None
+    assert route.auxiliary_image_names == ()
+    assert route.auxiliary_responsibility_fraction == 0.0

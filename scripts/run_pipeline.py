@@ -76,6 +76,10 @@ from src.referability_checks import (
     normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
 )
 from src.auxiliary_path import MAX_AUXILIARY_FRAMES, VisualPoseGraph
+from src.legacy_auxiliary_path import (
+    find_geometric_auxiliary_route,
+    object_group_center,
+)
 from src.quality_control import full_quality_pipeline, compute_statistics
 from src.utils.colmap_loader import (
     load_axis_alignment,
@@ -140,6 +144,12 @@ CROSS_FRAME_PUBLIC_QUESTION_TYPES = frozenset({
     "L3_coordinate_rotation_allocentric",
 })
 CROSS_FRAME_MAX_MAIN_PAIRS_PER_SEMANTIC_QUESTION = 3
+AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH = "visual_pose_graph"
+AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC = "legacy_geometric"
+AUXILIARY_ROUTE_METHODS = (
+    AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
+    AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
+)
 VLM_API_KEY_ENV_NAMES = ("DASHSCOPE_API_KEY", "OPENAI_API_KEY")
 PLACEHOLDER_VLM_API_KEY = "EMPTY"
 QUESTION_REVIEW_CROP_PADDING_RATIO = 0.10
@@ -4382,10 +4392,14 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
     if not isinstance(completed_scenes, dict):
         raise RuntimeError(f"Invalid scene status document at {path}: completed_scenes must be an object")
 
-    return {
+    result: dict[str, object] = {
         "version": PIPELINE_SCENE_STATUS_VERSION,
         "completed_scenes": dict(completed_scenes),
     }
+    route_method = loaded.get("auxiliary_route_method")
+    if isinstance(route_method, str) and route_method in AUXILIARY_ROUTE_METHODS:
+        result["auxiliary_route_method"] = route_method
+    return result
 
 
 def _scene_status_updated_at_now() -> str:
@@ -5216,10 +5230,18 @@ def run_pipeline(
     max_questions_per_scene_type: int | None = None,
     max_occlusion_objects: int | str | None = MAX_OCCLUSION_OBJECTS_AUTO,
     max_move_sources: int | None = None,
+    auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
 ):
     """Execute the full PSR-Bench data generation pipeline."""
     _set_pipeline_random_seed()
     only_question_types = _normalize_only_question_types(only_question_types)
+
+    auxiliary_route_method = str(auxiliary_route_method).strip().lower()
+    if auxiliary_route_method not in AUXILIARY_ROUTE_METHODS:
+        raise ValueError(
+            f"Unknown auxiliary_route_method: {auxiliary_route_method!r}. "
+            f"Expected one of {AUXILIARY_ROUTE_METHODS}."
+        )
 
     if referability_cache is None:
         raise ValueError(
@@ -5260,6 +5282,8 @@ def run_pipeline(
     cross_frame_requested_types = sorted(
         requested_public_types & CROSS_FRAME_PUBLIC_QUESTION_TYPES
     )
+    if cross_frame_requested_types:
+        logger.info("Cross-frame auxiliary route method: %s", auxiliary_route_method)
     attachment_only_l2_mode = False
 
     meta_dir = output_dir / "scene_metadata"
@@ -5273,7 +5297,8 @@ def run_pipeline(
         frame_debug_dir.mkdir(parents=True, exist_ok=True)
     if cross_frame_requested_types:
         cross_frame_funnel_dir.mkdir(parents=True, exist_ok=True)
-        auxiliary_graph_cache_dir.mkdir(parents=True, exist_ok=True)
+        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
+            auxiliary_graph_cache_dir.mkdir(parents=True, exist_ok=True)
 
     if dataset == "scannetpp":
         if scannetpp_split_file is not None:
@@ -5333,6 +5358,20 @@ def run_pipeline(
                 len(removed_scene_ids),
                 scene_status_path,
             )
+        completed_route_records = _pipeline_completed_scene_records(scene_status_doc)
+        recorded_route_method = scene_status_doc.get("auxiliary_route_method")
+        if cross_frame_requested_types and completed_route_records:
+            if recorded_route_method is None:
+                # Status files written before this option existed used the visual graph.
+                recorded_route_method = AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH
+            if recorded_route_method != auxiliary_route_method:
+                raise RuntimeError(
+                    "Cannot resume with auxiliary_route_method="
+                    f"{auxiliary_route_method!r}: {len(completed_route_records)} completed "
+                    f"scene(s) were generated with {recorded_route_method!r}. Use a new "
+                    "--output_dir, or reset all completed scenes before switching methods."
+                )
+        scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
         completed_scene_ids, corrupted_scene_ids, scene_status_changed = _reconcile_pipeline_completed_scenes(
             scene_status_doc,
             raw_questions_dir=raw_questions_dir,
@@ -5349,6 +5388,7 @@ def run_pipeline(
     else:
         _clear_pipeline_resume_state(output_dir)
         scene_status_doc = _build_empty_pipeline_scene_status_doc()
+        scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
         raw_questions_dir.mkdir(parents=True, exist_ok=True)
         completed_scene_ids = []
 
@@ -6221,59 +6261,115 @@ def run_pipeline(
                 "question_type_kept_counts": Counter(),
                 "pair_failures": [],
             }
-            if ds is not None:
-                image_path_for = ds.image_path
+            route_graph: VisualPoseGraph | None = None
+            if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
+                if ds is not None:
+                    image_path_for = ds.image_path
+                else:
+                    image_path_for = lambda name: scene_dir / "color" / name
+                route_graph = VisualPoseGraph(
+                    poses=poses,
+                    image_path_for=image_path_for,
+                    flash_frame_names={context.image_name for context in flash_contexts},
+                )
+                route_graph_cache_path = auxiliary_graph_cache_dir / f"{scene_id}.json"
+                route_graph_cache_hit = route_graph.load_cache(route_graph_cache_path)
+                if not route_graph_cache_hit:
+                    route_graph.build()
+                    try:
+                        route_graph.save_cache(route_graph_cache_path)
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not persist visual-pose graph cache for %s: %s",
+                            scene_id,
+                            exc,
+                        )
+                funnel["auxiliary_graph"] = {
+                    **route_graph.diagnostics(),
+                    "method": auxiliary_route_method,
+                    "cache_hit": route_graph_cache_hit,
+                    "cache_path": str(route_graph_cache_path),
+                }
             else:
-                image_path_for = lambda name: scene_dir / "color" / name
-            route_graph = VisualPoseGraph(
-                poses=poses,
-                image_path_for=image_path_for,
-                flash_frame_names={context.image_name for context in flash_contexts},
-            )
-            route_graph_cache_path = auxiliary_graph_cache_dir / f"{scene_id}.json"
-            route_graph_cache_hit = route_graph.load_cache(route_graph_cache_path)
-            if not route_graph_cache_hit:
-                route_graph.build()
-                try:
-                    route_graph.save_cache(route_graph_cache_path)
-                except OSError as exc:
-                    logger.warning(
-                        "Could not persist visual-pose graph cache for %s: %s",
-                        scene_id,
-                        exc,
-                    )
-            funnel["auxiliary_graph"] = {
-                **route_graph.diagnostics(),
-                "cache_hit": route_graph_cache_hit,
-                "cache_path": str(route_graph_cache_path),
-            }
+                funnel["auxiliary_graph"] = {
+                    "method": auxiliary_route_method,
+                    "pose_count": len(poses),
+                    "cache_hit": False,
+                    "note": "routes_are_computed_per_question_after_object_role_binding",
+                }
             cross_candidates: list[dict] = []
             pair_stage_counts: Counter = funnel["pair_stage_counts"]
             generated_counts: Counter = funnel["question_type_generated_counts"]
-            routes_by_pair: dict[tuple[str, str], object] = {}
+            routes_by_pair: dict[tuple[str, str], object | None] = {}
             contexts_by_name = {context.image_name: context for context in flash_contexts}
             for raw_frame_1 in flash_contexts:
                 for raw_frame_2 in flash_contexts:
                     if raw_frame_1.image_name == raw_frame_2.image_name:
                         continue
                     pair_stage_counts["considered"] += 1
-                    route = route_graph.find_route(
-                        raw_frame_1.image_name,
-                        raw_frame_2.image_name,
+                    pair_key = (raw_frame_1.image_name, raw_frame_2.image_name)
+                    if route_graph is None:
+                        routes_by_pair[pair_key] = None
+                        pair_stage_counts["path_deferred_until_question"] += 1
+                    else:
+                        route = route_graph.find_route(
+                            raw_frame_1.image_name,
+                            raw_frame_2.image_name,
+                            max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
+                        )
+                        if route is None:
+                            pair_stage_counts["auxiliary_path_rejected"] += 1
+                            failures = funnel["pair_failures"]
+                            if isinstance(failures, list) and len(failures) < 100:
+                                failures.append({
+                                    "frame_1": raw_frame_1.image_name,
+                                    "frame_2": raw_frame_2.image_name,
+                                    "reason": "no_visual_pose_path_within_auxiliary_limit",
+                                })
+                            continue
+                        routes_by_pair[pair_key] = route
+                        pair_stage_counts["path_accepted"] += 1
+
+            def _legacy_route_for_question(
+                question: dict,
+                frame_1: ReasoningFrameContext,
+                frame_2: ReasoningFrameContext,
+            ):
+                raw_groups = question.get("object_frame_groups")
+                if not isinstance(raw_groups, dict):
+                    return None
+
+                def _objects_for_group(group_name: str) -> list[dict]:
+                    raw_ids = raw_groups.get(group_name)
+                    if not isinstance(raw_ids, (list, tuple, set)):
+                        return []
+                    resolved: list[dict] = []
+                    for raw_id in raw_ids:
+                        try:
+                            obj = objects_by_id.get(int(raw_id))
+                        except (TypeError, ValueError):
+                            return []
+                        if obj is None:
+                            return []
+                        resolved.append(obj)
+                    return resolved
+
+                group_a_objects = _objects_for_group("frame_1")
+                group_b_objects = _objects_for_group("frame_2")
+                if not group_a_objects or not group_b_objects or color_intrinsics is None:
+                    return None
+                try:
+                    return find_geometric_auxiliary_route(
+                        center_a=object_group_center(group_a_objects),
+                        center_b=object_group_center(group_b_objects),
+                        frame_a_name=frame_1.image_name,
+                        frame_b_name=frame_2.image_name,
+                        poses=poses,
+                        intrinsics=color_intrinsics,
                         max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
                     )
-                    if route is None:
-                        pair_stage_counts["auxiliary_path_rejected"] += 1
-                        failures = funnel["pair_failures"]
-                        if isinstance(failures, list) and len(failures) < 100:
-                            failures.append({
-                                "frame_1": raw_frame_1.image_name,
-                                "frame_2": raw_frame_2.image_name,
-                                "reason": "no_visual_pose_path_within_auxiliary_limit",
-                            })
-                        continue
-                    routes_by_pair[(raw_frame_1.image_name, raw_frame_2.image_name)] = route
-                    pair_stage_counts["path_accepted"] += 1
+                except (TypeError, ValueError):
+                    return None
 
             def _append_pair_questions(
                 pair_questions: list[dict],
@@ -6290,18 +6386,55 @@ def run_pipeline(
                     )
                 frame_1_rank = int((frame_1.cache_entry or {}).get("final_selection_rank", 1_000_000))
                 frame_2_rank = int((frame_2.cache_entry or {}).get("final_selection_rank", 1_000_000))
-                pair_score = float(route.cost) + 0.001 * (frame_1_rank + frame_2_rank)
                 for question in pair_questions:
+                    question_route = route
+                    if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
+                        question_route = _legacy_route_for_question(question, frame_1, frame_2)
+                        if question_route is None:
+                            pair_stage_counts["question_auxiliary_path_rejected"] += 1
+                            failures = funnel["pair_failures"]
+                            if isinstance(failures, list) and len(failures) < 100:
+                                failures.append({
+                                    "frame_1": frame_1.image_name,
+                                    "frame_2": frame_2.image_name,
+                                    "question_type": str(question.get("type", "")),
+                                    "reason": "no_legacy_geometric_path_within_auxiliary_limit",
+                                })
+                            continue
+                        pair_stage_counts["question_path_accepted"] += 1
+                    if question_route is None:
+                        continue
+                    pair_score = float(question_route.cost) + 0.001 * (
+                        frame_1_rank + frame_2_rank
+                    )
                     question.pop("_cross_frame_layout_hint", None)
                     question["scene_id"] = scene_id
-                    question["auxiliary_image_names"] = list(route.auxiliary_image_names)
-                    question["auxiliary_route"] = {
-                        "method": "visual_pose_graph",
-                        "edge_count": route.edge_count,
-                        "cost": route.cost,
-                        "min_inliers": route.min_inliers,
-                        "min_inlier_ratio": route.min_inlier_ratio,
-                    }
+                    question["auxiliary_image_names"] = list(
+                        question_route.auxiliary_image_names
+                    )
+                    if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
+                        question["auxiliary_route"] = {
+                            "method": auxiliary_route_method,
+                            "edge_count": question_route.edge_count,
+                            "cost": question_route.cost,
+                            "min_inliers": question_route.min_inliers,
+                            "min_inlier_ratio": question_route.min_inlier_ratio,
+                        }
+                    else:
+                        question["auxiliary_route"] = {
+                            "method": auxiliary_route_method,
+                            "edge_count": question_route.edge_count,
+                            "cost": question_route.cost,
+                            "route_sample_count": question_route.route_sample_count,
+                            "frame_a_coverage_end": question_route.frame_a_coverage_end,
+                            "frame_b_coverage_start": question_route.frame_b_coverage_start,
+                            "auxiliary_responsibility_fraction": (
+                                question_route.auxiliary_responsibility_fraction
+                            ),
+                            "transition_overlap_fraction": (
+                                question_route.transition_overlap_fraction
+                            ),
+                        }
                     question["question_referability_audit"] = {
                         "decision": "pass",
                         "mode": "cross_frame_role_aware",
@@ -6884,6 +7017,18 @@ def main():
         help="Maximum frames per scene",
     )
     parser.add_argument(
+        "--auxiliary_route_method",
+        type=str,
+        choices=AUXILIARY_ROUTE_METHODS,
+        default=AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
+        help=(
+            "Auxiliary-frame routing for cross-frame questions. "
+            "visual_pose_graph uses the current per-scene ORB/RANSAC pose graph; "
+            "legacy_geometric uses per-question A-to-B route projection while "
+            "excluding route portions already covered by the two main frames."
+        ),
+    )
+    parser.add_argument(
         "--no_occlusion", action="store_true",
         help="Disable depth-map occlusion (faster but no occlusion questions)",
     )
@@ -7117,6 +7262,7 @@ def main():
             else (None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects))
         ),
         max_move_sources=(None if int(args.max_move_sources) == 0 else int(args.max_move_sources)),
+        auxiliary_route_method=args.auxiliary_route_method,
     )
 
 

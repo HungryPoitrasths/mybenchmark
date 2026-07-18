@@ -4716,9 +4716,23 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             min_inliers = 40
             min_inlier_ratio = 0.5
 
+        class FakeLegacyRoute:
+            auxiliary_image_names = ("legacy_bridge.jpg",)
+            cost = 1.25
+            edge_count = 2
+            route_sample_count = 10
+            frame_a_coverage_end = 0.3
+            frame_b_coverage_start = 0.7
+            auxiliary_responsibility_fraction = 0.4
+            transition_overlap_fraction = 0.2
+
+        visual_graph_init_count = 0
+        legacy_route_call_count = 0
+
         class FakeVisualPoseGraph:
             def __init__(self, **_kwargs):
-                pass
+                nonlocal visual_graph_init_count
+                visual_graph_init_count += 1
 
             def load_cache(self, _cache_path):
                 return False
@@ -4799,6 +4813,11 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 "audit_by_object_id": {},
             }
 
+        def fake_legacy_route(**_kwargs):
+            nonlocal legacy_route_call_count
+            legacy_route_call_count += 1
+            return FakeLegacyRoute()
+
         with (
             patch.object(run_pipeline_module, "parse_scene", return_value=scene),
             patch.object(run_pipeline_module, "enrich_scene_with_attachment", side_effect=lambda _scene: None),
@@ -4819,6 +4838,11 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 side_effect=fake_occlusion_veto,
             ),
             patch.object(run_pipeline_module, "VisualPoseGraph", FakeVisualPoseGraph),
+            patch.object(
+                run_pipeline_module,
+                "find_geometric_auxiliary_route",
+                side_effect=fake_legacy_route,
+            ),
             patch.object(
                 run_pipeline_module,
                 "generate_cross_frame_questions",
@@ -4848,15 +4872,37 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 run_question_presence_review=False,
                 write_frame_debug=False,
             )
+            default_non_occlusion_calls = list(non_occlusion_calls)
+            default_occlusion_calls = list(occlusion_calls)
+            legacy_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=root / "legacy_output",
+                max_scenes=1,
+                max_frames=3,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                only_question_types=[
+                    "L2_object_move_agent",
+                    "L2_object_move_occlusion",
+                ],
+                scene_type_cap=0,
+                frame_type_cap=0,
+                frame_type_object_cap=0,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                auxiliary_route_method="legacy_geometric",
+            )
 
         self.assertEqual(
-            [call[0] for call in non_occlusion_calls],
+            [call[0] for call in default_non_occlusion_calls],
             frame_names,
         )
         self.assertEqual(occlusion_veto_call_count, 0)
-        self.assertTrue(all(call[1] == "__deferred_frame_2__" for call in non_occlusion_calls))
+        self.assertTrue(
+            all(call[1] == "__deferred_frame_2__" for call in default_non_occlusion_calls)
+        )
         self.assertEqual(
-            occlusion_calls,
+            default_occlusion_calls,
             [
                 (frame_names[0], frame_names[1]),
                 (frame_names[0], frame_names[2]),
@@ -4878,6 +4924,30 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             "object_move_occlusion": 2,
         })
         self.assertFalse(funnel["auxiliary_graph"]["cache_hit"])
+        self.assertEqual(visual_graph_init_count, 1)
+        self.assertGreater(legacy_route_call_count, 0)
+        self.assertTrue(legacy_questions)
+        self.assertTrue(all(
+            question["auxiliary_route"]["method"] == "legacy_geometric"
+            for question in legacy_questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_image_names"] == ["legacy_bridge.jpg"]
+            for question in legacy_questions
+        ))
+        with self.assertRaisesRegex(RuntimeError, "Cannot resume with auxiliary_route_method"):
+            run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=output_dir,
+                max_scenes=1,
+                max_frames=3,
+                referability_cache=referability_cache,
+                only_question_types=["L2_object_move_agent"],
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                resume=True,
+                auxiliary_route_method="legacy_geometric",
+            )
 
     def test_run_pipeline_finalizes_frame_debug_after_scene_level_flush(self) -> None:
         root = make_case_dir("pipeline_frame_debug_finalize")
