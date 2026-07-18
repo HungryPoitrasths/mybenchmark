@@ -76,6 +76,7 @@ from src.referability_checks import (
     normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
 )
 from src.auxiliary_path import MAX_AUXILIARY_FRAMES, VisualPoseGraph
+from src.hybrid_auxiliary_path import HybridAuxiliaryRouter
 from src.legacy_auxiliary_path import (
     find_geometric_auxiliary_route,
     object_group_center,
@@ -146,9 +147,11 @@ CROSS_FRAME_PUBLIC_QUESTION_TYPES = frozenset({
 CROSS_FRAME_MAX_MAIN_PAIRS_PER_SEMANTIC_QUESTION = 3
 AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH = "visual_pose_graph"
 AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC = "legacy_geometric"
+AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL = "hybrid_geometric_visual"
 AUXILIARY_ROUTE_METHODS = (
     AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
     AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
+    AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL,
 )
 VLM_API_KEY_ENV_NAMES = ("DASHSCOPE_API_KEY", "OPENAI_API_KEY")
 PLACEHOLDER_VLM_API_KEY = "EMPTY"
@@ -5297,7 +5300,10 @@ def run_pipeline(
         frame_debug_dir.mkdir(parents=True, exist_ok=True)
     if cross_frame_requested_types:
         cross_frame_funnel_dir.mkdir(parents=True, exist_ok=True)
-        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
+        if auxiliary_route_method in {
+            AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
+            AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL,
+        }:
             auxiliary_graph_cache_dir.mkdir(parents=True, exist_ok=True)
 
     if dataset == "scannetpp":
@@ -6262,6 +6268,9 @@ def run_pipeline(
                 "pair_failures": [],
             }
             route_graph: VisualPoseGraph | None = None
+            hybrid_router: HybridAuxiliaryRouter | None = None
+            hybrid_cache_path: Path | None = None
+            hybrid_cache_hit = False
             if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
                 if ds is not None:
                     image_path_for = ds.image_path
@@ -6289,6 +6298,25 @@ def run_pipeline(
                     "method": auxiliary_route_method,
                     "cache_hit": route_graph_cache_hit,
                     "cache_path": str(route_graph_cache_path),
+                }
+            elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL:
+                if ds is not None:
+                    image_path_for = ds.image_path
+                else:
+                    image_path_for = lambda name: scene_dir / "color" / name
+                hybrid_router = HybridAuxiliaryRouter(
+                    poses=poses,
+                    intrinsics=color_intrinsics,
+                    image_path_for=image_path_for,
+                )
+                hybrid_cache_path = auxiliary_graph_cache_dir / f"{scene_id}.hybrid.json"
+                hybrid_cache_hit = hybrid_router.load_cache(hybrid_cache_path)
+                funnel["auxiliary_graph"] = {
+                    **hybrid_router.diagnostics(),
+                    "method": auxiliary_route_method,
+                    "cache_hit": hybrid_cache_hit,
+                    "cache_path": str(hybrid_cache_path),
+                    "note": "routes_are_computed_per_question_after_object_role_binding",
                 }
             else:
                 funnel["auxiliary_graph"] = {
@@ -6330,11 +6358,9 @@ def run_pipeline(
                         routes_by_pair[pair_key] = route
                         pair_stage_counts["path_accepted"] += 1
 
-            def _legacy_route_for_question(
+            def _question_object_groups(
                 question: dict,
-                frame_1: ReasoningFrameContext,
-                frame_2: ReasoningFrameContext,
-            ):
+            ) -> tuple[list[dict], list[dict]] | None:
                 raw_groups = question.get("object_frame_groups")
                 if not isinstance(raw_groups, dict):
                     return None
@@ -6356,8 +6382,19 @@ def run_pipeline(
 
                 group_a_objects = _objects_for_group("frame_1")
                 group_b_objects = _objects_for_group("frame_2")
-                if not group_a_objects or not group_b_objects or color_intrinsics is None:
+                if not group_a_objects or not group_b_objects:
                     return None
+                return group_a_objects, group_b_objects
+
+            def _legacy_route_for_question(
+                question: dict,
+                frame_1: ReasoningFrameContext,
+                frame_2: ReasoningFrameContext,
+            ):
+                groups = _question_object_groups(question)
+                if groups is None or color_intrinsics is None:
+                    return None
+                group_a_objects, group_b_objects = groups
                 try:
                     return find_geometric_auxiliary_route(
                         center_a=object_group_center(group_a_objects),
@@ -6366,6 +6403,28 @@ def run_pipeline(
                         frame_b_name=frame_2.image_name,
                         poses=poses,
                         intrinsics=color_intrinsics,
+                        max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
+                    )
+                except (TypeError, ValueError):
+                    return None
+
+            def _hybrid_route_for_question(
+                question: dict,
+                frame_1: ReasoningFrameContext,
+                frame_2: ReasoningFrameContext,
+            ):
+                if hybrid_router is None:
+                    return None
+                groups = _question_object_groups(question)
+                if groups is None:
+                    return None
+                group_a_objects, group_b_objects = groups
+                try:
+                    return hybrid_router.find_route(
+                        frame_a_name=frame_1.image_name,
+                        frame_b_name=frame_2.image_name,
+                        group_a_objects=group_a_objects,
+                        group_b_objects=group_b_objects,
                         max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
                     )
                 except (TypeError, ValueError):
@@ -6388,8 +6447,16 @@ def run_pipeline(
                 frame_2_rank = int((frame_2.cache_entry or {}).get("final_selection_rank", 1_000_000))
                 for question in pair_questions:
                     question_route = route
-                    if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
-                        question_route = _legacy_route_for_question(question, frame_1, frame_2)
+                    if auxiliary_route_method in {
+                        AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
+                        AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL,
+                    }:
+                        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
+                            question_route = _legacy_route_for_question(question, frame_1, frame_2)
+                            rejection_reason = "no_legacy_geometric_path_within_auxiliary_limit"
+                        else:
+                            question_route = _hybrid_route_for_question(question, frame_1, frame_2)
+                            rejection_reason = "no_hybrid_geometric_visual_path_within_auxiliary_limit"
                         if question_route is None:
                             pair_stage_counts["question_auxiliary_path_rejected"] += 1
                             failures = funnel["pair_failures"]
@@ -6398,7 +6465,7 @@ def run_pipeline(
                                     "frame_1": frame_1.image_name,
                                     "frame_2": frame_2.image_name,
                                     "question_type": str(question.get("type", "")),
-                                    "reason": "no_legacy_geometric_path_within_auxiliary_limit",
+                                    "reason": rejection_reason,
                                 })
                             continue
                         pair_stage_counts["question_path_accepted"] += 1
@@ -6420,6 +6487,21 @@ def run_pipeline(
                             "min_inliers": question_route.min_inliers,
                             "min_inlier_ratio": question_route.min_inlier_ratio,
                         }
+                    elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
+                        question["auxiliary_route"] = {
+                            "method": auxiliary_route_method,
+                            "edge_count": question_route.edge_count,
+                            "cost": question_route.cost,
+                            "route_sample_count": question_route.route_sample_count,
+                            "frame_a_coverage_end": question_route.frame_a_coverage_end,
+                            "frame_b_coverage_start": question_route.frame_b_coverage_start,
+                            "auxiliary_responsibility_fraction": (
+                                question_route.auxiliary_responsibility_fraction
+                            ),
+                            "transition_overlap_fraction": (
+                                question_route.transition_overlap_fraction
+                            ),
+                        }
                     else:
                         question["auxiliary_route"] = {
                             "method": auxiliary_route_method,
@@ -6433,6 +6515,14 @@ def run_pipeline(
                             ),
                             "transition_overlap_fraction": (
                                 question_route.transition_overlap_fraction
+                            ),
+                            "min_mutual_matches": question_route.min_mutual_matches,
+                            "min_inliers": question_route.min_inliers,
+                            "min_inlier_ratio": question_route.min_inlier_ratio,
+                            "min_grid_fraction": question_route.min_grid_fraction,
+                            "visual_models": list(question_route.visual_models),
+                            "semantic_rejected_frames": (
+                                question_route.semantic_rejected_frames
                             ),
                         }
                     question["question_referability_audit"] = {
@@ -6568,6 +6658,23 @@ def run_pipeline(
             kept_counts: Counter = funnel["question_type_kept_counts"]
             for question in retained_cross_questions:
                 kept_counts[str(question.get("type", ""))] += 1
+            if hybrid_router is not None:
+                if hybrid_cache_path is not None:
+                    try:
+                        hybrid_router.save_cache(hybrid_cache_path)
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not persist hybrid visual cache for %s: %s",
+                            scene_id,
+                            exc,
+                        )
+                funnel["auxiliary_graph"] = {
+                    **hybrid_router.diagnostics(),
+                    "method": auxiliary_route_method,
+                    "cache_hit": hybrid_cache_hit,
+                    "cache_path": str(hybrid_cache_path) if hybrid_cache_path is not None else None,
+                    "note": "routes_are_computed_per_question_after_object_role_binding",
+                }
             funnel["pair_stage_counts"] = dict(sorted(pair_stage_counts.items()))
             funnel["question_type_generated_counts"] = dict(sorted(generated_counts.items()))
             funnel["question_type_kept_counts"] = dict(sorted(kept_counts.items()))
@@ -7025,7 +7132,9 @@ def main():
             "Auxiliary-frame routing for cross-frame questions. "
             "visual_pose_graph uses the current per-scene ORB/RANSAC pose graph; "
             "legacy_geometric uses per-question A-to-B route projection while "
-            "excluding route portions already covered by the two main frames."
+            "excluding route portions already covered by the two main frames; "
+            "hybrid_geometric_visual adds reciprocal ORB plus Fundamental/Homography "
+            "verification and role-aware semantic gating to that per-question route."
         ),
     )
     parser.add_argument(
