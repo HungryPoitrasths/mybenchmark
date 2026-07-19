@@ -245,6 +245,25 @@ def test_cap_l2_object_move_occlusion_answer_ratios_noop_when_no_occluded_questi
     assert capped == questions
 
 
+def test_cap_l2_object_move_occlusion_answer_ratios_does_not_cap_pairwise_v2() -> None:
+    questions = [
+        {
+            **_make_object_move_occlusion_question(idx, relation),
+            "occlusion_semantics_version": 2,
+            "new_pairwise_occlusion_relation": relation,
+        }
+        for idx, relation in enumerate(
+            ["query_occluded_by_reference"]
+            + ["reference_occluded_by_query"] * 5
+            + ["neither"] * 5
+        )
+    ]
+
+    capped = cap_l2_object_move_occlusion_answer_ratios(questions)
+
+    assert capped == questions
+
+
 def test_cap_l2_object_move_occlusion_answer_ratios_ignores_other_question_types() -> None:
     questions = (
         [_make_object_move_occlusion_question(idx, "occluded") for idx in range(2)]

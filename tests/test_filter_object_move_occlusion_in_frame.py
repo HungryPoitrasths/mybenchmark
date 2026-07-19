@@ -7,6 +7,7 @@ from src.utils.colmap_loader import CameraPose
 from scripts.filter_object_move_occlusion_in_frame import (
     DROP_COUNTERFACTUAL_NOT_ENOUGH_IN_FRAME,
     DROP_ORIGINAL_NOT_FULLY_IN_FRAME,
+    DROP_REFERENCE_NOT_ENOUGH_IN_FRAME,
     filter_object_move_occlusion_questions,
 )
 
@@ -110,6 +111,43 @@ class FilterObjectMoveOcclusionInFrameTests(unittest.TestCase):
         self.assertEqual(filtered_payload["questions"], [])
         self.assertEqual(report["dropped_count"], 1)
         self.assertEqual(report["dropped"][0]["drop_reason"], DROP_COUNTERFACTUAL_NOT_ENOUGH_IN_FRAME)
+
+    def test_v2_filter_checks_query_and_reference_from_frame_1(self) -> None:
+        question = {
+            **self._question(),
+            "occlusion_semantics_version": 2,
+            "obj_ref_id": 12,
+        }
+        context = self._scene_context()
+        reference = {
+            "id": 12,
+            "label": "sofa",
+            "center": [0.4, 0.0, 1.0],
+            "bbox_min": [0.2, -0.2, 0.8],
+            "bbox_max": [0.6, 0.2, 1.2],
+        }
+        context["objects"].append(reference)
+        context["obj_map"][12] = reference
+
+        with (
+            mock.patch(
+                "scripts.filter_object_move_occlusion_in_frame._load_scene_context",
+                return_value=context,
+            ),
+            mock.patch(
+                "scripts.filter_object_move_occlusion_in_frame._bbox_in_frame_corner_count",
+                side_effect=[(8, 8), (5, 8)],
+            ),
+        ):
+            filtered_payload, report = filter_object_move_occlusion_questions(
+                {"questions": [question]},
+                scannet_root=Path("/unused/scannet"),
+                scannetpp_root=Path("/unused/scannetpp"),
+                progress_every=1,
+            )
+
+        self.assertEqual(filtered_payload["questions"], [])
+        self.assertEqual(report["dropped"][0]["drop_reason"], DROP_REFERENCE_NOT_ENOUGH_IN_FRAME)
 
 
 if __name__ == "__main__":

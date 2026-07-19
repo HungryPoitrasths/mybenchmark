@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -16,6 +17,7 @@ from src.qa_generator import (
     ReasoningFrameContext,
     _annotate_cross_frame_questions,
 )
+from src.referability_checks import _question_referability_role_ids
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 
 
@@ -74,6 +76,96 @@ def test_occlusion_binds_movement_to_frame_1_and_visibility_to_frame_2() -> None
         "visibility": "frame_2",
     }
     assert result[0]["object_frame_groups"] == {"frame_1": [1], "frame_2": [2]}
+
+
+def test_v2_occlusion_binds_query_and_reference_to_distinct_roles() -> None:
+    objects = {
+        1: make_object(1, "table"),
+        2: make_object(2, "lamp"),
+        3: make_object(3, "sofa"),
+    }
+    question = {
+        "type": "object_move_occlusion",
+        "occlusion_semantics_version": 2,
+        "question": "question",
+        "moved_obj_id": 1,
+        "query_obj_id": 2,
+        "obj_ref_id": 3,
+    }
+    result = _annotate_cross_frame_questions(
+        [question],
+        frame_1=make_context("first.jpg", regular=set(), attachment={1, 2}),
+        frame_2=make_context("last.jpg", regular={3}),
+        objects_by_id=objects,
+    )
+    assert len(result) == 1
+    assert result[0]["camera_bindings"] == {
+        "movement": "frame_1",
+        "visibility": "frame_1",
+    }
+    assert result[0]["object_frame_groups"] == {"frame_1": [1, 2], "frame_2": [3]}
+
+
+def test_v2_occlusion_referability_roles_keep_reference_ordinary() -> None:
+    attachment_ids, ordinary_ids = _question_referability_role_ids(
+        {
+            "type": "object_move_occlusion",
+            "attachment_remapped": True,
+            "moved_obj_id": 1,
+            "query_obj_id": 2,
+            "target_obj_id": 2,
+            "obj_ref_id": 3,
+        }
+    )
+
+    assert attachment_ids == {1, 2}
+    assert ordinary_ids == {3}
+
+
+def test_v2_cross_frame_generation_uses_frame_1_camera_for_occlusion() -> None:
+    objects = {
+        1: make_object(1, "table"),
+        2: make_object(2, "lamp"),
+        3: make_object(3, "sofa"),
+    }
+    frame_1 = make_context("first.jpg", regular=set(), attachment={1, 2})
+    frame_2_a = make_context("last-a.jpg", regular={3})
+    frame_2_b = make_context("last-b.jpg", regular={3})
+    generated = {
+        "type": "object_move_occlusion",
+        "occlusion_semantics_version": 2,
+        "question": "question",
+        "moved_obj_id": 1,
+        "query_obj_id": 2,
+        "obj_ref_id": 3,
+    }
+    with patch("src.qa_generator.generate_l2_object_move", return_value=[dict(generated)]) as generate_mock:
+        from src.qa_generator import generate_cross_frame_questions
+
+        result_a = generate_cross_frame_questions(
+            objects=list(objects.values()),
+            attachment_graph={1: [2]},
+            attached_by={2: 1},
+            frame_1=frame_1,
+            frame_2=frame_2_a,
+            color_intrinsics=make_intrinsics(),
+            only_question_types=["L2_object_move_occlusion"],
+        )
+        first_camera = generate_mock.call_args.args[3]
+        result_b = generate_cross_frame_questions(
+            objects=list(objects.values()),
+            attachment_graph={1: [2]},
+            attached_by={2: 1},
+            frame_1=frame_1,
+            frame_2=frame_2_b,
+            color_intrinsics=make_intrinsics(),
+            only_question_types=["L2_object_move_occlusion"],
+        )
+        second_camera = generate_mock.call_args.args[3]
+
+    assert first_camera is frame_1.camera_pose
+    assert second_camera is frame_1.camera_pose
+    assert result_a[0]["camera_bindings"] == result_b[0]["camera_bindings"]
 
 
 def test_generic_frame_2_role_requires_regular_referability() -> None:

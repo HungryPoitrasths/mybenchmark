@@ -32,8 +32,8 @@
     "From the first main view's camera perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?"
   ],
   "L2_object_move_occlusion": [
-    "From the first main view's camera perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the occlusion status of {obj_b} from the last main view's viewpoint? Here, 'occluded' means blocked by another object while part of it is still visible in that last image; being partly outside the image frame does not count as occlusion.",
-    "From the first main view's camera perspective, if {obj_a} is moved {direction_with_camera_hint} by {distance}, which best describes {obj_b} from the last main view's viewpoint: not occluded, occluded, or not in the frame? Here, 'occluded' means blocked by another object while part of it is still visible in that last image; being partly outside the image frame does not count as occlusion."
+    "After moving {obj_move_source} {direction_with_camera_hint} by {distance}, which best describes the pairwise occlusion relationship between {obj_query} and {obj_ref} from the first main view's viewpoint?",
+    "From the first main view's viewpoint, after {obj_move_source} is moved {direction_with_camera_hint} by {distance}, is {obj_query} occluded by {obj_ref}, is {obj_ref} occluded by {obj_query}, or does neither object occlude the other?"
   ],
   "L2_object_rotate_object_centric": [
     "Imagine you are {obj_query} and facing toward {obj_face}. If {obj_move_source} were moved along a {angle}-degree {rotation_direction} (viewed from above) orbit around the center of {obj_face} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {obj_ref} be? (For horizontal directions, compare the objects' 3D bounding-box centers projected onto the floor plane; above/below use the vertical spatial rule.)"

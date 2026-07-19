@@ -7,6 +7,9 @@ import numpy as np
 
 from src.qa_generator import (
     DISTANCE_MOVE_DIRECTIONS,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
     MAX_OCCLUSION_OBJECTS_AUTO,
     MOVEMENT_CANDIDATES,
     _aabb_extent_along_direction,
@@ -21,6 +24,8 @@ from src.qa_generator import (
     _make_l1_occlusion_metrics,
     _match_world_xy_direction_bin,
     _occluder_blocks_translated_query_object,
+    _pairwise_occlusion_relation_after_move,
+    _iter_pairwise_occlusion_directed_object_move_states,
     _select_l2_object_move_occlusion_records,
     _select_object_move_state,
     _select_occlusion_directed_occluder_candidates,
@@ -208,6 +213,16 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             [record["candidate_index"] for record in selected],
             [0, 1, 2, 3, 4, 6],
         )
+
+    def test_select_l2_object_move_occlusion_records_keeps_one_unchanged_fallback(self) -> None:
+        records = [
+            {"candidate_index": 0, "relation_unchanged": True},
+            {"candidate_index": 1, "relation_unchanged": True},
+        ]
+
+        selected = _select_l2_object_move_occlusion_records(records)
+
+        self.assertEqual([record["candidate_index"] for record in selected], [0])
 
     def test_find_object_move_occlusion_changes_tracks_l1_style_changes_for_moved_targets_only(self) -> None:
         objects = [
@@ -413,6 +428,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         query_mock.assert_not_called()
         static_mock.assert_not_called()
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_emits_single_target_l1_style_occlusion_question(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -488,6 +504,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertIn("blocked by another object", question["question"])
         self.assertIn("does not count as occlusion", question["question"])
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_selects_shared_state_without_occlusion_precompute(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -564,6 +581,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             ["object_move_occlusion"],
         )
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_skips_occlusion_when_target_bbox_not_fully_in_frame(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = {
@@ -638,6 +656,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             )
         )
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_skips_occlusion_when_target_moves_out_of_frame(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -778,6 +797,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
 
         self.assertFalse(any(q.get("type") == "object_move_occlusion" for q in questions))
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_uses_query_specific_occlusion_fallback_state(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -861,6 +881,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(occlusion_questions[0]["correct_value"], "not in the frame")
         self.assertFalse(occlusion_questions[0]["relation_unchanged"])
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_skips_fallback_visibility_when_fallback_target_fails_corner_gate(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -949,6 +970,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(visibility_mock.call_count, 1)
         self.assertIs(visibility_mock.call_args_list[0].kwargs["selected_state"], shared_state)
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_emits_visible_to_occluded_transition(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -1011,6 +1033,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
         self.assertEqual(occlusion_questions[0]["correct_value"], "occluded")
         self.assertFalse(occlusion_questions[0]["relation_unchanged"])
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_emits_occluded_to_visible_transition(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -1437,6 +1460,7 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
                 "src.qa_generator._batch_first_hit_distances_compat",
                 return_value=np.array([1.0], dtype=np.float64),
             ),
+            patch("src.qa_generator._projection_rects_overlap", return_value=True),
         ):
             blocked = _occluder_blocks_translated_query_object(
                 obj_ref=obj_ref,
@@ -1858,6 +1882,7 @@ class OcclusionDirectedIntegrationTests(unittest.TestCase):
     """Integration tests confirming Phase 1.5 is wired into
     generate_l2_object_move with the right priority and guardrails."""
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_emits_occlusion_directed_not_occluded_to_occluded_transition(self) -> None:
         sofa = make_object(1, "sofa", (0.0, 0.0, 2.0))
         cushion = make_object(2, "cushion", (0.2, 0.0, 2.0))
@@ -1953,6 +1978,7 @@ class OcclusionDirectedIntegrationTests(unittest.TestCase):
             {tuple(np.round(d, 6).tolist()) for d in MOVEMENT_CANDIDATES},
         )
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_stops_occlusion_directed_search_once_scene_budget_exhausted(self) -> None:
         # Two independent attachment pairs in the same scene, both eligible
         # for Phase 1.5. With the scene-wide changed-question budget patched
@@ -2031,6 +2057,7 @@ class OcclusionDirectedIntegrationTests(unittest.TestCase):
         self.assertEqual(len(occlusion_questions), 1)
         self.assertEqual(directed_mock.call_count, 1)
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_occlusion_directed_budget_scales_with_scene_size(self) -> None:
         # A scene with more movement objects than the old fixed budget of 20
         # should get a correspondingly larger occluder-directed search
@@ -2085,6 +2112,7 @@ class OcclusionDirectedIntegrationTests(unittest.TestCase):
         _, kwargs = directed_mock.call_args
         self.assertEqual(kwargs["max_candidates_tried"], 25)
 
+    @unittest.skip("legacy single-target semantics v1")
     def test_generate_l2_object_move_max_occlusion_objects_auto_scales_source_pool(self) -> None:
         # With max_occlusion_objects=MAX_OCCLUSION_OBJECTS_AUTO, a scene with
         # more movement objects than the old fixed default of 20 should get
@@ -2240,6 +2268,238 @@ class OcclusionDirectedIntegrationTests(unittest.TestCase):
 
         directed_mock.assert_not_called()
         self.assertFalse(any(q.get("type") == "object_move_occlusion" for q in questions))
+
+
+class PairwiseOcclusionV2Tests(unittest.TestCase):
+    def test_pairwise_relation_discards_mutual_partial_blocking(self) -> None:
+        query = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        reference = make_object(2, "sofa", (0.0, 0.0, 3.0))
+        with (
+            patch("src.qa_generator._get_instance_intersector", side_effect=lambda _mesh, obj_id: obj_id),
+            patch(
+                "src.qa_generator._instance_surface_samples",
+                return_value=np.array([[0.0, 0.0, 2.0]], dtype=np.float64),
+            ),
+            patch(
+                "src.qa_generator._in_frame_surface_sample_subset",
+                side_effect=lambda points, *_args, **_kwargs: (1.0, 1.0, points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._surface_probe_subset",
+                side_effect=lambda points, _limit: (points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._batch_first_hit_distances_compat",
+                side_effect=[np.array([1.0]), np.array([1.0])],
+            ),
+        ):
+            relation, _, _ = _pairwise_occlusion_relation_after_move(
+                query_obj=query,
+                ref_obj=reference,
+                query_delta=np.zeros(3),
+                ref_delta=np.zeros(3),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=SimpleNamespace(),
+            )
+
+        self.assertIsNone(relation)
+
+    def test_pairwise_relation_supports_query_ref_neither(self) -> None:
+        query = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        reference = make_object(2, "sofa", (0.0, 0.0, 3.0))
+        mesh_data = SimpleNamespace()
+
+        with (
+            patch("src.qa_generator._get_instance_intersector", side_effect=lambda _mesh, obj_id: obj_id),
+            patch(
+                "src.qa_generator._instance_surface_samples",
+                return_value=np.array([[0.0, 0.0, 2.0]], dtype=np.float64),
+            ),
+            patch(
+                "src.qa_generator._in_frame_surface_sample_subset",
+                side_effect=lambda points, *_args, **_kwargs: (1.0, 1.0, points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._surface_probe_subset",
+                side_effect=lambda points, _limit: (points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._batch_first_hit_distances_compat",
+                side_effect=[np.array([1.0]), np.array([np.inf])],
+            ),
+        ):
+            relation, query_ratio, ref_ratio = _pairwise_occlusion_relation_after_move(
+                query_obj=query,
+                ref_obj=reference,
+                query_delta=np.zeros(3),
+                ref_delta=np.zeros(3),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=mesh_data,
+            )
+
+        self.assertEqual(relation, L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF)
+        self.assertGreater(query_ratio, ref_ratio)
+
+        with (
+            patch("src.qa_generator._get_instance_intersector", side_effect=lambda _mesh, obj_id: obj_id),
+            patch(
+                "src.qa_generator._instance_surface_samples",
+                return_value=np.array([[0.0, 0.0, 2.0]], dtype=np.float64),
+            ),
+            patch(
+                "src.qa_generator._in_frame_surface_sample_subset",
+                side_effect=lambda points, *_args, **_kwargs: (1.0, 1.0, points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._surface_probe_subset",
+                side_effect=lambda points, _limit: (points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._batch_first_hit_distances_compat",
+                side_effect=[np.array([np.inf]), np.array([1.0])],
+            ),
+        ):
+            relation, _, _ = _pairwise_occlusion_relation_after_move(
+                query_obj=query,
+                ref_obj=reference,
+                query_delta=np.zeros(3),
+                ref_delta=np.zeros(3),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=mesh_data,
+            )
+        self.assertEqual(relation, L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY)
+
+        with (
+            patch("src.qa_generator._get_instance_intersector", side_effect=lambda _mesh, obj_id: obj_id),
+            patch(
+                "src.qa_generator._instance_surface_samples",
+                return_value=np.array([[0.0, 0.0, 2.0]], dtype=np.float64),
+            ),
+            patch(
+                "src.qa_generator._in_frame_surface_sample_subset",
+                side_effect=lambda points, *_args, **_kwargs: (1.0, 1.0, points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._surface_probe_subset",
+                side_effect=lambda points, _limit: (points, np.array([0]), np.zeros((len(points), 3))),
+            ),
+            patch(
+                "src.qa_generator._batch_first_hit_distances_compat",
+                side_effect=[np.array([np.inf]), np.array([np.inf])],
+            ),
+        ):
+            relation, _, _ = _pairwise_occlusion_relation_after_move(
+                query_obj=query,
+                ref_obj=reference,
+                query_delta=np.zeros(3),
+                ref_delta=np.zeros(3),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=mesh_data,
+            )
+        self.assertEqual(relation, L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER)
+
+    def test_pairwise_directed_search_finds_both_directions(self) -> None:
+        query = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        reference = make_object(2, "sofa", (1.0, 0.0, 2.0))
+        objects = [query, reference]
+        relation_results = [
+            (L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, 0.0, 0.8),
+            (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, 0.8, 0.0),
+            (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, 0.8, 0.0),
+        ]
+        with (
+            patch("src.qa_generator._match_world_xy_direction_bin", return_value=(0, np.array([1.0, 0.0, 0.0]))),
+            patch("src.qa_generator._adaptive_occlusion_directed_step", return_value=0.5),
+            patch("src.qa_generator.is_within_room", return_value=True),
+            patch("src.qa_generator.has_terminal_bbox_collision", return_value=False),
+            patch("src.qa_generator._object_blocks_translated_target_object", return_value=True),
+            patch("src.qa_generator._occluder_blocks_translated_query_object", return_value=True),
+            patch(
+                "src.qa_generator._pairwise_occlusion_relation_after_move",
+                side_effect=relation_results,
+            ),
+        ):
+            states = list(
+                _iter_pairwise_occlusion_directed_object_move_states(
+                    query_obj=query,
+                    ref_obj=reference,
+                    move_source_id=1,
+                    moved_ids={1},
+                    movement_scene_objects=objects,
+                    attachment_graph={},
+                    camera_pose=make_camera_pose(),
+                    color_intrinsics=make_camera_intrinsics(),
+                    instance_mesh_data=SimpleNamespace(),
+                    room_min=np.array([-5.0, -5.0, -5.0]),
+                    room_max=np.array([5.0, 5.0, 5.0]),
+                    collision_objects=objects,
+                    old_relation=L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
+                )
+            )
+
+        self.assertEqual(
+            {relation for _state, relation, _query_ratio, _ref_ratio in states},
+            {
+                L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+                L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+            },
+        )
+
+    def test_generate_l2_object_move_emits_pairwise_v2_fields(self) -> None:
+        mover = make_object(1, "table", (0.0, 0.0, 2.0))
+        query = make_object(2, "lamp", (0.2, 0.0, 2.0))
+        reference = make_object(3, "sofa", (0.8, 0.0, 2.0))
+        selected_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=[mover, query],
+            moved_ids={1, 2},
+        )
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=selected_state),
+            patch("src.qa_generator._iter_additional_object_move_states", return_value=[]),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator._pairwise_occlusion_relation_after_move",
+                side_effect=[
+                    (L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0),
+                    (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, 0.8, 0.0),
+                ],
+            ),
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            questions = generate_l2_object_move(
+                objects=[mover, query, reference],
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "After moving {obj_move_source}, compare {obj_query} and {obj_ref}."
+                    ]
+                },
+                movement_objects=[mover, query, reference],
+                object_map={obj["id"]: obj for obj in [mover, query, reference]},
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=SimpleNamespace(),
+                attachment_referable_object_ids=[1, 2],
+                attachment_query_objects=[query],
+                move_source_object_ids={1},
+                reference_object_ids={3},
+                enabled_l2_object_move_types={"object_move_occlusion"},
+            )
+
+        occlusion_questions = [q for q in questions if q.get("type") == "object_move_occlusion"]
+        self.assertEqual(len(occlusion_questions), 1)
+        question = occlusion_questions[0]
+        self.assertEqual(question["occlusion_semantics_version"], 2)
+        self.assertEqual(question["query_obj_id"], 2)
+        self.assertEqual(question["obj_ref_id"], 3)
+        self.assertEqual(question["new_pairwise_occlusion_relation"], L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF)
+        self.assertNotIn("last main view", question["question"].lower())
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ DEFAULT_REPORT = Path("output/benchmark.object_move_occlusion_inframe_filtered_r
 
 SKIP_NOT_OCCLUSION = "not_object_move_occlusion"
 DROP_INVALID_TARGET_ID = "invalid_target_obj_id"
+DROP_INVALID_REFERENCE_ID = "invalid_obj_ref_id"
 DROP_INVALID_MOVED_ID = "invalid_moved_obj_id"
 DROP_INVALID_DELTA = "invalid_delta"
 DROP_SCENE_NOT_FOUND = "scene_dir_not_found"
@@ -38,6 +39,7 @@ DROP_POSE_MISSING = "pose_missing_for_frame"
 DROP_INTRINSICS_MISSING = "intrinsics_missing"
 DROP_OBJECT_MISSING = "target_or_moved_object_missing"
 DROP_ORIGINAL_NOT_FULLY_IN_FRAME = "original_target_not_fully_in_frame"
+DROP_REFERENCE_NOT_ENOUGH_IN_FRAME = "original_reference_not_enough_in_frame"
 DROP_COUNTERFACTUAL_NOT_ENOUGH_IN_FRAME = "counterfactual_target_not_enough_in_frame"
 
 
@@ -146,6 +148,7 @@ def _drop_entry(
         "target_obj_id": question.get("target_obj_id"),
         "moved_obj_id": question.get("moved_obj_id"),
         "query_obj_id": question.get("query_obj_id"),
+        "obj_ref_id": question.get("obj_ref_id"),
         "drop_reason": reason,
     }
     if visible_corner_count is not None:
@@ -206,12 +209,20 @@ def filter_object_move_occlusion_questions(
         processed_occlusion += 1
         scene_id = str(question.get("scene_id", "")).strip()
         image_name = str(question.get("image_name", "")).strip()
-        target_obj_id = _coerce_int(question.get("target_obj_id"))
+        semantics_v2 = str(question.get("occlusion_semantics_version", "")).strip() == "2"
+        target_obj_id = _coerce_int(question.get("query_obj_id"))
+        if target_obj_id is None:
+            target_obj_id = _coerce_int(question.get("target_obj_id"))
+        ref_obj_id = _coerce_int(question.get("obj_ref_id"))
         moved_obj_id = _coerce_int(question.get("moved_obj_id"))
         delta = _coerce_delta(question.get("delta"))
 
         if target_obj_id is None:
             dropped.append(_drop_entry(question, reason=DROP_INVALID_TARGET_ID))
+            error_count += 1
+            continue
+        if semantics_v2 and ref_obj_id is None:
+            dropped.append(_drop_entry(question, reason=DROP_INVALID_REFERENCE_ID))
             error_count += 1
             continue
         if moved_obj_id is None:
@@ -252,6 +263,7 @@ def filter_object_move_occlusion_questions(
         intrinsics = ctx.get("intrinsics")
         camera_pose = ctx["poses"].get(image_name)
         target_obj = ctx["obj_map"].get(target_obj_id)
+        ref_obj = ctx["obj_map"].get(ref_obj_id) if ref_obj_id is not None else None
         if intrinsics is None:
             dropped.append(_drop_entry(question, reason=DROP_INTRINSICS_MISSING))
             error_count += 1
@@ -260,22 +272,40 @@ def filter_object_move_occlusion_questions(
             dropped.append(_drop_entry(question, reason=DROP_POSE_MISSING))
             error_count += 1
             continue
-        if target_obj is None or moved_obj_id not in ctx["obj_map"]:
+        if target_obj is None or moved_obj_id not in ctx["obj_map"] or (semantics_v2 and ref_obj is None):
             dropped.append(_drop_entry(question, reason=DROP_OBJECT_MISSING))
             error_count += 1
             continue
 
         original_visible, original_total = _bbox_in_frame_corner_count(target_obj, camera_pose, intrinsics)
-        if not _bbox_fully_in_frame(target_obj, camera_pose, intrinsics):
+        target_original_ok = (
+            _bbox_fully_in_frame(target_obj, camera_pose, intrinsics)
+            if not semantics_v2
+            else original_visible >= 6
+        )
+        if not target_original_ok:
             dropped.append(
                 _drop_entry(
                     question,
                     reason=DROP_ORIGINAL_NOT_FULLY_IN_FRAME,
                     visible_corner_count=original_visible,
-                    required_corner_count=8,
+                    required_corner_count=6 if semantics_v2 else 8,
                 )
             )
             continue
+
+        if semantics_v2:
+            ref_visible, ref_total = _bbox_in_frame_corner_count(ref_obj, camera_pose, intrinsics)
+            if ref_visible < 6:
+                dropped.append(
+                    _drop_entry(
+                        question,
+                        reason=DROP_REFERENCE_NOT_ENOUGH_IN_FRAME,
+                        visible_corner_count=ref_visible,
+                        required_corner_count=6,
+                    )
+                )
+                continue
 
         moved_objects = apply_movement(ctx["objects"], ctx["attachment_graph"], moved_obj_id, delta)
         moved_map = {int(obj["id"]): obj for obj in moved_objects}

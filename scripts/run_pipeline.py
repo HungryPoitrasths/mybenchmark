@@ -207,8 +207,8 @@ _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = False
 # than falling back to the single shared image_name (see _apply_two_frame_split).
 TWO_FRAME_SPLIT_ID_FIELDS: dict[str, dict[str, list[str]]] = {
     "object_move_occlusion": {
-        "group_a": ["moved_obj_id"],
-        "group_b": ["target_obj_id"],
+        "group_a": ["moved_obj_id", "query_obj_id"],
+        "group_b": ["obj_ref_id"],
     },
     "object_move_agent": {
         "group_a": ["moved_obj_id", "query_obj_id"],
@@ -470,8 +470,6 @@ def _apply_two_frame_split(
     group_b_pool = "ordinary"
     if _question_uses_attachment_referability(q):
         group_a_pool = "attachment"
-        if str(q.get("type", "")).strip().lower() == "object_move_occlusion":
-            group_b_pool = "attachment"
     frame_a_pool = {
         name: all_poses[name]
         for name in _referable_frame_names_for_group(
@@ -6560,11 +6558,8 @@ def run_pipeline(
                     generated_counts[str(question.get("type", ""))] += 1
                     cross_candidates.append(question)
 
-            non_occlusion_types = [
-                question_type for question_type in cross_frame_requested_types
-                if question_type != "L2_object_move_occlusion"
-            ]
-            if non_occlusion_types:
+            deferred_cross_types = list(cross_frame_requested_types)
+            if deferred_cross_types:
                 for frame_1 in flash_contexts:
                     destinations = [
                         contexts_by_name[frame_2_name]
@@ -6598,7 +6593,7 @@ def run_pipeline(
                         ray_caster=ray_caster,
                         instance_mesh_data=instance_mesh_data,
                         occlusion_backend=occlusion_backend,
-                        only_question_types=non_occlusion_types,
+                        only_question_types=deferred_cross_types,
                         max_occlusion_objects=max_occlusion_objects,
                         max_move_sources=max_move_sources,
                     )
@@ -6615,56 +6610,6 @@ def run_pipeline(
                             )
                             if annotated:
                                 _append_pair_questions(annotated, frame_1, frame_2, route)
-
-            if "L2_object_move_occlusion" in cross_frame_requested_types:
-                descendants_by_source: dict[int, set[int]] = {}
-                for source_id in attachment_graph:
-                    pending = list(attachment_graph.get(source_id, []))
-                    descendants: set[int] = set()
-                    while pending:
-                        child_id = int(pending.pop())
-                        if child_id in descendants:
-                            continue
-                        descendants.add(child_id)
-                        pending.extend(attachment_graph.get(child_id, []))
-                    descendants_by_source[int(source_id)] = descendants
-
-                for (frame_1_name, frame_2_name), route in routes_by_pair.items():
-                    frame_1 = _restrict_context_for_semantic_exclusivity(
-                        contexts_by_name[frame_1_name], contexts_by_name[frame_2_name],
-                    )
-                    frame_2 = _restrict_context_for_semantic_exclusivity(
-                        contexts_by_name[frame_2_name], contexts_by_name[frame_1_name],
-                    )
-                    has_source_target_pair = any(
-                        source_id in frame_1.attachment_capable_ids
-                        and bool(descendants & frame_2.regular_referable_ids)
-                        for source_id, descendants in descendants_by_source.items()
-                    )
-                    if not has_source_target_pair:
-                        pair_stage_counts["occlusion_role_infeasible"] += 1
-                        continue
-                    pair_questions = generate_cross_frame_questions(
-                        objects=scene["objects"],
-                        attachment_graph=attachment_graph,
-                        attached_by=attached_by,
-                        frame_1=frame_1,
-                        frame_2=frame_2,
-                        color_intrinsics=color_intrinsics,
-                        room_bounds=scene.get("room_bounds"),
-                        collision_objects=scene["objects"],
-                        ray_caster=ray_caster,
-                        instance_mesh_data=instance_mesh_data,
-                        occlusion_backend=occlusion_backend,
-                        only_question_types=["L2_object_move_occlusion"],
-                        max_occlusion_objects=max_occlusion_objects,
-                        max_move_sources=max_move_sources,
-                    )
-                    if pair_questions:
-                        pair_stage_counts["generated"] += 1
-                        _append_pair_questions(pair_questions, frame_1, frame_2, route)
-                    else:
-                        pair_stage_counts["gt_or_role_infeasible"] += 1
 
             retained_cross_questions = _retain_best_cross_frame_views(cross_candidates)
             retained_cross_questions = _apply_scene_type_cap(

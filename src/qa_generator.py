@@ -125,6 +125,15 @@ class CrossFrameLayoutSpec:
 CROSS_FRAME_LAYOUTS: dict[str, tuple[CrossFrameLayoutSpec, ...]] = {
     "object_move_occlusion": (
         CrossFrameLayoutSpec(
+            "source_query_to_ref",
+            ("moved_obj_id", "query_obj_id"),
+            ("obj_ref_id",),
+            (("movement", "frame_1"), ("visibility", "frame_1")),
+        ),
+        # Legacy v1 records used target_obj_id as the visibility target in
+        # frame 2. Keep this layout readable for old benchmarks while all new
+        # generated records use source_query_to_ref above.
+        CrossFrameLayoutSpec(
             "source_to_target",
             ("moved_obj_id",),
             ("target_obj_id",),
@@ -400,6 +409,15 @@ L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
 
 L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR = 4
+L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF = "query_occluded_by_reference"
+L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY = "reference_occluded_by_query"
+L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER = "neither"
+L2_OBJECT_MOVE_OCCLUSION_RELATIONS = [
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
+]
+L2_OBJECT_MOVE_OCCLUSION_SEMANTICS_VERSION = 2
 _MODIFIED_SCENE_CACHE_MAX_SIZE = 8
 _INTERSECTOR_CACHE_MAX_SIZE = 4
 _OCCLUSION_CANDIDATE_SEARCH_LIMIT = 8
@@ -443,13 +461,31 @@ def _select_l2_object_move_occlusion_records(
         record for record in records
         if bool(record["relation_unchanged"])
     ]
-    selected_unchanged_count = min(
-        len(unchanged_records),
-        len(changed_records) // L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR,
+    unchanged_limit = (
+        len(changed_records) // L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR
+        if changed_records
+        else 1
     )
+    selected_unchanged_count = min(len(unchanged_records), unchanged_limit)
     selected_records = changed_records + unchanged_records[:selected_unchanged_count]
     selected_records.sort(key=lambda record: int(record["candidate_index"]))
     return selected_records
+
+
+def _pairwise_occlusion_option_text(
+    relation: str,
+    query_label: str,
+    ref_label: str,
+) -> str:
+    query_text = _the(query_label)
+    ref_text = _the(ref_label)
+    if relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF:
+        return f"{query_text} is occluded by {ref_text}"
+    if relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY:
+        return f"{ref_text} is occluded by {query_text}"
+    if relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER:
+        return "neither object occludes the other"
+    raise ValueError(f"Unsupported pairwise occlusion relation: {relation!r}")
 
 
 L1_ABSENT_STRICT_NOT_VISIBLE_MAX_RAY_COUNT = 4096
@@ -713,9 +749,10 @@ def _get_instance_intersector(
 
     Returns ``None`` when the instance has no triangles.
     """
-    cache: dict[int, Any] = instance_mesh_data.__dict__.setdefault(
-        "_intersector_cache", {}
-    )
+    cache_owner = getattr(instance_mesh_data, "__dict__", None)
+    if cache_owner is None:
+        return None
+    cache: dict[int, Any] = cache_owner.setdefault("_intersector_cache", {})
     if obj_id in cache:
         # Move to end for LRU ordering.
         cache[obj_id] = cache.pop(obj_id)
@@ -1411,8 +1448,8 @@ def _default_templates() -> dict:
             "From the first main view's camera perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?",
         ],
         "L2_object_move_occlusion": [
-            f"From the first main view's camera perspective, imagine moving {{obj_a}} {{direction_with_camera_hint}} by {{distance}}. After this change, what is the occlusion status of {{obj_b}} from the last main view's viewpoint? {OCCLUSION_DEFINITION_NOTE}",
-            f"From the first main view's camera perspective, if {{obj_a}} is moved {{direction_with_camera_hint}} by {{distance}}, which best describes {{obj_b}} from the last main view's viewpoint: not occluded, occluded, or not in the frame? {OCCLUSION_DEFINITION_NOTE}",
+            "After moving {obj_move_source} {direction_with_camera_hint} by {distance}, which best describes the pairwise occlusion relationship between {obj_query} and {obj_ref} from the first main view's viewpoint?",
+            "From the first main view's viewpoint, after {obj_move_source} is moved {direction_with_camera_hint} by {distance}, is {obj_query} occluded by {obj_ref}, is {obj_ref} occluded by {obj_query}, or does neither object occlude the other?",
         ],
         "L2_object_remove": [
             f"If {{obj_a}} were removed from the scene, what would be the occlusion status of {{obj_b}} from the current viewpoint? {OCCLUSION_DEFINITION_NOTE}",
@@ -2016,6 +2053,45 @@ def _bbox_has_min_in_frame_corners(
     return visible >= required
 
 
+def _translated_bbox_projection_rect(
+    obj: dict[str, Any],
+    delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> tuple[float, float, float, float] | None:
+    if color_intrinsics.is_distorted:
+        return None
+    corners = _bbox_corner_points(obj)
+    if corners is None:
+        return None
+    records = _project_sample_point_records(
+        corners + np.asarray(delta, dtype=np.float64),
+        camera_pose,
+        color_intrinsics,
+    )
+    if len(records) < 4:
+        return None
+    us = [float(record["u"]) for record in records]
+    vs = [float(record["v"]) for record in records]
+    return min(us), min(vs), max(us), max(vs)
+
+
+def _projection_rects_overlap(
+    first: tuple[float, float, float, float] | None,
+    second: tuple[float, float, float, float] | None,
+) -> bool:
+    if first is None or second is None:
+        return True
+    first_u_min, first_v_min, first_u_max, first_v_max = first
+    second_u_min, second_v_min, second_u_max, second_v_max = second
+    return not (
+        first_u_max <= second_u_min
+        or second_u_max <= first_u_min
+        or first_v_max <= second_v_min
+        or second_v_max <= first_v_min
+    )
+
+
 def _in_frame_surface_sample_subset(
     sample_points: np.ndarray,
     camera_pose: CameraPose,
@@ -2537,6 +2613,8 @@ _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M = 5.0
 _OCCLUSION_DIRECTED_STEP_SIZE_FRACTION = 0.5
 _OCCLUSION_DIRECTED_MIN_DISTANCE_STEP_M = 0.05
 _OCCLUSION_DIRECTED_MAX_DISTANCE_STEP_M = 1.0
+_PAIRWISE_OCCLUSION_MAX_REFERENCES_PER_QUERY = 16
+_PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES = 16
 # Scene-wide budget for this occluder-directed search: with candidates drawn
 # from the whole scene (not just one frame) there can be many more
 # (query_obj, obj_ref) pairs to try than before, so cap total accepted
@@ -2693,10 +2771,11 @@ def _match_world_xy_direction_bin(
     return best_idx, np.asarray(directions[best_idx], dtype=np.float64)
 
 
-def _occluder_blocks_translated_query_object(
+def _object_blocks_translated_target_object(
     *,
-    obj_ref: dict[str, Any],
-    query_obj: dict[str, Any],
+    occluder_obj: dict[str, Any],
+    target_obj: dict[str, Any],
+    occluder_delta: np.ndarray,
     target_delta: np.ndarray,
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
@@ -2705,26 +2784,40 @@ def _occluder_blocks_translated_query_object(
     min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
     hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
 ) -> bool:
-    """Test whether *obj_ref* would occlude *query_obj* if moved by *target_delta*.
+    """Test whether one translated object blocks another translated object.
 
-    Casts rays from the (fixed) camera to *query_obj*'s surface samples
-    translated by ``target_delta``, against a ray caster scoped to *only*
-    ``obj_ref``'s own triangles (``_get_instance_intersector``). Using an
+    Casts rays from the fixed camera to ``target_obj`` surface samples at
+    ``target_delta``, against a caster scoped to ``occluder_obj``. Shifting
+    the ray origin by ``-occluder_delta`` represents the occluder's moved
+    position without rebuilding its instance mesh. Using an
     instance-scoped caster (rather than the full-scene caster used by
     ``_removed_object_occludes_target_mesh``) avoids any confusion with
-    *query_obj*'s own real mesh, which still sits at its original,
-    untranslated position in the full scene mesh -- only ``obj_ref`` is
-    real/static here, so only its own triangles need to be considered.
+    either object's original full-scene geometry.
     """
     if color_intrinsics is None or instance_mesh_data is None:
         return False
-    obj_ref_id = int(obj_ref["id"])
-    obj_ref_caster = _get_instance_intersector(instance_mesh_data, obj_ref_id)
-    if obj_ref_caster is None:
+    if not _projection_rects_overlap(
+        _translated_bbox_projection_rect(
+            occluder_obj,
+            occluder_delta,
+            camera_pose,
+            color_intrinsics,
+        ),
+        _translated_bbox_projection_rect(
+            target_obj,
+            target_delta,
+            camera_pose,
+            color_intrinsics,
+        ),
+    ):
+        return False
+    occluder_id = int(occluder_obj["id"])
+    occluder_caster = _get_instance_intersector(instance_mesh_data, occluder_id)
+    if occluder_caster is None:
         return False
 
-    query_obj_id = int(query_obj["id"])
-    sample_points = _instance_surface_samples(instance_mesh_data, query_obj_id)
+    target_obj_id = int(target_obj["id"])
+    sample_points = _instance_surface_samples(instance_mesh_data, target_obj_id)
     if len(sample_points) == 0:
         return False
     translated_points = sample_points + np.asarray(target_delta, dtype=np.float64)
@@ -2753,9 +2846,10 @@ def _occluder_blocks_translated_query_object(
     if not np.any(valid_mask):
         return False
     max_distances = target_dists + float(hit_epsilon)
-    origins = np.broadcast_to(camera_pos, directions.shape).copy()
+    local_origin = camera_pos - np.asarray(occluder_delta, dtype=np.float64)
+    origins = np.broadcast_to(local_origin, directions.shape).copy()
     hit_dists = _batch_first_hit_distances_compat(
-        obj_ref_caster,
+        occluder_caster,
         origins=origins,
         directions=directions,
         max_distances=max_distances,
@@ -2766,6 +2860,277 @@ def _occluder_blocks_translated_query_object(
         return False
     blocking_ratio = float(np.count_nonzero(blocking_mask) / valid_count)
     return blocking_ratio > float(min_blocking_ratio)
+
+
+def _occluder_blocks_translated_query_object(
+    *,
+    obj_ref: dict[str, Any],
+    query_obj: dict[str, Any],
+    target_delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
+    min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
+    hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
+) -> bool:
+    """Compatibility wrapper for the original query-behind-ref search."""
+    return _object_blocks_translated_target_object(
+        occluder_obj=obj_ref,
+        target_obj=query_obj,
+        occluder_delta=np.zeros(3, dtype=np.float64),
+        target_delta=target_delta,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        instance_mesh_data=instance_mesh_data,
+        max_probe_samples=max_probe_samples,
+        min_blocking_ratio=min_blocking_ratio,
+        hit_epsilon=hit_epsilon,
+    )
+
+
+def _pairwise_occlusion_relation_after_move(
+    *,
+    query_obj: dict[str, Any],
+    ref_obj: dict[str, Any],
+    query_delta: np.ndarray,
+    ref_delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
+    min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
+    hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
+) -> tuple[str | None, float, float]:
+    """Classify which member of a moved object pair blocks the other.
+
+    Rays are cast from ``camera_pose`` (the movement/answer frame) against
+    instance-scoped geometry.  Translating the ray origin by the occluder's
+    delta lets the original instance intersector represent its counterfactual
+    position without rebuilding the full scene mesh.
+    """
+    if color_intrinsics is None or instance_mesh_data is None:
+        return None, 0.0, 0.0
+    if not _projection_rects_overlap(
+        _translated_bbox_projection_rect(
+            query_obj,
+            query_delta,
+            camera_pose,
+            color_intrinsics,
+        ),
+        _translated_bbox_projection_rect(
+            ref_obj,
+            ref_delta,
+            camera_pose,
+            color_intrinsics,
+        ),
+    ):
+        return L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0
+
+    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+
+    def _blocking_ratio(
+        *,
+        occluder: dict[str, Any],
+        target: dict[str, Any],
+        occluder_delta: np.ndarray,
+        target_delta: np.ndarray,
+    ) -> float | None:
+        caster = _get_instance_intersector(instance_mesh_data, int(occluder["id"]))
+        if caster is None:
+            return None
+        sample_points = _instance_surface_samples(instance_mesh_data, int(target["id"]))
+        if len(sample_points) == 0:
+            return None
+        translated_points = np.asarray(sample_points, dtype=np.float64) + np.asarray(
+            target_delta, dtype=np.float64
+        )
+        _, _, in_frame_points, _, _ = _in_frame_surface_sample_subset(
+            translated_points,
+            camera_pose,
+            color_intrinsics,
+        )
+        if len(in_frame_points) == 0:
+            return None
+        probe_points, _, _ = _surface_probe_subset(in_frame_points, max_probe_samples)
+        if len(probe_points) == 0:
+            return None
+        directions = probe_points - camera_pos
+        target_dists = np.linalg.norm(directions, axis=1)
+        valid_mask = np.isfinite(target_dists) & (target_dists > 1e-6)
+        if not np.any(valid_mask):
+            return None
+        local_origin = camera_pos - np.asarray(occluder_delta, dtype=np.float64)
+        origins = np.broadcast_to(local_origin, directions.shape).copy()
+        hit_dists = _batch_first_hit_distances_compat(
+            caster,
+            origins=origins,
+            directions=directions,
+            max_distances=target_dists + float(hit_epsilon),
+        )
+        blocking = valid_mask & (hit_dists < (target_dists - float(hit_epsilon)))
+        valid_count = int(np.count_nonzero(valid_mask))
+        if valid_count <= 0:
+            return None
+        return float(np.count_nonzero(blocking) / valid_count)
+
+    query_by_ref = _blocking_ratio(
+        occluder=ref_obj,
+        target=query_obj,
+        occluder_delta=ref_delta,
+        target_delta=query_delta,
+    )
+    ref_by_query = _blocking_ratio(
+        occluder=query_obj,
+        target=ref_obj,
+        occluder_delta=query_delta,
+        target_delta=ref_delta,
+    )
+    if query_by_ref is None or ref_by_query is None:
+        return None, float(query_by_ref or 0.0), float(ref_by_query or 0.0)
+    query_blocked = query_by_ref > float(min_blocking_ratio)
+    ref_blocked = ref_by_query > float(min_blocking_ratio)
+    if query_blocked and ref_blocked:
+        # Mutual partial blocking is a fourth, ambiguous relation that is not
+        # represented by this question type's three answer choices. Returning
+        # None makes the generator discard the candidate instead of forcing a
+        # direction from ratios or object-center depth.
+        return None, float(query_by_ref), float(ref_by_query)
+    if query_blocked:
+        return L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, float(query_by_ref), float(ref_by_query)
+    if ref_blocked:
+        return L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, float(query_by_ref), float(ref_by_query)
+    return L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, float(query_by_ref), float(ref_by_query)
+
+
+def _iter_pairwise_occlusion_directed_object_move_states(
+    *,
+    query_obj: dict[str, Any],
+    ref_obj: dict[str, Any],
+    move_source_id: int,
+    moved_ids: set[int],
+    movement_scene_objects: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]],
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    room_min: np.ndarray,
+    room_max: np.ndarray,
+    collision_objects: list[dict] | None,
+    old_relation: str,
+    candidates_tried_counter: list[int] | None = None,
+    max_candidates_tried: int | None = None,
+):
+    """Yield valid moves that change the pairwise relation in either direction.
+
+    The regular movement-state selector is intentionally generic and often
+    misses the narrow depth interval in which the moved query crosses a static
+    reference.  This directed scan follows the canonical floor-plane vector
+    toward the reference, samples just before and after the crossing, and
+    classifies both directed outcomes with the frame-1 camera.
+    """
+    if color_intrinsics is None or instance_mesh_data is None:
+        return
+    if candidates_tried_counter is not None:
+        if max_candidates_tried is not None and candidates_tried_counter[0] >= max_candidates_tried:
+            return
+        candidates_tried_counter[0] += 1
+
+    match = _match_world_xy_direction_bin(
+        np.asarray(ref_obj["center"], dtype=np.float64)
+        - np.asarray(query_obj["center"], dtype=np.float64)
+    )
+    if match is None:
+        return
+    _bin_idx, unit_direction = match
+    offset = np.asarray(ref_obj["center"], dtype=np.float64) - np.asarray(
+        query_obj["center"], dtype=np.float64
+    )
+    along = float(np.dot(offset, unit_direction))
+    if not np.isfinite(along) or along <= 0.0 or along > _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M:
+        return
+
+    step = _adaptive_occlusion_directed_step(ref_obj, unit_direction)
+    query_extent = _aabb_extent_along_direction(query_obj, unit_direction)
+    # Include one query-width on each side of the reference so both
+    # ``query_by_ref`` and ``ref_by_query`` can be found without jumping over
+    # a thin occlusion window.
+    margin = max(float(step), 0.5 * float(query_extent))
+    start = max(0.05, along - margin)
+    end = min(float(_OCCLUSION_DIRECTED_MAX_MAGNITUDE_M), along + margin)
+    scan_count = min(
+        _PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES,
+        max(1, int(np.floor((end - start) / float(step))) + 1),
+    )
+    magnitudes = np.linspace(start, end, num=scan_count, dtype=np.float64)
+    seen_relations: set[str] = set()
+    for magnitude in magnitudes:
+        delta = np.asarray(unit_direction, dtype=np.float64) * float(magnitude)
+        moved_objects = apply_movement(
+            movement_scene_objects,
+            attachment_graph,
+            move_source_id,
+            delta,
+        )
+        if is_within_room(moved_objects, room_min, room_max) and not has_terminal_bbox_collision(
+            movement_scene_objects,
+            moved_objects,
+            moved_ids,
+            collision_objects=collision_objects,
+        ):
+            moved_map = {int(obj["id"]): obj for obj in moved_objects}
+            moved_query = moved_map.get(int(query_obj["id"]))
+            if moved_query is not None:
+                camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+                moved_query_distance = float(
+                    np.linalg.norm(
+                        np.asarray(query_obj["center"], dtype=np.float64) + delta - camera_pos
+                    )
+                )
+                ref_distance = float(
+                    np.linalg.norm(np.asarray(ref_obj["center"], dtype=np.float64) - camera_pos)
+                )
+                if moved_query_distance < ref_distance:
+                    expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY
+                    blocks = _object_blocks_translated_target_object(
+                        occluder_obj=query_obj,
+                        target_obj=ref_obj,
+                        occluder_delta=delta,
+                        target_delta=np.zeros(3, dtype=np.float64),
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        instance_mesh_data=instance_mesh_data,
+                    )
+                else:
+                    expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF
+                    blocks = _occluder_blocks_translated_query_object(
+                        obj_ref=ref_obj,
+                        query_obj=query_obj,
+                        target_delta=delta,
+                        camera_pose=camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        instance_mesh_data=instance_mesh_data,
+                    )
+                if not blocks or expected_relation == old_relation:
+                    continue
+                relation, query_ratio, ref_ratio = _pairwise_occlusion_relation_after_move(
+                    query_obj=query_obj,
+                    ref_obj=ref_obj,
+                    query_delta=delta,
+                    ref_delta=np.zeros(3, dtype=np.float64),
+                    camera_pose=camera_pose,
+                    color_intrinsics=color_intrinsics,
+                    instance_mesh_data=instance_mesh_data,
+                )
+                if (
+                    relation == expected_relation
+                    and relation != old_relation
+                    and relation not in seen_relations
+                ):
+                    seen_relations.add(relation)
+                    yield _make_selected_object_move_state(delta, moved_objects, moved_ids), relation, query_ratio, ref_ratio
+                    if len(seen_relations) >= 2:
+                        return
 
 
 def _find_occlusion_directed_delta_for_occluder(
@@ -6985,7 +7350,9 @@ def generate_l2_object_move(
         if reference_object_ids is not None
         else set(referable_object_ids)
     )
-    visibility_camera_pose = occlusion_camera_pose or camera_pose
+    # Kept in the public signature for legacy callers. Pairwise semantics v2
+    # deliberately ignores it and always evaluates from ``camera_pose``.
+    _ = occlusion_camera_pose
     question_attachment_graph = (
         {
             int(parent_id): [int(child_id) for child_id in child_ids]
@@ -7064,74 +7431,11 @@ def generate_l2_object_move(
     else:
         _debug_log = None
         _debug_lock = None
-    occlusion_enabled = (
+    pairwise_occlusion_enabled = (
         enable_occlusion
         and color_intrinsics is not None
-        and ray_caster is not None
         and instance_mesh_data is not None
     )
-    compare_backend = None
-    original_visibility: dict[int, tuple[str | None, str, str, _L1OcclusionMetrics]] = {}
-    occlusion_source_objects = movement_scene_objects
-    occlusion_allowed_ids = {int(o["id"]) for o in movement_scene_objects}
-    if occlusion_enabled:
-        if (
-            max_occlusion_objects is not None
-            and max_occlusion_objects >= 0
-            and len(movement_scene_objects) > max_occlusion_objects
-        ):
-            has_chain = [
-                obj
-                for obj in movement_scene_objects
-                if len(get_attachment_chain_ids(int(obj["id"]), attachment_graph)) > 0
-            ]
-            has_chain_ids = {int(obj["id"]) for obj in has_chain}
-            no_chain = [
-                obj
-                for obj in movement_scene_objects
-                if int(obj["id"]) not in has_chain_ids
-            ]
-            occlusion_source_objects = has_chain[:max_occlusion_objects]
-            remaining = max_occlusion_objects - len(occlusion_source_objects)
-            if remaining > 0:
-                occlusion_source_objects.extend(no_chain[:remaining])
-        if _debug_log is not None:
-            _debug_log["occlusion_source_count"] = len(occlusion_source_objects)
-        occlusion_allowed_ids = {int(o["id"]) for o in occlusion_source_objects}
-        compare_backend = _counterfactual_occlusion_backend(
-            occlusion_backend,
-            ray_caster,
-            instance_mesh_data,
-        )
-        original_scene_context = _build_modified_scene(
-            ray_caster,
-            instance_mesh_data,
-            set(),
-        )
-        for _vis_idx, visibility_obj in enumerate(occlusion_source_objects, 1):
-            if _vis_idx == 1 or _vis_idx % 5 == 0:
-                logger.info("L2 object_move: precompute visibility %d/%d",
-                            _vis_idx, len(occlusion_source_objects))
-            metrics, source_used = _compute_l1_style_visibility_metrics_for_static_target(
-                obj=visibility_obj,
-                camera_pose=visibility_camera_pose,
-                color_intrinsics=color_intrinsics,
-                depth_image=None,
-                depth_intrinsics=None,
-                occlusion_backend=compare_backend,
-                ray_caster=ray_caster,
-                instance_mesh_data=instance_mesh_data,
-                modified_scene=original_scene_context,
-            )
-            status, reason_code, _reason_detail = _resolve_counterfactual_l1_visibility_status(
-                metrics
-            )
-            original_visibility[int(visibility_obj["id"])] = (
-                status,
-                source_used,
-                reason_code,
-                metrics,
-            )
 
     occlusion_directed_room_min, occlusion_directed_room_max = compute_room_bounds(
         movement_scene_objects, room_bounds=room_bounds,
@@ -7261,26 +7565,13 @@ def generate_l2_object_move(
                 "moved_ids": sorted(int(x) for x in moved_ids),
                 "selected_state_delta": selected_state.delta.tolist() if selected_state is not None else None,
                 "selected_state_found": selected_state is not None,
-                "occlusion_enabled": occlusion_enabled,
+                "occlusion_enabled": pairwise_occlusion_enabled,
                 "query_objects": [],
             }
             _debug_log["move_sources"].append(_move_src_entry)
         else:
             _move_src_entry = None
         state_relation_cache: dict[tuple[float, ...], dict[tuple[int, int], dict[str, Any]]] = {}
-        state_visibility_cache: dict[
-            tuple[int, tuple[float, ...]],
-            tuple[
-                str | None,
-                str,
-                str,
-                _L1OcclusionMetrics,
-                str | None,
-                str,
-                str,
-                _L1OcclusionMetrics,
-            ],
-        ] = {}
         alternative_states: _LazyStateList | None = None
         priority_query_ids = {
             int(child_id)
@@ -7310,37 +7601,6 @@ def generate_l2_object_move(
                 )
                 state_relation_cache[delta_key] = relation_map
             return relation_map
-
-        def _visibility_for_state(
-            query_obj: dict[str, Any],
-            state: _SelectedObjectMoveState,
-        ) -> tuple[
-            str | None,
-            str,
-            str,
-            _L1OcclusionMetrics,
-            str | None,
-            str,
-            str,
-            _L1OcclusionMetrics,
-        ]:
-            delta_key = _delta_key(state.delta)
-            cache_key = (int(query_obj["id"]), delta_key)
-            visibility = state_visibility_cache.get(cache_key)
-            if visibility is None:
-                visibility = _query_visibility_for_object_move_state(
-                    query_obj=query_obj,
-                    original_objects=movement_scene_objects,
-                    selected_state=state,
-                    original_visibility=original_visibility,
-                    camera_pose=visibility_camera_pose,
-                    color_intrinsics=color_intrinsics,
-                    compare_backend=compare_backend,
-                    ray_caster=ray_caster,
-                    instance_mesh_data=instance_mesh_data,
-                )
-                state_visibility_cache[cache_key] = visibility
-            return visibility
 
         def _fallback_states() -> _LazyStateList:
             nonlocal alternative_states
@@ -7530,321 +7790,267 @@ def generate_l2_object_move(
                     "distance_generated": 0,  # filled below
                 })
 
-            occlusion_state: _SelectedObjectMoveState | None = None
-            occlusion_visibility: tuple[
-                str | None,
-                str,
-                str,
-                _L1OcclusionMetrics,
-                str | None,
-                str,
-                str,
-                _L1OcclusionMetrics,
-            ] | None = None
-            occlusion_counterfactual_min_in_frame_corners = 6
-            occlusion_counterfactual_corner_failures: list[dict[str, Any]] = []
-            moved_query_obj_id = int(query_obj["id"])
+            # Pairwise occlusion is evaluated from the movement frame.  The
+            # reference object is static and is supplied by the deferred
+            # frame-2 referability pool; it is deliberately not required to be
+            # an attachment descendant.
+            if pairwise_occlusion_enabled and enable_occlusion:
+                reference_candidates = [
+                    obj_map[int(ref_id)]
+                    for ref_id in sorted(allowed_reference_ids)
+                    if int(ref_id) in obj_map
+                    and int(ref_id) not in moved_ids
+                    and int(ref_id) != query_obj_id
+                ]
+                query_center = np.asarray(query_obj["center"], dtype=np.float64)
+                reference_candidates = [
+                    ref_obj for ref_obj in reference_candidates
+                    if float(
+                        np.linalg.norm(
+                            np.asarray(ref_obj["center"], dtype=np.float64) - query_center
+                        )
+                    ) <= _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M
+                ]
+                reference_candidates.sort(
+                    key=lambda ref_obj: float(
+                        np.linalg.norm(
+                            np.asarray(ref_obj["center"], dtype=np.float64) - query_center
+                        )
+                    )
+                )
+                reference_limit = _PAIRWISE_OCCLUSION_MAX_REFERENCES_PER_QUERY
+                if max_occlusion_objects is not None and max_occlusion_objects != MAX_OCCLUSION_OBJECTS_AUTO:
+                    reference_limit = min(reference_limit, max(0, int(max_occlusion_objects)))
+                reference_candidates = reference_candidates[:reference_limit]
 
-            def _target_in_frame_for_state(
-                candidate_state: _SelectedObjectMoveState,
-            ) -> tuple[bool, int, int]:
-                moved_map = {int(obj["id"]): obj for obj in candidate_state.moved_objects}
-                candidate_target = moved_map.get(moved_query_obj_id, query_obj)
-                visible_corners, total_corners = _bbox_in_frame_corner_count(
-                    candidate_target,
-                    visibility_camera_pose,
-                    color_intrinsics,
-                )
-                return (
-                    visible_corners >= occlusion_counterfactual_min_in_frame_corners,
-                    visible_corners,
-                    total_corners,
-                )
+                def _pair_in_frame(obj: dict[str, Any], delta: np.ndarray) -> bool:
+                    moved_obj = obj
+                    if np.any(np.asarray(delta, dtype=np.float64)):
+                        moved_obj = dict(obj)
+                        bbox_min, bbox_max = _translated_bbox(obj, np.asarray(delta, dtype=np.float64))
+                        moved_obj["bbox_min"] = bbox_min.tolist()
+                        moved_obj["bbox_max"] = bbox_max.tolist()
+                    visible_corners, total_corners = _bbox_in_frame_corner_count(
+                        moved_obj,
+                        camera_pose,
+                        color_intrinsics,
+                    )
+                    return total_corners > 0 and visible_corners >= 6
 
-            occlusion_target_in_frame = (
-                occlusion_enabled
-                and color_intrinsics is not None
-                and _bbox_fully_in_frame(
-                    query_obj, visibility_camera_pose, color_intrinsics
-                )
-            )
-            if (
-                occlusion_enabled
-                and compare_backend is not None
-                and move_source_id in occlusion_allowed_ids
-                and occlusion_target_in_frame
-            ):
-                occlusion_unchanged_fallback: tuple[
-                    _SelectedObjectMoveState,
-                    tuple[
-                        str | None,
-                        str,
-                        str,
-                        _L1OcclusionMetrics,
-                        str | None,
-                        str,
-                        str,
-                        _L1OcclusionMetrics,
-                    ],
-                ] | None = None
-                if selected_state is not None:
-                    target_ok, visible_corners, total_corners = _target_in_frame_for_state(selected_state)
-                    if target_ok:
-                        visibility = _visibility_for_state(query_obj, selected_state)
-                        if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
-                            occlusion_state = selected_state
-                            occlusion_visibility = visibility
-                        elif _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4]):
-                            occlusion_unchanged_fallback = (selected_state, visibility)
-                    else:
-                        occlusion_counterfactual_corner_failures.append({
-                            "delta": selected_state.delta.tolist(),
-                            "visible_corner_count": int(visible_corners),
-                            "total_corner_count": int(total_corners),
-                            "used_changed_delta": bool(selected_state.used_changed_delta),
-                        })
-                if (
-                    occlusion_state is None
-                    and original_visibility.get(query_obj_id, (None,))[0] == "not occluded"
-                    and _occlusion_directed_changed_count < OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE
-                    and _occlusion_directed_candidates_tried[0] < _occlusion_directed_max_candidates_tried
-                ):
-                    # Phase 1.5: occluder-directed search, aimed at a specific
-                    # nearby object's geometry instead of a blind grid walk.
-                    # Only attempted for "not occluded" originals, and accepted
-                    # strictly on "occluded" (not the general state-transition
-                    # check), since the whole point is to stop over-producing
-                    # "not visible" outcomes -- if a candidate resolves to
-                    # "not visible" it falls through to the next occluder, and
-                    # ultimately to the unchanged Phase 2 blind fallback below.
-                    for candidate_state in _iter_occlusion_directed_object_move_states(
+                zero_delta = np.zeros(3, dtype=np.float64)
+                for ref_obj in reference_candidates:
+                    if _has_duplicate_labels_for_distinct_objects(move_source, query_obj, ref_obj):
+                        continue
+                    if not _pair_in_frame(query_obj, zero_delta) or not _pair_in_frame(ref_obj, zero_delta):
+                        continue
+                    old_relation, old_query_ratio, old_ref_ratio = _pairwise_occlusion_relation_after_move(
                         query_obj=query_obj,
-                        move_source_id=move_source_id,
-                        moved_ids=moved_ids,
-                        movement_scene_objects=movement_scene_objects,
-                        occlusion_source_objects=occlusion_source_objects,
-                        original_visibility=original_visibility,
-                        attachment_graph=attachment_graph,
-                        camera_pose=visibility_camera_pose,
+                        ref_obj=ref_obj,
+                        query_delta=zero_delta,
+                        ref_delta=zero_delta,
+                        camera_pose=camera_pose,
                         color_intrinsics=color_intrinsics,
                         instance_mesh_data=instance_mesh_data,
-                        room_min=occlusion_directed_room_min,
-                        room_max=occlusion_directed_room_max,
-                        collision_objects=collision_objects,
-                        candidates_tried_counter=_occlusion_directed_candidates_tried,
-                        max_candidates_tried=_occlusion_directed_max_candidates_tried,
-                    ):
-                        target_ok, visible_corners, total_corners = _target_in_frame_for_state(candidate_state)
-                        if not target_ok:
-                            occlusion_counterfactual_corner_failures.append({
-                                "delta": candidate_state.delta.tolist(),
-                                "visible_corner_count": int(visible_corners),
-                                "total_corner_count": int(total_corners),
-                                "used_changed_delta": bool(candidate_state.used_changed_delta),
-                            })
+                    )
+                    if old_relation is None:
+                        continue
+
+                    changed_record: dict[str, Any] | None = None
+                    unchanged_record: dict[str, Any] | None = None
+                    seen_state_deltas: set[tuple[float, ...]] = set()
+                    candidate_states: list[_SelectedObjectMoveState] = []
+                    if selected_state is not None:
+                        candidate_states.append(selected_state)
+                    else:
+                        # One generic fallback is enough to supply an unchanged
+                        # candidate. Relation changes are sought by the directed
+                        # crossing scan below, which is both cheaper and more
+                        # targeted than ray-casting every grid state per ref.
+                        for candidate_state in _fallback_states():
+                            candidate_states.append(candidate_state)
+                            break
+
+                    for candidate_state in candidate_states:
+                        delta_key = _delta_key(candidate_state.delta)
+                        if delta_key in seen_state_deltas:
                             continue
-                        visibility = _visibility_for_state(query_obj, candidate_state)
-                        if visibility[4] == "occluded":
-                            occlusion_state = candidate_state
-                            occlusion_visibility = visibility
+                        seen_state_deltas.add(delta_key)
+                        moved_map = {int(obj["id"]): obj for obj in candidate_state.moved_objects}
+                        moved_query = moved_map.get(query_obj_id, query_obj)
+                        query_delta = np.asarray(candidate_state.delta, dtype=np.float64)
+                        if not _pair_in_frame(moved_query, zero_delta) or not _pair_in_frame(ref_obj, zero_delta):
+                            continue
+                        relation, query_ratio, ref_ratio = _pairwise_occlusion_relation_after_move(
+                            query_obj=query_obj,
+                            ref_obj=ref_obj,
+                            query_delta=query_delta,
+                            ref_delta=zero_delta,
+                            camera_pose=camera_pose,
+                            color_intrinsics=color_intrinsics,
+                            instance_mesh_data=instance_mesh_data,
+                        )
+                        if relation is None:
+                            continue
+                        record = {
+                            "candidate_index": len(occlusion_candidate_records),
+                            "query_obj_id": query_obj_id,
+                            "ref_obj_id": int(ref_obj["id"]),
+                            "question": None,
+                            "relation_unchanged": relation == old_relation,
+                            "old_relation": old_relation,
+                            "new_relation": relation,
+                            "old_query_blocking_ratio": old_query_ratio,
+                            "old_ref_blocking_ratio": old_ref_ratio,
+                            "new_query_blocking_ratio": query_ratio,
+                            "new_ref_blocking_ratio": ref_ratio,
+                            "move_source_id": move_source_id,
+                            "delta": query_delta.tolist(),
+                            "state": candidate_state,
+                            "query_obj": query_obj,
+                            "ref_obj": ref_obj,
+                        }
+                        if record["relation_unchanged"]:
+                            if unchanged_record is None:
+                                unchanged_record = record
+                        else:
+                            changed_record = record
+                            break
+
+                    if (
+                        changed_record is None
+                        and _occlusion_directed_changed_count
+                        < OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE
+                    ):
+                        for (
+                            candidate_state,
+                            relation,
+                            query_ratio,
+                            ref_ratio,
+                        ) in _iter_pairwise_occlusion_directed_object_move_states(
+                            query_obj=query_obj,
+                            ref_obj=ref_obj,
+                            move_source_id=move_source_id,
+                            moved_ids=moved_ids,
+                            movement_scene_objects=movement_scene_objects,
+                            attachment_graph=attachment_graph,
+                            camera_pose=camera_pose,
+                            color_intrinsics=color_intrinsics,
+                            instance_mesh_data=instance_mesh_data,
+                            room_min=occlusion_directed_room_min,
+                            room_max=occlusion_directed_room_max,
+                            collision_objects=collision_objects,
+                            old_relation=old_relation,
+                            candidates_tried_counter=_occlusion_directed_candidates_tried,
+                            max_candidates_tried=_occlusion_directed_max_candidates_tried,
+                        ):
+                            query_delta = np.asarray(candidate_state.delta, dtype=np.float64)
+                            moved_map = {
+                                int(obj["id"]): obj for obj in candidate_state.moved_objects
+                            }
+                            moved_query = moved_map.get(query_obj_id, query_obj)
+                            if not _pair_in_frame(moved_query, zero_delta):
+                                continue
+                            changed_record = {
+                                "candidate_index": len(occlusion_candidate_records),
+                                "query_obj_id": query_obj_id,
+                                "ref_obj_id": int(ref_obj["id"]),
+                                "question": None,
+                                "relation_unchanged": False,
+                                "old_relation": old_relation,
+                                "new_relation": relation,
+                                "old_query_blocking_ratio": old_query_ratio,
+                                "old_ref_blocking_ratio": old_ref_ratio,
+                                "new_query_blocking_ratio": query_ratio,
+                                "new_ref_blocking_ratio": ref_ratio,
+                                "move_source_id": move_source_id,
+                                "delta": query_delta.tolist(),
+                                "state": candidate_state,
+                                "query_obj": query_obj,
+                                "ref_obj": ref_obj,
+                            }
                             _occlusion_directed_changed_count += 1
                             break
-                        if (
-                            occlusion_unchanged_fallback is None
-                            and _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4])
-                        ):
-                            occlusion_unchanged_fallback = (candidate_state, visibility)
-                if occlusion_state is None:
-                    for candidate_state in _fallback_states():
-                        target_ok, visible_corners, total_corners = _target_in_frame_for_state(candidate_state)
-                        if not target_ok:
-                            occlusion_counterfactual_corner_failures.append({
-                                "delta": candidate_state.delta.tolist(),
-                                "visible_corner_count": int(visible_corners),
-                                "total_corner_count": int(total_corners),
-                                "used_changed_delta": bool(candidate_state.used_changed_delta),
-                            })
-                            continue
-                        visibility = _visibility_for_state(query_obj, candidate_state)
-                        if _is_l2_occlusion_state_transition(visibility[0], visibility[4]):
-                            occlusion_state = candidate_state
-                            occlusion_visibility = visibility
-                            break
-                        if (
-                            occlusion_unchanged_fallback is None
-                            and _is_l2_occlusion_unchanged_candidate(visibility[0], visibility[4])
-                        ):
-                            occlusion_unchanged_fallback = (candidate_state, visibility)
-                    if occlusion_state is None and occlusion_unchanged_fallback is not None:
-                        occlusion_state = occlusion_unchanged_fallback[0]
-                        occlusion_visibility = occlusion_unchanged_fallback[1]
-                if (
-                    occlusion_state is None
-                    and occlusion_counterfactual_corner_failures
-                ):
-                    best_failure = max(
-                        occlusion_counterfactual_corner_failures,
-                        key=lambda item: (int(item["visible_corner_count"]), -abs(float(item["delta"][0])) - abs(float(item["delta"][1])) - abs(float(item["delta"][2]))),
-                    )
-                    _emit_generator_candidate(
-                        trace_recorder,
-                        trace_detail=trace_detail,
-                        generator="generate_l2_object_move",
-                        candidate_kind="object_move_occlusion_target",
-                        candidate_key=_candidate_key(move_source_id, query_obj_id),
-                        object_ids=[move_source_id, query_obj_id],
-                        status="skipped",
-                        reason_code="occlusion_target_not_enough_in_frame_after_move",
-                        reason_detail=(
-                            "counterfactual target object's bbox does not keep enough projected "
-                            "corners inside the image after movement for a reliable occlusion question"
-                        ),
-                        evidence={
-                            "target_obj_id": query_obj_id,
-                            "required_corner_count": occlusion_counterfactual_min_in_frame_corners,
-                            "visible_corner_count": int(best_failure["visible_corner_count"]),
-                            "total_corner_count": int(best_failure["total_corner_count"]),
-                            "delta": best_failure["delta"],
-                            "used_changed_delta": bool(best_failure["used_changed_delta"]),
-                        },
-                    )
-            elif (
-                occlusion_enabled
-                and compare_backend is not None
-                and move_source_id in occlusion_allowed_ids
-                and not occlusion_target_in_frame
-            ):
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l2_object_move",
-                    candidate_kind="object_move_occlusion_target",
-                    candidate_key=_candidate_key(move_source_id, query_obj_id),
-                    object_ids=[move_source_id, query_obj_id],
-                    status="skipped",
-                    reason_code="occlusion_target_not_fully_in_frame",
-                    reason_detail=(
-                        "target object's bbox is not fully inside the image frame in the "
-                        "original scene, so its full extent is not visible; the occlusion "
-                        "outcome after moving would be underdetermined from the input image"
-                    ),
-                    evidence={
-                        "target_obj_id": query_obj_id,
-                        "required_corner_count": 8,
-                        "visible_corner_count": _bbox_in_frame_corner_count(
-                            query_obj,
-                            visibility_camera_pose,
-                            color_intrinsics,
-                        )[0],
-                        "total_corner_count": _bbox_in_frame_corner_count(
-                            query_obj,
-                            visibility_camera_pose,
-                            color_intrinsics,
-                        )[1],
-                    },
-                )
 
-            if occlusion_state is not None and occlusion_visibility is not None:
-                (
-                    query_old_status,
-                    query_old_source,
-                    query_old_reason_code,
-                    query_old_metrics,
-                    query_new_status,
-                    query_new_source,
-                    query_new_reason_code,
-                    query_new_metrics,
-                ) = occlusion_visibility
-                assert query_old_status is not None
-                assert query_new_status is not None
-                relation_unchanged = query_old_status == query_new_status
-                delta = occlusion_state.delta
-                direction_desc = _delta_to_description(delta, camera_pose)
-                distance_desc = f"{np.linalg.norm(delta):.1f}m"
-                tpl_list = templates.get(
-                    "L2_object_move_occlusion",
-                    _default_templates()["L2_object_move_occlusion"],
-                )
-                tpl = random.choice(tpl_list)
-                question_text = tpl.format(
-                    obj_a=_the(move_source["label"]),
-                    direction=direction_desc,
-                    direction_with_camera_hint=_direction_with_camera_hint(direction_desc),
-                    distance=distance_desc,
-                    obj_b=_the(query_obj["label"]),
-                    obj_target=_the(query_obj["label"]),
-                )
-                question_text = _with_occlusion_definition(question_text)
-                query_old_status_display = _l2_object_move_occlusion_display_status(query_old_status)
-                query_new_status_display = _l2_object_move_occlusion_display_status(query_new_status)
-                options, answer = generate_options(
-                    query_new_status_display,
-                    L2_OBJECT_MOVE_OCCLUSION_STATES,
-                    n_options=3,
-                )
-                occlusion_dict: dict[str, Any] = {
-                    "level": "L2",
-                    "type": "object_move_occlusion",
-                    "question": question_text,
-                    "options": options,
-                    "answer": answer,
-                    "correct_value": query_new_status_display,
-                    "old_correct_value": query_old_status_display,
-                    "new_correct_value": query_new_status_display,
-                    "old_visibility": query_old_status_display,
-                    "new_visibility": query_new_status_display,
-                    "old_visibility_source": query_old_source,
-                    "new_visibility_source": query_new_source,
-                    "old_visibility_resolution": query_old_reason_code,
-                    "new_visibility_resolution": query_new_reason_code,
-                    "old_visibility_metrics": _l1_occlusion_metrics_payload(query_old_metrics),
-                    "new_visibility_metrics": _l1_occlusion_metrics_payload(query_new_metrics),
-                    "moved_obj_id": move_source_id,
-                    "moved_obj_label": move_source["label"],
-                    "target_obj_id": query_obj_id,
-                    "target_obj_label": query_obj["label"],
-                    "query_obj_id": query_obj_id,
-                    "query_obj_label": query_obj["label"],
-                    "attachment_remapped": attachment_remapped,
-                    "obj_b_id": query_obj_id,
-                    "obj_b_label": query_obj["label"],
-                    "relation_unchanged": relation_unchanged,
-                    "mentioned_objects": [
-                        _mention("moved_object", move_source["label"], move_source_id),
-                        _mention("target_object", query_obj["label"], query_obj_id),
-                    ],
-                    "delta": delta.tolist(),
-                    "has_attachment_chain": has_attachment_chain,
-                }
-                if is_priority_query:
-                    occlusion_dict["attachment_priority_pair"] = True
-                    occlusion_dict["attachment_pair_id"] = f"{move_source_id}->{query_obj_id}"
-                    occlusion_dict["attachment_parent_id"] = move_source_id
-                    occlusion_dict["attachment_child_id"] = query_obj_id
-                if attachment_remapped:
-                    direct_children = question_attachment_graph.get(move_source_id, [])
-                    if direct_children:
-                        occlusion_dict.setdefault("attachment_pair_id", f"{move_source_id}->{direct_children[0]}")
-                        occlusion_dict.setdefault("attachment_parent_id", move_source_id)
-                        occlusion_dict.setdefault("attachment_child_id", direct_children[0])
-                occlusion_candidate_records.append({
-                    "candidate_index": len(occlusion_candidate_records),
-                    "query_obj_id": query_obj_id,
-                    "question": occlusion_dict,
-                    "relation_unchanged": relation_unchanged,
-                    "old_status": query_old_status,
-                    "new_status": query_new_status,
-                    "old_source": query_old_source,
-                    "new_source": query_new_source,
-                    "old_reason_code": query_old_reason_code,
-                    "new_reason_code": query_new_reason_code,
-                    "old_metrics": query_old_metrics,
-                    "new_metrics": query_new_metrics,
-                    "delta": delta.tolist(),
-                    "move_source_id": move_source_id,
-                    "query_obj_id": query_obj_id,
-                    "attachment_priority_pair": is_priority_query,
-                })
+                    selected_record = changed_record or unchanged_record
+                    if selected_record is None:
+                        continue
+                    delta = np.asarray(selected_record["delta"], dtype=np.float64)
+                    query_label = str(query_obj.get("label", "object"))
+                    ref_label = str(ref_obj.get("label", "object"))
+                    old_relation = str(selected_record["old_relation"])
+                    new_relation = str(selected_record["new_relation"])
+                    old_value = _pairwise_occlusion_option_text(old_relation, query_label, ref_label)
+                    new_value = _pairwise_occlusion_option_text(new_relation, query_label, ref_label)
+                    answer_pool = [
+                        _pairwise_occlusion_option_text(relation, query_label, ref_label)
+                        for relation in L2_OBJECT_MOVE_OCCLUSION_RELATIONS
+                    ]
+                    options, answer = generate_options(new_value, answer_pool, n_options=3)
+                    tpl_list = templates.get(
+                        "L2_object_move_occlusion",
+                        _default_templates()["L2_object_move_occlusion"],
+                    )
+                    question_text = random.choice(tpl_list).format(
+                        obj_move_source=_the(move_source["label"]),
+                        obj_a=_the(move_source["label"]),
+                        obj_query=_the(query_label),
+                        obj_b=_the(query_label),
+                        obj_ref=_the(ref_label),
+                        obj_c=_the(ref_label),
+                        direction_with_camera_hint=_direction_with_camera_hint(
+                            _delta_to_description(delta, camera_pose)
+                        ),
+                        direction=_delta_to_description(delta, camera_pose),
+                        distance=f"{np.linalg.norm(delta):.1f}m",
+                    )
+                    question_text = _with_occlusion_definition(question_text)
+                    occlusion_dict: dict[str, Any] = {
+                        "level": "L2",
+                        "type": "object_move_occlusion",
+                        "occlusion_semantics_version": L2_OBJECT_MOVE_OCCLUSION_SEMANTICS_VERSION,
+                        "question": question_text,
+                        "options": options,
+                        "answer": answer,
+                        "correct_value": new_value,
+                        "old_correct_value": old_value,
+                        "new_correct_value": new_value,
+                        "old_pairwise_occlusion_relation": old_relation,
+                        "new_pairwise_occlusion_relation": new_relation,
+                        "pairwise_occlusion_relation": new_relation,
+                        "moved_obj_id": move_source_id,
+                        "moved_obj_label": move_source["label"],
+                        "query_obj_id": query_obj_id,
+                        "query_obj_label": query_label,
+                        "target_obj_id": query_obj_id,
+                        "target_obj_label": query_label,
+                        "obj_b_id": query_obj_id,
+                        "obj_b_label": query_label,
+                        "obj_ref_id": int(ref_obj["id"]),
+                        "obj_ref_label": ref_label,
+                        "obj_c_id": int(ref_obj["id"]),
+                        "obj_c_label": ref_label,
+                        "attachment_remapped": attachment_remapped,
+                        "relation_unchanged": bool(selected_record["relation_unchanged"]),
+                        "old_query_blocking_ratio": selected_record["old_query_blocking_ratio"],
+                        "old_ref_blocking_ratio": selected_record["old_ref_blocking_ratio"],
+                        "new_query_blocking_ratio": selected_record["new_query_blocking_ratio"],
+                        "new_ref_blocking_ratio": selected_record["new_ref_blocking_ratio"],
+                        "mentioned_objects": [
+                            _mention("moved_object", move_source["label"], move_source_id),
+                            _mention("query_object", query_label, query_obj_id),
+                            _mention("reference_object", ref_label, int(ref_obj["id"])),
+                        ],
+                        "delta": delta.tolist(),
+                        "has_attachment_chain": has_attachment_chain,
+                    }
+                    if attachment_remapped:
+                        direct_children = question_attachment_graph.get(move_source_id, [])
+                        if direct_children:
+                            occlusion_dict["attachment_pair_id"] = f"{move_source_id}->{direct_children[0]}"
+                            occlusion_dict["attachment_parent_id"] = move_source_id
+                            occlusion_dict["attachment_child_id"] = direct_children[0]
+                    selected_record["question"] = occlusion_dict
+                    occlusion_candidate_records.append(selected_record)
 
             _dist_before = len(query_obj_questions)
             if enable_distance:
@@ -7888,7 +8094,7 @@ def generate_l2_object_move(
                 questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
 
         # --- Memory cleanup between source objects ---
-        del state_relation_cache, state_visibility_cache, alternative_states
+        del state_relation_cache, alternative_states
         _inst_dict = (
             getattr(instance_mesh_data, "__dict__", None)
             if instance_mesh_data is not None
@@ -10048,8 +10254,14 @@ def _cross_frame_layout_for_question(
     specs = CROSS_FRAME_LAYOUTS.get(str(question.get("type", "")).strip().lower(), ())
     if not specs:
         return None
-    if layout_id is None and len(specs) == 1:
-        return specs[0]
+    if layout_id is None:
+        if len(specs) == 1:
+            return specs[0]
+        if str(question.get("type", "")).strip().lower() == "object_move_occlusion":
+            # Presence of obj_ref_id is the unambiguous v2 marker; old
+            # questions have only target_obj_id and retain their old split.
+            preferred = "source_query_to_ref" if question.get("obj_ref_id") is not None else "source_to_target"
+            return next((spec for spec in specs if spec.layout_id == preferred), specs[0])
     return next((spec for spec in specs if spec.layout_id == layout_id), None)
 
 
@@ -10180,6 +10392,8 @@ def generate_cross_frame_questions(
         move_agent_types.add("object_move_agent")
     if "L2_object_move_distance" in requested:
         move_agent_types.add("object_move_distance")
+    if "L2_object_move_occlusion" in requested:
+        move_agent_types.add("object_move_occlusion")
     if move_agent_types:
         batch = generate_l2_object_move(
             ordinary_pool, attachment_graph, attached_by, frame_1.camera_pose, templates,
@@ -10196,26 +10410,6 @@ def generate_cross_frame_questions(
             max_occlusion_objects=max_occlusion_objects,
             max_move_sources=max_move_sources,
             reuse_move_state_for_distance=True,
-        )
-        questions.extend(_annotate_cross_frame_questions(
-            batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
-        ))
-
-    if "L2_object_move_occlusion" in requested and color_intrinsics is not None:
-        batch = generate_l2_object_move(
-            ordinary_pool, attachment_graph, attached_by, frame_1.camera_pose, templates,
-            room_bounds=room_bounds, collision_objects=collision_pool,
-            movement_objects=movement_objects, object_map=object_map,
-            color_intrinsics=color_intrinsics, occlusion_backend=occlusion_backend,
-            ray_caster=ray_caster, instance_mesh_data=instance_mesh_data,
-            attachment_referable_object_ids=sorted(source_ids),
-            attachment_query_objects=frame_2_regular,
-            move_source_object_ids=source_ids,
-            occlusion_camera_pose=frame_2.camera_pose,
-            candidate_attachment_graph=attachment_graph,
-            enabled_l2_object_move_types={"object_move_occlusion"},
-            max_occlusion_objects=max_occlusion_objects,
-            max_move_sources=max_move_sources,
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,

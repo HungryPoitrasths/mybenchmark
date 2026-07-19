@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.datasets import make_data_source
-from src.qa_generator import _bbox_fully_in_frame
+from src.qa_generator import _bbox_fully_in_frame, _bbox_in_frame_corner_count
 
 SCANNET_RE = re.compile(r"scene\d{4}_\d{2}")
 SCANNETPP_RE = re.compile(r"[0-9a-f]{8,}$")
@@ -81,7 +81,9 @@ def main() -> None:
         scene_id = str(q.get("scene_id"))
         image_name = str(q.get("image_name"))
         trace_qid = q.get("trace_question_id")
-        target_obj_id = q.get("target_obj_id")
+        semantics_v2 = str(q.get("occlusion_semantics_version", "")).strip() == "2"
+        target_obj_id = q.get("query_obj_id", q.get("target_obj_id"))
+        ref_obj_id = q.get("obj_ref_id")
         if time.perf_counter() - last_log_at >= heartbeat_seconds:
             elapsed = time.perf_counter() - started_at
             print(
@@ -96,6 +98,11 @@ def main() -> None:
             target_obj_id_int = int(target_obj_id)
         except (TypeError, ValueError):
             errors.append((trace_qid, scene_id, image_name, "invalid target_obj_id"))
+            continue
+        try:
+            ref_obj_id_int = int(ref_obj_id) if semantics_v2 else None
+        except (TypeError, ValueError):
+            errors.append((trace_qid, scene_id, image_name, "invalid obj_ref_id"))
             continue
 
         metrics = q.get("old_visibility_metrics")
@@ -133,16 +140,22 @@ def main() -> None:
 
             obj_by_id, intrinsics, poses = cache[scene_id]
             target_obj = obj_by_id.get(target_obj_id_int)
+            ref_obj = obj_by_id.get(ref_obj_id_int) if ref_obj_id_int is not None else None
             camera_pose = poses.get(image_name)
-            if target_obj is None or camera_pose is None:
+            if target_obj is None or camera_pose is None or (semantics_v2 and ref_obj is None):
                 errors.append((
                     trace_qid,
                     scene_id,
                     image_name,
-                    f"missing obj={target_obj is None} pose={camera_pose is None}",
+                    f"missing query={target_obj is None} ref={semantics_v2 and ref_obj is None} pose={camera_pose is None}",
                 ))
                 continue
-            in_frame = _bbox_fully_in_frame(target_obj, camera_pose, intrinsics)
+            if semantics_v2:
+                query_visible, _ = _bbox_in_frame_corner_count(target_obj, camera_pose, intrinsics)
+                ref_visible, _ = _bbox_in_frame_corner_count(ref_obj, camera_pose, intrinsics)
+                in_frame = query_visible >= 6 and ref_visible >= 6
+            else:
+                in_frame = _bbox_fully_in_frame(target_obj, camera_pose, intrinsics)
             if in_frame:
                 if trace_qid is not None:
                     kept.append(trace_qid)

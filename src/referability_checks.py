@@ -362,8 +362,16 @@ def _question_referability_role_ids(
         )
         ordinary_fields = ("obj_ref_id",)
     elif question_type == "object_move_occlusion":
-        attachment_fields = ("moved_obj_id", "query_obj_id", "target_obj_id")
-        ordinary_fields = ()
+        # Semantics v2 has three distinct roles: the moved support/root and
+        # its attachment query are attachment roles; the independent reference
+        # object is an ordinary referable. ``target_obj_id`` remains only as a
+        # compatibility alias for legacy v1 records.
+        if question.get("obj_ref_id") is None:
+            attachment_fields = ("moved_obj_id", "query_obj_id", "target_obj_id")
+            ordinary_fields = ()
+        else:
+            attachment_fields = ("moved_obj_id", "query_obj_id")
+            ordinary_fields = ("obj_ref_id",)
     elif question_type in {
         "object_move_object_centric",
         "object_move_allocentric",

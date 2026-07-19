@@ -211,11 +211,14 @@ SIMPLE_VIEWER_FIELD_SPECS: dict[
     "object_move_occlusion": {
         "objects": [
             ("moved", ("moved_obj_label",)),
-            ("target", ("query_obj_label", "target_obj_label")),
+            ("query", ("query_obj_label", "target_obj_label")),
+            ("reference", ("obj_ref_label", "obj_c_label")),
         ],
         "relations": [
-            ("old_visibility", ("old_visibility", "old_correct_value")),
-            ("new_visibility", ("new_visibility", "new_correct_value", "correct_value")),
+            ("old_relation", ("old_pairwise_occlusion_relation", "old_correct_value")),
+            ("new_relation", ("new_pairwise_occlusion_relation", "new_correct_value", "correct_value")),
+            ("old_visibility", ("old_visibility",)),
+            ("new_visibility", ("new_visibility",)),
         ],
     },
     "object_move_object_centric": {
