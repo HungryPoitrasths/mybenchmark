@@ -5233,7 +5233,7 @@ def run_pipeline(
     max_questions_per_scene_type: int | None = None,
     max_occlusion_objects: int | str | None = MAX_OCCLUSION_OBJECTS_AUTO,
     max_move_sources: int | None = None,
-    auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
+    auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
 ):
     """Execute the full PSR-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -6490,6 +6490,9 @@ def run_pipeline(
                     elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
                         question["auxiliary_route"] = {
                             "method": auxiliary_route_method,
+                            "search_method": getattr(
+                                question_route, "search_method", "legacy_greedy_backtracking"
+                            ),
                             "edge_count": question_route.edge_count,
                             "cost": question_route.cost,
                             "route_sample_count": question_route.route_sample_count,
@@ -6500,6 +6503,23 @@ def run_pipeline(
                             ),
                             "transition_overlap_fraction": (
                                 question_route.transition_overlap_fraction
+                            ),
+                            "min_progress_fraction": getattr(
+                                question_route, "min_progress_fraction", None
+                            ),
+                            "near_duplicate_translation_m": getattr(
+                                question_route, "near_duplicate_translation_m", None
+                            ),
+                            "near_duplicate_rotation_deg": getattr(
+                                question_route, "near_duplicate_rotation_deg", None
+                            ),
+                            "pre_prune_auxiliary_count": getattr(
+                                question_route,
+                                "pre_prune_auxiliary_count",
+                                len(question_route.auxiliary_image_names),
+                            ),
+                            "pruned_auxiliary_frame_count": getattr(
+                                question_route, "pruned_auxiliary_frame_count", 0
                             ),
                         }
                     else:
@@ -7127,12 +7147,13 @@ def main():
         "--auxiliary_route_method",
         type=str,
         choices=AUXILIARY_ROUTE_METHODS,
-        default=AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
+        default=AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
         help=(
             "Auxiliary-frame routing for cross-frame questions. "
             "visual_pose_graph uses the current per-scene ORB/RANSAC pose graph; "
-            "legacy_geometric uses per-question A-to-B route projection while "
-            "excluding route portions already covered by the two main frames; "
+            "legacy_geometric uses per-question global Dijkstra search over A-to-B "
+            "route projection while excluding portions already covered by the two "
+            "main frames; "
             "hybrid_geometric_visual adds reciprocal ORB plus Fundamental/Homography "
             "verification and role-aware semantic gating to that per-question route."
         ),

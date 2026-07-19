@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from src.auxiliary_path import AuxiliaryRoute, VisualPoseEdge, VisualPoseGraph
-from src.legacy_auxiliary_path import find_geometric_auxiliary_route, object_group_center
+from src.legacy_auxiliary_path import (
+    _prune_auxiliary_names,
+    find_geometric_auxiliary_route,
+    object_group_center,
+)
 from src.qa_generator import (
     ReasoningFrameContext,
     _annotate_cross_frame_questions,
@@ -254,6 +259,8 @@ def test_geometric_route_starts_after_frame_a_coverage(monkeypatch) -> None:
     assert route.frame_a_coverage_end == pytest.approx(1.0 / 3.0)
     assert route.frame_b_coverage_start == pytest.approx(2.0 / 3.0)
     assert route.auxiliary_responsibility_fraction == pytest.approx(1.0 / 3.0)
+    assert route.search_method == "dijkstra_lexicographic"
+    assert route.min_progress_fraction == pytest.approx(1.0 / 9.0)
 
 
 def test_geometric_route_group_center_falls_back_to_bbox() -> None:
@@ -291,3 +298,126 @@ def test_geometric_route_uses_no_auxiliary_when_main_frames_connect(monkeypatch)
     assert route is not None
     assert route.auxiliary_image_names == ()
     assert route.auxiliary_responsibility_fraction == 0.0
+
+
+def test_geometric_route_dijkstra_escapes_greedy_dead_end(monkeypatch) -> None:
+    names = ["main_a.jpg", "decoy.jpg", "bridge_1.jpg", "bridge_2.jpg", "main_b.jpg"]
+    poses = {name: make_pose(name) for name in names}
+    masks = {
+        "main_a.jpg": np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0], dtype=bool),
+        "decoy.jpg": np.array([0, 0, 1, 1, 1, 1, 1, 1, 0, 0], dtype=bool),
+        "bridge_1.jpg": np.array([0, 0, 1, 1, 1, 1, 1, 0, 0, 0], dtype=bool),
+        "bridge_2.jpg": np.array([0, 0, 0, 0, 0, 1, 1, 1, 1, 0], dtype=bool),
+        "main_b.jpg": np.array([0, 0, 0, 0, 0, 0, 0, 1, 1, 1], dtype=bool),
+    }
+    angles = {
+        "main_a.jpg": 0.0,
+        "decoy.jpg": 50.0,
+        "bridge_1.jpg": -30.0,
+        "bridge_2.jpg": -50.0,
+        "main_b.jpg": -50.0,
+    }
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path.route_visibility_mask",
+        lambda _points, pose, _intrinsics: masks[pose.image_name],
+    )
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path._unit_forward",
+        lambda pose: np.array([
+            math.sin(math.radians(angles[pose.image_name])),
+            0.0,
+            math.cos(math.radians(angles[pose.image_name])),
+        ]),
+    )
+
+    route = find_geometric_auxiliary_route(
+        center_a=np.array([0.0, 0.0, 2.0]),
+        center_b=np.array([0.9, 0.0, 2.0]),
+        frame_a_name="main_a.jpg",
+        frame_b_name="main_b.jpg",
+        poses=poses,
+        intrinsics=make_intrinsics(),
+        min_overlap_frac=0.1,
+        max_backtrack=0,
+    )
+
+    assert route is not None
+    assert route.auxiliary_image_names == ("bridge_1.jpg", "bridge_2.jpg")
+
+
+def test_geometric_route_minimizes_total_redundant_overlap(monkeypatch) -> None:
+    names = ["main_a.jpg", "high_overlap.jpg", "low_overlap.jpg", "main_b.jpg"]
+    poses = {name: make_pose(name) for name in names}
+    masks = {
+        "main_a.jpg": np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0], dtype=bool),
+        "high_overlap.jpg": np.ones(10, dtype=bool),
+        "low_overlap.jpg": np.array([0, 0, 1, 1, 1, 1, 1, 1, 1, 0], dtype=bool),
+        "main_b.jpg": np.array([0, 0, 0, 0, 0, 0, 0, 1, 1, 1], dtype=bool),
+    }
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path.route_visibility_mask",
+        lambda _points, pose, _intrinsics: masks[pose.image_name],
+    )
+
+    route = find_geometric_auxiliary_route(
+        center_a=np.array([0.0, 0.0, 2.0]),
+        center_b=np.array([0.9, 0.0, 2.0]),
+        frame_a_name="main_a.jpg",
+        frame_b_name="main_b.jpg",
+        poses=poses,
+        intrinsics=make_intrinsics(),
+        min_overlap_frac=0.1,
+    )
+
+    assert route is not None
+    assert route.auxiliary_image_names == ("low_overlap.jpg",)
+
+
+def test_geometric_route_enforces_minimum_progress(monkeypatch) -> None:
+    names = ["main_a.jpg", "tiny_step.jpg", "main_b.jpg"]
+    poses = {name: make_pose(name) for name in names}
+    masks = {
+        "main_a.jpg": np.array([1] * 11 + [0] * 29, dtype=bool),
+        "tiny_step.jpg": np.array([0] * 6 + [1] * 6 + [0] * 28, dtype=bool),
+        "main_b.jpg": np.array([0] * 7 + [1] * 33, dtype=bool),
+    }
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path.route_visibility_mask",
+        lambda _points, pose, _intrinsics: masks[pose.image_name],
+    )
+    kwargs = {
+        "center_a": np.array([0.0, 0.0, 2.0]),
+        "center_b": np.array([4.0, 0.0, 2.0]),
+        "frame_a_name": "main_a.jpg",
+        "frame_b_name": "main_b.jpg",
+        "poses": poses,
+        "intrinsics": make_intrinsics(),
+        "min_overlap_frac": 0.1,
+    }
+
+    assert find_geometric_auxiliary_route(**kwargs, min_progress_frac=0.05) is None
+    route = find_geometric_auxiliary_route(**kwargs, min_progress_frac=0.02)
+    assert route is not None
+    assert route.auxiliary_image_names == ("tiny_step.jpg",)
+
+
+def test_auxiliary_pruning_checks_near_pose_and_route_validity() -> None:
+    poses = {
+        "main_a.jpg": make_pose("main_a.jpg", 0.0),
+        "near.jpg": make_pose("near.jpg", 0.05),
+        "far_redundant.jpg": make_pose("far_redundant.jpg", 0.8),
+        "needed.jpg": make_pose("needed.jpg", 1.4),
+        "main_b.jpg": make_pose("main_b.jpg", 2.0),
+    }
+
+    pruned = _prune_auxiliary_names(
+        ("near.jpg", "far_redundant.jpg", "needed.jpg"),
+        frame_a_name="main_a.jpg",
+        frame_b_name="main_b.jpg",
+        poses=poses,
+        route_is_valid=lambda names: "needed.jpg" in names,
+        near_duplicate_translation_m=0.12,
+        near_duplicate_rotation_deg=6.0,
+    )
+
+    assert pruned == ("needed.jpg",)
