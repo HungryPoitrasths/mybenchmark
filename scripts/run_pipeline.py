@@ -6401,6 +6401,8 @@ def run_pipeline(
                         frame_b_name=frame_2.image_name,
                         poses=poses,
                         intrinsics=color_intrinsics,
+                        group_a_objects=group_a_objects,
+                        group_b_objects=group_b_objects,
                         max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
                     )
                 except (TypeError, ValueError):
@@ -6518,6 +6520,9 @@ def run_pipeline(
                             ),
                             "pruned_auxiliary_frame_count": getattr(
                                 question_route, "pruned_auxiliary_frame_count", 0
+                            ),
+                            "semantic_rejected_frame_count": getattr(
+                                question_route, "semantic_rejected_frame_count", 0
                             ),
                         }
                     else:

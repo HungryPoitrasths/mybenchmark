@@ -42,6 +42,13 @@ ROUTE_MIN_PROGRESS_FRAC = 0.05
 ROUTE_NEAR_DUPLICATE_TRANSLATION_M = 0.12
 ROUTE_NEAR_DUPLICATE_ROTATION_DEG = 6.0
 ROUTE_SEARCH_METHOD = "dijkstra_lexicographic"
+# Keep semantic gating aligned with HybridRoutingConfig defaults. The legacy
+# route only uses these thresholds to reject frames that show both question
+# sides at once; it does not require either side to be visible on its own.
+ROUTE_SEMANTIC_MIN_DEPTH_M = 0.3
+ROUTE_SEMANTIC_MAX_DEPTH_M = 8.0
+ROUTE_SEMANTIC_MIN_BBOX_IN_FRAME_RATIO = 0.35
+ROUTE_SEMANTIC_MIN_PROJECTED_AREA_RATIO = 800.0 / (640.0 * 480.0)
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,7 @@ class GeometricAuxiliaryRoute:
     near_duplicate_rotation_deg: float
     pre_prune_auxiliary_count: int
     pruned_auxiliary_frame_count: int
+    semantic_rejected_frame_count: int = 0
 
 
 def object_group_center(objects: Iterable[Mapping[str, Any]]) -> np.ndarray:
@@ -84,6 +92,83 @@ def object_group_center(objects: Iterable[Mapping[str, Any]]) -> np.ndarray:
     if not centers:
         raise ValueError("objects must not be empty")
     return np.mean(np.stack(centers, axis=0), axis=0)
+
+
+def _object_projection_metrics(
+    obj: Mapping[str, Any],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+) -> tuple[float, float, float]:
+    """Return center depth, in-frame bbox-corner ratio, and projected area ratio."""
+
+    bbox_min = np.asarray(obj.get("bbox_min"), dtype=np.float64)
+    bbox_max = np.asarray(obj.get("bbox_max"), dtype=np.float64)
+    if bbox_min.shape != (3,) or bbox_max.shape != (3,):
+        return 0.0, 0.0, 0.0
+    center = np.asarray(obj.get("center", 0.5 * (bbox_min + bbox_max)), dtype=np.float64)
+    if center.shape != (3,):
+        center = 0.5 * (bbox_min + bbox_max)
+
+    corners = np.asarray(
+        [
+            [x, y, z]
+            for x in (bbox_min[0], bbox_max[0])
+            for y in (bbox_min[1], bbox_max[1])
+            for z in (bbox_min[2], bbox_max[2])
+        ],
+        dtype=np.float64,
+    )
+    points_camera = (pose.rotation @ corners.T + pose.translation[:, None]).T
+    uv, depths = project_camera_points_to_image(points_camera, intrinsics)
+    valid = (depths > 0.0) & np.isfinite(uv).all(axis=1)
+    center_depth = float(pose.world_to_camera_point(center)[2])
+    if not valid.any():
+        return center_depth, 0.0, 0.0
+    valid_uv = uv[valid]
+    in_frame = (
+        (valid_uv[:, 0] >= 0.0)
+        & (valid_uv[:, 0] < intrinsics.width)
+        & (valid_uv[:, 1] >= 0.0)
+        & (valid_uv[:, 1] < intrinsics.height)
+    )
+    bbox_ratio = float(in_frame.sum() / len(valid_uv))
+    left = float(np.clip(valid_uv[:, 0].min(), 0.0, intrinsics.width))
+    right = float(np.clip(valid_uv[:, 0].max(), 0.0, intrinsics.width))
+    top = float(np.clip(valid_uv[:, 1].min(), 0.0, intrinsics.height))
+    bottom = float(np.clip(valid_uv[:, 1].max(), 0.0, intrinsics.height))
+    area_ratio = max(0.0, right - left) * max(0.0, bottom - top) / max(
+        float(intrinsics.width * intrinsics.height), 1.0
+    )
+    return center_depth, bbox_ratio, area_ratio
+
+
+def _meaningfully_projected(
+    objects: Iterable[Mapping[str, Any]],
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+) -> bool:
+    for obj in objects:
+        depth, bbox_ratio, area_ratio = _object_projection_metrics(obj, pose, intrinsics)
+        if (
+            ROUTE_SEMANTIC_MIN_DEPTH_M < depth <= ROUTE_SEMANTIC_MAX_DEPTH_M
+            and bbox_ratio >= ROUTE_SEMANTIC_MIN_BBOX_IN_FRAME_RATIO
+            and area_ratio >= ROUTE_SEMANTIC_MIN_PROJECTED_AREA_RATIO
+        ):
+            return True
+    return False
+
+
+def _semantic_conflict(
+    pose: CameraPose,
+    intrinsics: CameraIntrinsics,
+    group_a_objects: Iterable[Mapping[str, Any]],
+    group_b_objects: Iterable[Mapping[str, Any]],
+) -> bool:
+    """Whether a frame meaningfully shows both question-side object groups."""
+
+    return _meaningfully_projected(group_a_objects, pose, intrinsics) and _meaningfully_projected(
+        group_b_objects, pose, intrinsics
+    )
 
 
 def sample_route_points(
@@ -248,6 +333,8 @@ def find_geometric_auxiliary_route(
     frame_b_name: str,
     poses: dict[str, CameraPose],
     intrinsics: CameraIntrinsics,
+    group_a_objects: Iterable[Mapping[str, Any]] | None = None,
+    group_b_objects: Iterable[Mapping[str, Any]] | None = None,
     max_auxiliary_frames: int = MAX_AUXILIARY_FRAMES,
     orientation_threshold_deg: float = ROUTE_ORIENTATION_THRESHOLD_DEG,
     min_overlap_frac: float = ROUTE_MIN_OVERLAP_FRAC,
@@ -319,6 +406,9 @@ def find_geometric_auxiliary_route(
     forwards = {name: _unit_forward(pose) for name, pose in poses.items()}
     sample_interval = 1.0 / max(len(ts) - 1, 1)
     min_progress = max(float(min_progress_frac), sample_interval)
+    semantic_group_a = tuple(group_a_objects or ())
+    semantic_group_b = tuple(group_b_objects or ())
+    semantic_gate_enabled = bool(semantic_group_a and semantic_group_b)
 
     def transition_overlap(frontier: float, next_start: float) -> float:
         return max(0.0, frontier - next_start)
@@ -353,11 +443,17 @@ def find_geometric_auxiliary_route(
     if max_auxiliary_frames == 0:
         return None
 
-    candidate_runs = {
-        name: tuple(sorted(frame_runs, key=lambda run: (run[1], run[0])))
-        for name, frame_runs in runs.items()
-        if name not in {frame_a_name, frame_b_name} and frame_runs
-    }
+    semantic_rejected_frame_count = 0
+    candidate_runs: dict[str, tuple[tuple[float, float], ...]] = {}
+    for name, frame_runs in runs.items():
+        if name in {frame_a_name, frame_b_name} or not frame_runs:
+            continue
+        if semantic_gate_enabled and _semantic_conflict(
+            poses[name], intrinsics, semantic_group_a, semantic_group_b
+        ):
+            semantic_rejected_frame_count += 1
+            continue
+        candidate_runs[name] = tuple(sorted(frame_runs, key=lambda run: (run[1], run[0])))
 
     def best_fixed_path(
         auxiliary_names: tuple[str, ...],
@@ -519,4 +615,5 @@ def find_geometric_auxiliary_route(
         near_duplicate_rotation_deg=near_duplicate_rotation_deg,
         pre_prune_auxiliary_count=pre_prune_auxiliary_count,
         pruned_auxiliary_frame_count=pre_prune_auxiliary_count - len(auxiliary_names),
+        semantic_rejected_frame_count=semantic_rejected_frame_count,
     )

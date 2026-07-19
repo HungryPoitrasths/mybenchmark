@@ -10,6 +10,7 @@ import pytest
 from src.auxiliary_path import AuxiliaryRoute, VisualPoseEdge, VisualPoseGraph
 from src.legacy_auxiliary_path import (
     _prune_auxiliary_names,
+    _semantic_conflict,
     find_geometric_auxiliary_route,
     object_group_center,
 )
@@ -491,6 +492,65 @@ def test_geometric_route_enforces_minimum_progress(monkeypatch) -> None:
     route = find_geometric_auxiliary_route(**kwargs, min_progress_frac=0.02)
     assert route is not None
     assert route.auxiliary_image_names == ("tiny_step.jpg",)
+
+
+def test_geometric_route_rejects_auxiliary_frame_showing_both_question_groups(
+    monkeypatch,
+) -> None:
+    names = ["main_a.jpg", "both_groups.jpg", "one_group.jpg", "main_b.jpg"]
+    poses = {name: make_pose(name) for name in names}
+    masks = {
+        "main_a.jpg": np.array([1, 1, 1, 1, 0, 0, 0, 0, 0, 0], dtype=bool),
+        "both_groups.jpg": np.array([0, 0, 1, 1, 1, 1, 1, 1, 0, 0], dtype=bool),
+        "one_group.jpg": np.array([0, 0, 1, 1, 1, 1, 1, 1, 0, 0], dtype=bool),
+        "main_b.jpg": np.array([0, 0, 0, 0, 0, 0, 1, 1, 1, 1], dtype=bool),
+    }
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path.route_visibility_mask",
+        lambda _points, pose, _intrinsics: masks[pose.image_name],
+    )
+    monkeypatch.setattr(
+        "src.legacy_auxiliary_path._semantic_conflict",
+        lambda pose, _intrinsics, _group_a, _group_b: pose.image_name == "both_groups.jpg",
+    )
+
+    route = find_geometric_auxiliary_route(
+        center_a=np.array([0.0, 0.0, 2.0]),
+        center_b=np.array([0.9, 0.0, 2.0]),
+        frame_a_name="main_a.jpg",
+        frame_b_name="main_b.jpg",
+        poses=poses,
+        intrinsics=make_intrinsics(),
+        group_a_objects=[make_object(1, "frame-1-object")],
+        group_b_objects=[make_object(2, "frame-2-object")],
+        min_overlap_frac=0.1,
+    )
+
+    assert route is not None
+    assert route.auxiliary_image_names == ("one_group.jpg",)
+    assert route.semantic_rejected_frame_count == 1
+
+
+def test_geometric_semantic_conflict_requires_visible_objects_from_both_groups() -> None:
+    pose = make_pose("frame.jpg")
+    intrinsics = make_intrinsics()
+
+    def projected_object(obj_id: int, label: str, x: float) -> dict:
+        return {
+            "id": obj_id,
+            "label": label,
+            "center": [x, 0.0, 2.0],
+            "bbox_min": [x - 0.2, -0.2, 1.8],
+            "bbox_max": [x + 0.2, 0.2, 2.2],
+        }
+
+    visible_a = projected_object(1, "frame-1-object", -0.3)
+    visible_b = projected_object(2, "frame-2-object", 0.3)
+    outside_view = projected_object(3, "outside-view", 100.0)
+
+    assert _semantic_conflict(pose, intrinsics, [visible_a], [visible_b])
+    assert not _semantic_conflict(pose, intrinsics, [visible_a], [outside_view])
+    assert not _semantic_conflict(pose, intrinsics, [outside_view], [visible_b])
 
 
 def test_auxiliary_pruning_checks_near_pose_and_route_validity() -> None:
