@@ -58,6 +58,9 @@ from src.qa_generator import (
     _mesh_visibility_stats_compat,
     _apply_attachment_surface_text_overrides,
     _annotate_cross_frame_questions,
+    _clear_cross_frame_distance_metadata,
+    _cross_frame_distance_priority_key,
+    _prioritize_cross_frame_questions_by_distance,
     build_multi_frame_split_note,
     find_two_frame_split_v2,
     generate_all_questions,
@@ -115,7 +118,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 2
+PIPELINE_SCENE_STATUS_VERSION = 3
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 QUESTION_REVIEW_MAX_RETRIES = 4
@@ -604,9 +607,16 @@ def _retain_best_cross_frame_views(
     for question in questions:
         grouped[_cross_frame_semantic_key(question)].append(question)
     kept: list[dict] = []
-    for key in sorted(grouped, key=lambda value: repr(value)):
+    ordered_groups = sorted(
+        grouped.items(),
+        key=lambda item: (
+            _cross_frame_distance_priority_key(item[1][0])[:3],
+            repr(item[0]),
+        ),
+    )
+    for _key, group in ordered_groups:
         ranked = sorted(
-            grouped[key],
+            group,
             key=lambda question: (
                 float(question.get("_cross_frame_pair_score", float("inf"))),
                 str(question.get("image_name", "")),
@@ -6324,6 +6334,8 @@ def run_pipeline(
                     "note": "routes_are_computed_per_question_after_object_role_binding",
                 }
             cross_candidates: list[dict] = []
+            answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] = {}
+            distance_annotation_stats: Counter[str] = Counter()
             pair_stage_counts: Counter = funnel["pair_stage_counts"]
             generated_counts: Counter = funnel["question_type_generated_counts"]
             routes_by_pair: dict[tuple[str, str], object | None] = {}
@@ -6612,11 +6624,22 @@ def run_pipeline(
                                 frame_2=frame_2,
                                 objects_by_id=objects_by_id,
                                 layout_id=layout_id,
+                                answer_pair_distance_cache=answer_pair_distance_cache,
+                                distance_annotation_stats=distance_annotation_stats,
                             )
                             if annotated:
                                 _append_pair_questions(annotated, frame_1, frame_2, route)
 
-            retained_cross_questions = _retain_best_cross_frame_views(cross_candidates)
+            prioritized_cross_questions, distance_priority_diagnostics = (
+                _prioritize_cross_frame_questions_by_distance(cross_candidates)
+            )
+            distance_priority_diagnostics["annotation_invalid_question_count"] = (
+                int(distance_annotation_stats["invalid_answer_pair"])
+            )
+            funnel["distance_priority"] = distance_priority_diagnostics
+            retained_cross_questions = _retain_best_cross_frame_views(
+                prioritized_cross_questions
+            )
             retained_cross_questions = _apply_scene_type_cap(
                 retained_cross_questions,
                 scene_type_cap=scene_type_cap,
@@ -6625,6 +6648,8 @@ def run_pipeline(
                 type_counts=scene_question_type_counts,
                 pair_counts=scene_pair_counts,
             )
+            for question in retained_cross_questions:
+                _clear_cross_frame_distance_metadata(question)
             kept_counts: Counter = funnel["question_type_kept_counts"]
             for question in retained_cross_questions:
                 kept_counts[str(question.get("type", ""))] += 1

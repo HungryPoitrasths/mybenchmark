@@ -7350,6 +7350,10 @@ def generate_l2_object_move(
         if reference_object_ids is not None
         else set(referable_object_ids)
     )
+    cross_frame_role_constrained = (
+        allowed_move_source_ids is not None
+        and reference_object_ids is not None
+    )
     # Kept in the public signature for legacy callers. Pairwise semantics v2
     # deliberately ignores it and always evaluates from ``camera_pose``.
     _ = occlusion_camera_pose
@@ -7802,26 +7806,33 @@ def generate_l2_object_move(
                     and int(ref_id) not in moved_ids
                     and int(ref_id) != query_obj_id
                 ]
-                query_center = np.asarray(query_obj["center"], dtype=np.float64)
-                reference_candidates = [
-                    ref_obj for ref_obj in reference_candidates
-                    if float(
-                        np.linalg.norm(
-                            np.asarray(ref_obj["center"], dtype=np.float64) - query_center
-                        )
-                    ) <= _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M
-                ]
-                reference_candidates.sort(
-                    key=lambda ref_obj: float(
-                        np.linalg.norm(
-                            np.asarray(ref_obj["center"], dtype=np.float64) - query_center
-                        )
-                    )
-                )
                 reference_limit = _PAIRWISE_OCCLUSION_MAX_REFERENCES_PER_QUERY
                 if max_occlusion_objects is not None and max_occlusion_objects != MAX_OCCLUSION_OBJECTS_AUTO:
                     reference_limit = min(reference_limit, max(0, int(max_occlusion_objects)))
-                reference_candidates = reference_candidates[:reference_limit]
+                if cross_frame_role_constrained:
+                    reference_candidates = _prioritize_cross_frame_reference_objects(
+                        query_obj,
+                        reference_candidates,
+                        max_candidates=reference_limit,
+                    )
+                else:
+                    query_center = np.asarray(query_obj["center"], dtype=np.float64)
+                    reference_candidates = [
+                        ref_obj for ref_obj in reference_candidates
+                        if float(
+                            np.linalg.norm(
+                                np.asarray(ref_obj["center"], dtype=np.float64) - query_center
+                            )
+                        ) <= _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M
+                    ]
+                    reference_candidates.sort(
+                        key=lambda ref_obj: float(
+                            np.linalg.norm(
+                                np.asarray(ref_obj["center"], dtype=np.float64) - query_center
+                            )
+                        )
+                    )
+                    reference_candidates = reference_candidates[:reference_limit]
 
                 def _pair_in_frame(obj: dict[str, Any], delta: np.ndarray) -> bool:
                     moved_obj = obj
@@ -10227,6 +10238,259 @@ _CROSS_FRAME_PUBLIC_TYPES = frozenset({
     "L3_coordinate_rotation_allocentric",
 })
 
+_CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M = 4.0
+_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY = "_cross_frame_answer_pair_distance_m"
+_CROSS_FRAME_ANSWER_PAIR_DISTANCE_DEFINITION_KEY = (
+    "_cross_frame_answer_pair_distance_definition"
+)
+_CROSS_FRAME_ANSWER_PAIR_IDS_KEY = "_cross_frame_answer_pair_ids"
+_CROSS_FRAME_ANSWER_PAIR_FIELDS: dict[str, tuple[str, str]] = {
+    "object_move_agent": ("query_obj_id", "obj_c_id"),
+    "object_move_distance": ("query_obj_id", "obj_c_id"),
+    "object_move_occlusion": ("query_obj_id", "obj_ref_id"),
+    "object_move_object_centric": ("query_obj_id", "obj_ref_id"),
+    "object_rotate_object_centric": ("query_obj_id", "obj_ref_id"),
+    "object_move_allocentric": ("query_obj_id", "obj_ref_id"),
+    "attachment_move": ("query_obj_id", "obj_ref_id"),
+    "coordinate_rotation_agent": ("obj_a_id", "obj_b_id"),
+    "coordinate_rotation_object_centric": ("obj_ref_id", "obj_target_id"),
+    "coordinate_rotation_allocentric": ("obj_a_id", "obj_b_id"),
+}
+
+
+def _prioritize_cross_frame_reference_objects(
+    anchor_obj: dict[str, Any],
+    reference_objects: Iterable[dict[str, Any]],
+    *,
+    max_candidates: int,
+) -> list[dict[str, Any]]:
+    max_candidates = max(0, int(max_candidates))
+    if max_candidates == 0:
+        return []
+
+    scored: list[tuple[float, int, dict[str, Any]]] = []
+    for ref_obj in reference_objects:
+        try:
+            distance_m = float(compute_distance_details(anchor_obj, ref_obj)["distance_m"])
+            ref_id = int(ref_obj["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(distance_m) and distance_m >= 0.0:
+            scored.append((distance_m, ref_id, ref_obj))
+
+    within_limit = [
+        record
+        for record in scored
+        if record[0] <= _CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M
+    ]
+    if within_limit:
+        within_limit.sort(key=lambda record: (-record[0], record[1]))
+        return [record[2] for record in within_limit[:max_candidates]]
+
+    scored.sort(key=lambda record: (record[0], record[1]))
+    return [scored[0][2]] if scored else []
+
+
+def _cross_frame_answer_pair_ids(
+    question: dict[str, Any],
+) -> tuple[int, int] | None:
+    question_type = str(question.get("type", "")).strip().lower()
+    fields = _CROSS_FRAME_ANSWER_PAIR_FIELDS.get(question_type)
+    if (
+        question_type == "object_move_occlusion"
+        and (
+            question.get("query_obj_id") is None
+            or question.get("obj_ref_id") is None
+        )
+    ):
+        fields = ("moved_obj_id", "target_obj_id")
+    if fields is None:
+        return None
+    try:
+        left_id = int(question[fields[0]])
+        right_id = int(question[fields[1]])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if left_id == right_id:
+        return None
+    return left_id, right_id
+
+
+def _annotate_cross_frame_answer_pair_distance(
+    question: dict[str, Any],
+    objects_by_id: dict[int, dict[str, Any]],
+    *,
+    distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
+) -> bool:
+    answer_pair = _cross_frame_answer_pair_ids(question)
+    if answer_pair is None:
+        return False
+    left_id, right_id = answer_pair
+    left_obj = objects_by_id.get(left_id)
+    right_obj = objects_by_id.get(right_id)
+    if left_obj is None or right_obj is None:
+        return False
+
+    cache_key = tuple(sorted((left_id, right_id)))
+    details = distance_cache.get(cache_key) if distance_cache is not None else None
+    if details is None:
+        details = compute_distance_details(left_obj, right_obj)
+        if distance_cache is not None:
+            distance_cache[cache_key] = details
+    try:
+        distance_m = float(details["distance_m"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not math.isfinite(distance_m) or distance_m < 0.0:
+        return False
+
+    question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY] = list(cache_key)
+    question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY] = distance_m
+    question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_DEFINITION_KEY] = str(
+        details.get("distance_definition", "")
+    )
+    return True
+
+
+def _cross_frame_distance_priority_key(
+    question: dict[str, Any],
+) -> tuple[Any, ...]:
+    try:
+        distance_m = float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY])
+    except (KeyError, TypeError, ValueError):
+        distance_m = float("-inf")
+    raw_pair_ids = question.get(_CROSS_FRAME_ANSWER_PAIR_IDS_KEY, ())
+    try:
+        pair_ids = tuple(int(value) for value in raw_pair_ids)
+    except (TypeError, ValueError):
+        pair_ids = ()
+    delta = question.get("delta")
+    normalized_delta = tuple(
+        round(float(value), 4) for value in delta
+    ) if isinstance(delta, list) else ()
+    return (
+        str(question.get("type", "")).strip().lower(),
+        -distance_m,
+        pair_ids,
+        str(question.get("reference_frame", "")),
+        str(question.get("cross_frame_layout", "")),
+        normalized_delta,
+        question.get("rotation_angle"),
+        str(question.get("rotation_direction", "")),
+        str(question.get("correct_value", "")),
+        str(question.get("image_name", "")),
+        str(question.get("reasoning_frame_2", "")),
+    )
+
+
+def _prioritize_cross_frame_questions_by_distance(
+    questions: Iterable[dict[str, Any]],
+    *,
+    max_distance_m: float = _CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    max_distance_m = float(max_distance_m)
+    if not math.isfinite(max_distance_m) or max_distance_m < 0.0:
+        raise ValueError("max_distance_m must be a finite non-negative value")
+
+    questions_by_type: dict[str, list[dict[str, Any]]] = {}
+    invalid_distance_count = 0
+    input_count = 0
+    for question in questions:
+        input_count += 1
+        question_type = str(question.get("type", "")).strip().lower()
+        try:
+            distance_m = float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY])
+            pair_ids = tuple(
+                int(value) for value in question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY]
+            )
+        except (KeyError, TypeError, ValueError):
+            invalid_distance_count += 1
+            continue
+        if (
+            not question_type
+            or not math.isfinite(distance_m)
+            or distance_m < 0.0
+            or len(pair_ids) != 2
+            or pair_ids[0] == pair_ids[1]
+        ):
+            invalid_distance_count += 1
+            continue
+        questions_by_type.setdefault(question_type, []).append(question)
+
+    selected: list[dict[str, Any]] = []
+    by_type: dict[str, dict[str, Any]] = {}
+    fallback_type_count = 0
+    fallback_question_count = 0
+    over_limit_dropped_count = 0
+    within_limit_count = 0
+    for question_type in sorted(questions_by_type):
+        candidates = questions_by_type[question_type]
+        within_limit = [
+            question
+            for question in candidates
+            if float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY]) <= max_distance_m
+        ]
+        within_limit_count += len(within_limit)
+        fallback_pair: tuple[int, int] | None = None
+        if within_limit:
+            kept_for_type = within_limit
+            dropped_for_type = len(candidates) - len(kept_for_type)
+        else:
+            fallback_type_count += 1
+            distance_by_pair: dict[tuple[int, int], float] = {}
+            for question in candidates:
+                pair = tuple(
+                    int(value) for value in question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY]
+                )
+                distance_m = float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY])
+                distance_by_pair[pair] = min(
+                    distance_m,
+                    distance_by_pair.get(pair, float("inf")),
+                )
+            fallback_pair = min(
+                distance_by_pair,
+                key=lambda pair: (distance_by_pair[pair], pair),
+            )
+            kept_for_type = [
+                question
+                for question in candidates
+                if tuple(
+                    int(value) for value in question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY]
+                ) == fallback_pair
+            ]
+            fallback_question_count += len(kept_for_type)
+            dropped_for_type = len(candidates) - len(kept_for_type)
+        over_limit_dropped_count += dropped_for_type
+        kept_for_type.sort(key=_cross_frame_distance_priority_key)
+        selected.extend(kept_for_type)
+        by_type[question_type] = {
+            "input_question_count": len(candidates),
+            "within_limit_question_count": len(within_limit),
+            "kept_question_count": len(kept_for_type),
+            "over_limit_dropped_question_count": dropped_for_type,
+            "fallback_pair": list(fallback_pair) if fallback_pair is not None else None,
+        }
+
+    diagnostics = {
+        "max_distance_m": max_distance_m,
+        "input_question_count": input_count,
+        "valid_distance_question_count": sum(len(values) for values in questions_by_type.values()),
+        "invalid_distance_question_count": invalid_distance_count,
+        "within_limit_question_count": within_limit_count,
+        "fallback_type_count": fallback_type_count,
+        "fallback_question_count": fallback_question_count,
+        "over_limit_dropped_question_count": over_limit_dropped_count,
+        "kept_question_count": len(selected),
+        "by_type": by_type,
+    }
+    return selected, diagnostics
+
+
+def _clear_cross_frame_distance_metadata(question: dict[str, Any]) -> None:
+    question.pop(_CROSS_FRAME_ANSWER_PAIR_IDS_KEY, None)
+    question.pop(_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY, None)
+    question.pop(_CROSS_FRAME_ANSWER_PAIR_DISTANCE_DEFINITION_KEY, None)
+
 
 def _objects_for_ids(
     objects_by_id: dict[int, dict[str, Any]],
@@ -10272,6 +10536,8 @@ def _annotate_cross_frame_questions(
     frame_2: ReasoningFrameContext,
     objects_by_id: dict[int, dict[str, Any]],
     layout_id: str | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
+    distance_annotation_stats: Counter[str] | None = None,
 ) -> list[dict[str, Any]]:
     kept: list[dict[str, Any]] = []
     for question in questions:
@@ -10317,6 +10583,14 @@ def _annotate_cross_frame_questions(
         frame_1_objects = _objects_for_ids(objects_by_id, frame_1_ids)
         frame_2_objects = _objects_for_ids(objects_by_id, frame_2_ids)
         if len(frame_1_objects) != len(frame_1_ids) or len(frame_2_objects) != len(frame_2_ids):
+            continue
+        if not _annotate_cross_frame_answer_pair_distance(
+            question,
+            objects_by_id,
+            distance_cache=answer_pair_distance_cache,
+        ):
+            if distance_annotation_stats is not None:
+                distance_annotation_stats["invalid_answer_pair"] += 1
             continue
 
         bindings = dict(spec.camera_bindings)
@@ -10374,6 +10648,7 @@ def generate_cross_frame_questions(
 
     enrich_objects_with_distance_geometry(objects, instance_mesh_data)
     objects_by_id = {int(obj["id"]): obj for obj in objects}
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] = {}
     movement_objects = [
         obj for obj in objects
         if str(obj.get("label", "")).strip().lower() not in EXCLUDED_LABELS
@@ -10413,6 +10688,7 @@ def generate_cross_frame_questions(
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         ))
 
     common_move_kwargs = dict(
@@ -10427,11 +10703,13 @@ def generate_cross_frame_questions(
         batch = generate_l2_object_move_object_centric(**common_move_kwargs)
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         ))
     if "L2_object_move_allocentric" in requested:
         batch = generate_l2_object_move_allocentric(**common_move_kwargs)
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         ))
 
     if "L2_object_rotate_object_centric" in requested:
@@ -10451,6 +10729,7 @@ def generate_cross_frame_questions(
             questions.extend(_annotate_cross_frame_questions(
                 batch, frame_1=frame_1, frame_2=frame_2,
                 objects_by_id=objects_by_id, layout_id=layout_id,
+                answer_pair_distance_cache=answer_pair_distance_cache,
             ))
 
     if "L3_attachment_move" in requested:
@@ -10464,6 +10743,7 @@ def generate_cross_frame_questions(
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         ))
 
     coordinate_pool = _merge_unique_objects(frame_1_regular, frame_2_regular)
@@ -10475,6 +10755,7 @@ def generate_cross_frame_questions(
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         ))
     if "L3_coordinate_rotation_allocentric" in requested:
         batch = generate_l3_coordinate_rotation_allocentric(
@@ -10484,6 +10765,7 @@ def generate_cross_frame_questions(
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         ))
     if "L3_coordinate_rotation_object_centric" in requested:
         for layout_id, ref_pool, face_pool in (
@@ -10498,6 +10780,7 @@ def generate_cross_frame_questions(
             questions.extend(_annotate_cross_frame_questions(
                 batch, frame_1=frame_1, frame_2=frame_2,
                 objects_by_id=objects_by_id, layout_id=layout_id,
+                answer_pair_distance_cache=answer_pair_distance_cache,
             ))
 
     deduped: list[dict[str, Any]] = []
@@ -10518,7 +10801,10 @@ def generate_cross_frame_questions(
             continue
         seen.add(key)
         deduped.append(question)
-    return deduped
+    prioritized, _diagnostics = _prioritize_cross_frame_questions_by_distance(deduped)
+    for question in prioritized:
+        _clear_cross_frame_distance_metadata(question)
+    return prioritized
 
 
 # ---------------------------------------------------------------------------
