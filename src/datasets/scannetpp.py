@@ -738,7 +738,8 @@ def _parse_colmap_images(path: Path) -> list[dict[str, Any]]:
 # 板块 4: DataSource 实现
 # ===========================================================================
 
-from .base import SceneDataSource
+from .base import DepthFrame, SceneDataSource
+from .scannetpp_depth import ScanNetPPDepthReader
 
 
 class ScanNetPPDataSource(SceneDataSource):
@@ -768,6 +769,7 @@ class ScanNetPPDataSource(SceneDataSource):
             Path(frame_root) if frame_root
             else Path("output") / "scannetpp_iphone_frames"
         )
+        self._depth_reader: ScanNetPPDepthReader | None = None
 
     # ------------------------------------------------------------------
     # Public interface (mirrors SceneDataSource)
@@ -824,6 +826,17 @@ class ScanNetPPDataSource(SceneDataSource):
 
     def depth_image_path(self, image_name: str) -> Path | None:
         return None
+
+    def load_depth_frame(self, image_name: str) -> DepthFrame | None:
+        if self.sensor != "iphone":
+            return None
+        if self._depth_reader is None:
+            depth_path = self.scene_dir / "iphone" / "depth.bin"
+            metadata_path = self.scene_dir / "iphone" / "pose_intrinsic_imu.json"
+            if not depth_path.is_file() or not metadata_path.is_file():
+                return None
+            self._depth_reader = ScanNetPPDepthReader(depth_path, metadata_path)
+        return self._depth_reader.load(image_name)
 
     def validate(self) -> dict[str, Any]:
         issues: list[str] = []

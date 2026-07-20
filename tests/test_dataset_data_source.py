@@ -39,6 +39,17 @@ class TestScanNetDataSource:
         p = ds.image_path("42.jpg")
         assert p == Path("/fake/scene0000_00/color/42.jpg")
 
+    def test_missing_depth_rejects_without_loading_intrinsics(self, tmp_path: Path):
+        from src.datasets.scannet import ScanNetDataSource
+
+        ds = ScanNetDataSource(tmp_path / "scene0000_00")
+        with mock.patch.object(
+            ds,
+            "load_depth_intrinsics",
+            side_effect=AssertionError("depth intrinsics should not be loaded"),
+        ):
+            assert ds.load_depth_frame("000001.jpg") is None
+
 
 # ---------------------------------------------------------------------------
 # ScanNetPPDataSource (iPhone / DSLR)

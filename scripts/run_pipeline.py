@@ -79,6 +79,8 @@ from src.referability_checks import (
     normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
 )
 from src.auxiliary_path import MAX_AUXILIARY_FRAMES, VisualPoseGraph
+from src.depth_auxiliary_path import find_depth_corridor_auxiliary_route
+from src.datasets.scannet import ScanNetDataSource
 from src.hybrid_auxiliary_path import HybridAuxiliaryRouter
 from src.legacy_auxiliary_path import (
     find_geometric_auxiliary_route,
@@ -118,7 +120,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 3
+PIPELINE_SCENE_STATUS_VERSION = 4
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 QUESTION_REVIEW_MAX_RETRIES = 4
@@ -151,7 +153,9 @@ CROSS_FRAME_MAX_MAIN_PAIRS_PER_SEMANTIC_QUESTION = 3
 AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH = "visual_pose_graph"
 AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC = "legacy_geometric"
 AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL = "hybrid_geometric_visual"
+AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC = "depth_corridor_geometric"
 AUXILIARY_ROUTE_METHODS = (
+    AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
     AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
     AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
     AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL,
@@ -5241,7 +5245,7 @@ def run_pipeline(
     max_questions_per_scene_type: int | None = None,
     max_occlusion_objects: int | str | None = MAX_OCCLUSION_OBJECTS_AUTO,
     max_move_sources: int | None = None,
-    auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
+    auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
 ):
     """Execute the full PSR-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -6277,8 +6281,20 @@ def run_pipeline(
             }
             route_graph: VisualPoseGraph | None = None
             hybrid_router: HybridAuxiliaryRouter | None = None
+            depth_data_source = None
             hybrid_cache_path: Path | None = None
             hybrid_cache_hit = False
+            if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+                depth_data_source = ds if ds is not None else ScanNetDataSource(scene_dir)
+                if dataset == "scannetpp" and (
+                    getattr(depth_data_source, "sensor", None) != "iphone"
+                    or not (scene_dir / "iphone" / "depth.bin").is_file()
+                    or not (scene_dir / "iphone" / "pose_intrinsic_imu.json").is_file()
+                ):
+                    raise RuntimeError(
+                        "depth_corridor_geometric requires ScanNet++ iPhone depth.bin "
+                        "and pose_intrinsic_imu.json"
+                    )
             if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
                 if ds is not None:
                     image_path_for = ds.image_path
@@ -6420,6 +6436,30 @@ def run_pipeline(
                 except (TypeError, ValueError):
                     return None
 
+            def _depth_route_for_question(
+                question: dict,
+                frame_1: ReasoningFrameContext,
+                frame_2: ReasoningFrameContext,
+            ):
+                if depth_data_source is None:
+                    return None
+                groups = _question_object_groups(question)
+                if groups is None or color_intrinsics is None:
+                    return None
+                group_a_objects, group_b_objects = groups
+                return find_depth_corridor_auxiliary_route(
+                    center_a=object_group_center(group_a_objects),
+                    center_b=object_group_center(group_b_objects),
+                    frame_a_name=frame_1.image_name,
+                    frame_b_name=frame_2.image_name,
+                    poses=poses,
+                    intrinsics=color_intrinsics,
+                    depth_frame_for=depth_data_source.load_depth_frame,
+                    group_a_objects=group_a_objects,
+                    group_b_objects=group_b_objects,
+                    max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
+                )
+
             def _hybrid_route_for_question(
                 question: dict,
                 frame_1: ReasoningFrameContext,
@@ -6460,10 +6500,14 @@ def run_pipeline(
                 for question in pair_questions:
                     question_route = route
                     if auxiliary_route_method in {
+                        AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
                         AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
                         AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL,
                     }:
-                        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
+                        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+                            question_route = _depth_route_for_question(question, frame_1, frame_2)
+                            rejection_reason = "no_depth_corridor_path_within_auxiliary_limit"
+                        elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
                             question_route = _legacy_route_for_question(question, frame_1, frame_2)
                             rejection_reason = "no_legacy_geometric_path_within_auxiliary_limit"
                         else:
@@ -6498,6 +6542,48 @@ def run_pipeline(
                             "cost": question_route.cost,
                             "min_inliers": question_route.min_inliers,
                             "min_inlier_ratio": question_route.min_inlier_ratio,
+                        }
+                    elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+                        question["auxiliary_route"] = {
+                            "method": auxiliary_route_method,
+                            "search_method": question_route.search_method,
+                            "edge_count": question_route.edge_count,
+                            "cost": question_route.cost,
+                            "route_sample_count": question_route.route_sample_count,
+                            "frame_a_coverage_end": question_route.frame_a_coverage_end,
+                            "frame_b_coverage_start": question_route.frame_b_coverage_start,
+                            "auxiliary_responsibility_fraction": (
+                                question_route.auxiliary_responsibility_fraction
+                            ),
+                            "transition_overlap_fraction": (
+                                question_route.transition_overlap_fraction
+                            ),
+                            "min_progress_fraction": question_route.min_progress_fraction,
+                            "min_depth_valid_fraction": (
+                                question_route.min_depth_valid_fraction
+                            ),
+                            "min_depth_visible_fraction": (
+                                question_route.min_depth_visible_fraction
+                            ),
+                            "max_local_perpendicular_m": (
+                                question_route.max_local_perpendicular_m
+                            ),
+                            "max_global_perpendicular_m": (
+                                question_route.max_global_perpendicular_m
+                            ),
+                            "max_height_change_m": question_route.max_height_change_m,
+                            "max_parallel_change_m": question_route.max_parallel_change_m,
+                            "max_forward_angle_deg": question_route.max_forward_angle_deg,
+                            "depth_sources": list(question_route.depth_sources),
+                            "pre_prune_auxiliary_count": (
+                                question_route.pre_prune_auxiliary_count
+                            ),
+                            "pruned_auxiliary_frame_count": (
+                                question_route.pruned_auxiliary_frame_count
+                            ),
+                            "semantic_rejected_frame_count": (
+                                question_route.semantic_rejected_frame_count
+                            ),
                         }
                     elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
                         question["auxiliary_route"] = {
@@ -7122,9 +7208,11 @@ def main():
         "--auxiliary_route_method",
         type=str,
         choices=AUXILIARY_ROUTE_METHODS,
-        default=AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
+        default=AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
         help=(
             "Auxiliary-frame routing for cross-frame questions. "
+            "depth_corridor_geometric uses sensor depth plus an A-to-B-aligned "
+            "camera corridor and is the default; "
             "visual_pose_graph uses the current per-scene ORB/RANSAC pose graph; "
             "legacy_geometric uses per-question global Dijkstra search over A-to-B "
             "route projection while excluding portions already covered by the two "

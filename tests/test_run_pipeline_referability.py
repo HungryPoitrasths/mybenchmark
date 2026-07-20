@@ -4709,6 +4709,29 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         occlusion_calls: list[tuple[str, str]] = []
         occlusion_veto_call_count = 0
 
+        class FakeDepthRoute:
+            auxiliary_image_names = ("depth_bridge.jpg",)
+            cost = 0.9
+            edge_count = 2
+            route_sample_count = 10
+            frame_a_coverage_end = 0.3
+            frame_b_coverage_start = 0.7
+            auxiliary_responsibility_fraction = 0.4
+            transition_overlap_fraction = 0.2
+            search_method = "dijkstra_depth_corridor"
+            min_progress_fraction = 0.05
+            min_depth_valid_fraction = 0.8
+            min_depth_visible_fraction = 0.7
+            max_local_perpendicular_m = 0.2
+            max_global_perpendicular_m = 0.3
+            max_height_change_m = 0.1
+            max_parallel_change_m = 0.5
+            max_forward_angle_deg = 15.0
+            depth_sources = ("test_depth",)
+            pre_prune_auxiliary_count = 2
+            pruned_auxiliary_frame_count = 1
+            semantic_rejected_frame_count = 0
+
         class FakeRoute:
             auxiliary_image_names = ("bridge.jpg",)
             cost = 1.0
@@ -4726,8 +4749,26 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             auxiliary_responsibility_fraction = 0.4
             transition_overlap_fraction = 0.2
 
+        class FakeHybridRoute:
+            auxiliary_image_names = ("hybrid_bridge.jpg",)
+            cost = 1.1
+            edge_count = 2
+            route_sample_count = 10
+            frame_a_coverage_end = 0.3
+            frame_b_coverage_start = 0.7
+            auxiliary_responsibility_fraction = 0.4
+            transition_overlap_fraction = 0.2
+            min_mutual_matches = 32
+            min_inliers = 24
+            min_inlier_ratio = 0.6
+            min_grid_fraction = 0.5
+            visual_models = ("fundamental", "homography")
+            semantic_rejected_frames = 1
+
+        depth_route_call_count = 0
         visual_graph_init_count = 0
         legacy_route_call_count = 0
+        hybrid_route_call_count = 0
 
         class FakeVisualPoseGraph:
             def __init__(self, **_kwargs):
@@ -4754,6 +4795,31 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
             def find_route(self, start, end, **_kwargs):
                 return None if start == end else FakeRoute()
+
+        class FakeHybridAuxiliaryRouter:
+            def __init__(self, **_kwargs):
+                pass
+
+            def load_cache(self, _cache_path):
+                return False
+
+            def save_cache(self, _cache_path):
+                pass
+
+            def diagnostics(self):
+                return {
+                    "pose_count": 3,
+                    "route_count": hybrid_route_call_count,
+                    "visual_edge_cache_count": 2,
+                    "feature_frame_count": 3,
+                    "visual_counts": {"passed": 2},
+                    "route_rejection_counts": {},
+                }
+
+            def find_route(self, **_kwargs):
+                nonlocal hybrid_route_call_count
+                hybrid_route_call_count += 1
+                return FakeHybridRoute()
 
         def fake_generate_cross_frame_questions(**kwargs):
             frame_1 = kwargs["frame_1"]
@@ -4782,7 +4848,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             non_occlusion_calls.append((frame_1.image_name, frame_2.image_name, requested))
             if frame_1.image_name != frame_names[0]:
                 return []
-            return [
+            questions = [
                 {
                     "level": "L2",
                     "type": "object_move_agent",
@@ -4799,6 +4865,18 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 }
                 for ref_id in (2, 3)
             ]
+            questions.append({
+                "level": "L2",
+                "type": "object_move_occlusion",
+                "question": "occlusion question",
+                "options": ["visible", "occluded", "not visible"],
+                "answer": "A",
+                "correct_value": "visible",
+                "moved_obj_id": 1,
+                "target_obj_id": 6,
+                "query_obj_id": 6,
+            })
+            return questions
 
         def fake_occlusion_veto(**kwargs):
             nonlocal occlusion_veto_call_count
@@ -4817,6 +4895,11 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             nonlocal legacy_route_call_count
             legacy_route_call_count += 1
             return FakeLegacyRoute()
+
+        def fake_depth_route(**_kwargs):
+            nonlocal depth_route_call_count
+            depth_route_call_count += 1
+            return FakeDepthRoute()
 
         with (
             patch.object(run_pipeline_module, "parse_scene", return_value=scene),
@@ -4838,6 +4921,16 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 side_effect=fake_occlusion_veto,
             ),
             patch.object(run_pipeline_module, "VisualPoseGraph", FakeVisualPoseGraph),
+            patch.object(
+                run_pipeline_module,
+                "find_depth_corridor_auxiliary_route",
+                side_effect=fake_depth_route,
+            ),
+            patch.object(
+                run_pipeline_module,
+                "HybridAuxiliaryRouter",
+                FakeHybridAuxiliaryRouter,
+            ),
             patch.object(
                 run_pipeline_module,
                 "find_geometric_auxiliary_route",
@@ -4874,6 +4967,24 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             )
             default_non_occlusion_calls = list(non_occlusion_calls)
             default_occlusion_calls = list(occlusion_calls)
+            visual_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=root / "visual_output",
+                max_scenes=1,
+                max_frames=3,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                only_question_types=[
+                    "L2_object_move_agent",
+                    "L2_object_move_occlusion",
+                ],
+                scene_type_cap=0,
+                frame_type_cap=0,
+                frame_type_object_cap=0,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                auxiliary_route_method="visual_pose_graph",
+            )
             legacy_questions = run_pipeline_module.run_pipeline(
                 data_root=data_root,
                 output_dir=root / "legacy_output",
@@ -4892,6 +5003,25 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 write_frame_debug=False,
                 auxiliary_route_method="legacy_geometric",
             )
+            hybrid_output_dir = root / "hybrid_output"
+            hybrid_questions = run_pipeline_module.run_pipeline(
+                data_root=data_root,
+                output_dir=hybrid_output_dir,
+                max_scenes=1,
+                max_frames=3,
+                use_occlusion=False,
+                referability_cache=referability_cache,
+                only_question_types=[
+                    "L2_object_move_agent",
+                    "L2_object_move_occlusion",
+                ],
+                scene_type_cap=0,
+                frame_type_cap=0,
+                frame_type_object_cap=0,
+                run_question_presence_review=False,
+                write_frame_debug=False,
+                auxiliary_route_method="hybrid_geometric_visual",
+            )
 
         self.assertEqual(
             [call[0] for call in default_non_occlusion_calls],
@@ -4901,13 +5031,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertTrue(
             all(call[1] == "__deferred_frame_2__" for call in default_non_occlusion_calls)
         )
-        self.assertEqual(
-            default_occlusion_calls,
-            [
-                (frame_names[0], frame_names[1]),
-                (frame_names[0], frame_names[2]),
-            ],
-        )
+        self.assertEqual(default_occlusion_calls, [])
         self.assertEqual(Counter(question["type"] for question in questions), {
             "object_move_agent": 2,
             "object_move_occlusion": 2,
@@ -4924,7 +5048,27 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             "object_move_occlusion": 2,
         })
         self.assertFalse(funnel["auxiliary_graph"]["cache_hit"])
+        self.assertEqual(funnel["auxiliary_graph"]["method"], "depth_corridor_geometric")
+        self.assertGreater(depth_route_call_count, 0)
+        self.assertTrue(questions)
+        self.assertTrue(all(
+            question["auxiliary_route"]["method"] == "depth_corridor_geometric"
+            for question in questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_image_names"] == ["depth_bridge.jpg"]
+            for question in questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_route"]["min_depth_valid_fraction"] == 0.8
+            for question in questions
+        ))
         self.assertEqual(visual_graph_init_count, 1)
+        self.assertTrue(visual_questions)
+        self.assertTrue(all(
+            question["auxiliary_route"]["method"] == "visual_pose_graph"
+            for question in visual_questions
+        ))
         self.assertGreater(legacy_route_call_count, 0)
         self.assertTrue(legacy_questions)
         self.assertTrue(all(
@@ -4935,6 +5079,30 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             question["auxiliary_image_names"] == ["legacy_bridge.jpg"]
             for question in legacy_questions
         ))
+        self.assertGreater(hybrid_route_call_count, 0)
+        self.assertTrue(hybrid_questions)
+        self.assertTrue(all(
+            question["auxiliary_route"]["method"] == "hybrid_geometric_visual"
+            for question in hybrid_questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_image_names"] == ["hybrid_bridge.jpg"]
+            for question in hybrid_questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_route"]["visual_models"]
+            == ["fundamental", "homography"]
+            for question in hybrid_questions
+        ))
+        hybrid_funnel = json.loads(
+            (hybrid_output_dir / "cross_frame_funnel" / f"{scene_id}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            hybrid_funnel["auxiliary_graph"]["method"],
+            "hybrid_geometric_visual",
+        )
         with self.assertRaisesRegex(RuntimeError, "Cannot resume with auxiliary_route_method"):
             run_pipeline_module.run_pipeline(
                 data_root=data_root,

@@ -8,10 +8,21 @@ particular scene.
 from __future__ import annotations
 
 import abc
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class DepthFrame:
+    """A depth image registered to one camera frame."""
+
+    image_m: np.ndarray
+    intrinsics: "CameraIntrinsics"
+    valid_ratio: float
+    source: str
 
 
 class SceneDataSource(abc.ABC):
@@ -93,3 +104,25 @@ class SceneDataSource(abc.ABC):
     def depth_image_path(self, image_name: str) -> Path | None:
         """Return path to per-frame depth image, or ``None`` if unavailable."""
         return None
+
+    def load_depth_frame(self, image_name: str) -> DepthFrame | None:
+        """Load a metric depth image and its matching intrinsics."""
+        depth_path = self.depth_image_path(image_name)
+        if depth_path is None or not depth_path.is_file():
+            return None
+        from ..utils.depth_occlusion import load_depth_image
+
+        try:
+            intrinsics = self.load_depth_intrinsics()
+            image_m = load_depth_image(depth_path)
+        except (FileNotFoundError, OSError, ValueError):
+            return None
+        if intrinsics is None:
+            return None
+        valid = np.isfinite(image_m) & (image_m > 0.0)
+        return DepthFrame(
+            image_m=image_m,
+            intrinsics=intrinsics,
+            valid_ratio=float(np.count_nonzero(valid) / max(image_m.size, 1)),
+            source="sensor_png",
+        )
