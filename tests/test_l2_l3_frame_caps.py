@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import importlib.util
 from pathlib import Path
 
@@ -198,3 +199,57 @@ def test_attachment_chain_uses_grandparent_as_its_primary_object() -> None:
     )
 
     assert [question["question"] for question in kept] == ["chain 8"]
+
+
+def test_split_scene_question_hard_caps() -> None:
+    assert run_pipeline._split_scene_question_hard_cap("val") == 50
+    assert run_pipeline._split_scene_question_hard_cap("train") == 100
+    assert run_pipeline._split_scene_question_hard_cap("all") == 0
+    assert run_pipeline._split_scene_question_hard_cap(None) == 0
+
+
+def test_hard_cap_applies_to_every_scene_question_type() -> None:
+    questions = [
+        _question(
+            level="L2",
+            question_type="object_move_agent",
+            image_name=f"{index:06d}.jpg",
+            object_id=index,
+            index=index,
+        )
+        for index in range(55)
+    ] + [
+        _question(
+            level="L3",
+            question_type="coordinate_rotation_agent",
+            image_name=f"{index:06d}.jpg",
+            object_id=index,
+            index=100 + index,
+        )
+        for index in range(55)
+    ]
+
+    kept = run_pipeline._apply_scene_type_cap(
+        questions,
+        scene_type_cap=0,
+        frame_type_cap=0,
+        frame_type_object_cap=0,
+        scene_question_hard_cap=50,
+    )
+
+    kept_counts = Counter(question["type"] for question in kept)
+    assert kept_counts == {
+        "object_move_agent": 50,
+        "coordinate_rotation_agent": 50,
+    }
+
+
+def test_hard_cap_budget_reaches_zero_for_early_stop() -> None:
+    budgets = run_pipeline._remaining_scene_type_budgets(
+        Counter({"object_move_agent": 50, "attachment_move": 49}),
+        scene_type_cap=8,
+        allowed_types={"object_move_agent", "attachment_move"},
+        scene_question_hard_cap=50,
+    )
+
+    assert budgets == {"attachment_move": 1, "object_move_agent": 0}

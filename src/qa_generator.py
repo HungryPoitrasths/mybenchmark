@@ -12643,7 +12643,20 @@ def generate_all_questions(
             "occlusion_backend": occlusion_backend,
         },
     )
-    if _any_question_type_budget_available("object_move_agent", "object_move_distance", "object_move_occlusion"):
+    budgeted_l2_object_move_types = {
+        question_type
+        for question_type in (
+            "object_move_agent",
+            "object_move_distance",
+            "object_move_occlusion",
+        )
+        if _question_type_budget_available(question_type)
+        and (
+            enabled_l2_object_move_types is None
+            or question_type in enabled_l2_object_move_types
+        )
+    }
+    if budgeted_l2_object_move_types:
         all_questions.extend(
             _run_question_step(
                 "generate_l2_object_move",
@@ -12669,7 +12682,7 @@ def generate_all_questions(
                         attachment_priority_pairs=attachment_priority_pairs,
                         trace_recorder=trace_recorder,
                         trace_detail=trace_detail,
-                        enabled_l2_object_move_types=enabled_l2_object_move_types,
+                        enabled_l2_object_move_types=budgeted_l2_object_move_types,
                         max_occlusion_objects=max_occlusion_objects,
                         max_move_sources=max_move_sources,
                         pair_budget_remaining=pair_budget_remaining,

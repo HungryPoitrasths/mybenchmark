@@ -155,6 +155,43 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             {"object_move_agent", "object_move_distance"},
         )
 
+    def test_generate_all_questions_stops_capped_l2_move_subtype(self) -> None:
+        objects = [make_object(1, "table"), make_object(2, "box")]
+        captured: dict[str, object] = {}
+
+        def fake_generate_l2_object_move(*_args, **kwargs):
+            captured["enabled_l2_object_move_types"] = kwargs.get(
+                "enabled_l2_object_move_types"
+            )
+            return []
+
+        with patch(
+            "src.qa_generator.generate_l2_object_move",
+            side_effect=fake_generate_l2_object_move,
+        ):
+            questions = generate_all_questions(
+                objects=objects,
+                attachment_graph={},
+                attached_by={},
+                camera_pose=make_camera_pose(),
+                templates={},
+                referable_object_ids=[1, 2],
+                only_question_types=[
+                    "L2_object_move_agent",
+                    "L2_object_move_distance",
+                ],
+                question_type_budgets={
+                    "object_move_agent": 0,
+                    "object_move_distance": 1,
+                },
+            )
+
+        self.assertEqual(questions, [])
+        self.assertEqual(
+            captured["enabled_l2_object_move_types"],
+            {"object_move_distance"},
+        )
+
     def test_generate_all_questions_accepts_all_single_frame_l1_types(self) -> None:
         objects = [
             make_object(1, "table"),
