@@ -1092,7 +1092,7 @@ class L1OcclusionQuestionTests(unittest.TestCase):
         self.assertLess(not_occluded_metrics.occlusion_ratio_in_frame, 0.005)
         self.assertEqual(not_occluded_metrics.occluded_in_frame_count, 2)
         self.assertEqual(occluded_metrics.decision, "occluded")
-        self.assertGreater(occluded_metrics.occlusion_ratio_in_frame, 0.10)
+        self.assertGreater(occluded_metrics.occlusion_ratio_in_frame, 0.05)
         self.assertEqual(occluded_metrics.occluded_in_frame_count, 52)
         self.assertEqual(not_visible_metrics.decision, "not visible")
         self.assertEqual(not_visible_metrics.not_visible_probe_visible_count, 0)
@@ -1119,6 +1119,29 @@ class L1OcclusionQuestionTests(unittest.TestCase):
 
         self.assertEqual(not_occluded_metrics.decision, "not occluded")
         self.assertEqual(boundary_metrics.decision, "grayzone")
+
+    def test_l1_occlusion_requires_strictly_more_than_five_percent_for_occluded(self) -> None:
+        boundary_metrics = _make_l1_occlusion_metrics(
+            projected_area=500.0,
+            in_frame_ratio=1.0,
+            occlusion_ratio_in_frame=0.05,
+            valid_in_frame_count=512,
+            sampled_point_count=512,
+            in_frame_sample_count=512,
+            backend="mesh_ray",
+        )
+        occluded_metrics = _make_l1_occlusion_metrics(
+            projected_area=500.0,
+            in_frame_ratio=1.0,
+            occlusion_ratio_in_frame=0.051,
+            valid_in_frame_count=512,
+            sampled_point_count=512,
+            in_frame_sample_count=512,
+            backend="mesh_ray",
+        )
+
+        self.assertEqual(boundary_metrics.decision, "grayzone")
+        self.assertEqual(occluded_metrics.decision, "occluded")
 
     def test_l1_occlusion_demotes_high_ratio_with_too_few_occluded_samples_to_grayzone(self) -> None:
         insufficient_count_metrics = _make_l1_occlusion_metrics(
@@ -1185,7 +1208,7 @@ class L1OcclusionQuestionTests(unittest.TestCase):
         )
         self.assertIsNone(questions[0]["obj_a_id"])
 
-    def test_l1_occlusion_skips_grayzone_ratio_between_1_and_10_percent(self) -> None:
+    def test_l1_occlusion_skips_grayzone_ratio_between_half_and_five_percent(self) -> None:
         xs = np.linspace(-0.5, 0.5, 32, dtype=np.float64)
         ys = np.linspace(-0.25, 0.25, 16, dtype=np.float64)
         grid = np.stack(np.meshgrid(xs, ys), axis=-1).reshape(-1, 2)
@@ -1208,7 +1231,7 @@ class L1OcclusionQuestionTests(unittest.TestCase):
             depth_image=None,
             depth_intrinsics=None,
             occlusion_backend="mesh_ray",
-            ray_caster=_FixedVisibilityStatsCaster(visible_count=486, valid_count=512),
+            ray_caster=_FixedVisibilityStatsCaster(visible_count=487, valid_count=512),
             instance_mesh_data=InstanceMeshData(
                 vertices=np.empty((0, 3), dtype=np.float64),
                 faces=np.empty((0, 3), dtype=np.int64),
