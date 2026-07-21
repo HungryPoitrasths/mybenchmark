@@ -8,8 +8,10 @@ import pytest
 
 from src.hybrid_auxiliary_path import (
     HybridAuxiliaryRouter,
+    HybridRoutingConfig,
     VisualContinuityEvidence,
 )
+from src.legacy_auxiliary_path import ROUTE_SEMANTIC_MIN_BBOX_IN_FRAME_RATIO
 from src.utils.colmap_loader import CameraIntrinsics, CameraPose
 
 
@@ -53,6 +55,11 @@ def passing_evidence(model: str = "fundamental") -> VisualContinuityEvidence:
         grid_fraction_right=0.5,
         reason="passed",
     )
+
+
+def test_auxiliary_semantic_bbox_threshold_is_twenty_percent() -> None:
+    assert HybridRoutingConfig().semantic_min_bbox_in_frame_ratio == pytest.approx(0.20)
+    assert ROUTE_SEMANTIC_MIN_BBOX_IN_FRAME_RATIO == pytest.approx(0.20)
 
 
 def test_route_advances_only_gap_and_rejects_semantic_conflict(monkeypatch) -> None:

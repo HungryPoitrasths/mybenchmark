@@ -40,7 +40,7 @@ class HybridRoutingConfig:
     min_grid_fraction: float = 0.25
     semantic_min_depth_m: float = 0.3
     semantic_max_depth_m: float = 8.0
-    semantic_min_bbox_in_frame_ratio: float = 0.35
+    semantic_min_bbox_in_frame_ratio: float = 0.20
     semantic_min_projected_area_ratio: float = 800.0 / (640.0 * 480.0)
     min_transition_overlap_samples: int = 1
     max_visual_edge_checks_per_question: int = 256

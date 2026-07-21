@@ -47,7 +47,7 @@ ROUTE_SEARCH_METHOD = "dijkstra_lexicographic"
 # sides at once; it does not require either side to be visible on its own.
 ROUTE_SEMANTIC_MIN_DEPTH_M = 0.3
 ROUTE_SEMANTIC_MAX_DEPTH_M = 8.0
-ROUTE_SEMANTIC_MIN_BBOX_IN_FRAME_RATIO = 0.35
+ROUTE_SEMANTIC_MIN_BBOX_IN_FRAME_RATIO = 0.20
 ROUTE_SEMANTIC_MIN_PROJECTED_AREA_RATIO = 800.0 / (640.0 * 480.0)
 
 
