@@ -416,7 +416,8 @@ OBJECT_RELATIVE_DIRECTION_NOTE = (
 )
 ALLOCENTRIC_DIRECTION_NOTE = (
     "For horizontal cardinal directions, compare the objects' 3D bounding-box "
-    "centers projected onto the floor plan."
+    "centers projected onto the floor plan; above/below use the vertical spatial "
+    "rule."
 )
 ATTACHMENT_CHAIN_MULTI_SELECT_NOTE = (
     "This is a multiple-select question; choose all options that apply."

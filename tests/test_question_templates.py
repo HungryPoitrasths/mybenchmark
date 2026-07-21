@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -39,6 +41,23 @@ EXPECTED_L2_OBJECT_CENTRIC_MOVE_TEMPLATES = [
     "{obj_ref}? (For horizontal directions, compare the objects' 3D bounding-box "
     "centers projected onto the floor plane; above/below use the vertical spatial rule.)",
 ]
+
+VERTICAL_DIRECTION_RULE = "above/below use the vertical spatial rule."
+DIRECTION_TEMPLATE_KEYS = (
+    "L1_direction_agent",
+    "L1_direction_object_centric",
+    "L1_direction_allocentric",
+    "L2_object_move_agent",
+    "L2_object_rotate_object_centric",
+    "L2_object_move_object_centric",
+    "L2_object_move_allocentric",
+    "L3_attachment_move_agent",
+    "L3_attachment_move_object_centric",
+    "L3_attachment_move_allocentric",
+    "L3_coordinate_rotation_agent",
+    "L3_coordinate_rotation_object_centric",
+    "L3_coordinate_rotation_allocentric",
+)
 
 
 def make_camera_pose() -> CameraPose:
@@ -269,6 +288,28 @@ class _ScriptedHitPathCaster:
 
 
 class QuestionTemplateTests(unittest.TestCase):
+    def test_all_direction_templates_end_with_vertical_spatial_rule(self) -> None:
+        template_path = (
+            Path(__file__).resolve().parents[1]
+            / "templates"
+            / "question_templates.json"
+        )
+        file_templates = json.loads(template_path.read_text(encoding="utf-8"))
+
+        for source, templates in (
+            ("default", _default_templates()),
+            ("json", file_templates),
+        ):
+            for key in DIRECTION_TEMPLATE_KEYS:
+                with self.subTest(source=source, key=key):
+                    self.assertIn(key, templates)
+                    self.assertTrue(templates[key])
+                    for template in templates[key]:
+                        self.assertEqual(template.count(VERTICAL_DIRECTION_RULE), 1)
+                        self.assertTrue(
+                            template.endswith(f"{VERTICAL_DIRECTION_RULE})")
+                        )
+
     def test_default_object_centric_templates_split_move_and_rotate_wording(self) -> None:
         templates = _default_templates()
 
