@@ -123,7 +123,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 5
+PIPELINE_SCENE_STATUS_VERSION = 6
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 SCENE_QUESTION_HARD_CAP_BY_SPLIT = {"val": 50, "train": 100}
@@ -4490,6 +4490,18 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
     route_method = loaded.get("auxiliary_route_method")
     if isinstance(route_method, str) and route_method in AUXILIARY_ROUTE_METHODS:
         result["auxiliary_route_method"] = route_method
+    if "scene_type_cap" in loaded:
+        try:
+            recorded_scene_type_cap = int(loaded["scene_type_cap"])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Invalid scene status document at {path}: scene_type_cap must be an integer"
+            ) from exc
+        if recorded_scene_type_cap < 0:
+            raise RuntimeError(
+                f"Invalid scene status document at {path}: scene_type_cap must be >= 0"
+            )
+        result["scene_type_cap"] = recorded_scene_type_cap
     return result
 
 
@@ -4735,9 +4747,8 @@ _ALL_CANONICAL_QUESTION_TYPES = {
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 }
-# scene_type_cap and frame_type_cap only bound L1 (perception) question types.
-# L2/L3 remain uncapped by type, but have fixed per-object limits within each
-# (scene, type, frame) below.
+# scene_type_cap bounds L1 perception types. L1/L2/L3 have no frame/type
+# total cap; their fixed per-primary-object limits are applied below.
 _SCENE_TYPE_CAP_ELIGIBLE_TYPES = {
     "direction_agent",
     "occlusion",
@@ -4763,6 +4774,7 @@ _L3_CANONICAL_QUESTION_TYPES = {
 }
 _L2_FRAME_TYPE_OBJECT_CAP = 2
 _L3_FRAME_TYPE_OBJECT_CAP = 1
+_L1_FRAME_TYPE_OBJECT_CAP = 1
 _PUBLIC_TO_CANONICAL_QUESTION_TYPES = {
     "L1_direction_agent": "direction_agent",
     "L1_occlusion": "occlusion",
@@ -4806,6 +4818,11 @@ _QUESTION_CAP_OBJECT_ID_FIELDS = [
     "obj_b_id",
 ]
 _QUESTION_CAP_OBJECT_ID_FIELD_BY_TYPE = {
+    "direction_agent": "obj_a_id",
+    "occlusion": "obj_a_id",
+    "distance": "obj_a_id",
+    "direction_object_centric": "obj_target_id",
+    "direction_allocentric": "obj_a_id",
     "object_move_agent": "query_obj_id",
     "object_move_distance": "query_obj_id",
     "object_move_occlusion": "query_obj_id",
@@ -4951,9 +4968,8 @@ def _frame_has_attachment_pair(
     return any(child_ids for child_ids in graph.values())
 
 
-# L2/L3 pair-dedup is looser than L1's: the same (type, object pair) may
-# recur across several viewpoints of the same scene, so instead of L1's
-# "one ever" rule, allow up to one per frame and up to this many scene-wide.
+# Multi-image question types may reuse a semantic object pair from a few
+# different viewpoints, while preventing one frame pair from duplicating it.
 _L2_L3_PAIR_SCENE_CAP = 3
 
 
@@ -4976,9 +4992,7 @@ def _apply_incremental_question_caps(
         frame_type_object_counts if frame_type_object_counts is not None else Counter()
     )
     pair_counter = pair_counts if pair_counts is not None else Counter()
-    # Keyed by (scene_id, frame_identity, *pair_key), so a single Counter
-    # created fresh per call correctly scopes pair dedup during live frame
-    # processing and persist-time re-application.
+    # Keyed by (scene_id, frame_identity, *pair_key), scoped to this batch.
     frame_pair_counter: Counter[tuple[str, ...]] = Counter()
 
     for question in questions:
@@ -5003,8 +5017,7 @@ def _apply_incremental_question_caps(
             if pair_key is not None
             else None
         )
-        # L1 keeps its configurable caps. The split-specific hard cap applies
-        # to every canonical question type (including L2/L3).
+        # The split-specific hard cap applies to every canonical question type.
         type_is_cap_eligible = canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES
         effective_scene_type_cap = scene_type_cap if type_is_cap_eligible else 0
         if scene_question_hard_cap > 0:
@@ -5015,8 +5028,10 @@ def _apply_incremental_question_caps(
             else:
                 effective_scene_type_cap = scene_question_hard_cap
         if type_is_cap_eligible:
-            effective_frame_type_cap = frame_type_cap
-            effective_frame_type_object_cap = frame_type_object_cap
+            # L1 follows the multi-image L3 distribution rule: no frame/type
+            # total cap, and one question per primary object/frame identity.
+            effective_frame_type_cap = 0
+            effective_frame_type_object_cap = _L1_FRAME_TYPE_OBJECT_CAP
         elif canonical_type in _L2_CANONICAL_QUESTION_TYPES:
             effective_frame_type_cap = 0
             effective_frame_type_object_cap = _L2_FRAME_TYPE_OBJECT_CAP
@@ -5035,19 +5050,12 @@ def _apply_incremental_question_caps(
             and frame_object_counts[frame_object_key] >= effective_frame_type_object_cap
         ):
             continue
-        if type_is_cap_eligible:
-            # L1: at most one question per (type, object pair), scene-wide.
-            if pair_key is not None and pair_counter[pair_key] >= 1:
-                continue
-        else:
-            # L2/L3: at most one per (type, object pair) per frame, and at
-            # most _L2_L3_PAIR_SCENE_CAP per (type, object pair) scene-wide --
-            # lets the same counterfactual be asked from a few different
-            # viewpoints without one frame or one pair dominating the scene.
-            if frame_pair_key is not None and frame_pair_counter[frame_pair_key] >= 1:
-                continue
-            if pair_key is not None and pair_counter[pair_key] >= _L2_L3_PAIR_SCENE_CAP:
-                continue
+        # L1/L2/L3 all allow a pair to recur across a few viewpoints, but not
+        # within the same frame identity and never more than three scene-wide.
+        if frame_pair_key is not None and frame_pair_counter[frame_pair_key] >= 1:
+            continue
+        if pair_key is not None and pair_counter[pair_key] >= _L2_L3_PAIR_SCENE_CAP:
+            continue
         kept.append(question)
         scene_counts[canonical_type] += 1
         frame_counts[frame_key] += 1
@@ -5122,6 +5130,42 @@ def _remaining_scene_type_budgets(
             limits.append(scene_question_hard_cap)
         budgets[question_type] = max(min(limits) - int(type_counts[question_type]), 0)
     return budgets
+
+
+def _scene_type_budget_remaining(
+    type_counts: Counter[str],
+    canonical_type: str,
+    *,
+    scene_type_cap: int,
+    scene_question_hard_cap: int = 0,
+) -> int | None:
+    budgets = _remaining_scene_type_budgets(
+        type_counts,
+        scene_type_cap=scene_type_cap,
+        allowed_types={canonical_type},
+        scene_question_hard_cap=scene_question_hard_cap,
+    )
+    if budgets is None:
+        return None
+    return budgets.get(canonical_type)
+
+
+def _all_scene_type_budgets_exhausted(
+    type_counts: Counter[str],
+    canonical_types: set[str],
+    *,
+    scene_type_cap: int,
+    scene_question_hard_cap: int = 0,
+) -> bool:
+    return bool(canonical_types) and all(
+        _scene_type_budget_remaining(
+            type_counts,
+            canonical_type,
+            scene_type_cap=scene_type_cap,
+            scene_question_hard_cap=scene_question_hard_cap,
+        ) == 0
+        for canonical_type in canonical_types
+    )
 
 
 def _split_scene_question_hard_cap(split: str | None) -> int:
@@ -5345,7 +5389,7 @@ def run_pipeline(
     resume: bool = False,
     reset: int | None = None,
     only_question_types: list[str] | None = None,
-    scene_type_cap: int = 8,
+    scene_type_cap: int = 10,
     frame_type_cap: int = 2,
     frame_type_object_cap: int = 1,
     max_questions_per_scene_type: int | None = None,
@@ -5493,6 +5537,16 @@ def run_pipeline(
                 scene_status_path,
             )
         completed_route_records = _pipeline_completed_scene_records(scene_status_doc)
+        recorded_scene_type_cap = scene_status_doc.get("scene_type_cap")
+        if completed_route_records and recorded_scene_type_cap != scene_type_cap:
+            raise RuntimeError(
+                "Cannot resume with scene_type_cap="
+                f"{scene_type_cap}: {len(completed_route_records)} completed scene(s) "
+                f"were generated with scene_type_cap={recorded_scene_type_cap!r}. "
+                "Use a new --output_dir, or reset all completed scenes before "
+                "changing the L1 scene/type cap."
+            )
+        scene_status_doc["scene_type_cap"] = scene_type_cap
         recorded_route_method = scene_status_doc.get("auxiliary_route_method")
         if cross_frame_requested_types and completed_route_records:
             if recorded_route_method is None:
@@ -5523,6 +5577,7 @@ def run_pipeline(
         _clear_pipeline_resume_state(output_dir)
         scene_status_doc = _build_empty_pipeline_scene_status_doc()
         scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
+        scene_status_doc["scene_type_cap"] = scene_type_cap
         raw_questions_dir.mkdir(parents=True, exist_ok=True)
         completed_scene_ids = []
 
@@ -5965,14 +6020,11 @@ def run_pipeline(
             # effective scene cap. The split hard cap makes L2/L3 eligible for
             # this early stop too.
             if scene_type_cap > 0 or scene_question_hard_cap > 0:
-                remaining_scene_type_budgets = _remaining_scene_type_budgets(
+                if _all_scene_type_budgets_exhausted(
                     scene_question_type_counts,
                     scene_type_cap=scene_type_cap,
-                    allowed_types=single_frame_scene_question_types,
+                    canonical_types=single_frame_scene_question_types,
                     scene_question_hard_cap=scene_question_hard_cap,
-                )
-                if remaining_scene_type_budgets is not None and all(
-                    budget <= 0 for budget in remaining_scene_type_budgets.values()
                 ):
                     logger.info(
                         "Scene %s reached all active per-type caps after %d frame(s); stopping early",
@@ -6256,12 +6308,10 @@ def run_pipeline(
                             pair = tuple(sorted((str(id_a), str(id_b))))
                             if pair[0] == pair[1]:
                                 return True
-                            cap = (
-                                1
-                                if canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES
-                                else _L2_L3_PAIR_SCENE_CAP
+                            return (
+                                scene_pair_counts[(canonical_type, pair[0], pair[1])]
+                                < _L2_L3_PAIR_SCENE_CAP
                             )
-                            return scene_pair_counts[(canonical_type, pair[0], pair[1])] < cap
 
                         if single_frame_requested_types:
                             questions = _call_generate_all_questions_compat(
@@ -6505,6 +6555,16 @@ def run_pipeline(
             cross_candidate_type_counts: Counter[str] = Counter(
                 scene_question_type_counts
             )
+
+            def _cross_type_budget_available(canonical_type: str) -> bool:
+                remaining = _scene_type_budget_remaining(
+                    cross_candidate_type_counts,
+                    canonical_type,
+                    scene_type_cap=scene_type_cap,
+                    scene_question_hard_cap=scene_question_hard_cap,
+                )
+                return remaining is None or remaining > 0
+
             answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] = {}
             distance_annotation_stats: Counter[str] = Counter()
             pair_stage_counts: Counter = funnel["pair_stage_counts"]
@@ -6655,11 +6715,7 @@ def run_pipeline(
                 frame_2_rank = int((frame_2.cache_entry or {}).get("final_selection_rank", 1_000_000))
                 for question in pair_questions:
                     canonical_type = _canonical_scene_question_type(question)
-                    if (
-                        scene_question_hard_cap > 0
-                        and cross_candidate_type_counts[canonical_type]
-                        >= scene_question_hard_cap
-                    ):
+                    if not _cross_type_budget_available(canonical_type):
                         continue
                     question_route = route
                     if auxiliary_route_method in {
@@ -6851,10 +6907,9 @@ def run_pipeline(
                     active_cross_types = [
                         public_type
                         for public_type in deferred_cross_types
-                        if scene_question_hard_cap <= 0
-                        or cross_candidate_type_counts[
+                        if _cross_type_budget_available(
                             _PUBLIC_TO_CANONICAL_QUESTION_TYPES[public_type]
-                        ] < scene_question_hard_cap
+                        )
                     ]
                     if not active_cross_types:
                         logger.info(
@@ -7604,7 +7659,7 @@ def main():
     parser.add_argument(
         "--scene_type_cap",
         type=int,
-        default=8,
+        default=10,
         help="Maximum kept L1 questions per (dataset, scene, type). Use 0 to disable.",
     )
     parser.add_argument(
@@ -7612,8 +7667,8 @@ def main():
         type=int,
         default=2,
         help=(
-            "Maximum kept L1 questions per (dataset, scene, frame, type). "
-            "L2/L3 have no per-frame type-total cap. Use 0 to disable the L1 cap."
+            "Deprecated compatibility option; ignored. L1/L2/L3 have no "
+            "per-frame type-total cap."
         ),
     )
     parser.add_argument(
@@ -7621,9 +7676,8 @@ def main():
         type=int,
         default=1,
         help=(
-            "Maximum kept L1 questions per (dataset, scene, frame, type, obj). "
-            "L2 uses a fixed cap of 2 and L3 a fixed cap of 1. "
-            "Use 0 to disable the L1 cap."
+            "Deprecated compatibility option; ignored for L1. L1 and L3 use "
+            "a fixed per-frame primary-object cap of 1; L2 uses 2."
         ),
     )
     parser.add_argument(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 import importlib.util
+import inspect
 from pathlib import Path
 
 
@@ -253,3 +254,106 @@ def test_hard_cap_budget_reaches_zero_for_early_stop() -> None:
     )
 
     assert budgets == {"attachment_move": 1, "object_move_agent": 0}
+
+
+def test_l1_default_scene_type_cap_is_ten() -> None:
+    signature = inspect.signature(run_pipeline.run_pipeline)
+    assert signature.parameters["scene_type_cap"].default == 10
+
+
+def test_l1_uses_no_frame_total_cap_and_one_primary_object_per_frame() -> None:
+    questions = [
+        {
+            "scene_id": "scene0000_00",
+            "level": "L1",
+            "type": "direction_agent",
+            "image_name": "000100.jpg",
+            "reasoning_frame_2": "000200.jpg",
+            "obj_a_id": object_id,
+            "obj_b_id": object_id + 100,
+            "question": f"direction {object_id} {index}",
+        }
+        for object_id in range(12)
+        for index in range(2)
+    ]
+
+    kept = run_pipeline._apply_scene_type_cap(
+        questions,
+        scene_type_cap=0,
+        frame_type_cap=1,
+        frame_type_object_cap=99,
+    )
+
+    assert len(kept) == 12
+    assert {question["obj_a_id"] for question in kept} == set(range(12))
+
+
+def test_l1_scene_type_cap_keeps_ten_and_budget_reaches_zero() -> None:
+    questions = [
+        {
+            "scene_id": "scene0000_00",
+            "level": "L1",
+            "type": "occlusion",
+            "image_name": f"{index:06d}.jpg",
+            "obj_a_id": index,
+            "question": f"occlusion {index}",
+        }
+        for index in range(11)
+    ]
+
+    kept = run_pipeline._apply_scene_type_cap(
+        questions,
+        scene_type_cap=10,
+    )
+    budgets = run_pipeline._remaining_scene_type_budgets(
+        Counter({"occlusion": len(kept)}),
+        scene_type_cap=10,
+        allowed_types={"occlusion"},
+    )
+
+    assert len(kept) == 10
+    assert budgets == {"occlusion": 0}
+
+
+def test_uncapped_l2_type_prevents_mixed_single_frame_early_stop() -> None:
+    counts = Counter({"occlusion": 10, "object_remove": 3})
+
+    assert not run_pipeline._all_scene_type_budgets_exhausted(
+        counts,
+        {"occlusion", "object_remove"},
+        scene_type_cap=10,
+    )
+    assert run_pipeline._all_scene_type_budgets_exhausted(
+        counts,
+        {"occlusion"},
+        scene_type_cap=10,
+    )
+
+
+def test_l1_pair_repeats_once_per_frame_pair_and_three_times_per_scene() -> None:
+    questions = []
+    for index in range(4):
+        question = {
+            "scene_id": "scene0000_00",
+            "level": "L1",
+            "type": "direction_agent",
+            "image_name": f"frame-a-{index}.jpg",
+            "reasoning_frame_2": f"frame-b-{index}.jpg",
+            "cross_frame_layout": "a_to_b",
+            "object_frame_groups": {"frame_1": [1], "frame_2": [2]},
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "question": f"pair {index}",
+        }
+        questions.extend([question, {**question, "question": f"duplicate {index}"}])
+
+    kept = run_pipeline._apply_scene_type_cap(
+        questions,
+        scene_type_cap=10,
+    )
+
+    assert [question["question"] for question in kept] == [
+        "pair 0",
+        "pair 1",
+        "pair 2",
+    ]
