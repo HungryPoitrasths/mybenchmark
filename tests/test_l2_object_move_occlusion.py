@@ -23,6 +23,7 @@ from src.qa_generator import (
     _iter_occlusion_directed_object_move_states,
     _make_l1_occlusion_metrics,
     _match_world_xy_direction_bin,
+    _match_world_xy_direction_bins,
     _occluder_blocks_translated_query_object,
     _pairwise_occlusion_relation_after_move,
     _iter_pairwise_occlusion_directed_object_move_states,
@@ -196,7 +197,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
                 instance_mesh_data=SimpleNamespace(),
             )
 
-    def test_select_l2_object_move_occlusion_records_caps_unchanged_at_changed_quarter(self) -> None:
+    def test_select_l2_object_move_occlusion_records_keeps_all_post_move_records(self) -> None:
         records = [
             {"candidate_index": 0, "relation_unchanged": False},
             {"candidate_index": 1, "relation_unchanged": False},
@@ -211,10 +212,10 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
 
         self.assertEqual(
             [record["candidate_index"] for record in selected],
-            [0, 1, 2, 3, 4, 6],
+            [0, 1, 2, 3, 4, 5, 6],
         )
 
-    def test_select_l2_object_move_occlusion_records_keeps_one_unchanged_fallback(self) -> None:
+    def test_select_l2_object_move_occlusion_records_does_not_balance_by_old_state(self) -> None:
         records = [
             {"candidate_index": 0, "relation_unchanged": True},
             {"candidate_index": 1, "relation_unchanged": True},
@@ -222,7 +223,7 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
 
         selected = _select_l2_object_move_occlusion_records(records)
 
-        self.assertEqual([record["candidate_index"] for record in selected], [0])
+        self.assertEqual([record["candidate_index"] for record in selected], [0, 1])
 
     def test_find_object_move_occlusion_changes_tracks_l1_style_changes_for_moved_targets_only(self) -> None:
         objects = [
@@ -1290,9 +1291,9 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
     moved object at a specific nearby occluder instead of blindly walking the
     fixed movement grid."""
 
-    def test_match_world_xy_direction_bin_accepts_vector_within_15_degrees(self) -> None:
+    def test_match_world_xy_direction_bin_accepts_vector_within_22_5_degrees(self) -> None:
         # +X axis is DISTANCE_MOVE_DIRECTIONS[0] (see MOVEMENT_CANDIDATES[:8]).
-        vector = np.array([1.0, math.tan(math.radians(10.0)), 0.0], dtype=np.float64)
+        vector = np.array([1.0, math.tan(math.radians(20.0)), 0.0], dtype=np.float64)
 
         match = _match_world_xy_direction_bin(vector)
 
@@ -1301,27 +1302,33 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
         self.assertEqual(bin_idx, 0)
         np.testing.assert_allclose(unit_direction, DISTANCE_MOVE_DIRECTIONS[0])
 
-    def test_match_world_xy_direction_bin_rejects_vector_between_bins(self) -> None:
-        # Exactly at the 22.5-degree bin boundary: the OLD (incorrect) 22.5deg
-        # threshold would accept this (cos(22.5deg) is an identity, never
-        # rejects for 8 bins spaced 45deg apart); the 15deg threshold used
-        # here must reject it. This is a regression guard against
-        # accidentally reverting to 22.5deg.
+    def test_match_world_xy_direction_bins_returns_both_at_exact_boundary(self) -> None:
         angle = math.radians(22.5)
         vector = np.array([math.cos(angle), math.sin(angle), 0.0], dtype=np.float64)
 
-        match = _match_world_xy_direction_bin(vector)
+        matches = _match_world_xy_direction_bins(vector)
 
-        self.assertIsNone(match)
-        # Sanity-check the claim above: cos(22.5deg) would not reject this.
-        best_dot = max(
-            float(np.dot(vector[:2], np.asarray(direction)[:2]))
-            for direction in DISTANCE_MOVE_DIRECTIONS
+        self.assertEqual([idx for idx, _direction in matches], [0, 4])
+        np.testing.assert_allclose(matches[0][1], DISTANCE_MOVE_DIRECTIONS[0])
+        np.testing.assert_allclose(matches[1][1], DISTANCE_MOVE_DIRECTIONS[4])
+
+    def test_match_world_xy_direction_bins_returns_only_nearest_around_boundary(self) -> None:
+        below = math.radians(22.5 - 1e-4)
+        above = math.radians(22.5 + 1e-4)
+
+        below_matches = _match_world_xy_direction_bins(
+            np.array([math.cos(below), math.sin(below), 0.0], dtype=np.float64)
         )
-        self.assertGreaterEqual(best_dot, math.cos(math.radians(22.5)) - 1e-9)
+        above_matches = _match_world_xy_direction_bins(
+            np.array([math.cos(above), math.sin(above), 0.0], dtype=np.float64)
+        )
+
+        self.assertEqual([idx for idx, _direction in below_matches], [0])
+        self.assertEqual([idx for idx, _direction in above_matches], [4])
 
     def test_match_world_xy_direction_bin_rejects_zero_vector(self) -> None:
         self.assertIsNone(_match_world_xy_direction_bin(np.zeros(3)))
+        self.assertEqual(_match_world_xy_direction_bins(np.zeros(3)), ())
 
     def test_adaptive_scene_scaled_cap_scales_linearly_and_clamps(self) -> None:
         # Below min_cap: clamps up to min_cap.
@@ -1788,18 +1795,13 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
 
         self.assertIsNone(selected_state)
 
-    def test_iter_occlusion_directed_object_move_states_excludes_moved_ids_and_direction_mismatches(self) -> None:
+    def test_iter_occlusion_directed_object_move_states_excludes_moved_ids_and_zero_vectors(self) -> None:
         query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
         # Directly "north" (+Y direction) of query_obj: matches a canonical bin.
         aligned_occluder = make_object(2, "shelf", (0.0, 1.0, 2.0))
-        # 20 degrees off the nearest canonical bin (bins are 45deg apart, so
-        # this is also 25deg off the next-nearest bin): should be rejected by
-        # the direction filter and never reach the (mocked) delta search.
-        misaligned_occluder = make_object(3, "lamp", (
-            math.cos(math.radians(20.0)),
-            math.sin(math.radians(20.0)),
-            2.0,
-        ))
+        # A coincident center has no usable floor-plane direction and should
+        # never reach the mocked delta search.
+        zero_vector_occluder = make_object(3, "lamp", (0.0, 0.0, 2.0))
         moved_sibling = make_object(4, "pillow", (0.0, 1.0, 2.0))
         original_visibility = {
             2: (None, "mesh_ray", "", make_l1_metrics("occluded")),
@@ -1817,8 +1819,8 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
                     query_obj=query_obj,
                     move_source_id=1,
                     moved_ids={1, 4},
-                    movement_scene_objects=[query_obj, aligned_occluder, misaligned_occluder, moved_sibling],
-                    occlusion_source_objects=[aligned_occluder, misaligned_occluder, moved_sibling],
+                    movement_scene_objects=[query_obj, aligned_occluder, zero_vector_occluder, moved_sibling],
+                    occlusion_source_objects=[aligned_occluder, zero_vector_occluder, moved_sibling],
                     original_visibility=original_visibility,
                     attachment_graph={},
                     camera_pose=make_camera_pose(),
@@ -1835,6 +1837,56 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
         # Only the aligned occluder should ever reach the delta search.
         self.assertEqual(delta_mock.call_count, 1)
         self.assertEqual(int(delta_mock.call_args.kwargs["obj_ref"]["id"]), 2)
+
+    def test_iter_occlusion_directed_object_move_states_tries_both_boundary_directions(self) -> None:
+        query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        angle = math.radians(22.5)
+        occluder = make_object(
+            2,
+            "shelf",
+            (math.cos(angle), math.sin(angle), 2.0),
+        )
+        original_visibility = {
+            2: (None, "mesh_ray", "", make_l1_metrics("occluded")),
+        }
+        states_by_direction = [
+            SimpleNamespace(delta=np.array([0.8, 0.0, 0.0])),
+            SimpleNamespace(delta=np.array([0.6, 0.6, 0.0])),
+        ]
+        counter = [0]
+
+        with patch(
+            "src.qa_generator._find_occlusion_directed_delta_for_occluder",
+            side_effect=states_by_direction,
+        ) as delta_mock:
+            states = list(
+                _iter_occlusion_directed_object_move_states(
+                    query_obj=query_obj,
+                    move_source_id=1,
+                    moved_ids={1},
+                    movement_scene_objects=[query_obj, occluder],
+                    occlusion_source_objects=[occluder],
+                    original_visibility=original_visibility,
+                    attachment_graph={},
+                    camera_pose=make_camera_pose(),
+                    color_intrinsics=make_camera_intrinsics(),
+                    instance_mesh_data=object(),
+                    room_min=np.array([-10.0, -10.0, -10.0]),
+                    room_max=np.array([10.0, 10.0, 10.0]),
+                    collision_objects=None,
+                    candidates_tried_counter=counter,
+                    max_candidates_tried=1,
+                )
+            )
+
+        self.assertEqual(states, states_by_direction)
+        self.assertEqual(counter, [1])
+        self.assertEqual(delta_mock.call_count, 2)
+        attempted_directions = [
+            call.kwargs["unit_direction"] for call in delta_mock.call_args_list
+        ]
+        np.testing.assert_allclose(attempted_directions[0], DISTANCE_MOVE_DIRECTIONS[0])
+        np.testing.assert_allclose(attempted_directions[1], DISTANCE_MOVE_DIRECTIONS[4])
 
     def test_iter_occlusion_directed_object_move_states_stops_when_candidate_budget_exhausted(self) -> None:
         query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
@@ -2402,17 +2454,19 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
             )
         self.assertEqual(relation, L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER)
 
-    def test_pairwise_directed_search_finds_both_directions(self) -> None:
+    def test_pairwise_directed_search_yields_both_post_move_directions(self) -> None:
         query = make_object(1, "cushion", (0.0, 0.0, 2.0))
         reference = make_object(2, "sofa", (1.0, 0.0, 2.0))
         objects = [query, reference]
         relation_results = [
             (L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, 0.0, 0.8),
             (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, 0.8, 0.0),
-            (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, 0.8, 0.0),
         ]
         with (
-            patch("src.qa_generator._match_world_xy_direction_bin", return_value=(0, np.array([1.0, 0.0, 0.0]))),
+            patch(
+                "src.qa_generator._match_world_xy_direction_bins",
+                return_value=((0, np.array([1.0, 0.0, 0.0])),),
+            ),
             patch("src.qa_generator._adaptive_occlusion_directed_step", return_value=0.5),
             patch("src.qa_generator.is_within_room", return_value=True),
             patch("src.qa_generator.has_terminal_bbox_collision", return_value=False),
@@ -2437,17 +2491,60 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
                     room_min=np.array([-5.0, -5.0, -5.0]),
                     room_max=np.array([5.0, 5.0, 5.0]),
                     collision_objects=objects,
-                    old_relation=L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
                 )
             )
 
         self.assertEqual(
             {relation for _state, relation, _query_ratio, _ref_ratio in states},
             {
-                L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
                 L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+                L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
             },
         )
+
+    def test_pairwise_directed_search_recomputes_step_for_both_boundary_directions(self) -> None:
+        query = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        angle = math.radians(22.5)
+        reference = make_object(
+            2,
+            "sofa",
+            (math.cos(angle), math.sin(angle), 2.0),
+        )
+        objects = [query, reference]
+        counter = [0]
+
+        with (
+            patch(
+                "src.qa_generator._adaptive_occlusion_directed_step",
+                return_value=0.5,
+            ) as step_mock,
+            patch("src.qa_generator.is_within_room", return_value=False),
+        ):
+            states = list(
+                _iter_pairwise_occlusion_directed_object_move_states(
+                    query_obj=query,
+                    ref_obj=reference,
+                    move_source_id=1,
+                    moved_ids={1},
+                    movement_scene_objects=objects,
+                    attachment_graph={},
+                    camera_pose=make_camera_pose(),
+                    color_intrinsics=make_camera_intrinsics(),
+                    instance_mesh_data=SimpleNamespace(),
+                    room_min=np.array([-5.0, -5.0, -5.0]),
+                    room_max=np.array([5.0, 5.0, 5.0]),
+                    collision_objects=objects,
+                    candidates_tried_counter=counter,
+                    max_candidates_tried=1,
+                )
+            )
+
+        self.assertEqual(states, [])
+        self.assertEqual(counter, [1])
+        self.assertEqual(step_mock.call_count, 2)
+        attempted_directions = [call.args[1] for call in step_mock.call_args_list]
+        np.testing.assert_allclose(attempted_directions[0], DISTANCE_MOVE_DIRECTIONS[0])
+        np.testing.assert_allclose(attempted_directions[1], DISTANCE_MOVE_DIRECTIONS[4])
 
     def test_generate_l2_object_move_emits_pairwise_v2_fields(self) -> None:
         mover = make_object(1, "table", (0.0, 0.0, 2.0))
@@ -2464,11 +2561,12 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
             patch("src.qa_generator.compute_all_relations", return_value=[]),
             patch(
                 "src.qa_generator._pairwise_occlusion_relation_after_move",
-                side_effect=[
-                    (L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0),
-                    (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, 0.8, 0.0),
-                ],
-            ),
+                return_value=(
+                    L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+                    0.8,
+                    0.0,
+                ),
+            ) as relation_mock,
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
             questions = generate_l2_object_move(
@@ -2499,7 +2597,80 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
         self.assertEqual(question["query_obj_id"], 2)
         self.assertEqual(question["obj_ref_id"], 3)
         self.assertEqual(question["new_pairwise_occlusion_relation"], L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF)
+        self.assertEqual(relation_mock.call_count, 1)
+        self.assertTrue(np.any(np.asarray(relation_mock.call_args.kwargs["query_delta"])))
+        self.assertNotIn("old_correct_value", question)
+        self.assertNotIn("old_pairwise_occlusion_relation", question)
+        self.assertNotIn("old_query_blocking_ratio", question)
         self.assertNotIn("last main view", question["question"].lower())
+
+    def test_generate_l2_object_move_prefers_reverse_occlusion_over_neither_fallback(self) -> None:
+        mover = make_object(1, "table", (0.0, 0.0, 2.0))
+        query = make_object(2, "lamp", (0.2, 0.0, 2.0))
+        reference = make_object(3, "sofa", (0.8, 0.0, 2.0))
+        generic_state = SimpleNamespace(
+            delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
+            moved_objects=[mover, query],
+            moved_ids={1, 2},
+        )
+        directed_state = SimpleNamespace(
+            delta=np.array([0.8, 0.0, 0.0], dtype=np.float64),
+            moved_objects=[mover, query],
+            moved_ids={1, 2},
+        )
+
+        with (
+            patch("src.qa_generator._select_object_move_state", return_value=generic_state),
+            patch("src.qa_generator._iter_additional_object_move_states", return_value=[]),
+            patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch(
+                "src.qa_generator._pairwise_occlusion_relation_after_move",
+                return_value=(L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0),
+            ),
+            patch(
+                "src.qa_generator._iter_pairwise_occlusion_directed_object_move_states",
+                return_value=[
+                    (
+                        directed_state,
+                        L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+                        0.0,
+                        0.8,
+                    )
+                ],
+            ) as directed_mock,
+            patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
+        ):
+            questions = generate_l2_object_move(
+                objects=[mover, query, reference],
+                attachment_graph={1: [2]},
+                attached_by={2: 1},
+                camera_pose=make_camera_pose(),
+                templates={
+                    "L2_object_move_occlusion": [
+                        "After moving {obj_move_source}, compare {obj_query} and {obj_ref}."
+                    ]
+                },
+                movement_objects=[mover, query, reference],
+                object_map={obj["id"]: obj for obj in [mover, query, reference]},
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=SimpleNamespace(),
+                attachment_referable_object_ids=[1, 2],
+                attachment_query_objects=[query],
+                move_source_object_ids={1},
+                reference_object_ids={3},
+                enabled_l2_object_move_types={"object_move_occlusion"},
+            )
+
+        occlusion_questions = [
+            question for question in questions
+            if question.get("type") == "object_move_occlusion"
+        ]
+        self.assertEqual(len(occlusion_questions), 1)
+        self.assertEqual(directed_mock.call_count, 1)
+        self.assertEqual(
+            occlusion_questions[0]["new_pairwise_occlusion_relation"],
+            L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+        )
 
 
 if __name__ == "__main__":

@@ -408,7 +408,6 @@ L1_ABSENT_STRICT_NOT_VISIBLE_MIN_RAY_COUNT = 512
 L1_ABSENT_STRICT_NOT_VISIBLE_BASE_PROJECTED_AREA_PX = 800.0
 
 
-L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR = 4
 L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF = "query_occluded_by_reference"
 L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY = "reference_occluded_by_query"
 L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER = "neither"
@@ -453,23 +452,8 @@ def _l2_object_move_occlusion_display_status(status: str | None) -> str | None:
 def _select_l2_object_move_occlusion_records(
     records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    changed_records = [
-        record for record in records
-        if not bool(record["relation_unchanged"])
-    ]
-    unchanged_records = [
-        record for record in records
-        if bool(record["relation_unchanged"])
-    ]
-    unchanged_limit = (
-        len(changed_records) // L2_OBJECT_MOVE_OCCLUSION_UNCHANGED_DIVISOR
-        if changed_records
-        else 1
-    )
-    selected_unchanged_count = min(len(unchanged_records), unchanged_limit)
-    selected_records = changed_records + unchanged_records[:selected_unchanged_count]
-    selected_records.sort(key=lambda record: int(record["candidate_index"]))
-    return selected_records
+    """Keep every valid post-move occlusion record in generation order."""
+    return sorted(records, key=lambda record: int(record["candidate_index"]))
 
 
 def _pairwise_occlusion_option_text(
@@ -2584,10 +2568,11 @@ _OCCLUSION_DIRECTED_MAX_OCCLUDER_CANDIDATES = 100
 _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT = 128
 _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO = 0.15
 _OCCLUSION_DIRECTED_HIT_EPSILON_M = 0.05
-_OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG = 15.0
+_OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG = 22.5
 _OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD = math.cos(
     math.radians(_OCCLUSION_DIRECTED_DIRECTION_HALF_WIDTH_DEG)
 )
+_OCCLUSION_DIRECTED_DIRECTION_TIE_ATOL = 1e-9
 # obj_ref and obj_move need not be visible in the same image frame (a
 # separate auxiliary-frame mechanism can supplement a second image), so the
 # candidate pool isn't restricted to "naturally visible together" objects --
@@ -2618,8 +2603,8 @@ _PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES = 16
 # Scene-wide budget for this occluder-directed search: with candidates drawn
 # from the whole scene (not just one frame) there can be many more
 # (query_obj, obj_ref) pairs to try than before, so cap total accepted
-# "changed" object_move_occlusion questions and total occluder attempts per
-# scene to bound generation cost.
+# object_move_occlusion questions and total occluder attempts per scene to
+# bound generation cost. The legacy constant name is kept for compatibility.
 OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE = 40
 # Scene-wide try budget: clamp(round(fraction * len(movement_scene_objects)),
 # min, max) via _adaptive_scene_scaled_cap, so a larger multi-frame candidate
@@ -2737,38 +2722,58 @@ def _select_occlusion_directed_occluder_candidates(
     return [obj for _distance, obj in candidates[: max(0, int(max_candidates))]]
 
 
+def _match_world_xy_direction_bins(
+    vector_world: np.ndarray,
+    *,
+    directions: tuple[np.ndarray, ...] = DISTANCE_MOVE_DIRECTIONS,
+    cos_threshold: float = _OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD,
+) -> tuple[tuple[int, np.ndarray], ...]:
+    """Snap *vector_world* to its nearest canonical move direction(s).
+
+    Normally this returns one direction. At an exact boundary between two
+    bins, both tied directions are returned so callers can try both movement
+    scans. Invalid/zero vectors and vectors outside ``cos_threshold`` return
+    an empty tuple.
+    """
+    vector_xy = np.asarray(vector_world, dtype=np.float64)[:2]
+    norm = float(np.linalg.norm(vector_xy))
+    if not np.isfinite(norm) or norm <= 1e-9:
+        return ()
+    unit_vector_xy = vector_xy / norm
+    scored_directions: list[tuple[float, int, np.ndarray]] = []
+    for idx, direction in enumerate(directions):
+        unit_direction = np.asarray(direction, dtype=np.float64)
+        dot = float(np.dot(unit_vector_xy, unit_direction[:2]))
+        if np.isfinite(dot):
+            scored_directions.append((dot, idx, unit_direction))
+    if not scored_directions:
+        return ()
+    scored_directions.sort(key=lambda item: (-item[0], item[1]))
+    best_dot = scored_directions[0][0]
+    if best_dot < float(cos_threshold) - _OCCLUSION_DIRECTED_DIRECTION_TIE_ATOL:
+        return ()
+    return tuple(
+        (idx, unit_direction)
+        for dot, idx, unit_direction in scored_directions
+        if abs(dot - best_dot) <= _OCCLUSION_DIRECTED_DIRECTION_TIE_ATOL
+    )
+
+
 def _match_world_xy_direction_bin(
     vector_world: np.ndarray,
     *,
     directions: tuple[np.ndarray, ...] = DISTANCE_MOVE_DIRECTIONS,
     cos_threshold: float = _OCCLUSION_DIRECTED_DIRECTION_COS_THRESHOLD,
 ) -> tuple[int, np.ndarray] | None:
-    """Snap *vector_world* to the nearest of the 8 canonical move directions.
-
-    Returns ``None`` when the vector isn't within ``cos_threshold`` of any
-    bin's center — i.e. it doesn't clearly point toward one of the 8
-    axis/diagonal directions the movement grid supports, so the caller
-    should skip this candidate rather than force a mismatched direction.
-    Note ``cos_threshold`` must be tighter than ``cos(22.5deg)``: the 8 bins
-    are exactly 45deg apart with no gap, so every vector is within 22.5deg of
-    its nearest bin by construction and a 22.5deg threshold would never
-    reject anything.
-    """
-    vector_xy = np.asarray(vector_world, dtype=np.float64)[:2]
-    norm = float(np.linalg.norm(vector_xy))
-    if not np.isfinite(norm) or norm <= 1e-9:
+    """Return the first nearest canonical direction for compatibility."""
+    matches = _match_world_xy_direction_bins(
+        vector_world,
+        directions=directions,
+        cos_threshold=cos_threshold,
+    )
+    if not matches:
         return None
-    unit_vector_xy = vector_xy / norm
-    best_idx = -1
-    best_dot = -1.0
-    for idx, direction in enumerate(directions):
-        dot = float(np.dot(unit_vector_xy, np.asarray(direction, dtype=np.float64)[:2]))
-        if dot > best_dot:
-            best_dot = dot
-            best_idx = idx
-    if best_idx < 0 or best_dot < float(cos_threshold):
-        return None
-    return best_idx, np.asarray(directions[best_idx], dtype=np.float64)
+    return matches[0]
 
 
 def _object_blocks_translated_target_object(
@@ -3017,17 +3022,18 @@ def _iter_pairwise_occlusion_directed_object_move_states(
     room_min: np.ndarray,
     room_max: np.ndarray,
     collision_objects: list[dict] | None,
-    old_relation: str,
     candidates_tried_counter: list[int] | None = None,
     max_candidates_tried: int | None = None,
 ):
-    """Yield valid moves that change the pairwise relation in either direction.
+    """Yield valid moves producing either directed pairwise occlusion.
 
     The regular movement-state selector is intentionally generic and often
     misses the narrow depth interval in which the moved query crosses a static
     reference.  This directed scan follows the canonical floor-plane vector
-    toward the reference, samples just before and after the crossing, and
-    classifies both directed outcomes with the frame-1 camera.
+    toward the reference and samples the crossing with the frame-1 camera.
+    Both ``query_obj`` occluded by ``ref_obj`` and the reverse relation are
+    detected. Only the post-move relation is relevant; no pre-move occlusion
+    relation is required or compared.
     """
     if color_intrinsics is None or instance_mesh_data is None:
         return
@@ -3036,101 +3042,99 @@ def _iter_pairwise_occlusion_directed_object_move_states(
             return
         candidates_tried_counter[0] += 1
 
-    match = _match_world_xy_direction_bin(
+    matches = _match_world_xy_direction_bins(
         np.asarray(ref_obj["center"], dtype=np.float64)
         - np.asarray(query_obj["center"], dtype=np.float64)
     )
-    if match is None:
+    if not matches:
         return
-    _bin_idx, unit_direction = match
     offset = np.asarray(ref_obj["center"], dtype=np.float64) - np.asarray(
         query_obj["center"], dtype=np.float64
     )
-    along = float(np.dot(offset, unit_direction))
-    if not np.isfinite(along) or along <= 0.0 or along > _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M:
-        return
-
-    step = _adaptive_occlusion_directed_step(ref_obj, unit_direction)
-    query_extent = _aabb_extent_along_direction(query_obj, unit_direction)
-    # Include one query-width on each side of the reference so both
-    # ``query_by_ref`` and ``ref_by_query`` can be found without jumping over
-    # a thin occlusion window.
-    margin = max(float(step), 0.5 * float(query_extent))
-    start = max(0.05, along - margin)
-    end = min(float(_OCCLUSION_DIRECTED_MAX_MAGNITUDE_M), along + margin)
-    scan_count = min(
-        _PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES,
-        max(1, int(np.floor((end - start) / float(step))) + 1),
-    )
-    magnitudes = np.linspace(start, end, num=scan_count, dtype=np.float64)
     seen_relations: set[str] = set()
-    for magnitude in magnitudes:
-        delta = np.asarray(unit_direction, dtype=np.float64) * float(magnitude)
-        moved_objects = apply_movement(
-            movement_scene_objects,
-            attachment_graph,
-            move_source_id,
-            delta,
+    for _bin_idx, unit_direction in matches:
+        along = float(np.dot(offset, unit_direction))
+        if not np.isfinite(along) or along <= 0.0 or along > _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M:
+            continue
+
+        step = _adaptive_occlusion_directed_step(ref_obj, unit_direction)
+        query_extent = _aabb_extent_along_direction(query_obj, unit_direction)
+        # Include one query-width on each side of the reference so both
+        # ``query_by_ref`` and ``ref_by_query`` can be found without jumping
+        # over a thin occlusion window.
+        margin = max(float(step), 0.5 * float(query_extent))
+        start = max(0.05, along - margin)
+        end = min(float(_OCCLUSION_DIRECTED_MAX_MAGNITUDE_M), along + margin)
+        scan_count = min(
+            _PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES,
+            max(1, int(np.floor((end - start) / float(step))) + 1),
         )
-        if is_within_room(moved_objects, room_min, room_max) and not has_terminal_bbox_collision(
-            movement_scene_objects,
-            moved_objects,
-            moved_ids,
-            collision_objects=collision_objects,
-        ):
-            moved_map = {int(obj["id"]): obj for obj in moved_objects}
-            moved_query = moved_map.get(int(query_obj["id"]))
-            if moved_query is not None:
-                camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
-                moved_query_distance = float(
-                    np.linalg.norm(
-                        np.asarray(query_obj["center"], dtype=np.float64) + delta - camera_pos
+        magnitudes = np.linspace(start, end, num=scan_count, dtype=np.float64)
+        for magnitude in magnitudes:
+            delta = np.asarray(unit_direction, dtype=np.float64) * float(magnitude)
+            moved_objects = apply_movement(
+                movement_scene_objects,
+                attachment_graph,
+                move_source_id,
+                delta,
+            )
+            if is_within_room(moved_objects, room_min, room_max) and not has_terminal_bbox_collision(
+                movement_scene_objects,
+                moved_objects,
+                moved_ids,
+                collision_objects=collision_objects,
+            ):
+                moved_map = {int(obj["id"]): obj for obj in moved_objects}
+                moved_query = moved_map.get(int(query_obj["id"]))
+                if moved_query is not None:
+                    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+                    moved_query_distance = float(
+                        np.linalg.norm(
+                            np.asarray(query_obj["center"], dtype=np.float64) + delta - camera_pos
+                        )
                     )
-                )
-                ref_distance = float(
-                    np.linalg.norm(np.asarray(ref_obj["center"], dtype=np.float64) - camera_pos)
-                )
-                if moved_query_distance < ref_distance:
-                    expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY
-                    blocks = _object_blocks_translated_target_object(
-                        occluder_obj=query_obj,
-                        target_obj=ref_obj,
-                        occluder_delta=delta,
-                        target_delta=np.zeros(3, dtype=np.float64),
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        instance_mesh_data=instance_mesh_data,
+                    ref_distance = float(
+                        np.linalg.norm(np.asarray(ref_obj["center"], dtype=np.float64) - camera_pos)
                     )
-                else:
-                    expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF
-                    blocks = _occluder_blocks_translated_query_object(
-                        obj_ref=ref_obj,
+                    if moved_query_distance < ref_distance:
+                        expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY
+                        blocks = _object_blocks_translated_target_object(
+                            occluder_obj=query_obj,
+                            target_obj=ref_obj,
+                            occluder_delta=delta,
+                            target_delta=np.zeros(3, dtype=np.float64),
+                            camera_pose=camera_pose,
+                            color_intrinsics=color_intrinsics,
+                            instance_mesh_data=instance_mesh_data,
+                        )
+                    else:
+                        expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF
+                        blocks = _occluder_blocks_translated_query_object(
+                            obj_ref=ref_obj,
+                            query_obj=query_obj,
+                            target_delta=delta,
+                            camera_pose=camera_pose,
+                            color_intrinsics=color_intrinsics,
+                            instance_mesh_data=instance_mesh_data,
+                        )
+                    if not blocks:
+                        continue
+                    relation, query_ratio, ref_ratio = _pairwise_occlusion_relation_after_move(
                         query_obj=query_obj,
-                        target_delta=delta,
+                        ref_obj=ref_obj,
+                        query_delta=delta,
+                        ref_delta=np.zeros(3, dtype=np.float64),
                         camera_pose=camera_pose,
                         color_intrinsics=color_intrinsics,
                         instance_mesh_data=instance_mesh_data,
                     )
-                if not blocks or expected_relation == old_relation:
-                    continue
-                relation, query_ratio, ref_ratio = _pairwise_occlusion_relation_after_move(
-                    query_obj=query_obj,
-                    ref_obj=ref_obj,
-                    query_delta=delta,
-                    ref_delta=np.zeros(3, dtype=np.float64),
-                    camera_pose=camera_pose,
-                    color_intrinsics=color_intrinsics,
-                    instance_mesh_data=instance_mesh_data,
-                )
-                if (
-                    relation == expected_relation
-                    and relation != old_relation
-                    and relation not in seen_relations
-                ):
-                    seen_relations.add(relation)
-                    yield _make_selected_object_move_state(delta, moved_objects, moved_ids), relation, query_ratio, ref_ratio
-                    if len(seen_relations) >= 2:
-                        return
+                    if relation == expected_relation and relation not in seen_relations:
+                        seen_relations.add(relation)
+                        yield _make_selected_object_move_state(
+                            delta, moved_objects, moved_ids
+                        ), relation, query_ratio, ref_ratio
+                        if len(seen_relations) >= 2:
+                            return
 
 
 def _find_occlusion_directed_delta_for_occluder(
@@ -3249,8 +3253,9 @@ def _iter_occlusion_directed_object_move_states(
 
     ``candidates_tried_counter`` (a single-element list used as a shared,
     mutable counter across all query_obj/move_source pairs in the current
-    scene) is incremented once per occluder actually handed to
-    ``_find_occlusion_directed_delta_for_occluder``; once it reaches
+    scene) is incremented once per occluder pair. A pair at an exact direction
+    boundary is scanned in both tied directions without consuming two budget
+    slots. Once the counter reaches
     ``max_candidates_tried`` this generator stops yielding new candidates for
     the rest of the scene, bounding total search cost when the candidate
     pool is large.
@@ -3274,29 +3279,29 @@ def _iter_occlusion_directed_object_move_states(
         ):
             break
         obj_ref_center = np.asarray(obj_ref["center"], dtype=np.float64)
-        match = _match_world_xy_direction_bin(obj_ref_center - query_center)
-        if match is None:
+        matches = _match_world_xy_direction_bins(obj_ref_center - query_center)
+        if not matches:
             continue
-        _bin_idx, unit_direction = match
         if candidates_tried_counter is not None:
             candidates_tried_counter[0] += 1
-        selected_state = _find_occlusion_directed_delta_for_occluder(
-            query_obj=query_obj,
-            obj_ref=obj_ref,
-            unit_direction=unit_direction,
-            move_source_id=move_source_id,
-            moved_ids=moved_ids,
-            movement_scene_objects=movement_scene_objects,
-            attachment_graph=attachment_graph,
-            camera_pose=camera_pose,
-            color_intrinsics=color_intrinsics,
-            instance_mesh_data=instance_mesh_data,
-            room_min=room_min,
-            room_max=room_max,
-            collision_objects=collision_objects,
-        )
-        if selected_state is not None:
-            yield selected_state
+        for _bin_idx, unit_direction in matches:
+            selected_state = _find_occlusion_directed_delta_for_occluder(
+                query_obj=query_obj,
+                obj_ref=obj_ref,
+                unit_direction=unit_direction,
+                move_source_id=move_source_id,
+                moved_ids=moved_ids,
+                movement_scene_objects=movement_scene_objects,
+                attachment_graph=attachment_graph,
+                camera_pose=camera_pose,
+                color_intrinsics=color_intrinsics,
+                instance_mesh_data=instance_mesh_data,
+                room_min=room_min,
+                room_max=room_max,
+                collision_objects=collision_objects,
+            )
+            if selected_state is not None:
+                yield selected_state
 
 
 def _classify_l1_occlusion_metrics(metrics: _L1OcclusionMetrics) -> str:
@@ -7453,7 +7458,7 @@ def generate_l2_object_move(
     # inside `_iter_occlusion_directed_object_move_states`, a separate
     # top-level function -- passing it by reference avoids needing a return
     # channel just for the counter.
-    _occlusion_directed_changed_count = 0
+    _occlusion_directed_accepted_count = 0
     _occlusion_directed_candidates_tried = [0]
     _occlusion_directed_max_candidates_tried = _adaptive_scene_scaled_cap(
         len(movement_scene_objects),
@@ -7854,29 +7859,16 @@ def generate_l2_object_move(
                         continue
                     if not _pair_in_frame(query_obj, zero_delta) or not _pair_in_frame(ref_obj, zero_delta):
                         continue
-                    old_relation, old_query_ratio, old_ref_ratio = _pairwise_occlusion_relation_after_move(
-                        query_obj=query_obj,
-                        ref_obj=ref_obj,
-                        query_delta=zero_delta,
-                        ref_delta=zero_delta,
-                        camera_pose=camera_pose,
-                        color_intrinsics=color_intrinsics,
-                        instance_mesh_data=instance_mesh_data,
-                    )
-                    if old_relation is None:
-                        continue
-
-                    changed_record: dict[str, Any] | None = None
-                    unchanged_record: dict[str, Any] | None = None
+                    selected_record: dict[str, Any] | None = None
+                    neither_record: dict[str, Any] | None = None
                     seen_state_deltas: set[tuple[float, ...]] = set()
                     candidate_states: list[_SelectedObjectMoveState] = []
                     if selected_state is not None:
                         candidate_states.append(selected_state)
                     else:
-                        # One generic fallback is enough to supply an unchanged
-                        # candidate. Relation changes are sought by the directed
-                        # crossing scan below, which is both cheaper and more
-                        # targeted than ray-casting every grid state per ref.
+                        # One generic fallback may already place the query
+                        # behind this reference. The targeted crossing scan
+                        # below handles the remaining cases.
                         for candidate_state in _fallback_states():
                             candidate_states.append(candidate_state)
                             break
@@ -7907,11 +7899,8 @@ def generate_l2_object_move(
                             "query_obj_id": query_obj_id,
                             "ref_obj_id": int(ref_obj["id"]),
                             "question": None,
-                            "relation_unchanged": relation == old_relation,
-                            "old_relation": old_relation,
+                            "relation_unchanged": False,
                             "new_relation": relation,
-                            "old_query_blocking_ratio": old_query_ratio,
-                            "old_ref_blocking_ratio": old_ref_ratio,
                             "new_query_blocking_ratio": query_ratio,
                             "new_ref_blocking_ratio": ref_ratio,
                             "move_source_id": move_source_id,
@@ -7920,16 +7909,15 @@ def generate_l2_object_move(
                             "query_obj": query_obj,
                             "ref_obj": ref_obj,
                         }
-                        if record["relation_unchanged"]:
-                            if unchanged_record is None:
-                                unchanged_record = record
+                        if relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER:
+                            neither_record = record
                         else:
-                            changed_record = record
+                            selected_record = record
                             break
 
                     if (
-                        changed_record is None
-                        and _occlusion_directed_changed_count
+                        selected_record is None
+                        and _occlusion_directed_accepted_count
                         < OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE
                     ):
                         for (
@@ -7950,7 +7938,6 @@ def generate_l2_object_move(
                             room_min=occlusion_directed_room_min,
                             room_max=occlusion_directed_room_max,
                             collision_objects=collision_objects,
-                            old_relation=old_relation,
                             candidates_tried_counter=_occlusion_directed_candidates_tried,
                             max_candidates_tried=_occlusion_directed_max_candidates_tried,
                         ):
@@ -7961,16 +7948,13 @@ def generate_l2_object_move(
                             moved_query = moved_map.get(query_obj_id, query_obj)
                             if not _pair_in_frame(moved_query, zero_delta):
                                 continue
-                            changed_record = {
+                            selected_record = {
                                 "candidate_index": len(occlusion_candidate_records),
                                 "query_obj_id": query_obj_id,
                                 "ref_obj_id": int(ref_obj["id"]),
                                 "question": None,
                                 "relation_unchanged": False,
-                                "old_relation": old_relation,
                                 "new_relation": relation,
-                                "old_query_blocking_ratio": old_query_ratio,
-                                "old_ref_blocking_ratio": old_ref_ratio,
                                 "new_query_blocking_ratio": query_ratio,
                                 "new_ref_blocking_ratio": ref_ratio,
                                 "move_source_id": move_source_id,
@@ -7979,18 +7963,17 @@ def generate_l2_object_move(
                                 "query_obj": query_obj,
                                 "ref_obj": ref_obj,
                             }
-                            _occlusion_directed_changed_count += 1
+                            _occlusion_directed_accepted_count += 1
                             break
 
-                    selected_record = changed_record or unchanged_record
+                    if selected_record is None:
+                        selected_record = neither_record
                     if selected_record is None:
                         continue
                     delta = np.asarray(selected_record["delta"], dtype=np.float64)
                     query_label = str(query_obj.get("label", "object"))
                     ref_label = str(ref_obj.get("label", "object"))
-                    old_relation = str(selected_record["old_relation"])
                     new_relation = str(selected_record["new_relation"])
-                    old_value = _pairwise_occlusion_option_text(old_relation, query_label, ref_label)
                     new_value = _pairwise_occlusion_option_text(new_relation, query_label, ref_label)
                     answer_pool = [
                         _pairwise_occlusion_option_text(relation, query_label, ref_label)
@@ -8023,9 +8006,7 @@ def generate_l2_object_move(
                         "options": options,
                         "answer": answer,
                         "correct_value": new_value,
-                        "old_correct_value": old_value,
                         "new_correct_value": new_value,
-                        "old_pairwise_occlusion_relation": old_relation,
                         "new_pairwise_occlusion_relation": new_relation,
                         "pairwise_occlusion_relation": new_relation,
                         "moved_obj_id": move_source_id,
@@ -8041,9 +8022,7 @@ def generate_l2_object_move(
                         "obj_c_id": int(ref_obj["id"]),
                         "obj_c_label": ref_label,
                         "attachment_remapped": attachment_remapped,
-                        "relation_unchanged": bool(selected_record["relation_unchanged"]),
-                        "old_query_blocking_ratio": selected_record["old_query_blocking_ratio"],
-                        "old_ref_blocking_ratio": selected_record["old_ref_blocking_ratio"],
+                        "relation_unchanged": False,
                         "new_query_blocking_ratio": selected_record["new_query_blocking_ratio"],
                         "new_ref_blocking_ratio": selected_record["new_ref_blocking_ratio"],
                         "mentioned_objects": [
