@@ -318,9 +318,9 @@ def test_cross_frame_view_selection_keeps_lowest_route_cost_per_semantic_questio
             "_cross_frame_pair_score": route_cost,
         })
 
-    retained = run_pipeline._retain_best_cross_frame_views(questions, max_views=2)
+    retained = run_pipeline._retain_best_cross_frame_views(questions)
 
-    assert [question["image_name"] for question in retained] == ["best.jpg", "ok.jpg"]
+    assert [question["image_name"] for question in retained] == ["best.jpg"]
     assert all("_cross_frame_pair_score" not in question for question in retained)
 
 
