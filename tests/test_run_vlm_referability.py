@@ -5761,7 +5761,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 cache_path=cache_path,
             )
 
-    def test_apply_attachment_pair_salvage_html_review_raises_on_sidecar_metadata_mismatch(self) -> None:
+    def test_apply_attachment_pair_salvage_html_review_allows_sidecar_model_mismatch(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"attachment_salvage_meta_{uuid.uuid4().hex}"
         cache_path = root / "output" / "referability_cache.json"
         scene_id = "scene0001_00"
@@ -5805,15 +5805,15 @@ class RunVlmReferabilityTests(unittest.TestCase):
 </body>
 </html>"""
 
-        with self.assertRaisesRegex(
-            ValueError,
-            r"metadata mismatch for vlm_model: cache has 'fake-vlm', sidecar has 'other-model'",
-        ):
-            referability_module._apply_attachment_pair_salvage_html_review(
-                html_text=html_text,
-                cache_doc=cache_doc,
-                cache_path=cache_path,
-            )
+        updated = referability_module._apply_attachment_pair_salvage_html_review(
+            html_text=html_text,
+            cache_doc=cache_doc,
+            cache_path=cache_path,
+        )
+
+        restored_entry = updated["frames"][scene_id]["000002.jpg"]
+        self.assertEqual(restored_entry["attachment_referable_pairs"], [[7, 9]])
+        self.assertEqual(restored_entry["attachment_referable_object_ids"], [7, 9])
 
     def test_attachment_pair_salvage_review_roundtrip_edited_image_id_updates_target_frame(self) -> None:
         review_doc = {
@@ -6191,9 +6191,20 @@ class RunVlmReferabilityTests(unittest.TestCase):
         )
         self.assertIn("000001.jpg", loaded)
 
+        sidecar_path.write_text(
+            json.dumps(dict(valid_doc, vlm_model="other-model"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        loaded = referability_module._load_frame_sidecar_scene_cache(
+            output_path=output_path,
+            scene_id=scene_id,
+            model_name="fake-vlm",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+        )
+        self.assertIn("000001.jpg", loaded)
+
         invalid_docs = [
             "{bad json",
-            dict(valid_doc, vlm_model="other-model"),
             dict(valid_doc, version="999.0"),
             dict(valid_doc, alias_config_version="other-alias-version"),
             dict(valid_doc, referability_backend="other-backend"),
@@ -6213,7 +6224,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
             )
             self.assertEqual(loaded, {})
 
-    def test_main_reuses_frame_sidecar_across_reset_runs(self) -> None:
+    def test_main_reuses_frame_sidecar_across_reset_runs_and_model_changes(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_main_{uuid.uuid4().hex}"
         data_root = root / "data"
         scene_dir = data_root / "scene0001_00"
@@ -6247,7 +6258,13 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         self.addCleanup(shutil.rmtree, root, True)
 
-        def run_once(*, reset: int | None, frame_decision_batch_side_effect, entry_side_effect) -> None:
+        def run_once(
+            *,
+            reset: int | None,
+            model_name: str,
+            frame_decision_batch_side_effect,
+            entry_side_effect,
+        ) -> None:
             def fake_select_and_rerank_frames(**kwargs):
                 frame = dict(kwargs["frame_candidates"][0])
                 reviewed_frame = kwargs["frame_review_getter"](frame)
@@ -6281,6 +6298,8 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 "1",
                 "--max_frames",
                 "1",
+                "--vlm_model",
+                model_name,
                 "--no-write_attachment_review",
                 "--no-write_attachment_pair_salvage_review",
             ]
@@ -6352,6 +6371,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         run_once(
             reset=None,
+            model_name="fake-vlm",
             frame_decision_batch_side_effect=lambda *args, **kwargs: {
                 "000101.jpg": {
                     "clear": True,
@@ -6371,6 +6391,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
 
         run_once(
             reset=1,
+            model_name="other-model",
             frame_decision_batch_side_effect=AssertionError("frame sidecar should skip _frame_decision_batch"),
             entry_side_effect=AssertionError("frame sidecar should skip _compute_frame_referability_entry"),
         )

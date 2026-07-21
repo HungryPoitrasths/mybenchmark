@@ -725,11 +725,18 @@ def _load_frame_sidecar_scene_cache(
         "version": REFERABILITY_CACHE_VERSION,
         "alias_config_version": ALIAS_CONFIG_VERSION,
         "referability_backend": str(referability_backend),
-        "vlm_model": str(model_name),
     }
     for key, expected_value in expected_meta.items():
         if sidecar_doc.get(key) != expected_value:
             return {}
+    sidecar_model_name = sidecar_doc.get("vlm_model")
+    if sidecar_model_name != str(model_name):
+        logger.info(
+            "Reusing frame sidecar %s across VLM model change: cached=%r current=%r",
+            sidecar_path,
+            sidecar_model_name,
+            str(model_name),
+        )
     raw_frames = sidecar_doc.get("frames")
     if not isinstance(raw_frames, dict):
         logger.warning("Ignoring malformed frame sidecar %s: missing frames mapping", sidecar_path)
@@ -4745,7 +4752,6 @@ def _apply_attachment_pair_salvage_html_review(
             "version": str(updated_cache.get("version", "")),
             "alias_config_version": updated_cache.get("alias_config_version"),
             "referability_backend": updated_cache.get("referability_backend"),
-            "vlm_model": updated_cache.get("model"),
         }
         for key, expected_value in expected_meta.items():
             actual_value = sidecar_doc.get(key)
@@ -4755,6 +4761,17 @@ def _apply_attachment_pair_salvage_html_review(
                     f"Frame sidecar {sidecar_path} metadata mismatch for {key}: "
                     f"cache has {expected_value!r}, sidecar has {actual_value!r}."
                 )
+        cache_model_name = updated_cache.get("model")
+        sidecar_model_name = sidecar_doc.get("vlm_model")
+        if sidecar_model_name != cache_model_name:
+            logger.info(
+                "Recovering %s/%s from frame sidecar across VLM model change: "
+                "cache=%r sidecar=%r",
+                scene_id,
+                image_name,
+                cache_model_name,
+                sidecar_model_name,
+            )
 
         raw_frames = sidecar_doc.get("frames")
         if not isinstance(raw_frames, dict):
