@@ -5892,5 +5892,111 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertEqual(questions_by_scene["scene0000_00"], "Initial 000001.jpg")
         self.assertEqual(questions_by_scene["scene0001_00"], "Reset 000002.jpg")
 
+
+class VerticalObjectRotateQuestionFilterTests(unittest.TestCase):
+    @staticmethod
+    def _box_object(
+        obj_id: int,
+        center: tuple[float, float, float],
+        *,
+        half_extent: float = 0.1,
+    ) -> dict:
+        center_arr = np.asarray(center, dtype=float)
+        extent = np.full(3, half_extent, dtype=float)
+        return {
+            "id": obj_id,
+            "label": f"object-{obj_id}",
+            "center": center_arr.tolist(),
+            "bbox_min": (center_arr - extent).tolist(),
+            "bbox_max": (center_arr + extent).tolist(),
+        }
+
+    @staticmethod
+    def _question(**overrides) -> dict:
+        question = {
+            "level": "L2",
+            "type": "object_rotate_object_centric",
+            "moved_obj_id": 10,
+            "query_obj_id": 1,
+            "obj_ref_id": 2,
+            "obj_face_id": 3,
+            "rotation_angle": 90,
+            "rotation_direction": "counterclockwise",
+        }
+        question.update(overrides)
+        return question
+
+    def _filter(self, question: dict, objects: list[dict]) -> list[dict]:
+        return run_pipeline_module._filter_vertical_object_rotate_questions(
+            [question],
+            scene_objects=objects,
+            attachment_graph={10: [1]},
+        )
+
+    def test_drops_initial_vertical_query_ref_pair(self) -> None:
+        objects = [
+            self._box_object(10, (1.0, 0.0, 0.2)),
+            self._box_object(1, (1.0, 0.0, 1.1)),
+            self._box_object(2, (1.0, 0.0, 0.2)),
+            self._box_object(3, (0.0, 0.0, 0.2)),
+        ]
+
+        self.assertEqual(self._filter(self._question(), objects), [])
+
+    def test_drops_initial_vertical_query_face_pair(self) -> None:
+        objects = [
+            self._box_object(10, (1.0, 0.0, 0.2)),
+            self._box_object(1, (1.0, 0.0, 1.1)),
+            self._box_object(2, (2.0, 0.0, 0.2)),
+            self._box_object(3, (1.0, 0.0, 0.2)),
+        ]
+
+        self.assertEqual(self._filter(self._question(), objects), [])
+
+    def test_drops_pair_that_becomes_vertical_after_orbit_rotation(self) -> None:
+        objects = [
+            self._box_object(10, (1.0, 0.0, 0.2)),
+            self._box_object(1, (1.0, 0.0, 1.1)),
+            self._box_object(2, (0.0, 1.0, 0.2)),
+            self._box_object(3, (0.0, 0.0, 0.2)),
+        ]
+
+        self.assertEqual(self._filter(self._question(), objects), [])
+
+    def test_keeps_horizontal_pairs_before_and_after_rotation(self) -> None:
+        question = self._question()
+        objects = [
+            self._box_object(10, (1.0, 0.0, 0.2)),
+            self._box_object(1, (1.0, 0.0, 1.1)),
+            self._box_object(2, (2.0, 0.0, 0.2)),
+            self._box_object(3, (0.0, 0.0, 0.2)),
+        ]
+
+        self.assertEqual(self._filter(question, objects), [question])
+
+    def test_does_not_filter_other_question_types(self) -> None:
+        question = self._question(type="object_move_object_centric")
+        objects = [
+            self._box_object(10, (1.0, 0.0, 0.2)),
+            self._box_object(1, (1.0, 0.0, 1.1)),
+            self._box_object(2, (1.0, 0.0, 0.2)),
+            self._box_object(3, (1.0, 0.0, 0.2)),
+        ]
+
+        self.assertEqual(self._filter(question, objects), [question])
+
+    def test_keeps_question_with_incomplete_rotation_metadata(self) -> None:
+        question = self._question()
+        question.pop("rotation_angle")
+        objects = [
+            self._box_object(10, (1.0, 0.0, 0.2)),
+            self._box_object(1, (1.0, 0.0, 1.1)),
+            self._box_object(2, (2.0, 0.0, 0.2)),
+            self._box_object(3, (0.0, 0.0, 0.2)),
+        ]
+
+        with self.assertLogs(run_pipeline_module.logger, level="WARNING"):
+            self.assertEqual(self._filter(question, objects), [question])
+
 if __name__ == "__main__":
     unittest.main()

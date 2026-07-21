@@ -53,6 +53,7 @@ from src.support_graph import (
     has_nontrivial_attachment,
 )
 from src.qa_generator import (
+    _object_bottom_hull_xy,
     _in_frame_surface_sample_subset,
     _instance_triangle_id_set,
     _mesh_visibility_stats_compat,
@@ -69,7 +70,8 @@ from src.qa_generator import (
     recompute_coordinate_rotation_agent_answer,
     MAX_OCCLUSION_OBJECTS_AUTO,
 )
-from src.relation_engine import camera_cardinal_direction
+from src.relation_engine import camera_cardinal_direction, primary_direction_allocentric
+from src.virtual_ops import apply_orbit_rotation
 from src.referability_checks import (
     QUESTION_MENTION_FIELDS,
     build_question_referability_audit as _shared_build_question_referability_audit,
@@ -4730,6 +4732,175 @@ def _canonical_scene_question_type(question: dict) -> str:
     return str(question.get("type", "")).strip().lower()
 
 
+_VERTICAL_RELATION_LABELS = frozenset({"above", "below"})
+
+
+def _strict_vertical_object_pair(obj_a: dict, obj_b: dict) -> bool | None:
+    """Return whether two objects satisfy the benchmark's strict above/below rule.
+
+    ``None`` means the geometry is missing or malformed.  The caller deliberately
+    keeps such questions instead of turning incomplete metadata into a false
+    positive removal.
+    """
+    try:
+        required_vectors = [
+            np.asarray(obj_a[field], dtype=float)
+            for field in ("center", "bbox_min", "bbox_max")
+        ] + [
+            np.asarray(obj_b[field], dtype=float)
+            for field in ("center", "bbox_min", "bbox_max")
+        ]
+        if any(vector.shape != (3,) or not np.all(np.isfinite(vector)) for vector in required_vectors):
+            return None
+
+        direction, _ambiguity = primary_direction_allocentric(
+            required_vectors[0],
+            required_vectors[3],
+            obj_a_hull_xy=_object_bottom_hull_xy(obj_a),
+            obj_b_hull_xy=_object_bottom_hull_xy(obj_b),
+            obj_a_bbox_min=required_vectors[1],
+            obj_a_bbox_max=required_vectors[2],
+            obj_b_bbox_min=required_vectors[4],
+            obj_b_bbox_max=required_vectors[5],
+        )
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+        return None
+    return direction in _VERTICAL_RELATION_LABELS
+
+
+def _question_orbit_signed_angle(question: dict) -> float | None:
+    try:
+        angle = abs(float(question["rotation_angle"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not np.isfinite(angle):
+        return None
+
+    direction = str(question.get("rotation_direction", "")).strip().lower()
+    if direction == "clockwise":
+        return -angle
+    if direction == "counterclockwise":
+        return angle
+    return None
+
+
+def _filter_vertical_object_rotate_questions(
+    questions: list[dict],
+    *,
+    scene_objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+) -> list[dict]:
+    """Drop L2 object-rotate/object-centric questions with vertical role pairs.
+
+    Both the original scene and the question's simulated orbit-rotation state
+    are checked.  A strict above/below relation between query-ref or query-face
+    in either state makes the horizontal object-centric question invalid.
+    """
+    objects_by_id: dict[int, dict] = {}
+    rotated_scene_cache: dict[tuple[int, int, float], dict[int, dict] | None] = {}
+    malformed_geometry_count = 0
+    for obj in scene_objects:
+        obj_id = _coerce_object_id(obj.get("id")) if isinstance(obj, dict) else None
+        if obj_id is not None:
+            objects_by_id[obj_id] = obj
+
+    kept: list[dict] = []
+    removed = 0
+    for question in questions:
+        if _canonical_scene_question_type(question) != "object_rotate_object_centric":
+            kept.append(question)
+            continue
+
+        query_id = _coerce_object_id(question.get("query_obj_id"))
+        ref_id = _coerce_object_id(question.get("obj_ref_id"))
+        face_id = _coerce_object_id(question.get("obj_face_id"))
+        moved_id = _coerce_object_id(question.get("moved_obj_id"))
+        role_ids = (query_id, ref_id, face_id, moved_id)
+        if any(obj_id is None for obj_id in role_ids):
+            malformed_geometry_count += 1
+            kept.append(question)
+            continue
+
+        query_obj = objects_by_id.get(int(query_id))
+        ref_obj = objects_by_id.get(int(ref_id))
+        face_obj = objects_by_id.get(int(face_id))
+        if query_obj is None or ref_obj is None or face_obj is None:
+            malformed_geometry_count += 1
+            kept.append(question)
+            continue
+
+        original_relations = (
+            _strict_vertical_object_pair(query_obj, ref_obj),
+            _strict_vertical_object_pair(query_obj, face_obj),
+        )
+        if any(relation is True for relation in original_relations):
+            removed += 1
+            continue
+        if any(relation is None for relation in original_relations):
+            malformed_geometry_count += 1
+            kept.append(question)
+            continue
+
+        signed_angle = _question_orbit_signed_angle(question)
+        if signed_angle is None:
+            malformed_geometry_count += 1
+            kept.append(question)
+            continue
+
+        rotation_key = (int(moved_id), int(face_id), float(signed_angle))
+        if rotation_key not in rotated_scene_cache:
+            try:
+                rotated_objects = apply_orbit_rotation(
+                    scene_objects,
+                    attachment_graph,
+                    int(moved_id),
+                    int(face_id),
+                    signed_angle,
+                )
+                rotated_scene_cache[rotation_key] = {
+                    int(obj["id"]): obj for obj in rotated_objects
+                }
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+                rotated_scene_cache[rotation_key] = None
+
+        rotated_by_id = rotated_scene_cache[rotation_key]
+        if rotated_by_id is None:
+            malformed_geometry_count += 1
+            kept.append(question)
+            continue
+        try:
+            rotated_query = rotated_by_id[int(query_id)]
+            rotated_ref = rotated_by_id[int(ref_id)]
+            rotated_face = rotated_by_id[int(face_id)]
+        except (KeyError, TypeError):
+            malformed_geometry_count += 1
+            kept.append(question)
+            continue
+
+        final_relations = (
+            _strict_vertical_object_pair(rotated_query, rotated_ref),
+            _strict_vertical_object_pair(rotated_query, rotated_face),
+        )
+        if any(relation is True for relation in final_relations):
+            removed += 1
+            continue
+        if any(relation is None for relation in final_relations):
+            malformed_geometry_count += 1
+        kept.append(question)
+
+    if removed:
+        logger.info(
+            "Vertical object-rotate filter removed %d question(s) with query-ref/query-face above/below geometry",
+            removed,
+        )
+    if malformed_geometry_count:
+        logger.warning(
+            "Vertical object-rotate filter kept %d question(s) because required IDs, rotation fields, or geometry were incomplete",
+            malformed_geometry_count,
+        )
+    return kept
+
+
 _ALL_CANONICAL_QUESTION_TYPES = {
     "direction_agent",
     "occlusion",
@@ -6372,6 +6543,11 @@ def run_pipeline(
                             len(occlusion_eligible_ids or []),
                         )
                         raise
+                questions = _filter_vertical_object_rotate_questions(
+                    questions,
+                    scene_objects=scene["objects"],
+                    attachment_graph=attachment_graph,
+                )
                 frame_raw_generated_count = len(questions)
 
                 for q in questions:
@@ -6991,6 +7167,11 @@ def run_pipeline(
                         max_move_sources=max_move_sources,
                         attachment_edges=scene.get("attachment_edges", []),
                     )
+                    raw_questions = _filter_vertical_object_rotate_questions(
+                        raw_questions,
+                        scene_objects=scene["objects"],
+                        attachment_graph=attachment_graph,
+                    )
                     for raw_question in raw_questions:
                         layout_id = str(raw_question.get("_cross_frame_layout_hint", "")).strip() or None
                         for frame_2 in destinations:
@@ -7362,6 +7543,11 @@ def run_pipeline(
                 only_question_types=only_question_types,
                 max_occlusion_objects=max_occlusion_objects,
                 max_move_sources=max_move_sources,
+            )
+            questions = _filter_vertical_object_rotate_questions(
+                questions,
+                scene_objects=scene["objects"],
+                attachment_graph=attachment_graph,
             )
 
             for q in questions:
