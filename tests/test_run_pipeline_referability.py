@@ -340,7 +340,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             run_pipeline_module.CROSS_FRAME_PUBLIC_QUESTION_TYPES,
         )
 
-    def test_scene_status_v5_is_rejected_after_l1_cap_migration(self) -> None:
+    def test_scene_status_v5_is_rejected_after_candidate_budget_migration(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             status_path = Path(tmpdir) / "scene_status.json"
             status_path.write_text(
@@ -348,10 +348,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(RuntimeError, "expected 6"):
+            with self.assertRaisesRegex(RuntimeError, "expected 7"):
                 run_pipeline_module._load_pipeline_scene_status_doc(status_path)
 
-    def test_scene_type_cap_limits_all_l1_types(self) -> None:
+    def test_scene_type_cap_does_not_limit_final_l1_types(self) -> None:
         questions = [
             {
                 "scene_id": "scene0000_00",
@@ -386,9 +386,9 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             scene_type_cap=5,
         )
 
-        self.assertEqual([q["question"] for q in kept if q["type"] == "direction_agent"], [f"d {idx}" for idx in range(5)])
-        self.assertEqual([q["question"] for q in kept if q["type"] == "distance"], [f"m {idx}" for idx in range(5)])
-        self.assertEqual([q["question"] for q in kept if q["type"] == "occlusion"], [f"o {idx}" for idx in range(5)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "direction_agent"], [f"d {idx}" for idx in range(7)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "distance"], [f"m {idx}" for idx in range(6)])
+        self.assertEqual([q["question"] for q in kept if q["type"] == "occlusion"], [f"o {idx}" for idx in range(7)])
 
     def test_scene_type_cap_does_not_limit_object_move_or_rotate_types(self) -> None:
         questions = [
@@ -414,7 +414,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             [f"rotate {idx}" for idx in range(6)],
         )
 
-    def test_load_cached_scene_questions_applies_scene_type_cap(self) -> None:
+    def test_load_cached_scene_questions_does_not_apply_final_type_cap(self) -> None:
         root = make_case_dir("cached_scene_cap")
         self.addCleanup(shutil.rmtree, root, True)
         raw_questions_dir = root / "_raw_questions_scene_cache"
@@ -444,11 +444,11 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(raw_count, 8)
-        self.assertEqual(len(loaded), 5)
-        self.assertEqual([q["question"] for q in loaded], [f"occlusion {idx}" for idx in range(5)])
+        self.assertEqual(len(loaded), 8)
+        self.assertEqual([q["question"] for q in loaded], [f"occlusion {idx}" for idx in range(8)])
 
-    def test_remaining_scene_type_budgets_tracks_all_requested_l1_types(self) -> None:
-        budgets = run_pipeline_module._remaining_scene_type_budgets(
+    def test_remaining_candidate_budgets_tracks_requested_types(self) -> None:
+        budgets = run_pipeline_module._remaining_candidate_type_budgets(
             Counter(
                 {
                     "occlusion": 3,
@@ -456,15 +456,17 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     "distance": 4,
                 }
             ),
-            scene_type_cap=5,
+            l1_candidate_budget=5,
+            l2_l3_candidate_budget=100,
             allowed_types={"occlusion", "distance", "object_move_agent"},
         )
 
-        self.assertEqual(budgets, {"distance": 1, "occlusion": 2})
+        self.assertEqual(
+            budgets,
+            {"distance": 1, "object_move_agent": 1, "occlusion": 2},
+        )
 
-    def test_scene_cap_only_bounds_l1_while_l2_l3_use_object_frame_caps(self) -> None:
-        # The configurable scene cap remains L1-only. L2/L3 instead use the
-        # fixed per-object/frame limits applied by the incremental cap helper.
+    def test_final_filter_only_applies_object_frame_caps(self) -> None:
         questions = [
             {"scene_id": "scene0000_00", "type": "occlusion", "question": f"o {idx}"}
             for idx in range(7)
@@ -494,7 +496,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         self.assertEqual(
             [q["question"] for q in kept if q["type"] == "occlusion"],
-            [f"o {idx}" for idx in range(5)],
+            [f"o {idx}" for idx in range(7)],
         )
         self.assertEqual(
             [q["question"] for q in kept if q["type"] == "object_move_object_centric"],
@@ -505,19 +507,24 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             ["chain 0"],
         )
 
-    def test_remaining_scene_type_budgets_omits_l2_l3_types(self) -> None:
-        budgets = run_pipeline_module._remaining_scene_type_budgets(
+    def test_remaining_candidate_budgets_include_l2_l3_types(self) -> None:
+        budgets = run_pipeline_module._remaining_candidate_type_budgets(
             Counter({"occlusion": 3, "object_move_agent": 99, "attachment_chain": 99}),
-            scene_type_cap=5,
+            l1_candidate_budget=5,
+            l2_l3_candidate_budget=100,
             allowed_types={"occlusion", "object_move_agent", "attachment_chain"},
         )
 
-        self.assertEqual(budgets, {"occlusion": 2})
+        self.assertEqual(
+            budgets,
+            {"attachment_chain": 1, "object_move_agent": 1, "occlusion": 2},
+        )
 
-    def test_remaining_scene_type_budgets_returns_none_when_no_l1_types_targeted(self) -> None:
-        budgets = run_pipeline_module._remaining_scene_type_budgets(
+    def test_remaining_candidate_budgets_return_none_when_unlimited(self) -> None:
+        budgets = run_pipeline_module._remaining_candidate_type_budgets(
             Counter({"object_move_agent": 99}),
-            scene_type_cap=5,
+            l1_candidate_budget=0,
+            l2_l3_candidate_budget=0,
             allowed_types={"object_move_agent"},
         )
 

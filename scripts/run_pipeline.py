@@ -125,12 +125,11 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 6
+PIPELINE_SCENE_STATUS_VERSION = 7
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
-SCENE_QUESTION_HARD_CAP_BY_SPLIT = {"val": 50, "train": 100}
-DEFAULT_L1_SCENE_TYPE_CAP = 10
-L1_SCENE_TYPE_CAP_BY_SPLIT = {"train": 50}
+L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 50, "train": 100}
+L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 100, "train": 200}
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -4494,18 +4493,20 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
     route_method = loaded.get("auxiliary_route_method")
     if isinstance(route_method, str) and route_method in AUXILIARY_ROUTE_METHODS:
         result["auxiliary_route_method"] = route_method
-    if "scene_type_cap" in loaded:
+    for field_name in ("l1_candidate_budget", "l2_l3_candidate_budget"):
+        if field_name not in loaded:
+            continue
         try:
-            recorded_scene_type_cap = int(loaded["scene_type_cap"])
+            recorded_budget = int(loaded[field_name])
         except (TypeError, ValueError) as exc:
             raise RuntimeError(
-                f"Invalid scene status document at {path}: scene_type_cap must be an integer"
+                f"Invalid scene status document at {path}: {field_name} must be an integer"
             ) from exc
-        if recorded_scene_type_cap < 0:
+        if recorded_budget < 0:
             raise RuntimeError(
-                f"Invalid scene status document at {path}: scene_type_cap must be >= 0"
+                f"Invalid scene status document at {path}: {field_name} must be >= 0"
             )
-        result["scene_type_cap"] = recorded_scene_type_cap
+        result[field_name] = recorded_budget
     return result
 
 
@@ -4920,8 +4921,8 @@ _ALL_CANONICAL_QUESTION_TYPES = {
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 }
-# scene_type_cap bounds L1 perception types. L1/L2/L3 have no frame/type
-# total cap; their fixed per-primary-object limits are applied below.
+# L1/L2/L3 have no final scene/type total cap. Candidate generation budgets
+# are enforced separately; fixed per-primary-object limits are applied below.
 _SCENE_TYPE_CAP_ELIGIBLE_TYPES = {
     "direction_agent",
     "occlusion",
@@ -5149,14 +5150,12 @@ _L2_L3_PAIR_SCENE_CAP = 3
 def _apply_incremental_question_caps(
     questions: list[dict],
     *,
-    scene_type_cap: int,
     frame_type_cap: int,
     frame_type_object_cap: int,
     scene_type_counts: Counter[str] | None = None,
     frame_type_counts: Counter[tuple[str, str, str]] | None = None,
     frame_type_object_counts: Counter[tuple[str, str, str, str]] | None = None,
     pair_counts: Counter[tuple[str, str, str]] | None = None,
-    scene_question_hard_cap: int = 0,
 ) -> list[dict]:
     kept: list[dict] = []
     scene_counts = scene_type_counts if scene_type_counts is not None else Counter()
@@ -5190,16 +5189,7 @@ def _apply_incremental_question_caps(
             if pair_key is not None
             else None
         )
-        # The split-specific hard cap applies to every canonical question type.
         type_is_cap_eligible = canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES
-        effective_scene_type_cap = scene_type_cap if type_is_cap_eligible else 0
-        if scene_question_hard_cap > 0:
-            if effective_scene_type_cap > 0:
-                effective_scene_type_cap = min(
-                    effective_scene_type_cap, scene_question_hard_cap
-                )
-            else:
-                effective_scene_type_cap = scene_question_hard_cap
         if type_is_cap_eligible:
             # L1 follows the multi-image L3 distribution rule: no frame/type
             # total cap, and one question per primary object/frame identity.
@@ -5214,8 +5204,6 @@ def _apply_incremental_question_caps(
         else:
             effective_frame_type_cap = 0
             effective_frame_type_object_cap = 0
-        if effective_scene_type_cap > 0 and scene_counts[canonical_type] >= effective_scene_type_cap:
-            continue
         if effective_frame_type_cap > 0 and frame_counts[frame_key] >= effective_frame_type_cap:
             continue
         if (
@@ -5264,93 +5252,137 @@ def _apply_scene_type_cap(
     pair_counts: Counter[tuple[str, str, str]] | None = None,
     scene_question_hard_cap: int = 0,
 ) -> list[dict]:
+    """Apply object/frame and pair diversity caps, never a type-total cap.
+
+    ``scene_type_cap`` and ``scene_question_hard_cap`` remain accepted for
+    compatibility with older internal callers. They now control candidate
+    generation only and do not truncate retained questions.
+    """
+    _ = scene_type_cap, scene_question_hard_cap
     return _apply_incremental_question_caps(
         questions,
-        scene_type_cap=scene_type_cap,
         frame_type_cap=frame_type_cap,
         frame_type_object_cap=frame_type_object_cap,
         scene_type_counts=type_counts,
         frame_type_counts=frame_type_counts,
         frame_type_object_counts=frame_type_object_counts,
         pair_counts=pair_counts,
-        scene_question_hard_cap=scene_question_hard_cap,
     )
 
 
-def _remaining_scene_type_budgets(
+def _candidate_budget_for_type(
+    canonical_type: str,
+    *,
+    l1_candidate_budget: int,
+    l2_l3_candidate_budget: int,
+) -> int | None:
+    if canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES:
+        budget = l1_candidate_budget
+    elif canonical_type in _L2_CANONICAL_QUESTION_TYPES | _L3_CANONICAL_QUESTION_TYPES:
+        budget = l2_l3_candidate_budget
+    else:
+        return None
+    return int(budget) if int(budget) > 0 else None
+
+
+def _remaining_candidate_type_budgets(
     type_counts: Counter[str],
     *,
-    scene_type_cap: int,
+    l1_candidate_budget: int,
+    l2_l3_candidate_budget: int,
     allowed_types: set[str] | None = None,
-    scene_question_hard_cap: int = 0,
 ) -> dict[str, int] | None:
-    if scene_type_cap <= 0 and scene_question_hard_cap <= 0:
-        return None
     target_types = set(allowed_types) if allowed_types else set(_ALL_CANONICAL_QUESTION_TYPES)
-    capped_types = set()
-    if scene_type_cap > 0:
-        capped_types |= target_types & _SCENE_TYPE_CAP_ELIGIBLE_TYPES
-    if scene_question_hard_cap > 0:
-        capped_types |= target_types
-    if not capped_types:
-        return None
     budgets: dict[str, int] = {}
-    for question_type in sorted(capped_types):
-        limits: list[int] = []
-        if scene_type_cap > 0 and question_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES:
-            limits.append(scene_type_cap)
-        if scene_question_hard_cap > 0:
-            limits.append(scene_question_hard_cap)
-        budgets[question_type] = max(min(limits) - int(type_counts[question_type]), 0)
-    return budgets
+    for question_type in sorted(target_types):
+        budget = _candidate_budget_for_type(
+            question_type,
+            l1_candidate_budget=l1_candidate_budget,
+            l2_l3_candidate_budget=l2_l3_candidate_budget,
+        )
+        if budget is not None:
+            budgets[question_type] = max(budget - int(type_counts[question_type]), 0)
+    return budgets or None
 
 
-def _scene_type_budget_remaining(
+def _take_questions_within_candidate_budgets(
+    questions: list[dict],
+    type_counts: Counter[str],
+    *,
+    l1_candidate_budget: int,
+    l2_l3_candidate_budget: int,
+) -> list[dict]:
+    kept: list[dict] = []
+    for question in questions:
+        canonical_type = _canonical_scene_question_type(question)
+        budget = _candidate_budget_for_type(
+            canonical_type,
+            l1_candidate_budget=l1_candidate_budget,
+            l2_l3_candidate_budget=l2_l3_candidate_budget,
+        )
+        if budget is not None and type_counts[canonical_type] >= budget:
+            continue
+        kept.append(question)
+        if canonical_type:
+            type_counts[canonical_type] += 1
+    return kept
+
+
+def _candidate_type_budget_remaining(
     type_counts: Counter[str],
     canonical_type: str,
     *,
-    scene_type_cap: int,
-    scene_question_hard_cap: int = 0,
+    l1_candidate_budget: int,
+    l2_l3_candidate_budget: int,
 ) -> int | None:
-    budgets = _remaining_scene_type_budgets(
+    budgets = _remaining_candidate_type_budgets(
         type_counts,
-        scene_type_cap=scene_type_cap,
+        l1_candidate_budget=l1_candidate_budget,
+        l2_l3_candidate_budget=l2_l3_candidate_budget,
         allowed_types={canonical_type},
-        scene_question_hard_cap=scene_question_hard_cap,
     )
     if budgets is None:
         return None
     return budgets.get(canonical_type)
 
 
-def _all_scene_type_budgets_exhausted(
+def _all_candidate_type_budgets_exhausted(
     type_counts: Counter[str],
     canonical_types: set[str],
     *,
-    scene_type_cap: int,
-    scene_question_hard_cap: int = 0,
+    l1_candidate_budget: int,
+    l2_l3_candidate_budget: int,
 ) -> bool:
-    return bool(canonical_types) and all(
-        _scene_type_budget_remaining(
+    limited_types = {
+        canonical_type
+        for canonical_type in canonical_types
+        if _candidate_budget_for_type(
+            canonical_type,
+            l1_candidate_budget=l1_candidate_budget,
+            l2_l3_candidate_budget=l2_l3_candidate_budget,
+        ) is not None
+    }
+    return bool(limited_types) and limited_types == canonical_types and all(
+        _candidate_type_budget_remaining(
             type_counts,
             canonical_type,
-            scene_type_cap=scene_type_cap,
-            scene_question_hard_cap=scene_question_hard_cap,
+            l1_candidate_budget=l1_candidate_budget,
+            l2_l3_candidate_budget=l2_l3_candidate_budget,
         ) == 0
-        for canonical_type in canonical_types
+        for canonical_type in limited_types
     )
 
 
-def _split_scene_question_hard_cap(split: str | None) -> int:
-    """Return the required scene/type ceiling for a dataset split."""
+def _default_l1_candidate_budget(split: str | None) -> int:
+    """Return the default per-scene/type L1 generation budget."""
     split_name = str(split or "").strip().lower()
-    return SCENE_QUESTION_HARD_CAP_BY_SPLIT.get(split_name, 0)
+    return L1_CANDIDATE_BUDGET_BY_SPLIT.get(split_name, 0)
 
 
-def _default_l1_scene_type_cap(split: str | None) -> int:
-    """Return the default L1 scene/type cap for a dataset split."""
+def _default_l2_l3_candidate_budget(split: str | None) -> int:
+    """Return the default per-scene/type L2/L3 generation budget."""
     split_name = str(split or "").strip().lower()
-    return L1_SCENE_TYPE_CAP_BY_SPLIT.get(split_name, DEFAULT_L1_SCENE_TYPE_CAP)
+    return L2_L3_CANDIDATE_BUDGET_BY_SPLIT.get(split_name, 0)
 
 
 def _make_dedup_key(q: dict) -> tuple:
@@ -5598,11 +5630,11 @@ def run_pipeline(
     if max_questions_per_scene_type is not None:
         scene_type_cap = int(max_questions_per_scene_type)
     elif scene_type_cap is None:
-        scene_type_cap = _default_l1_scene_type_cap(split)
+        scene_type_cap = _default_l1_candidate_budget(split)
     scene_type_cap = int(scene_type_cap)
+    l2_l3_candidate_budget = _default_l2_l3_candidate_budget(split)
     frame_type_cap = int(frame_type_cap)
     frame_type_object_cap = int(frame_type_object_cap)
-    scene_question_hard_cap = _split_scene_question_hard_cap(split)
     if scene_type_cap < 0:
         raise ValueError("scene_type_cap must be >= 0")
     if frame_type_cap < 0:
@@ -5615,11 +5647,12 @@ def run_pipeline(
             raise ValueError("max_occlusion_objects must be >= 0 or None")
     if dataset not in ("scannet", "scannetpp"):
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
-    if scene_question_hard_cap > 0:
+    if scene_type_cap > 0 or l2_l3_candidate_budget > 0:
         logger.info(
-            "Applying split=%s hard cap of %d questions per (scene, type)",
+            "Applying split=%s candidate budgets per (scene, type): L1=%s L2/L3=%s",
             split,
-            scene_question_hard_cap,
+            scene_type_cap or "unlimited",
+            l2_l3_candidate_budget or "unlimited",
         )
     l3_attachment_chain_only = only_question_types == ["L3_attachment_chain"]
     l3_attachment_move_only = only_question_types == ["L3_attachment_move"]
@@ -5718,16 +5751,22 @@ def run_pipeline(
                 scene_status_path,
             )
         completed_route_records = _pipeline_completed_scene_records(scene_status_doc)
-        recorded_scene_type_cap = scene_status_doc.get("scene_type_cap")
-        if completed_route_records and recorded_scene_type_cap != scene_type_cap:
+        recorded_l1_budget = scene_status_doc.get("l1_candidate_budget")
+        recorded_l2_l3_budget = scene_status_doc.get("l2_l3_candidate_budget")
+        if completed_route_records and (
+            recorded_l1_budget != scene_type_cap
+            or recorded_l2_l3_budget != l2_l3_candidate_budget
+        ):
             raise RuntimeError(
-                "Cannot resume with scene_type_cap="
-                f"{scene_type_cap}: {len(completed_route_records)} completed scene(s) "
-                f"were generated with scene_type_cap={recorded_scene_type_cap!r}. "
+                "Cannot resume with candidate budgets "
+                f"L1={scene_type_cap}, L2/L3={l2_l3_candidate_budget}: "
+                f"{len(completed_route_records)} completed scene(s) were generated "
+                f"with L1={recorded_l1_budget!r}, L2/L3={recorded_l2_l3_budget!r}. "
                 "Use a new --output_dir, or reset all completed scenes before "
-                "changing the L1 scene/type cap."
+                "changing candidate budgets."
             )
-        scene_status_doc["scene_type_cap"] = scene_type_cap
+        scene_status_doc["l1_candidate_budget"] = scene_type_cap
+        scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
         recorded_route_method = scene_status_doc.get("auxiliary_route_method")
         if cross_frame_requested_types and completed_route_records:
             if recorded_route_method is None:
@@ -5758,7 +5797,8 @@ def run_pipeline(
         _clear_pipeline_resume_state(output_dir)
         scene_status_doc = _build_empty_pipeline_scene_status_doc()
         scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
-        scene_status_doc["scene_type_cap"] = scene_type_cap
+        scene_status_doc["l1_candidate_budget"] = scene_type_cap
+        scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
         raw_questions_dir.mkdir(parents=True, exist_ok=True)
         completed_scene_ids = []
 
@@ -5890,7 +5930,6 @@ def run_pipeline(
             scene_type_cap=scene_type_cap,
             frame_type_cap=frame_type_cap,
             frame_type_object_cap=frame_type_object_cap,
-            scene_question_hard_cap=scene_question_hard_cap,
         )
         _write_json_file(raw_question_path, scene_questions)
         _mark_pipeline_scene_completed(
@@ -5912,6 +5951,7 @@ def run_pipeline(
     for scene_index, scene_dir in pending_scene_entries:
         scene_id = scene_dir.name
         scene_question_type_counts: Counter[str] = Counter()
+        scene_candidate_type_counts: Counter[str] = Counter()
         scene_pair_counts: Counter[tuple[str, str, str]] = Counter()
         logger.info(
             "=== Processing scene %s (%d/%d) ===",
@@ -6197,18 +6237,17 @@ def run_pipeline(
                     scene_id,
                 )
                 break
-            # Stop scanning frames once every requested type has reached its
-            # effective scene cap. The split hard cap makes L2/L3 eligible for
-            # this early stop too.
-            if scene_type_cap > 0 or scene_question_hard_cap > 0:
-                if _all_scene_type_budgets_exhausted(
-                    scene_question_type_counts,
-                    scene_type_cap=scene_type_cap,
+            # Stop scanning frames once every requested type has exhausted its
+            # generation budget. Final retained questions have no type-total cap.
+            if scene_type_cap > 0 or l2_l3_candidate_budget > 0:
+                if _all_candidate_type_budgets_exhausted(
+                    scene_candidate_type_counts,
                     canonical_types=single_frame_scene_question_types,
-                    scene_question_hard_cap=scene_question_hard_cap,
+                    l1_candidate_budget=scene_type_cap,
+                    l2_l3_candidate_budget=l2_l3_candidate_budget,
                 ):
                     logger.info(
-                        "Scene %s reached all active per-type caps after %d frame(s); stopping early",
+                        "Scene %s exhausted all active single-frame candidate budgets after %d frame(s); stopping early",
                         scene_id,
                         frame_index - 1,
                     )
@@ -6465,11 +6504,11 @@ def run_pipeline(
                             questions = []
                             question_type_budgets = None
                         else:
-                            question_type_budgets = _remaining_scene_type_budgets(
-                                scene_question_type_counts,
-                                scene_type_cap=scene_type_cap,
+                            question_type_budgets = _remaining_candidate_type_budgets(
+                                scene_candidate_type_counts,
+                                l1_candidate_budget=scene_type_cap,
+                                l2_l3_candidate_budget=l2_l3_candidate_budget,
                                 allowed_types=single_frame_scene_question_types,
-                                scene_question_hard_cap=scene_question_hard_cap,
                             )
 
                         def _pair_budget_remaining(
@@ -6548,6 +6587,12 @@ def run_pipeline(
                     scene_objects=scene["objects"],
                     attachment_graph=attachment_graph,
                 )
+                questions = _take_questions_within_candidate_budgets(
+                    questions,
+                    scene_candidate_type_counts,
+                    l1_candidate_budget=scene_type_cap,
+                    l2_l3_candidate_budget=l2_l3_candidate_budget,
+                )
                 frame_raw_generated_count = len(questions)
 
                 for q in questions:
@@ -6574,7 +6619,6 @@ def run_pipeline(
                         frame_type_counts=frame_question_type_counts,
                         frame_type_object_counts=frame_question_type_object_counts,
                         pair_counts=scene_pair_counts,
-                        scene_question_hard_cap=scene_question_hard_cap,
                     )
                 frame_kept_count = len(kept_questions)
                 scene_questions.extend(kept_questions)
@@ -6738,16 +6782,14 @@ def run_pipeline(
                         "note": "routes_are_computed_per_question_after_object_role_binding",
                     }
             cross_candidates: list[dict] = []
-            cross_candidate_type_counts: Counter[str] = Counter(
-                scene_question_type_counts
-            )
+            cross_candidate_type_counts = scene_candidate_type_counts
 
             def _cross_type_budget_available(canonical_type: str) -> bool:
-                remaining = _scene_type_budget_remaining(
+                remaining = _candidate_type_budget_remaining(
                     cross_candidate_type_counts,
                     canonical_type,
-                    scene_type_cap=scene_type_cap,
-                    scene_question_hard_cap=scene_question_hard_cap,
+                    l1_candidate_budget=scene_type_cap,
+                    l2_l3_candidate_budget=l2_l3_candidate_budget,
                 )
                 return remaining is None or remaining > 0
 
@@ -7099,7 +7141,7 @@ def run_pipeline(
                     ]
                     if not active_cross_types:
                         logger.info(
-                            "Scene %s reached all requested cross-frame type caps; stopping early",
+                            "Scene %s exhausted all requested cross-frame candidate budgets; stopping early",
                             scene_id,
                         )
                         break
@@ -7215,7 +7257,6 @@ def run_pipeline(
                 frame_type_object_cap=frame_type_object_cap,
                 type_counts=scene_question_type_counts,
                 pair_counts=scene_pair_counts,
-                scene_question_hard_cap=scene_question_hard_cap,
             )
             for question in retained_cross_questions:
                 _clear_cross_frame_distance_metadata(question)
@@ -7315,7 +7356,6 @@ def run_pipeline(
         scene_type_cap=scene_type_cap,
         frame_type_cap=frame_type_cap,
         frame_type_object_cap=frame_type_object_cap,
-        scene_question_hard_cap=scene_question_hard_cap,
         dataset=dataset,
         scannetpp_sensor=scannetpp_sensor,
         scannetpp_frame_root=scannetpp_frame_root,
@@ -7690,7 +7730,8 @@ def main():
         help="Dataset split. ScanNet v2: filters discovered scene dirs by the matching "
         "SCANNET_METADATA_SPLIT_FILES entry. ScanNet++: selects the matching "
         "SCANNETPP_METADATA_SPLIT_FILES entry; overridden by --scannetpp_split_file. "
-        "The val split is capped at 50 questions per scene/type and train at 100. "
+        "Candidate budgets per scene/type are val L1=50 and L2/L3=100, or "
+        "train L1=100 and L2/L3=200; final type totals are not capped. "
         "'all' or omitted scans every scene directory under --data_root.",
     )
     parser.add_argument(
@@ -7857,8 +7898,8 @@ def main():
         type=int,
         default=None,
         help=(
-            "Maximum kept L1 questions per (dataset, scene, type). Defaults to 50 "
-            "for the train split and 10 otherwise; use 0 to disable."
+            "L1 candidate-generation budget per (dataset, scene, type). Defaults "
+            "to 100 for train, 50 for val, and unlimited otherwise; use 0 to disable."
         ),
     )
     parser.add_argument(
@@ -7883,7 +7924,10 @@ def main():
         "--max_questions_per_scene_type",
         type=int,
         default=None,
-        help="Deprecated alias for --scene_type_cap. When provided, overrides --scene_type_cap.",
+        help=(
+            "Deprecated alias for the L1 candidate-generation budget. When "
+            "provided, overrides --scene_type_cap."
+        ),
     )
     parser.add_argument(
         "--max_occlusion_objects",
@@ -7909,7 +7953,7 @@ def main():
         parser.error("--reset requires --resume")
     if args.max_questions_per_scene_type is not None and int(args.max_questions_per_scene_type) < 0:
         parser.error("--max_questions_per_scene_type must be >= 0")
-    if int(args.scene_type_cap) < 0:
+    if args.scene_type_cap is not None and int(args.scene_type_cap) < 0:
         parser.error("--scene_type_cap must be >= 0")
     if int(args.frame_type_cap) < 0:
         parser.error("--frame_type_cap must be >= 0")

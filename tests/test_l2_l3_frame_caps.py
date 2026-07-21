@@ -202,14 +202,16 @@ def test_attachment_chain_uses_grandparent_as_its_primary_object() -> None:
     assert [question["question"] for question in kept] == ["chain 8"]
 
 
-def test_split_scene_question_hard_caps() -> None:
-    assert run_pipeline._split_scene_question_hard_cap("val") == 50
-    assert run_pipeline._split_scene_question_hard_cap("train") == 100
-    assert run_pipeline._split_scene_question_hard_cap("all") == 0
-    assert run_pipeline._split_scene_question_hard_cap(None) == 0
+def test_split_candidate_budgets() -> None:
+    assert run_pipeline._default_l1_candidate_budget("val") == 50
+    assert run_pipeline._default_l1_candidate_budget("train") == 100
+    assert run_pipeline._default_l2_l3_candidate_budget("val") == 100
+    assert run_pipeline._default_l2_l3_candidate_budget("train") == 200
+    assert run_pipeline._default_l1_candidate_budget("all") == 0
+    assert run_pipeline._default_l2_l3_candidate_budget(None) == 0
 
 
-def test_hard_cap_applies_to_every_scene_question_type() -> None:
+def test_final_diversity_caps_do_not_apply_a_type_total_limit() -> None:
     questions = [
         _question(
             level="L2",
@@ -240,29 +242,80 @@ def test_hard_cap_applies_to_every_scene_question_type() -> None:
 
     kept_counts = Counter(question["type"] for question in kept)
     assert kept_counts == {
-        "object_move_agent": 50,
-        "coordinate_rotation_agent": 50,
+        "object_move_agent": 55,
+        "coordinate_rotation_agent": 55,
     }
 
 
-def test_hard_cap_budget_reaches_zero_for_early_stop() -> None:
-    budgets = run_pipeline._remaining_scene_type_budgets(
-        Counter({"object_move_agent": 50, "attachment_move": 49}),
-        scene_type_cap=8,
+def test_candidate_budgets_are_independent_by_level() -> None:
+    budgets = run_pipeline._remaining_candidate_type_budgets(
+        Counter({"occlusion": 49, "object_move_agent": 100, "attachment_move": 99}),
+        l1_candidate_budget=50,
+        l2_l3_candidate_budget=100,
+        allowed_types={"occlusion", "object_move_agent", "attachment_move"},
+    )
+
+    assert budgets == {
+        "attachment_move": 1,
+        "object_move_agent": 0,
+        "occlusion": 1,
+    }
+
+
+def test_candidate_collection_stops_at_each_type_budget() -> None:
+    questions = [
+        _question(
+            level="L1",
+            question_type="occlusion",
+            image_name=f"l1-{index}.jpg",
+            object_id=index,
+            index=index,
+        )
+        for index in range(55)
+    ] + [
+        _question(
+            level="L2",
+            question_type="object_move_agent",
+            image_name=f"l2-{index}.jpg",
+            object_id=index,
+            index=100 + index,
+        )
+        for index in range(105)
+    ]
+    counts: Counter[str] = Counter()
+
+    kept = run_pipeline._take_questions_within_candidate_budgets(
+        questions,
+        counts,
+        l1_candidate_budget=50,
+        l2_l3_candidate_budget=100,
+    )
+
+    assert Counter(question["type"] for question in kept) == {
+        "occlusion": 50,
+        "object_move_agent": 100,
+    }
+    assert counts == Counter({"object_move_agent": 100, "occlusion": 50})
+
+
+def test_candidate_budget_reaches_zero_for_early_stop() -> None:
+    budgets = run_pipeline._remaining_candidate_type_budgets(
+        Counter({"object_move_agent": 100, "attachment_move": 99}),
+        l1_candidate_budget=50,
+        l2_l3_candidate_budget=100,
         allowed_types={"object_move_agent", "attachment_move"},
-        scene_question_hard_cap=50,
     )
 
     assert budgets == {"attachment_move": 1, "object_move_agent": 0}
 
 
-def test_l1_default_scene_type_cap_depends_on_split() -> None:
+def test_l1_candidate_budget_can_be_overridden() -> None:
     signature = inspect.signature(run_pipeline.run_pipeline)
     assert signature.parameters["scene_type_cap"].default is None
-    assert run_pipeline._default_l1_scene_type_cap("train") == 50
-    assert run_pipeline._default_l1_scene_type_cap("val") == 10
-    assert run_pipeline._default_l1_scene_type_cap("all") == 10
-    assert run_pipeline._default_l1_scene_type_cap(None) == 10
+    assert run_pipeline._default_l1_candidate_budget("train") == 100
+    assert run_pipeline._default_l1_candidate_budget("val") == 50
+    assert run_pipeline._default_l1_candidate_budget("all") == 0
+    assert run_pipeline._default_l1_candidate_budget(None) == 0
 
 
 def test_l1_uses_no_frame_total_cap_and_one_primary_object_per_frame() -> None:
@@ -292,7 +345,7 @@ def test_l1_uses_no_frame_total_cap_and_one_primary_object_per_frame() -> None:
     assert {question["obj_a_id"] for question in kept} == set(range(12))
 
 
-def test_l1_scene_type_cap_keeps_ten_and_budget_reaches_zero() -> None:
+def test_l1_candidate_budget_does_not_become_a_final_cap() -> None:
     questions = [
         {
             "scene_id": "scene0000_00",
@@ -309,28 +362,38 @@ def test_l1_scene_type_cap_keeps_ten_and_budget_reaches_zero() -> None:
         questions,
         scene_type_cap=10,
     )
-    budgets = run_pipeline._remaining_scene_type_budgets(
+    budgets = run_pipeline._remaining_candidate_type_budgets(
         Counter({"occlusion": len(kept)}),
-        scene_type_cap=10,
+        l1_candidate_budget=10,
+        l2_l3_candidate_budget=20,
         allowed_types={"occlusion"},
     )
 
-    assert len(kept) == 10
+    assert len(kept) == 11
     assert budgets == {"occlusion": 0}
 
 
-def test_uncapped_l2_type_prevents_mixed_single_frame_early_stop() -> None:
-    counts = Counter({"occlusion": 10, "object_remove": 3})
+def test_all_candidate_budgets_must_be_exhausted_for_early_stop() -> None:
+    counts = Counter({"occlusion": 10, "object_remove": 19})
 
-    assert not run_pipeline._all_scene_type_budgets_exhausted(
+    assert not run_pipeline._all_candidate_type_budgets_exhausted(
         counts,
         {"occlusion", "object_remove"},
-        scene_type_cap=10,
+        l1_candidate_budget=10,
+        l2_l3_candidate_budget=20,
     )
-    assert run_pipeline._all_scene_type_budgets_exhausted(
+    counts["object_remove"] = 20
+    assert run_pipeline._all_candidate_type_budgets_exhausted(
         counts,
-        {"occlusion"},
-        scene_type_cap=10,
+        {"occlusion", "object_remove"},
+        l1_candidate_budget=10,
+        l2_l3_candidate_budget=20,
+    )
+    assert not run_pipeline._all_candidate_type_budgets_exhausted(
+        counts,
+        {"occlusion", "object_remove"},
+        l1_candidate_budget=0,
+        l2_l3_candidate_budget=0,
     )
 
 
