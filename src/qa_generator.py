@@ -102,6 +102,7 @@ class ReasoningFrameContext:
     camera_pose: CameraPose
     regular_referable_ids: frozenset[int]
     attachment_referable_ids: frozenset[int]
+    cross_frame_visible_ids: frozenset[int] = frozenset()
     cache_entry: dict[str, Any] | None = None
     defer_annotation: bool = False
 
@@ -123,6 +124,44 @@ class CrossFrameLayoutSpec:
 
 
 CROSS_FRAME_LAYOUTS: dict[str, tuple[CrossFrameLayoutSpec, ...]] = {
+    "direction_agent": (
+        CrossFrameLayoutSpec(
+            "a_to_b",
+            ("obj_a_id",),
+            ("obj_b_id",),
+            (("answer", "frame_1"),),
+        ),
+    ),
+    "distance": (
+        CrossFrameLayoutSpec(
+            "a_to_b",
+            ("obj_a_id",),
+            ("obj_b_id",),
+            (("answer", "camera_independent"),),
+        ),
+    ),
+    "direction_allocentric": (
+        CrossFrameLayoutSpec(
+            "a_to_b",
+            ("obj_a_id",),
+            ("obj_b_id",),
+            (("cardinal_hint", "frame_1"), ("answer", "world")),
+        ),
+    ),
+    "direction_object_centric": (
+        CrossFrameLayoutSpec(
+            "ref_in_frame_1",
+            ("obj_ref_id",),
+            ("obj_face_id", "obj_target_id"),
+            (("answer", "object_defined"),),
+        ),
+        CrossFrameLayoutSpec(
+            "face_in_frame_1",
+            ("obj_face_id",),
+            ("obj_ref_id", "obj_target_id"),
+            (("answer", "object_defined"),),
+        ),
+    ),
     "object_move_occlusion": (
         CrossFrameLayoutSpec(
             "source_query_to_ref",
@@ -350,11 +389,12 @@ OCCLUSION_DEFINITION_NOTE = (
     "the image frame does not count as occlusion."
 )
 CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B = (
-    "(Use {obj_b} as the reference origin and align the axes with the camera "
-    "coordinate frame: front means farther from the camera, back means toward "
-    "the camera, and left/right follow the image left/right. For horizontal "
-    "directions, compare the objects' 3D bounding-box centers projected onto "
-    "the floor plane; above/below use the vertical spatial rule.)"
+    "(Use {obj_b} as the reference origin and align the axes with the first "
+    "main view's camera coordinate frame: front means farther from that camera, "
+    "back means toward that camera, and left/right follow the first image's "
+    "left/right. For horizontal directions, compare the objects' 3D bounding-box "
+    "centers projected onto the floor plane; above/below use the vertical spatial "
+    "rule.)"
 )
 CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_C = (
     "(Use {obj_c} as the reference origin and align the axes with the camera "
@@ -1394,9 +1434,9 @@ def _default_templates() -> dict:
 
         # --- Ego-centric ---
         "L1_direction_agent": [
-            f"From the camera's viewpoint, {{obj_a}} is in which direction relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
-            f"Looking at the scene from the camera's perspective, where is {{obj_a}} positioned relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
-            f"From the current camera perspective, what is the spatial relationship of {{obj_a}} to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"From the first main view's camera perspective, {{obj_a}} is in which direction relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"Using the first main view's camera coordinate frame, where is {{obj_a}} positioned relative to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
+            f"From the first main view's camera perspective, what is the spatial relationship of {{obj_a}} to {{obj_b}}? {CAMERA_RELATIVE_DIRECTION_NOTE_OBJ_B}",
         ],
         "L1_distance": [
             "What is the approximate shortest distance between {obj_a} and {obj_b}, measured from their closest points?",
@@ -1416,8 +1456,8 @@ def _default_templates() -> dict:
 
         # --- Allocentric ---
         "L1_direction_allocentric": [
-            f"The camera is facing {{camera_cardinal}} in this scene. On the room's floor plan, in which cardinal direction is {{obj_a}} from {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
-            f"In this image the camera faces {{camera_cardinal}}. Viewed from above on the room's layout, {{obj_a}} is in which cardinal direction relative to {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
+            f"The first main view's camera is facing {{camera_cardinal}}. On the room's floor plan, in which cardinal direction is {{obj_a}} from {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
+            f"In the first main view, the camera faces {{camera_cardinal}}. Viewed from above on the room's layout, {{obj_a}} is in which cardinal direction relative to {{obj_b}}? ({ALLOCENTRIC_DIRECTION_NOTE})",
         ],
 
         # ==== L2 — Intervention ====
@@ -4567,14 +4607,24 @@ def generate_l1_direction_object_centric(
     attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
+    reference_objects: list[dict] | None = None,
+    face_objects: list[dict] | None = None,
+    target_objects: list[dict] | None = None,
 ) -> list[dict]:
     """Generate L1 object-centric direction questions.
 
     Uses triples (ref, face, target) to define a reference frame at *ref*
     facing *face*, then asks for the direction of *target*.
     """
-    n = len(objects)
-    if n < 3:
+    reference_pool = list(objects if reference_objects is None else reference_objects)
+    face_pool = list(objects if face_objects is None else face_objects)
+    target_pool = list(objects if target_objects is None else target_objects)
+    available_ids = {
+        int(obj["id"])
+        for pool in (reference_pool, face_pool, target_pool)
+        for obj in pool
+    }
+    if not reference_pool or not face_pool or not target_pool or len(available_ids) < 3:
         _emit_generator_summary(
             trace_recorder,
             "generate_l1_direction_object_centric",
@@ -4583,7 +4633,12 @@ def generate_l1_direction_object_centric(
             generated_candidate_count=0,
             skipped_candidate_count=0,
             reason_counts={"insufficient_objects": 1},
-            details={"object_count": n},
+            details={
+                "object_count": len(available_ids),
+                "reference_object_count": len(reference_pool),
+                "face_object_count": len(face_pool),
+                "target_object_count": len(target_pool),
+            },
         )
         return []
 
@@ -4595,16 +4650,15 @@ def generate_l1_direction_object_centric(
     candidates: list[dict] = []
     reason_counts: Counter[str] = Counter()
     generated_candidate_count = 0
-    for i in range(n):
-        for j in range(n):
-            if i == j:
+    total_candidate_count = 0
+    for ref in reference_pool:
+        for face in face_pool:
+            if int(ref["id"]) == int(face["id"]):
                 continue
-            for k in range(n):
-                if k == i or k == j:
+            for target in target_pool:
+                if int(target["id"]) in {int(ref["id"]), int(face["id"])}:
                     continue
-                ref = objects[i]
-                face = objects[j]
-                target = objects[k]
+                total_candidate_count += 1
                 candidate_id = _candidate_key(ref["id"], face["id"], target["id"])
                 object_ids = [int(ref["id"]), int(face["id"]), int(target["id"])]
                 # All three labels must be distinct for unambiguous reference
@@ -4787,7 +4841,6 @@ def generate_l1_direction_object_centric(
                     question_preview=_question_preview_payload(candidates[-1]),
                 )
 
-    total_candidate_count = n * (n - 1) * (n - 2)
     _emit_generator_summary(
         trace_recorder,
         "generate_l1_direction_object_centric",
@@ -4796,7 +4849,12 @@ def generate_l1_direction_object_centric(
         generated_candidate_count=generated_candidate_count,
         skipped_candidate_count=max(total_candidate_count - generated_candidate_count, 0),
         reason_counts=dict(reason_counts),
-        details={"object_count": n},
+        details={
+            "object_count": len(available_ids),
+            "reference_object_count": len(reference_pool),
+            "face_object_count": len(face_pool),
+            "target_object_count": len(target_pool),
+        },
     )
     return candidates
 
@@ -4808,6 +4866,8 @@ def generate_l1_direction_allocentric(
     attachment_edge_lookup: dict[frozenset[int], dict[str, Any]] | None = None,
     trace_recorder: Callable[[dict[str, Any]], None] | None = None,
     trace_detail: str = "light",
+    obj_a_objects: list[dict] | None = None,
+    obj_b_objects: list[dict] | None = None,
 ) -> list[dict]:
     """Generate L1 allocentric (cardinal) direction questions.
 
@@ -4815,7 +4875,21 @@ def generate_l1_direction_allocentric(
     absolute directions from the image.
     """
     cam_cardinal = camera_cardinal_direction(camera_pose)
-    n = len(objects)
+    if obj_a_objects is None and obj_b_objects is None:
+        pairs = [
+            (objects[i], objects[j])
+            for i in range(len(objects))
+            for j in range(i + 1, len(objects))
+        ]
+    else:
+        a_pool = list(objects if obj_a_objects is None else obj_a_objects)
+        b_pool = list(objects if obj_b_objects is None else obj_b_objects)
+        pairs = [
+            (a, b)
+            for a in a_pool
+            for b in b_pool
+            if int(a["id"]) != int(b["id"])
+        ]
 
     tpl_list = templates.get(
         "L1_direction_allocentric",
@@ -4825,138 +4899,11 @@ def generate_l1_direction_allocentric(
     candidates: list[dict] = []
     reason_counts: Counter[str] = Counter()
     generated_candidate_count = 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            a, b = objects[i], objects[j]
-            candidate_id = _candidate_key(a["id"], b["id"])
-            object_ids = [int(a["id"]), int(b["id"])]
-            if a["label"] == b["label"]:
-                reason_counts["duplicate_labels"] += 1
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l1_direction_allocentric",
-                    candidate_kind="object_pair",
-                    candidate_key=candidate_id,
-                    object_ids=object_ids,
-                    status="skipped",
-                    reason_code="duplicate_labels",
-                    reason_detail="allocentric direction questions require distinct object labels",
-                )
-                continue
-
-            a_c = np.array(a["center"])
-            b_c = np.array(b["center"])
-            if np.linalg.norm(b_c - a_c) < MIN_DIRECTION_DISTANCE:
-                reason_counts["pair_too_close"] += 1
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l1_direction_allocentric",
-                    candidate_kind="object_pair",
-                    candidate_key=candidate_id,
-                    object_ids=object_ids,
-                    status="skipped",
-                    reason_code="pair_too_close",
-                    reason_detail="object centers are too close for a reliable allocentric direction question",
-                    evidence={"min_distance": MIN_DIRECTION_DISTANCE},
-                )
-                continue
-            direction, ambiguity = primary_direction_allocentric(
-                a_c,
-                b_c,
-                obj_a_hull_xy=_object_bottom_hull_xy(a),
-                obj_b_hull_xy=_object_bottom_hull_xy(b),
-                obj_a_bbox_min=np.array(a["bbox_min"], dtype=float),
-                obj_a_bbox_max=np.array(a["bbox_max"], dtype=float),
-                obj_b_bbox_min=np.array(b["bbox_min"], dtype=float),
-                obj_b_bbox_max=np.array(b["bbox_max"], dtype=float),
-            )
-            if ambiguity > 0.7:
-                reason_counts["ambiguous_direction"] += 1
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l1_direction_allocentric",
-                    candidate_kind="object_pair",
-                    candidate_key=candidate_id,
-                    object_ids=object_ids,
-                    status="skipped",
-                    reason_code="ambiguous_direction",
-                    reason_detail="allocentric direction falls too close to an ambiguity boundary",
-                    evidence={"ambiguity_score": float(ambiguity), "threshold": 0.7},
-                )
-                continue
-            if direction not in CARDINAL_DIRECTIONS_8:
-                reason_counts["non_cardinal_direction"] += 1
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l1_direction_allocentric",
-                    candidate_kind="object_pair",
-                    candidate_key=candidate_id,
-                    object_ids=object_ids,
-                    status="skipped",
-                    reason_code="non_cardinal_direction",
-                    reason_detail="computed allocentric direction is not one of the supported cardinal answers",
-                    evidence={"direction": direction},
-                )
-                continue
-            suppression = _direction_suppression_reason(
-                a,
-                b,
-                direction,
-                attachment_edge_lookup,
-            )
-            if suppression is not None:
-                reason_code, reason_detail, evidence = suppression
-                reason_counts[reason_code] += 1
-                _emit_generator_candidate(
-                    trace_recorder,
-                    trace_detail=trace_detail,
-                    generator="generate_l1_direction_allocentric",
-                    candidate_kind="object_pair",
-                    candidate_key=candidate_id,
-                    object_ids=object_ids,
-                    status="skipped",
-                    reason_code=reason_code,
-                    reason_detail=reason_detail,
-                    evidence=evidence,
-                )
-                continue
-
-            tpl = random.choice(tpl_list)
-            question_text = tpl.format(
-                camera_cardinal=cam_cardinal,
-                obj_a=_the(a["label"]),
-                obj_b=_the(b["label"]),
-            )
-            options, answer = generate_direction_options(
-                direction,
-                ALL_DIRECTIONS_ALLOCENTRIC,
-            )
-            candidates.append({
-                "level": "L1",
-                "type": "direction_allocentric",
-                "reference_frame": "allocentric",
-                "question": question_text,
-                "options": options,
-                "answer": answer,
-                "correct_value": direction,
-                "camera_cardinal": cam_cardinal,
-                "obj_a_id": a["id"],
-                "obj_a_label": a["label"],
-                "obj_b_id": b["id"],
-                "obj_b_label": b["label"],
-                "mentioned_objects": [
-                    _mention("obj_a", a["label"], a["id"]),
-                    _mention("obj_b", b["label"], b["id"]),
-                ],
-                "ambiguity_score": ambiguity,
-                "relation_unchanged": False,
-            })
-            generated_candidate_count += 1
-            reason_counts["generated"] += 1
+    for a, b in pairs:
+        candidate_id = _candidate_key(a["id"], b["id"])
+        object_ids = [int(a["id"]), int(b["id"])]
+        if a["label"] == b["label"]:
+            reason_counts["duplicate_labels"] += 1
             _emit_generator_candidate(
                 trace_recorder,
                 trace_detail=trace_detail,
@@ -4964,14 +4911,139 @@ def generate_l1_direction_allocentric(
                 candidate_kind="object_pair",
                 candidate_key=candidate_id,
                 object_ids=object_ids,
-                status="generated",
-                reason_code="generated",
-                reason_detail="pair yields a valid allocentric cardinal-direction relation",
-                evidence={"ambiguity_score": float(ambiguity), "direction": direction},
-                question_preview=_question_preview_payload(candidates[-1]),
+                status="skipped",
+                reason_code="duplicate_labels",
+                reason_detail="allocentric direction questions require distinct object labels",
             )
+            continue
 
-    total_candidate_count = int((n * max(n - 1, 0)) / 2)
+        a_c = np.array(a["center"])
+        b_c = np.array(b["center"])
+        if np.linalg.norm(b_c - a_c) < MIN_DIRECTION_DISTANCE:
+            reason_counts["pair_too_close"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction_allocentric",
+                candidate_kind="object_pair",
+                candidate_key=candidate_id,
+                object_ids=object_ids,
+                status="skipped",
+                reason_code="pair_too_close",
+                reason_detail="object centers are too close for a reliable allocentric direction question",
+                evidence={"min_distance": MIN_DIRECTION_DISTANCE},
+            )
+            continue
+        direction, ambiguity = primary_direction_allocentric(
+            a_c,
+            b_c,
+            obj_a_hull_xy=_object_bottom_hull_xy(a),
+            obj_b_hull_xy=_object_bottom_hull_xy(b),
+            obj_a_bbox_min=np.array(a["bbox_min"], dtype=float),
+            obj_a_bbox_max=np.array(a["bbox_max"], dtype=float),
+            obj_b_bbox_min=np.array(b["bbox_min"], dtype=float),
+            obj_b_bbox_max=np.array(b["bbox_max"], dtype=float),
+        )
+        if ambiguity > 0.7:
+            reason_counts["ambiguous_direction"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction_allocentric",
+                candidate_kind="object_pair",
+                candidate_key=candidate_id,
+                object_ids=object_ids,
+                status="skipped",
+                reason_code="ambiguous_direction",
+                reason_detail="allocentric direction falls too close to an ambiguity boundary",
+                evidence={"ambiguity_score": float(ambiguity), "threshold": 0.7},
+            )
+            continue
+        if direction not in CARDINAL_DIRECTIONS_8:
+            reason_counts["non_cardinal_direction"] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction_allocentric",
+                candidate_kind="object_pair",
+                candidate_key=candidate_id,
+                object_ids=object_ids,
+                status="skipped",
+                reason_code="non_cardinal_direction",
+                reason_detail="computed allocentric direction is not one of the supported cardinal answers",
+                evidence={"direction": direction},
+            )
+            continue
+        suppression = _direction_suppression_reason(
+            a,
+            b,
+            direction,
+            attachment_edge_lookup,
+        )
+        if suppression is not None:
+            reason_code, reason_detail, evidence = suppression
+            reason_counts[reason_code] += 1
+            _emit_generator_candidate(
+                trace_recorder,
+                trace_detail=trace_detail,
+                generator="generate_l1_direction_allocentric",
+                candidate_kind="object_pair",
+                candidate_key=candidate_id,
+                object_ids=object_ids,
+                status="skipped",
+                reason_code=reason_code,
+                reason_detail=reason_detail,
+                evidence=evidence,
+            )
+            continue
+
+        tpl = random.choice(tpl_list)
+        question_text = tpl.format(
+            camera_cardinal=cam_cardinal,
+            obj_a=_the(a["label"]),
+            obj_b=_the(b["label"]),
+        )
+        options, answer = generate_direction_options(
+            direction,
+            ALL_DIRECTIONS_ALLOCENTRIC,
+        )
+        candidates.append({
+            "level": "L1",
+            "type": "direction_allocentric",
+            "reference_frame": "allocentric",
+            "question": question_text,
+            "options": options,
+            "answer": answer,
+            "correct_value": direction,
+            "camera_cardinal": cam_cardinal,
+            "obj_a_id": a["id"],
+            "obj_a_label": a["label"],
+            "obj_b_id": b["id"],
+            "obj_b_label": b["label"],
+            "mentioned_objects": [
+                _mention("obj_a", a["label"], a["id"]),
+                _mention("obj_b", b["label"], b["id"]),
+            ],
+            "ambiguity_score": ambiguity,
+            "relation_unchanged": False,
+        })
+        generated_candidate_count += 1
+        reason_counts["generated"] += 1
+        _emit_generator_candidate(
+            trace_recorder,
+            trace_detail=trace_detail,
+            generator="generate_l1_direction_allocentric",
+            candidate_kind="object_pair",
+            candidate_key=candidate_id,
+            object_ids=object_ids,
+            status="generated",
+            reason_code="generated",
+            reason_detail="pair yields a valid allocentric cardinal-direction relation",
+            evidence={"ambiguity_score": float(ambiguity), "direction": direction},
+            question_preview=_question_preview_payload(candidates[-1]),
+        )
+
+    total_candidate_count = len(pairs)
     _emit_generator_summary(
         trace_recorder,
         "generate_l1_direction_allocentric",
@@ -4980,7 +5052,11 @@ def generate_l1_direction_allocentric(
         generated_candidate_count=generated_candidate_count,
         skipped_candidate_count=max(total_candidate_count - generated_candidate_count, 0),
         reason_counts=dict(reason_counts),
-        details={"object_count": n},
+        details={
+            "object_count": len(objects),
+            "obj_a_object_count": len({int(a["id"]) for a, _ in pairs}),
+            "obj_b_object_count": len({int(b["id"]) for _, b in pairs}),
+        },
     )
     return candidates
 
@@ -10205,6 +10281,10 @@ def generate_l3_coordinate_rotation_allocentric(
 
 
 _CROSS_FRAME_PUBLIC_TYPES = frozenset({
+    "L1_direction_agent",
+    "L1_distance",
+    "L1_direction_object_centric",
+    "L1_direction_allocentric",
     "L2_object_move_agent",
     "L2_object_move_distance",
     "L2_object_move_occlusion",
@@ -10224,6 +10304,10 @@ _CROSS_FRAME_ANSWER_PAIR_DISTANCE_DEFINITION_KEY = (
 )
 _CROSS_FRAME_ANSWER_PAIR_IDS_KEY = "_cross_frame_answer_pair_ids"
 _CROSS_FRAME_ANSWER_PAIR_FIELDS: dict[str, tuple[str, str]] = {
+    "direction_agent": ("obj_a_id", "obj_b_id"),
+    "distance": ("obj_a_id", "obj_b_id"),
+    "direction_object_centric": ("obj_ref_id", "obj_target_id"),
+    "direction_allocentric": ("obj_a_id", "obj_b_id"),
     "object_move_agent": ("query_obj_id", "obj_c_id"),
     "object_move_distance": ("query_obj_id", "obj_c_id"),
     "object_move_occlusion": ("query_obj_id", "obj_ref_id"),
@@ -10517,6 +10601,8 @@ def _annotate_cross_frame_questions(
     layout_id: str | None = None,
     answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
     distance_annotation_stats: Counter[str] | None = None,
+    rejection_counts: Counter[str] | None = None,
+    rejection_details: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     kept: list[dict[str, Any]] = []
     for question in questions:
@@ -10557,6 +10643,22 @@ def _annotate_cross_frame_questions(
         if any(obj_id in frame_2.any_referable_ids for obj_id in frame_1_ids):
             continue
         if any(obj_id in frame_1.any_referable_ids for obj_id in frame_2_ids):
+            continue
+
+        frame_1_conflicts = sorted(set(frame_2_ids) & frame_1.cross_frame_visible_ids)
+        frame_2_conflicts = sorted(set(frame_1_ids) & frame_2.cross_frame_visible_ids)
+        if frame_1_conflicts or frame_2_conflicts:
+            if rejection_counts is not None:
+                rejection_counts["question_main_frame_visibility_overlap_rejected"] += 1
+            if rejection_details is not None and len(rejection_details) < 100:
+                rejection_details.append({
+                    "frame_1": frame_1.image_name,
+                    "frame_2": frame_2.image_name,
+                    "question_type": str(question.get("type", "")),
+                    "reason": "main_frame_visibility_overlap",
+                    "frame_1_conflicting_object_ids": frame_1_conflicts,
+                    "frame_2_conflicting_object_ids": frame_2_conflicts,
+                })
             continue
 
         frame_1_objects = _objects_for_ids(objects_by_id, frame_1_ids)
@@ -10614,8 +10716,9 @@ def generate_cross_frame_questions(
     only_question_types: list[str] | None = None,
     max_occlusion_objects: int | str | None = None,
     max_move_sources: int | None = None,
+    attachment_edges: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Generate counterfactual questions after both flash main frames are fixed."""
+    """Generate spatial questions after both flash main frames are fixed."""
     templates = templates or _load_templates()
     requested = (
         _CROSS_FRAME_PUBLIC_TYPES
@@ -10638,8 +10741,89 @@ def generate_cross_frame_questions(
     frame_1_attachment = _objects_for_ids(objects_by_id, frame_1.attachment_capable_ids)
     frame_2_regular = _objects_for_ids(objects_by_id, frame_2.regular_referable_ids)
     ordinary_pool = _merge_unique_objects(frame_1_regular, frame_2_regular)
+    attachment_edge_lookup = _build_attachment_edge_lookup(attachment_edges)
     source_ids = set(frame_1.attachment_capable_ids)
     questions: list[dict[str, Any]] = []
+
+    l1_pair_types = requested & {
+        "L1_direction_agent",
+        "L1_distance",
+    }
+    if l1_pair_types:
+        relations = compute_all_relations(
+            ordinary_pool,
+            frame_1.camera_pose,
+            None,
+            None,
+        )
+        frame_1_ids = set(frame_1.regular_referable_ids)
+        frame_2_ids = set(frame_2.regular_referable_ids)
+        for relation in relations:
+            obj_a_id = int(relation["obj_a_id"])
+            obj_b_id = int(relation["obj_b_id"])
+            if obj_a_id not in frame_1_ids or obj_b_id not in frame_2_ids:
+                continue
+            batch: list[dict[str, Any]] = []
+            if "L1_direction_agent" in l1_pair_types:
+                direction_question = generate_l1_direction(
+                    relation,
+                    templates,
+                    obj_a=objects_by_id.get(obj_a_id),
+                    obj_b=objects_by_id.get(obj_b_id),
+                    attachment_edge_lookup=attachment_edge_lookup,
+                )
+                if direction_question is not None:
+                    batch.append(direction_question)
+            if "L1_distance" in l1_pair_types:
+                distance_question = generate_l1_distance(relation, templates)
+                if distance_question is not None:
+                    batch.append(distance_question)
+            questions.extend(_annotate_cross_frame_questions(
+                batch,
+                frame_1=frame_1,
+                frame_2=frame_2,
+                objects_by_id=objects_by_id,
+                answer_pair_distance_cache=answer_pair_distance_cache,
+            ))
+
+    if "L1_direction_allocentric" in requested:
+        batch = generate_l1_direction_allocentric(
+            ordinary_pool,
+            frame_1.camera_pose,
+            templates,
+            attachment_edge_lookup=attachment_edge_lookup,
+            obj_a_objects=frame_1_regular,
+            obj_b_objects=frame_2_regular,
+        )
+        questions.extend(_annotate_cross_frame_questions(
+            batch,
+            frame_1=frame_1,
+            frame_2=frame_2,
+            objects_by_id=objects_by_id,
+            answer_pair_distance_cache=answer_pair_distance_cache,
+        ))
+
+    if "L1_direction_object_centric" in requested:
+        for layout_id, reference_pool, face_pool, target_pool in (
+            ("ref_in_frame_1", frame_1_regular, frame_2_regular, frame_2_regular),
+            ("face_in_frame_1", frame_2_regular, frame_1_regular, frame_2_regular),
+        ):
+            batch = generate_l1_direction_object_centric(
+                ordinary_pool,
+                templates,
+                attachment_edge_lookup=attachment_edge_lookup,
+                reference_objects=reference_pool,
+                face_objects=face_pool,
+                target_objects=target_pool,
+            )
+            questions.extend(_annotate_cross_frame_questions(
+                batch,
+                frame_1=frame_1,
+                frame_2=frame_2,
+                objects_by_id=objects_by_id,
+                layout_id=layout_id,
+                answer_pair_distance_cache=answer_pair_distance_cache,
+            ))
 
     move_agent_types: set[str] = set()
     if "L2_object_move_agent" in requested:

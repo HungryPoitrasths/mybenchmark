@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import math
 from pathlib import Path
 from unittest.mock import patch
@@ -65,12 +66,14 @@ def make_context(
     *,
     regular: set[int],
     attachment: set[int] | None = None,
+    cross_frame_visible: set[int] | None = None,
 ) -> ReasoningFrameContext:
     return ReasoningFrameContext(
         image_name=name,
         camera_pose=make_pose(name),
         regular_referable_ids=frozenset(regular),
         attachment_referable_ids=frozenset(attachment or set()),
+        cross_frame_visible_ids=frozenset(cross_frame_visible or set()),
         cache_entry={"frame_usable": True},
     )
 
@@ -78,6 +81,27 @@ def make_context(
 @pytest.mark.parametrize(
     ("question", "expected_pair"),
     [
+        (
+            {"type": "direction_agent", "obj_a_id": 1, "obj_b_id": 2},
+            (1, 2),
+        ),
+        (
+            {"type": "distance", "obj_a_id": 1, "obj_b_id": 2},
+            (1, 2),
+        ),
+        (
+            {"type": "direction_allocentric", "obj_a_id": 1, "obj_b_id": 2},
+            (1, 2),
+        ),
+        (
+            {
+                "type": "direction_object_centric",
+                "obj_ref_id": 1,
+                "obj_face_id": 3,
+                "obj_target_id": 2,
+            },
+            (1, 2),
+        ),
         (
             {"type": "object_move_agent", "moved_obj_id": 90, "query_obj_id": 1, "obj_c_id": 2},
             (1, 2),
@@ -477,6 +501,173 @@ def test_direct_cross_frame_generation_applies_distance_priority_and_cleans_meta
     )
 
 
+def test_l1_cross_frame_generation_uses_expected_layouts_and_camera_bindings() -> None:
+    from src.qa_generator import generate_cross_frame_questions
+
+    objects = [
+        make_point_object(1, "table", 0.0),
+        make_point_object(2, "lamp", 1.5),
+        make_point_object(3, "sofa", 2.5),
+        make_point_object(4, "cabinet", 3.5),
+    ]
+    frame_1 = make_context("first.jpg", regular={1})
+    frame_2 = make_context("last.jpg", regular={2, 3, 4})
+
+    result = generate_cross_frame_questions(
+        objects=objects,
+        attachment_graph={},
+        attached_by={},
+        frame_1=frame_1,
+        frame_2=frame_2,
+        color_intrinsics=make_intrinsics(),
+        only_question_types=[
+            "L1_direction_agent",
+            "L1_distance",
+            "L1_direction_object_centric",
+            "L1_direction_allocentric",
+        ],
+    )
+
+    by_type: dict[str, list[dict]] = {}
+    for question in result:
+        by_type.setdefault(question["type"], []).append(question)
+        assert question["image_name"] == "first.jpg"
+        assert question["reasoning_frame_2"] == "last.jpg"
+        assert set(question["object_frame_groups"]["frame_1"]) == {1}
+        assert set(question["object_frame_groups"]["frame_1"]).isdisjoint(
+            question["object_frame_groups"]["frame_2"]
+        )
+        assert question["question"].startswith(
+            "A sequence of views follows a visually continuous camera path"
+        )
+
+    assert set(by_type) == {
+        "direction_agent",
+        "distance",
+        "direction_object_centric",
+        "direction_allocentric",
+    }
+    assert {q["cross_frame_layout"] for q in by_type["direction_agent"]} == {"a_to_b"}
+    assert {q["cross_frame_layout"] for q in by_type["distance"]} == {"a_to_b"}
+    assert {q["cross_frame_layout"] for q in by_type["direction_allocentric"]} == {"a_to_b"}
+    assert {q["cross_frame_layout"] for q in by_type["direction_object_centric"]} == {
+        "ref_in_frame_1",
+        "face_in_frame_1",
+    }
+    assert all(
+        question["question"].count("first main view") >= 2
+        for question_type in ("direction_agent", "direction_allocentric")
+        for question in by_type[question_type]
+    )
+    for question in by_type["direction_object_centric"]:
+        if question["cross_frame_layout"] == "ref_in_frame_1":
+            assert question["obj_ref_id"] == 1
+            assert {
+                question["obj_face_id"],
+                question["obj_target_id"],
+            } == set(question["object_frame_groups"]["frame_2"])
+        else:
+            assert question["obj_face_id"] == 1
+            assert {
+                question["obj_ref_id"],
+                question["obj_target_id"],
+            } == set(question["object_frame_groups"]["frame_2"])
+    assert by_type["direction_agent"][0]["camera_bindings"] == {"answer": "frame_1"}
+    assert by_type["distance"][0]["camera_bindings"] == {
+        "answer": "camera_independent"
+    }
+    assert by_type["direction_allocentric"][0]["camera_bindings"] == {
+        "cardinal_hint": "frame_1",
+        "answer": "world",
+    }
+    assert by_type["direction_object_centric"][0]["camera_bindings"] == {
+        "answer": "object_defined"
+    }
+
+
+def test_l1_cross_frame_generation_uses_first_main_view_camera() -> None:
+    from src.qa_generator import generate_cross_frame_questions
+
+    objects = [make_object(1, "table"), make_object(2, "lamp")]
+    frame_1 = make_context("first.jpg", regular={1})
+    frame_2 = make_context("last.jpg", regular={2})
+
+    with (
+        patch("src.qa_generator.compute_all_relations", return_value=[]) as relations_mock,
+        patch(
+            "src.qa_generator.generate_l1_direction_allocentric",
+            return_value=[],
+        ) as allocentric_mock,
+    ):
+        generate_cross_frame_questions(
+            objects=objects,
+            attachment_graph={},
+            attached_by={},
+            frame_1=frame_1,
+            frame_2=frame_2,
+            color_intrinsics=make_intrinsics(),
+            only_question_types=[
+                "L1_direction_agent",
+                "L1_direction_allocentric",
+            ],
+        )
+
+    assert relations_mock.call_args.args[1] is frame_1.camera_pose
+    assert allocentric_mock.call_args.args[1] is frame_1.camera_pose
+
+
+def test_l1_cross_frame_annotation_rejects_overlap_without_single_frame_fallback() -> None:
+    objects = {1: make_object(1, "table"), 2: make_object(2, "lamp")}
+    question = {
+        "level": "L1",
+        "type": "direction_agent",
+        "question": "question",
+        "obj_a_id": 1,
+        "obj_b_id": 2,
+    }
+
+    referability_overlap = _annotate_cross_frame_questions(
+        [dict(question)],
+        frame_1=make_context("first.jpg", regular={1, 2}),
+        frame_2=make_context("last.jpg", regular={2}),
+        objects_by_id=objects,
+    )
+    visibility_overlap = _annotate_cross_frame_questions(
+        [dict(question)],
+        frame_1=make_context(
+            "first.jpg",
+            regular={1},
+            cross_frame_visible={2},
+        ),
+        frame_2=make_context("last.jpg", regular={2}),
+        objects_by_id=objects,
+    )
+
+    assert referability_overlap == []
+    assert visibility_overlap == []
+
+
+def test_l1_cross_frame_direction_preserves_attachment_suppression() -> None:
+    from src.qa_generator import generate_cross_frame_questions
+
+    objects = [
+        make_point_object(1, "table", 0.0),
+        make_point_object(2, "lamp", 1.5),
+    ]
+    result = generate_cross_frame_questions(
+        objects=objects,
+        attachment_graph={1: [2]},
+        attached_by={2: 1},
+        frame_1=make_context("first.jpg", regular={1}),
+        frame_2=make_context("last.jpg", regular={2}),
+        color_intrinsics=make_intrinsics(),
+        only_question_types=["L1_direction_agent", "L1_distance"],
+        attachment_edges=[{"parent_id": 1, "child_id": 2, "type": "support"}],
+    )
+
+    assert {question["type"] for question in result} == {"distance"}
+
+
 def test_generic_frame_2_role_requires_regular_referability() -> None:
     objects = {1: make_object(1, "table"), 2: make_object(2, "lamp")}
     question = {
@@ -508,6 +699,94 @@ def test_opposite_frame_union_signal_rejects_semantic_overlap() -> None:
         frame_2=make_context("last.jpg", regular={2}, attachment={1}),
         objects_by_id=objects,
     )
+    assert result == []
+
+
+def test_visible_but_nonreferable_opposite_role_reports_cross_frame_rejection() -> None:
+    objects = {1: make_object(1, "table"), 2: make_object(2, "toilet paper")}
+    question = {
+        "type": "object_move_occlusion",
+        "question": "question",
+        "moved_obj_id": 1,
+        "target_obj_id": 2,
+    }
+    rejection_counts: Counter[str] = Counter()
+    rejection_details: list[dict] = []
+
+    result = _annotate_cross_frame_questions(
+        [question],
+        frame_1=make_context(
+            "first.jpg",
+            regular=set(),
+            attachment={1},
+            cross_frame_visible={1, 2},
+        ),
+        frame_2=make_context("last.jpg", regular={2}, cross_frame_visible={2}),
+        objects_by_id=objects,
+        rejection_counts=rejection_counts,
+        rejection_details=rejection_details,
+    )
+
+    assert result == []
+    assert rejection_counts["question_main_frame_visibility_overlap_rejected"] == 1
+    assert rejection_details[0]["frame_1_conflicting_object_ids"] == [2]
+    assert rejection_details[0]["frame_2_conflicting_object_ids"] == []
+
+
+def test_frame_2_visibility_of_frame_1_role_rejects_cross_frame_question() -> None:
+    objects = {1: make_object(1, "table"), 2: make_object(2, "lamp")}
+    question = {
+        "type": "object_move_occlusion",
+        "question": "question",
+        "moved_obj_id": 1,
+        "target_obj_id": 2,
+    }
+
+    result = _annotate_cross_frame_questions(
+        [question],
+        frame_1=make_context(
+            "first.jpg",
+            regular=set(),
+            attachment={1},
+            cross_frame_visible={1},
+        ),
+        frame_2=make_context("last.jpg", regular={2}, cross_frame_visible={1, 2}),
+        objects_by_id=objects,
+    )
+
+    assert result == []
+
+
+def test_scene_0d2ee665be_frame_001200_rejects_visible_toilet_paper() -> None:
+    objects = {
+        34: make_object(34, "table"),
+        42: make_object(42, "keyboard"),
+        64: make_object(64, "toilet paper"),
+    }
+    question = {
+        "type": "object_move_agent",
+        "question": "question",
+        "moved_obj_id": 34,
+        "query_obj_id": 42,
+        "obj_c_id": 64,
+    }
+
+    result = _annotate_cross_frame_questions(
+        [question],
+        frame_1=make_context(
+            "frame_001200.jpg",
+            regular=set(),
+            attachment={34, 42},
+            cross_frame_visible={34, 42, 64},
+        ),
+        frame_2=make_context(
+            "frame_001480.jpg",
+            regular={64},
+            cross_frame_visible={64},
+        ),
+        objects_by_id=objects,
+    )
+
     assert result == []
 
 
