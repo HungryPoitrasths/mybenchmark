@@ -127,6 +127,8 @@ PIPELINE_SCENE_STATUS_VERSION = 6
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 SCENE_QUESTION_HARD_CAP_BY_SPLIT = {"val": 50, "train": 100}
+DEFAULT_L1_SCENE_TYPE_CAP = 10
+L1_SCENE_TYPE_CAP_BY_SPLIT = {"train": 50}
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -5174,6 +5176,12 @@ def _split_scene_question_hard_cap(split: str | None) -> int:
     return SCENE_QUESTION_HARD_CAP_BY_SPLIT.get(split_name, 0)
 
 
+def _default_l1_scene_type_cap(split: str | None) -> int:
+    """Return the default L1 scene/type cap for a dataset split."""
+    split_name = str(split or "").strip().lower()
+    return L1_SCENE_TYPE_CAP_BY_SPLIT.get(split_name, DEFAULT_L1_SCENE_TYPE_CAP)
+
+
 def _make_dedup_key(q: dict) -> tuple:
     """Build a dedup key from question text + sorted object IDs."""
     obj_id_fields = [
@@ -5389,7 +5397,7 @@ def run_pipeline(
     resume: bool = False,
     reset: int | None = None,
     only_question_types: list[str] | None = None,
-    scene_type_cap: int = 10,
+    scene_type_cap: int | None = None,
     frame_type_cap: int = 2,
     frame_type_object_cap: int = 1,
     max_questions_per_scene_type: int | None = None,
@@ -5418,6 +5426,8 @@ def run_pipeline(
         raise ValueError("reset requires resume=True")
     if max_questions_per_scene_type is not None:
         scene_type_cap = int(max_questions_per_scene_type)
+    elif scene_type_cap is None:
+        scene_type_cap = _default_l1_scene_type_cap(split)
     scene_type_cap = int(scene_type_cap)
     frame_type_cap = int(frame_type_cap)
     frame_type_object_cap = int(frame_type_object_cap)
@@ -7659,8 +7669,11 @@ def main():
     parser.add_argument(
         "--scene_type_cap",
         type=int,
-        default=10,
-        help="Maximum kept L1 questions per (dataset, scene, type). Use 0 to disable.",
+        default=None,
+        help=(
+            "Maximum kept L1 questions per (dataset, scene, type). Defaults to 50 "
+            "for the train split and 10 otherwise; use 0 to disable."
+        ),
     )
     parser.add_argument(
         "--frame_type_cap",

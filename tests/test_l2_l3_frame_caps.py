@@ -256,9 +256,13 @@ def test_hard_cap_budget_reaches_zero_for_early_stop() -> None:
     assert budgets == {"attachment_move": 1, "object_move_agent": 0}
 
 
-def test_l1_default_scene_type_cap_is_ten() -> None:
+def test_l1_default_scene_type_cap_depends_on_split() -> None:
     signature = inspect.signature(run_pipeline.run_pipeline)
-    assert signature.parameters["scene_type_cap"].default == 10
+    assert signature.parameters["scene_type_cap"].default is None
+    assert run_pipeline._default_l1_scene_type_cap("train") == 50
+    assert run_pipeline._default_l1_scene_type_cap("val") == 10
+    assert run_pipeline._default_l1_scene_type_cap("all") == 10
+    assert run_pipeline._default_l1_scene_type_cap(None) == 10
 
 
 def test_l1_uses_no_frame_total_cap_and_one_primary_object_per_frame() -> None:
