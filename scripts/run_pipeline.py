@@ -7129,7 +7129,49 @@ def run_pipeline(
                     cross_candidates.append(question)
                     cross_candidate_type_counts[canonical_type] += 1
 
-            deferred_cross_types = list(cross_frame_requested_types)
+            occlusion_cross_type = "L2_object_move_occlusion"
+            if (
+                occlusion_cross_type in cross_frame_requested_types
+                and _cross_type_budget_available(
+                    _PUBLIC_TO_CANONICAL_QUESTION_TYPES[occlusion_cross_type]
+                )
+            ):
+                for (frame_1_name, frame_2_name), route in routes_by_pair.items():
+                    if not _cross_type_budget_available(
+                        _PUBLIC_TO_CANONICAL_QUESTION_TYPES[occlusion_cross_type]
+                    ):
+                        break
+                    frame_1 = contexts_by_name[frame_1_name]
+                    frame_2 = contexts_by_name[frame_2_name]
+                    pair_questions = generate_cross_frame_questions(
+                        objects=scene["objects"],
+                        attachment_graph=attachment_graph,
+                        attached_by=attached_by,
+                        frame_1=frame_1,
+                        frame_2=frame_2,
+                        color_intrinsics=color_intrinsics,
+                        room_bounds=scene.get("room_bounds"),
+                        collision_objects=scene["objects"],
+                        ray_caster=ray_caster,
+                        instance_mesh_data=instance_mesh_data,
+                        occlusion_backend=occlusion_backend,
+                        only_question_types=[occlusion_cross_type],
+                        max_occlusion_objects=max_occlusion_objects,
+                        max_move_sources=max_move_sources,
+                        attachment_edges=scene.get("attachment_edges", []),
+                    )
+                    pair_questions = _filter_vertical_object_rotate_questions(
+                        pair_questions,
+                        scene_objects=scene["objects"],
+                        attachment_graph=attachment_graph,
+                    )
+                    _append_pair_questions(pair_questions, frame_1, frame_2, route)
+
+            deferred_cross_types = [
+                public_type
+                for public_type in cross_frame_requested_types
+                if public_type != occlusion_cross_type
+            ]
             if deferred_cross_types:
                 for frame_1 in flash_contexts:
                     active_cross_types = [
@@ -7214,6 +7256,16 @@ def run_pipeline(
                         scene_objects=scene["objects"],
                         attachment_graph=attachment_graph,
                     )
+                    active_canonical_types = {
+                        _PUBLIC_TO_CANONICAL_QUESTION_TYPES[public_type]
+                        for public_type in active_cross_types
+                    }
+                    raw_questions = [
+                        question
+                        for question in raw_questions
+                        if _canonical_scene_question_type(question)
+                        in active_canonical_types
+                    ]
                     for raw_question in raw_questions:
                         layout_id = str(raw_question.get("_cross_frame_layout_hint", "")).strip() or None
                         for frame_2 in destinations:

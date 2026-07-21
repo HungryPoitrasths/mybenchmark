@@ -5197,10 +5197,23 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertTrue(
             all(call[1] == "__deferred_frame_2__" for call in default_non_occlusion_calls)
         )
-        self.assertEqual(default_occlusion_calls, [])
+        self.assertTrue(default_occlusion_calls)
+        self.assertTrue(all(
+            frame_2_name != "__deferred_frame_2__"
+            for _frame_1_name, frame_2_name in default_occlusion_calls
+        ))
+        self.assertEqual(
+            set(default_occlusion_calls),
+            {
+                (frame_1_name, frame_2_name)
+                for frame_1_name in frame_names
+                for frame_2_name in frame_names
+                if frame_1_name != frame_2_name
+            },
+        )
         self.assertEqual(Counter(question["type"] for question in questions), {
             "object_move_agent": 2,
-            "object_move_occlusion": 2,
+            "object_move_occlusion": 1,
         })
         self.assertEqual(
             {question.get("reasoning_frame_2") for question in questions},

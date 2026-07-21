@@ -2550,10 +2550,20 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
         mover = make_object(1, "table", (0.0, 0.0, 2.0))
         query = make_object(2, "lamp", (0.2, 0.0, 2.0))
         reference = make_object(3, "sofa", (0.8, 0.0, 2.0))
+        moved_query = dict(query)
+        moved_query["center"] = [0.7, 0.0, 2.0]
+        moved_query["bbox_min"] = [0.6, -0.1, 1.9]
+        moved_query["bbox_max"] = [0.8, 0.1, 2.1]
         selected_state = SimpleNamespace(
             delta=np.array([0.5, 0.0, 0.0], dtype=np.float64),
-            moved_objects=[mover, query],
+            moved_objects=[mover, moved_query],
             moved_ids={1, 2},
+        )
+        movement_camera = make_camera_pose()
+        occlusion_camera = CameraPose(
+            image_name="last.jpg",
+            rotation=np.eye(3, dtype=np.float64),
+            translation=np.array([-0.2, 0.0, 0.0], dtype=np.float64),
         )
         with (
             patch("src.qa_generator._select_object_move_state", return_value=selected_state),
@@ -2567,16 +2577,20 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
                     0.0,
                 ),
             ) as relation_mock,
+            patch(
+                "src.qa_generator._bbox_in_frame_corner_count",
+                return_value=(8, 8),
+            ) as bbox_mock,
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
             questions = generate_l2_object_move(
                 objects=[mover, query, reference],
                 attachment_graph={1: [2]},
                 attached_by={2: 1},
-                camera_pose=make_camera_pose(),
+                camera_pose=movement_camera,
                 templates={
                     "L2_object_move_occlusion": [
-                        "After moving {obj_move_source}, compare {obj_query} and {obj_ref}."
+                        "After moving {obj_move_source}, compare {obj_query} and {obj_ref} from the last main view."
                     ]
                 },
                 movement_objects=[mover, query, reference],
@@ -2587,6 +2601,7 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
                 attachment_query_objects=[query],
                 move_source_object_ids={1},
                 reference_object_ids={3},
+                occlusion_camera_pose=occlusion_camera,
                 enabled_l2_object_move_types={"object_move_occlusion"},
             )
 
@@ -2599,10 +2614,20 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
         self.assertEqual(question["new_pairwise_occlusion_relation"], L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF)
         self.assertEqual(relation_mock.call_count, 1)
         self.assertTrue(np.any(np.asarray(relation_mock.call_args.kwargs["query_delta"])))
+        self.assertIs(relation_mock.call_args.kwargs["camera_pose"], occlusion_camera)
+        self.assertEqual(
+            [int(call.args[0]["id"]) for call in bbox_mock.call_args_list],
+            [3, 2, 3],
+        )
+        self.assertTrue(all(
+            call.args[1] is occlusion_camera
+            for call in bbox_mock.call_args_list
+        ))
+        self.assertEqual(bbox_mock.call_args_list[1].args[0]["center"], moved_query["center"])
         self.assertNotIn("old_correct_value", question)
         self.assertNotIn("old_pairwise_occlusion_relation", question)
         self.assertNotIn("old_query_blocking_ratio", question)
-        self.assertNotIn("last main view", question["question"].lower())
+        self.assertIn("last main view", question["question"].lower())
 
     def test_generate_l2_object_move_prefers_reverse_occlusion_over_neither_fallback(self) -> None:
         mover = make_object(1, "table", (0.0, 0.0, 2.0))
@@ -2617,6 +2642,11 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
             delta=np.array([0.8, 0.0, 0.0], dtype=np.float64),
             moved_objects=[mover, query],
             moved_ids={1, 2},
+        )
+        occlusion_camera = CameraPose(
+            image_name="last.jpg",
+            rotation=np.eye(3, dtype=np.float64),
+            translation=np.array([-0.2, 0.0, 0.0], dtype=np.float64),
         )
 
         with (
@@ -2658,6 +2688,7 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
                 attachment_query_objects=[query],
                 move_source_object_ids={1},
                 reference_object_ids={3},
+                occlusion_camera_pose=occlusion_camera,
                 enabled_l2_object_move_types={"object_move_occlusion"},
             )
 
@@ -2667,6 +2698,10 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
         ]
         self.assertEqual(len(occlusion_questions), 1)
         self.assertEqual(directed_mock.call_count, 1)
+        self.assertIs(
+            directed_mock.call_args.kwargs["camera_pose"],
+            occlusion_camera,
+        )
         self.assertEqual(
             occlusion_questions[0]["new_pairwise_occlusion_relation"],
             L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,

@@ -167,7 +167,7 @@ CROSS_FRAME_LAYOUTS: dict[str, tuple[CrossFrameLayoutSpec, ...]] = {
             "source_query_to_ref",
             ("moved_obj_id", "query_obj_id"),
             ("obj_ref_id",),
-            (("movement", "frame_1"), ("visibility", "frame_1")),
+            (("movement", "frame_1"), ("visibility", "frame_2")),
         ),
         # Legacy v1 records used target_obj_id as the visibility target in
         # frame 2. Keep this layout readable for old benchmarks while all new
@@ -1473,8 +1473,8 @@ def _default_templates() -> dict:
             "From the first main view's camera perspective, imagine moving {obj_a} {direction_with_camera_hint} by {distance}. After this change, what is the approximate shortest distance between {obj_b} and {obj_c}, measured from their closest points?",
         ],
         "L2_object_move_occlusion": [
-            "After moving {obj_move_source} {direction_with_camera_hint} by {distance}, which best describes the pairwise occlusion relationship between {obj_query} and {obj_ref} from the first main view's viewpoint?",
-            "From the first main view's viewpoint, after {obj_move_source} is moved {direction_with_camera_hint} by {distance}, is {obj_query} occluded by {obj_ref}, is {obj_ref} occluded by {obj_query}, or does neither object occlude the other?",
+            "After moving {obj_move_source} {direction_with_camera_hint} by {distance}, which best describes the pairwise occlusion relationship between {obj_query} and {obj_ref} from the last main view's viewpoint?",
+            "From the last main view's viewpoint, after {obj_move_source} is moved {direction_with_camera_hint} by {distance}, is {obj_query} occluded by {obj_ref}, is {obj_ref} occluded by {obj_query}, or does neither object occlude the other?",
         ],
         "L2_object_remove": [
             f"If {{obj_a}} were removed from the scene, what would be the occlusion status of {{obj_b}} from the current viewpoint? {OCCLUSION_DEFINITION_NOTE}",
@@ -2950,7 +2950,7 @@ def _pairwise_occlusion_relation_after_move(
 ) -> tuple[str | None, float, float]:
     """Classify which member of a moved object pair blocks the other.
 
-    Rays are cast from ``camera_pose`` (the movement/answer frame) against
+    Rays are cast from ``camera_pose`` (the visibility/answer frame) against
     instance-scoped geometry.  Translating the ray origin by the occluder's
     delta lets the original instance intersector represent its counterfactual
     position without rebuilding the full scene mesh.
@@ -3071,7 +3071,7 @@ def _iter_pairwise_occlusion_directed_object_move_states(
     The regular movement-state selector is intentionally generic and often
     misses the narrow depth interval in which the moved query crosses a static
     reference.  This directed scan follows the canonical floor-plane vector
-    toward the reference and samples the crossing with the frame-1 camera.
+    toward the reference and samples the crossing with the visibility camera.
     Both ``query_obj`` occluded by ``ref_obj`` and the reverse relation are
     detected. Only the post-move relation is relevant; no pre-move occlusion
     relation is required or compared.
@@ -7436,9 +7436,7 @@ def generate_l2_object_move(
         allowed_move_source_ids is not None
         and reference_object_ids is not None
     )
-    # Kept in the public signature for legacy callers. Pairwise semantics v2
-    # deliberately ignores it and always evaluates from ``camera_pose``.
-    _ = occlusion_camera_pose
+    visibility_camera_pose = occlusion_camera_pose or camera_pose
     question_attachment_graph = (
         {
             int(parent_id): [int(child_id) for child_id in child_ids]
@@ -7925,7 +7923,7 @@ def generate_l2_object_move(
                         moved_obj["bbox_max"] = bbox_max.tolist()
                     visible_corners, total_corners = _bbox_in_frame_corner_count(
                         moved_obj,
-                        camera_pose,
+                        visibility_camera_pose,
                         color_intrinsics,
                     )
                     return total_corners > 0 and visible_corners >= 6
@@ -7934,7 +7932,10 @@ def generate_l2_object_move(
                 for ref_obj in reference_candidates:
                     if _has_duplicate_labels_for_distinct_objects(move_source, query_obj, ref_obj):
                         continue
-                    if not _pair_in_frame(query_obj, zero_delta) or not _pair_in_frame(ref_obj, zero_delta):
+                    # The query is evaluated only after movement. The static
+                    # reference must be visible from the occlusion (frame-2)
+                    # camera, not from the movement (frame-1) camera.
+                    if not _pair_in_frame(ref_obj, zero_delta):
                         continue
                     selected_record: dict[str, Any] | None = None
                     neither_record: dict[str, Any] | None = None
@@ -7965,7 +7966,7 @@ def generate_l2_object_move(
                             ref_obj=ref_obj,
                             query_delta=query_delta,
                             ref_delta=zero_delta,
-                            camera_pose=camera_pose,
+                            camera_pose=visibility_camera_pose,
                             color_intrinsics=color_intrinsics,
                             instance_mesh_data=instance_mesh_data,
                         )
@@ -8009,7 +8010,7 @@ def generate_l2_object_move(
                             moved_ids=moved_ids,
                             movement_scene_objects=movement_scene_objects,
                             attachment_graph=attachment_graph,
-                            camera_pose=camera_pose,
+                            camera_pose=visibility_camera_pose,
                             color_intrinsics=color_intrinsics,
                             instance_mesh_data=instance_mesh_data,
                             room_min=occlusion_directed_room_min,
@@ -10844,6 +10845,7 @@ def generate_cross_frame_questions(
             attachment_query_objects=frame_1_attachment,
             move_source_object_ids=source_ids,
             reference_object_ids=set(frame_2.regular_referable_ids),
+            occlusion_camera_pose=frame_2.camera_pose,
             candidate_attachment_graph=attachment_graph,
             enabled_l2_object_move_types=move_agent_types,
             max_occlusion_objects=max_occlusion_objects,

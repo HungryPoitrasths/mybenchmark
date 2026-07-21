@@ -393,7 +393,7 @@ def test_v2_occlusion_binds_query_and_reference_to_distinct_roles() -> None:
     assert len(result) == 1
     assert result[0]["camera_bindings"] == {
         "movement": "frame_1",
-        "visibility": "frame_1",
+        "visibility": "frame_2",
     }
     assert result[0]["object_frame_groups"] == {"frame_1": [1, 2], "frame_2": [3]}
 
@@ -414,7 +414,7 @@ def test_v2_occlusion_referability_roles_keep_reference_ordinary() -> None:
     assert ordinary_ids == {3}
 
 
-def test_v2_cross_frame_generation_uses_frame_1_camera_for_occlusion() -> None:
+def test_v2_cross_frame_generation_uses_frame_2_camera_for_occlusion() -> None:
     objects = {
         1: make_object(1, "table"),
         2: make_object(2, "lamp"),
@@ -443,7 +443,8 @@ def test_v2_cross_frame_generation_uses_frame_1_camera_for_occlusion() -> None:
             color_intrinsics=make_intrinsics(),
             only_question_types=["L2_object_move_occlusion"],
         )
-        first_camera = generate_mock.call_args.args[3]
+        first_movement_camera = generate_mock.call_args.args[3]
+        first_occlusion_camera = generate_mock.call_args.kwargs["occlusion_camera_pose"]
         result_b = generate_cross_frame_questions(
             objects=list(objects.values()),
             attachment_graph={1: [2]},
@@ -453,10 +454,13 @@ def test_v2_cross_frame_generation_uses_frame_1_camera_for_occlusion() -> None:
             color_intrinsics=make_intrinsics(),
             only_question_types=["L2_object_move_occlusion"],
         )
-        second_camera = generate_mock.call_args.args[3]
+        second_movement_camera = generate_mock.call_args.args[3]
+        second_occlusion_camera = generate_mock.call_args.kwargs["occlusion_camera_pose"]
 
-    assert first_camera is frame_1.camera_pose
-    assert second_camera is frame_1.camera_pose
+    assert first_movement_camera is frame_1.camera_pose
+    assert second_movement_camera is frame_1.camera_pose
+    assert first_occlusion_camera is frame_2_a.camera_pose
+    assert second_occlusion_camera is frame_2_b.camera_pose
     assert result_a[0]["camera_bindings"] == result_b[0]["camera_bindings"]
 
 
