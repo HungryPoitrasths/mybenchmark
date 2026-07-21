@@ -79,7 +79,10 @@ from src.referability_checks import (
     normalize_label_to_object_ids as _shared_normalize_label_to_object_ids,
 )
 from src.auxiliary_path import MAX_AUXILIARY_FRAMES, VisualPoseGraph
-from src.depth_auxiliary_path import find_depth_corridor_auxiliary_route
+from src.depth_auxiliary_path import (
+    DepthVisualRedundancyEvaluator,
+    find_depth_corridor_auxiliary_route,
+)
 from src.datasets.scannet import ScanNetDataSource
 from src.hybrid_auxiliary_path import HybridAuxiliaryRouter
 from src.legacy_auxiliary_path import (
@@ -120,7 +123,7 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 4
+PIPELINE_SCENE_STATUS_VERSION = 5
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 SCENE_QUESTION_HARD_CAP_BY_SPLIT = {"val": 50, "train": 100}
@@ -130,15 +133,15 @@ QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
 QUESTION_REVIEW_MAX_TOKENS_CAP = 1024
 
 SINGLE_FRAME_PUBLIC_QUESTION_TYPES = frozenset({
-    "L1_direction_agent",
     "L1_occlusion",
-    "L1_distance",
-    "L1_direction_object_centric",
-    "L1_direction_allocentric",
     "L2_object_remove",
     "L3_attachment_chain",
 })
 CROSS_FRAME_PUBLIC_QUESTION_TYPES = frozenset({
+    "L1_direction_agent",
+    "L1_distance",
+    "L1_direction_object_centric",
+    "L1_direction_allocentric",
     "L2_object_move_agent",
     "L2_object_move_distance",
     "L2_object_move_occlusion",
@@ -172,6 +175,11 @@ QUESTION_REVIEW_CROP_MIN_DIM_PX = 16
 # proportionally larger floor instead of the same 800px on ~6x more area.
 QUESTION_REVIEW_CROP_MIN_PROJECTED_AREA_RATIO = 800.0 / (640 * 480)
 QUESTION_REVIEW_CROP_MIN_IN_FRAME_RATIO = 0.35
+CROSS_FRAME_EXCLUSION_BBOX_IN_FRAME_RATIO_MIN = 0.20
+CROSS_FRAME_TRUSTED_VISIBILITY_SOURCES = frozenset({
+    "mesh_ray_refined",
+    "mesh_ray_depth_refined",
+})
 
 
 def _scene_resource_requirements(
@@ -188,7 +196,10 @@ def _scene_resource_requirements(
             or "L2_object_move_occlusion" in cross_frame_requested_types
         )
     )
-    needs_instance_mesh_data = needs_mesh_resources
+    needs_instance_mesh_data = (
+        needs_mesh_resources
+        or "L1_distance" in cross_frame_requested_types
+    )
     return needs_mesh_resources, needs_instance_mesh_data
 
 
@@ -540,7 +551,36 @@ def _build_reasoning_frame_contexts(
     frames: list[dict[str, object]],
     scene_frames: dict[str, dict],
     poses: dict[str, object],
+    scene_objects: list[dict],
+    color_intrinsics: object,
 ) -> list[ReasoningFrameContext]:
+    objects_by_id = {int(obj["id"]): obj for obj in scene_objects}
+
+    def _cached_bbox_ratios(entry: dict, candidate_ids: list[int]) -> dict[int, float]:
+        ratios: dict[int, float] = {}
+
+        def _ingest(container: object) -> None:
+            if isinstance(container, dict):
+                items = container.items()
+            elif isinstance(container, list):
+                items = ((None, value) for value in container)
+            else:
+                return
+            for key, value in items:
+                if not isinstance(value, dict):
+                    continue
+                try:
+                    obj_id = int(value.get("obj_id", key))
+                    ratio = float(value["bbox_in_frame_ratio"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if obj_id in candidate_ids:
+                    ratios[obj_id] = ratio
+
+        _ingest(entry.get("visibility_audit_by_object_id"))
+        _ingest(entry.get("object_reviews"))
+        return ratios
+
     contexts: list[ReasoningFrameContext] = []
     for frame in frames:
         image_name = str(frame.get("image_name", "")).strip()
@@ -550,6 +590,39 @@ def _build_reasoning_frame_contexts(
             continue
         if entry.get("frame_usable") is False:
             continue
+        visibility_source = str(entry.get("candidate_visibility_source", "")).strip()
+        if visibility_source not in CROSS_FRAME_TRUSTED_VISIBILITY_SOURCES:
+            continue
+        candidate_ids = _normalize_object_ids(entry.get("candidate_visible_object_ids"))
+        bbox_ratios = _cached_bbox_ratios(entry, candidate_ids)
+        missing_ratio_ids = [obj_id for obj_id in candidate_ids if obj_id not in bbox_ratios]
+        if missing_ratio_ids and color_intrinsics is not None:
+            fallback_visibility = compute_frame_object_visibility(
+                objects=[
+                    objects_by_id[obj_id]
+                    for obj_id in missing_ratio_ids
+                    if obj_id in objects_by_id
+                ],
+                pose=pose,
+                color_intrinsics=color_intrinsics,
+                image_path=None,
+                depth_image=None,
+                depth_intrinsics=None,
+            )
+            for obj_id, meta in fallback_visibility.items():
+                try:
+                    bbox_ratios[int(obj_id)] = float(
+                        meta.get("bbox_in_frame_ratio", 0.0) or 0.0
+                    )
+                except (TypeError, ValueError):
+                    continue
+        if any(obj_id not in bbox_ratios for obj_id in candidate_ids):
+            continue
+        cross_frame_visible_ids = frozenset(
+            obj_id
+            for obj_id in candidate_ids
+            if bbox_ratios[obj_id] >= CROSS_FRAME_EXCLUSION_BBOX_IN_FRAME_RATIO_MIN
+        )
         regular_ids = frozenset(_normalize_object_ids(entry.get("referable_object_ids")))
         attachment_ids = frozenset(
             _normalize_object_ids(entry.get("attachment_referable_object_ids"))
@@ -562,6 +635,7 @@ def _build_reasoning_frame_contexts(
                 camera_pose=pose,
                 regular_referable_ids=regular_ids,
                 attachment_referable_ids=attachment_ids,
+                cross_frame_visible_ids=cross_frame_visible_ids,
                 cache_entry=entry,
             )
         )
@@ -579,6 +653,7 @@ def _restrict_context_for_semantic_exclusivity(
         attachment_referable_ids=frozenset(
             own.attachment_referable_ids - other.any_referable_ids
         ),
+        cross_frame_visible_ids=own.cross_frame_visible_ids,
         cache_entry=own.cache_entry,
     )
 
@@ -6309,6 +6384,8 @@ def run_pipeline(
                 frames=frames,
                 scene_frames=scene_frames,
                 poses=poses,
+                scene_objects=scene["objects"],
+                color_intrinsics=color_intrinsics,
             )
             funnel: dict[str, object] = {
                 "scene_id": scene_id,
@@ -6323,9 +6400,13 @@ def run_pipeline(
             }
             route_graph: VisualPoseGraph | None = None
             hybrid_router: HybridAuxiliaryRouter | None = None
+            depth_visual_router: HybridAuxiliaryRouter | None = None
+            depth_visual_redundancy: DepthVisualRedundancyEvaluator | None = None
             depth_data_source = None
             hybrid_cache_path: Path | None = None
             hybrid_cache_hit = False
+            depth_visual_cache_path: Path | None = None
+            depth_visual_cache_hit = False
             if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
                 depth_data_source = ds if ds is not None else ScanNetDataSource(scene_dir)
                 if dataset == "scannetpp" and (
@@ -6337,6 +6418,26 @@ def run_pipeline(
                         "depth_corridor_geometric requires ScanNet++ iPhone depth.bin "
                         "and pose_intrinsic_imu.json"
                     )
+                if ds is not None:
+                    image_path_for = ds.image_path
+                else:
+                    image_path_for = lambda name: scene_dir / "color" / name
+                depth_visual_router = HybridAuxiliaryRouter(
+                    poses=poses,
+                    intrinsics=color_intrinsics,
+                    image_path_for=image_path_for,
+                )
+                depth_visual_cache_path = (
+                    auxiliary_graph_cache_dir / f"{scene_id}.depth_visual_prune.json"
+                )
+                depth_visual_cache_hit = depth_visual_router.load_cache(
+                    depth_visual_cache_path
+                )
+                depth_visual_redundancy = DepthVisualRedundancyEvaluator(
+                    poses=poses,
+                    depth_frame_for=depth_data_source.load_depth_frame,
+                    rgb_evidence_for=depth_visual_router.visual_continuity,
+                )
             if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH:
                 if ds is not None:
                     image_path_for = ds.image_path
@@ -6385,12 +6486,21 @@ def run_pipeline(
                     "note": "routes_are_computed_per_question_after_object_role_binding",
                 }
             else:
-                funnel["auxiliary_graph"] = {
-                    "method": auxiliary_route_method,
-                    "pose_count": len(poses),
-                    "cache_hit": False,
-                    "note": "routes_are_computed_per_question_after_object_role_binding",
-                }
+                if depth_visual_router is not None:
+                    funnel["auxiliary_graph"] = {
+                        **depth_visual_router.diagnostics(),
+                        "method": auxiliary_route_method,
+                        "cache_hit": depth_visual_cache_hit,
+                        "cache_path": str(depth_visual_cache_path),
+                        "note": "visual evidence is used only for depth-route pruning",
+                    }
+                else:
+                    funnel["auxiliary_graph"] = {
+                        "method": auxiliary_route_method,
+                        "pose_count": len(poses),
+                        "cache_hit": False,
+                        "note": "routes_are_computed_per_question_after_object_role_binding",
+                    }
             cross_candidates: list[dict] = []
             cross_candidate_type_counts: Counter[str] = Counter(
                 scene_question_type_counts
@@ -6502,6 +6612,7 @@ def run_pipeline(
                     depth_frame_for=depth_data_source.load_depth_frame,
                     group_a_objects=group_a_objects,
                     group_b_objects=group_b_objects,
+                    visual_redundancy_for=depth_visual_redundancy,
                     max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
                 )
 
@@ -6633,6 +6744,26 @@ def run_pipeline(
                             "pruned_auxiliary_frame_count": (
                                 question_route.pruned_auxiliary_frame_count
                             ),
+                            "visual_pruned_auxiliary_frame_count": getattr(
+                                question_route,
+                                "visual_pruned_auxiliary_frame_count",
+                                0,
+                            ),
+                            "visual_duplicate_candidate_count": getattr(
+                                question_route,
+                                "visual_duplicate_candidate_count",
+                                0,
+                            ),
+                            "visual_prune_relaxed_angle_edge_count": getattr(
+                                question_route,
+                                "visual_prune_relaxed_angle_edge_count",
+                                0,
+                            ),
+                            "visual_redundancy_metric_version": getattr(
+                                question_route,
+                                "visual_redundancy_metric_version",
+                                None,
+                            ),
                             "semantic_rejected_frame_count": (
                                 question_route.semantic_rejected_frame_count
                             ),
@@ -6738,8 +6869,35 @@ def run_pipeline(
                     ]
                     if not destinations:
                         continue
+                    deferred_visibility_conflicts = [
+                        {
+                            "frame_2": destination.image_name,
+                            "object_ids": sorted(
+                                destination.regular_referable_ids
+                                & frame_1.cross_frame_visible_ids
+                            ),
+                        }
+                        for destination in destinations
+                        if destination.regular_referable_ids
+                        & frame_1.cross_frame_visible_ids
+                    ]
+                    for conflict in deferred_visibility_conflicts:
+                        conflict_ids = conflict["object_ids"]
+                        pair_stage_counts[
+                            "deferred_reference_visibility_overlap_object_rejected"
+                        ] += len(conflict_ids)
+                        failures = funnel["pair_failures"]
+                        if isinstance(failures, list) and len(failures) < 100:
+                            failures.append({
+                                "frame_1": frame_1.image_name,
+                                "frame_2": conflict["frame_2"],
+                                "reason": "deferred_reference_visible_in_frame_1",
+                                "conflicting_object_ids": conflict_ids,
+                            })
                     deferred_regular_ids = frozenset().union(*(
-                        destination.regular_referable_ids - frame_1.any_referable_ids
+                        destination.regular_referable_ids
+                        - frame_1.any_referable_ids
+                        - frame_1.cross_frame_visible_ids
                         for destination in destinations
                     ))
                     if not deferred_regular_ids:
@@ -6766,6 +6924,7 @@ def run_pipeline(
                         only_question_types=active_cross_types,
                         max_occlusion_objects=max_occlusion_objects,
                         max_move_sources=max_move_sources,
+                        attachment_edges=scene.get("attachment_edges", []),
                     )
                     for raw_question in raw_questions:
                         layout_id = str(raw_question.get("_cross_frame_layout_hint", "")).strip() or None
@@ -6779,6 +6938,8 @@ def run_pipeline(
                                 layout_id=layout_id,
                                 answer_pair_distance_cache=answer_pair_distance_cache,
                                 distance_annotation_stats=distance_annotation_stats,
+                                rejection_counts=pair_stage_counts,
+                                rejection_details=funnel["pair_failures"],
                             )
                             if annotated:
                                 _append_pair_questions(annotated, frame_1, frame_2, route)
@@ -6790,6 +6951,14 @@ def run_pipeline(
                 int(distance_annotation_stats["invalid_answer_pair"])
             )
             funnel["distance_priority"] = distance_priority_diagnostics
+            funnel["main_frame_visibility_overlap_rejected"] = int(
+                pair_stage_counts["question_main_frame_visibility_overlap_rejected"]
+            )
+            funnel["deferred_reference_visibility_overlap_object_rejected"] = int(
+                pair_stage_counts[
+                    "deferred_reference_visibility_overlap_object_rejected"
+                ]
+            )
             retained_cross_questions = _retain_best_cross_frame_views(
                 prioritized_cross_questions
             )
@@ -6823,6 +6992,27 @@ def run_pipeline(
                     "cache_hit": hybrid_cache_hit,
                     "cache_path": str(hybrid_cache_path) if hybrid_cache_path is not None else None,
                     "note": "routes_are_computed_per_question_after_object_role_binding",
+                }
+            if depth_visual_router is not None:
+                if depth_visual_cache_path is not None:
+                    try:
+                        depth_visual_router.save_cache(depth_visual_cache_path)
+                    except OSError as exc:
+                        logger.warning(
+                            "Could not persist depth visual-prune cache for %s: %s",
+                            scene_id,
+                            exc,
+                        )
+                funnel["auxiliary_graph"] = {
+                    **depth_visual_router.diagnostics(),
+                    "method": auxiliary_route_method,
+                    "cache_hit": depth_visual_cache_hit,
+                    "cache_path": (
+                        str(depth_visual_cache_path)
+                        if depth_visual_cache_path is not None
+                        else None
+                    ),
+                    "note": "visual evidence is used only for depth-route pruning",
                 }
             funnel["pair_stage_counts"] = dict(sorted(pair_stage_counts.items()))
             funnel["question_type_generated_counts"] = dict(sorted(generated_counts.items()))

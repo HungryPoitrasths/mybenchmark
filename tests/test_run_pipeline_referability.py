@@ -1,5 +1,6 @@
 ﻿import json
 import shutil
+import tempfile
 import unittest
 import uuid
 from collections import Counter
@@ -202,6 +203,84 @@ def make_attachment_pair_review_html(
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_build_reasoning_context_filters_mesh_visible_ids_by_bbox_ratio(self) -> None:
+        image_name = "000123.jpg"
+        objects = [make_object(1, "table"), make_object(2, "toilet paper")]
+        entry = {
+            "frame_usable": True,
+            "candidate_visibility_source": "mesh_ray_refined",
+            "candidate_visible_object_ids": [1, 2],
+            "referable_object_ids": [1],
+            "attachment_referable_object_ids": [],
+            "visibility_audit_by_object_id": {
+                "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.20},
+                "2": {"obj_id": 2, "bbox_in_frame_ratio": 0.199},
+            },
+        }
+
+        contexts = run_pipeline_module._build_reasoning_frame_contexts(
+            frames=[{"image_name": image_name}],
+            scene_frames={image_name: entry},
+            poses={image_name: make_camera_pose(image_name)},
+            scene_objects=objects,
+            color_intrinsics=make_camera_intrinsics(),
+        )
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].cross_frame_visible_ids, frozenset({1}))
+
+    def test_build_reasoning_context_uses_independent_cross_frame_bbox_threshold(self) -> None:
+        image_name = "000123.jpg"
+        entry = {
+            "frame_usable": True,
+            "candidate_visibility_source": "mesh_ray_refined",
+            "candidate_visible_object_ids": [1],
+            "referable_object_ids": [1],
+            "attachment_referable_object_ids": [],
+            "visibility_audit_by_object_id": {
+                "1": {"obj_id": 1, "bbox_in_frame_ratio": 0.70},
+            },
+        }
+
+        with patch.object(
+            run_pipeline_module,
+            "CROSS_FRAME_EXCLUSION_BBOX_IN_FRAME_RATIO_MIN",
+            0.75,
+        ):
+            contexts = run_pipeline_module._build_reasoning_frame_contexts(
+                frames=[{"image_name": image_name}],
+                scene_frames={image_name: entry},
+                poses={image_name: make_camera_pose(image_name)},
+                scene_objects=[make_object(1, "table")],
+                color_intrinsics=make_camera_intrinsics(),
+            )
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].cross_frame_visible_ids, frozenset())
+
+    def test_build_reasoning_context_rejects_untrusted_visibility_source(self) -> None:
+        image_name = "000123.jpg"
+        entry = {
+            "frame_usable": True,
+            "candidate_visibility_source": "projection_fallback",
+            "candidate_visible_object_ids": [1],
+            "referable_object_ids": [1],
+            "attachment_referable_object_ids": [],
+            "visibility_audit_by_object_id": {
+                "1": {"obj_id": 1, "bbox_in_frame_ratio": 1.0},
+            },
+        }
+
+        contexts = run_pipeline_module._build_reasoning_frame_contexts(
+            frames=[{"image_name": image_name}],
+            scene_frames={image_name: entry},
+            poses={image_name: make_camera_pose(image_name)},
+            scene_objects=[make_object(1, "table")],
+            color_intrinsics=make_camera_intrinsics(),
+        )
+
+        self.assertEqual(contexts, [])
+
     def test_cross_only_resource_requirements_follow_requested_types(self) -> None:
         self.assertEqual(
             run_pipeline_module._scene_resource_requirements(
@@ -227,6 +306,50 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             ),
             (True, True),
         )
+        self.assertEqual(
+            run_pipeline_module._scene_resource_requirements(
+                single_frame_requested_types=[],
+                cross_frame_requested_types=["L1_distance"],
+                occlusion_backend="mesh_ray",
+            ),
+            (False, True),
+        )
+
+    def test_l1_non_occlusion_types_are_cross_frame_only(self) -> None:
+        cross_frame_l1_types = {
+            "L1_direction_agent",
+            "L1_distance",
+            "L1_direction_object_centric",
+            "L1_direction_allocentric",
+        }
+
+        self.assertTrue(
+            cross_frame_l1_types <= run_pipeline_module.CROSS_FRAME_PUBLIC_QUESTION_TYPES
+        )
+        self.assertTrue(
+            cross_frame_l1_types.isdisjoint(
+                run_pipeline_module.SINGLE_FRAME_PUBLIC_QUESTION_TYPES
+            )
+        )
+        self.assertIn(
+            "L1_occlusion",
+            run_pipeline_module.SINGLE_FRAME_PUBLIC_QUESTION_TYPES,
+        )
+        self.assertNotIn(
+            "L1_occlusion",
+            run_pipeline_module.CROSS_FRAME_PUBLIC_QUESTION_TYPES,
+        )
+
+    def test_scene_status_v4_is_rejected_after_l1_cross_frame_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            status_path = Path(tmpdir) / "scene_status.json"
+            status_path.write_text(
+                json.dumps({"version": 4, "completed_scenes": {}}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "expected 5"):
+                run_pipeline_module._load_pipeline_scene_status_doc(status_path)
 
     def test_scene_type_cap_only_limits_l1_occlusion_and_l2_viewpoint_move(self) -> None:
         questions = [
@@ -4671,7 +4794,15 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             entry = {
                 "frame_usable": True,
                 "final_selection_rank": rank,
+                "candidate_visibility_source": "mesh_ray_refined",
                 "candidate_visible_object_ids": visible_ids,
+                "visibility_audit_by_object_id": {
+                    str(obj_id): {
+                        "obj_id": obj_id,
+                        "bbox_in_frame_ratio": 1.0,
+                    }
+                    for obj_id in visible_ids
+                },
                 "label_to_object_ids": {
                     objects_by_id[obj_id]["label"]: [obj_id] for obj_id in visible_ids
                 },
@@ -4730,6 +4861,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             depth_sources = ("test_depth",)
             pre_prune_auxiliary_count = 2
             pruned_auxiliary_frame_count = 1
+            visual_pruned_auxiliary_frame_count = 1
+            visual_duplicate_candidate_count = 1
+            visual_prune_relaxed_angle_edge_count = 1
+            visual_redundancy_metric_version = 1
             semantic_rejected_frame_count = 0
 
         class FakeRoute:
@@ -4815,6 +4950,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     "visual_counts": {"passed": 2},
                     "route_rejection_counts": {},
                 }
+
+            def visual_continuity(self, _left, _right):
+                return Mock(
+                    passed=True,
+                    inliers=40,
+                    inlier_ratio=0.7,
+                    min_grid_fraction=0.5,
+                )
 
             def find_route(self, **_kwargs):
                 nonlocal hybrid_route_call_count
@@ -5061,6 +5204,14 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         ))
         self.assertTrue(all(
             question["auxiliary_route"]["min_depth_valid_fraction"] == 0.8
+            for question in questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_route"]["visual_pruned_auxiliary_frame_count"] == 1
+            for question in questions
+        ))
+        self.assertTrue(all(
+            question["auxiliary_route"]["visual_prune_relaxed_angle_edge_count"] == 1
             for question in questions
         ))
         self.assertEqual(visual_graph_init_count, 1)

@@ -51,6 +51,16 @@ ROUTE_DEGENERATE_XY_HARD_M = 1.00
 ROUTE_ANGLE_SOFT_DEG = 30.0
 ROUTE_EDGE_BASE_COST = 0.35
 ROUTE_SEARCH_METHOD = "dijkstra_depth_corridor"
+VISUAL_PRUNE_ORIENTATION_THRESHOLD_DEG = 80.0
+VISUAL_PRUNE_LOCAL_PERP_HARD_M = 0.80
+VISUAL_REDUNDANCY_METRIC_VERSION = 1
+VISUAL_REDUNDANCY_SAMPLE_STRIDE_PX = 8
+VISUAL_REDUNDANCY_MIN_SAMPLES = 32
+VISUAL_REDUNDANCY_MIN_BIDIRECTIONAL_OVERLAP = 0.65
+VISUAL_REDUNDANCY_MAX_P75_DISPLACEMENT_DIAGONAL = 0.12
+VISUAL_REDUNDANCY_MIN_ORB_INLIERS = 24
+VISUAL_REDUNDANCY_MIN_ORB_INLIER_RATIO = 0.60
+VISUAL_REDUNDANCY_MIN_ORB_GRID_FRACTION = 0.25
 
 
 @dataclass(frozen=True)
@@ -75,7 +85,215 @@ class DepthCorridorAuxiliaryRoute:
     depth_sources: tuple[str, ...]
     pre_prune_auxiliary_count: int
     pruned_auxiliary_frame_count: int
+    visual_pruned_auxiliary_frame_count: int
+    visual_duplicate_candidate_count: int
+    visual_prune_relaxed_angle_edge_count: int
+    visual_redundancy_metric_version: int
     semantic_rejected_frame_count: int
+
+
+@dataclass(frozen=True)
+class VisualRedundancyEvidence:
+    available: bool
+    is_duplicate: bool
+    min_bidirectional_overlap: float
+    max_p75_displacement_diagonal: float
+    orb_inliers: int
+    orb_inlier_ratio: float
+    orb_min_grid_fraction: float
+    reason: str
+
+
+class DepthVisualRedundancyEvaluator:
+    """Detect rendered-view duplicates using depth reprojection plus RGB evidence."""
+
+    def __init__(
+        self,
+        *,
+        poses: Mapping[str, CameraPose],
+        depth_frame_for: Callable[[str], DepthFrame | None],
+        rgb_evidence_for: Callable[[str, str], Any],
+    ) -> None:
+        self.poses = poses
+        self.depth_frame_for = depth_frame_for
+        self.rgb_evidence_for = rgb_evidence_for
+        self._cache: dict[tuple[str, str], VisualRedundancyEvidence] = {}
+
+    @staticmethod
+    def _directional_reprojection(
+        source_pose: CameraPose,
+        target_pose: CameraPose,
+        source_depth: DepthFrame,
+        target_depth: DepthFrame,
+    ) -> tuple[float, float, int] | None:
+        source_image = np.asarray(source_depth.image_m, dtype=np.float64)
+        target_image = np.asarray(target_depth.image_m, dtype=np.float64)
+        source_height, source_width = source_image.shape[:2]
+        target_height, target_width = target_image.shape[:2]
+        offset = VISUAL_REDUNDANCY_SAMPLE_STRIDE_PX // 2
+        sample_y = np.arange(
+            offset,
+            source_height,
+            VISUAL_REDUNDANCY_SAMPLE_STRIDE_PX,
+            dtype=np.int64,
+        )
+        sample_x = np.arange(
+            offset,
+            source_width,
+            VISUAL_REDUNDANCY_SAMPLE_STRIDE_PX,
+            dtype=np.int64,
+        )
+        grid_x, grid_y = np.meshgrid(sample_x, sample_y)
+        source_z = source_image[grid_y, grid_x]
+        valid_source = np.isfinite(source_z) & (source_z > 0.0)
+        if int(np.count_nonzero(valid_source)) < VISUAL_REDUNDANCY_MIN_SAMPLES:
+            return None
+
+        source_u = grid_x[valid_source].astype(np.float64)
+        source_v = grid_y[valid_source].astype(np.float64)
+        source_z = source_z[valid_source]
+        source_intrinsics = source_depth.intrinsics
+        source_camera = np.column_stack(
+            (
+                (source_u - source_intrinsics.cx) * source_z / source_intrinsics.fx,
+                (source_v - source_intrinsics.cy) * source_z / source_intrinsics.fy,
+                source_z,
+            )
+        )
+        world_points = (source_camera - source_pose.translation) @ source_pose.rotation
+        target_camera = (
+            target_pose.rotation @ world_points.T + target_pose.translation[:, None]
+        ).T
+        target_uv, target_z = project_camera_points_to_image(
+            target_camera, target_depth.intrinsics
+        )
+        finite_projection = (
+            np.isfinite(target_uv).all(axis=1)
+            & np.isfinite(target_z)
+            & (target_z > 0.0)
+        )
+        target_x = np.zeros(len(target_uv), dtype=np.int64)
+        target_y = np.zeros(len(target_uv), dtype=np.int64)
+        target_x[finite_projection] = np.rint(
+            target_uv[finite_projection, 0]
+        ).astype(np.int64)
+        target_y[finite_projection] = np.rint(
+            target_uv[finite_projection, 1]
+        ).astype(np.int64)
+        in_frame = (
+            finite_projection
+            & (target_x >= 0)
+            & (target_x < target_width)
+            & (target_y >= 0)
+            & (target_y < target_height)
+        )
+        projected_indices = np.flatnonzero(in_frame)
+        if projected_indices.size < VISUAL_REDUNDANCY_MIN_SAMPLES:
+            return (0.0, 1.0, int(projected_indices.size))
+        observed = target_image[
+            target_y[projected_indices], target_x[projected_indices]
+        ]
+        expected = target_z[projected_indices]
+        valid_target = np.isfinite(observed) & (observed > 0.0)
+        tolerance = np.maximum(
+            DEPTH_ABSOLUTE_TOLERANCE_M,
+            DEPTH_RELATIVE_TOLERANCE * expected,
+        )
+        visible = valid_target & (expected <= observed + tolerance)
+        visible_indices = projected_indices[visible]
+        overlap = float(len(visible_indices) / max(len(projected_indices), 1))
+        if len(visible_indices) < VISUAL_REDUNDANCY_MIN_SAMPLES:
+            return (overlap, 1.0, len(visible_indices))
+
+        delta_x = (
+            target_uv[visible_indices, 0] / max(float(target_width), 1.0)
+            - source_u[visible_indices] / max(float(source_width), 1.0)
+        )
+        delta_y = (
+            target_uv[visible_indices, 1] / max(float(target_height), 1.0)
+            - source_v[visible_indices] / max(float(source_height), 1.0)
+        )
+        residual_x = delta_x - float(np.median(delta_x))
+        residual_y = delta_y - float(np.median(delta_y))
+        normalized_displacement = np.hypot(residual_x, residual_y) / math.sqrt(2.0)
+        return (
+            overlap,
+            float(np.percentile(normalized_displacement, 75.0)),
+            len(visible_indices),
+        )
+
+    def __call__(self, left_name: str, right_name: str) -> VisualRedundancyEvidence:
+        key = tuple(sorted((left_name, right_name)))
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        left_pose = self.poses.get(left_name)
+        right_pose = self.poses.get(right_name)
+        left_depth = self.depth_frame_for(left_name)
+        right_depth = self.depth_frame_for(right_name)
+        if left_pose is None or right_pose is None or left_depth is None or right_depth is None:
+            evidence = VisualRedundancyEvidence(
+                False, False, 0.0, 1.0, 0, 0.0, 0.0, "missing_pose_or_depth"
+            )
+            self._cache[key] = evidence
+            return evidence
+
+        forward = self._directional_reprojection(
+            left_pose, right_pose, left_depth, right_depth
+        )
+        reverse = self._directional_reprojection(
+            right_pose, left_pose, right_depth, left_depth
+        )
+        if forward is None or reverse is None:
+            evidence = VisualRedundancyEvidence(
+                False, False, 0.0, 1.0, 0, 0.0, 0.0, "insufficient_depth_samples"
+            )
+            self._cache[key] = evidence
+            return evidence
+
+        try:
+            rgb = self.rgb_evidence_for(left_name, right_name)
+        except (OSError, TypeError, ValueError):
+            rgb = None
+        if rgb is None:
+            evidence = VisualRedundancyEvidence(
+                False,
+                False,
+                min(forward[0], reverse[0]),
+                max(forward[1], reverse[1]),
+                0,
+                0.0,
+                0.0,
+                "missing_rgb_evidence",
+            )
+            self._cache[key] = evidence
+            return evidence
+
+        orb_inliers = int(getattr(rgb, "inliers", 0) or 0)
+        orb_ratio = float(getattr(rgb, "inlier_ratio", 0.0) or 0.0)
+        orb_grid = float(getattr(rgb, "min_grid_fraction", 0.0) or 0.0)
+        overlap = min(forward[0], reverse[0])
+        displacement = max(forward[1], reverse[1])
+        is_duplicate = (
+            bool(getattr(rgb, "passed", False))
+            and overlap >= VISUAL_REDUNDANCY_MIN_BIDIRECTIONAL_OVERLAP
+            and displacement <= VISUAL_REDUNDANCY_MAX_P75_DISPLACEMENT_DIAGONAL
+            and orb_inliers >= VISUAL_REDUNDANCY_MIN_ORB_INLIERS
+            and orb_ratio >= VISUAL_REDUNDANCY_MIN_ORB_INLIER_RATIO
+            and orb_grid >= VISUAL_REDUNDANCY_MIN_ORB_GRID_FRACTION
+        )
+        evidence = VisualRedundancyEvidence(
+            available=True,
+            is_duplicate=is_duplicate,
+            min_bidirectional_overlap=overlap,
+            max_p75_displacement_diagonal=displacement,
+            orb_inliers=orb_inliers,
+            orb_inlier_ratio=orb_ratio,
+            orb_min_grid_fraction=orb_grid,
+            reason="duplicate" if is_duplicate else "thresholds_not_met",
+        )
+        self._cache[key] = evidence
+        return evidence
 
 
 @dataclass(frozen=True)
@@ -229,6 +447,7 @@ def _edge_metrics(
     depth_visible_fraction: float,
     basis: _CorridorBasis,
     orientation_threshold_deg: float,
+    local_perpendicular_hard_m: float = ROUTE_LOCAL_PERP_HARD_M,
 ) -> _EdgeMetrics | None:
     delta = np.asarray(right.position - left.position, dtype=np.float64)
     height_change = abs(float(delta[2]))
@@ -262,7 +481,7 @@ def _edge_metrics(
         )
         global_perpendicular = abs(right_lateral - expected_lateral)
         if (
-            local_perpendicular > ROUTE_LOCAL_PERP_HARD_M
+            local_perpendicular > local_perpendicular_hard_m
             or global_perpendicular > ROUTE_GLOBAL_PERP_HARD_M
         ):
             return None
@@ -300,6 +519,7 @@ def find_depth_corridor_auxiliary_route(
     depth_frame_for: Callable[[str], DepthFrame | None],
     group_a_objects: Iterable[Mapping[str, Any]],
     group_b_objects: Iterable[Mapping[str, Any]],
+    visual_redundancy_for: Callable[[str, str], VisualRedundancyEvidence] | None = None,
     max_auxiliary_frames: int = MAX_AUXILIARY_FRAMES,
     orientation_threshold_deg: float = ROUTE_ORIENTATION_THRESHOLD_DEG,
     min_overlap_frac: float = ROUTE_MIN_OVERLAP_FRAC,
@@ -420,7 +640,11 @@ def find_depth_corridor_auxiliary_route(
     def transition_overlap(frontier: float, next_start: float) -> float:
         return max(0.0, frontier - next_start)
 
-    def evaluate_fixed_path(names: tuple[str, ...]) -> _EvaluatedPath | None:
+    def evaluate_fixed_path(
+        names: tuple[str, ...],
+        *,
+        relaxed_edges: frozenset[tuple[str, str]] = frozenset(),
+    ) -> _EvaluatedPath | None:
         states: dict[
             float,
             tuple[float, float, tuple[_EdgeMetrics, ...], tuple[_FrameCoverage, ...]],
@@ -449,7 +673,16 @@ def find_depth_corridor_auxiliary_route(
                         next_frontier=run_end,
                         depth_visible_fraction=coverage.visible_fraction,
                         basis=basis,
-                        orientation_threshold_deg=orientation_threshold_deg,
+                        orientation_threshold_deg=(
+                            VISUAL_PRUNE_ORIENTATION_THRESHOLD_DEG + 1e-9
+                            if (tail_name, image_name) in relaxed_edges
+                            else orientation_threshold_deg
+                        ),
+                        local_perpendicular_hard_m=(
+                            VISUAL_PRUNE_LOCAL_PERP_HARD_M
+                            if (tail_name, image_name) in relaxed_edges
+                            else ROUTE_LOCAL_PERP_HARD_M
+                        ),
                     )
                     if edge is None:
                         continue
@@ -482,7 +715,16 @@ def find_depth_corridor_auxiliary_route(
                 next_frontier=1.0,
                 depth_visible_fraction=coverage_b.visible_fraction,
                 basis=basis,
-                orientation_threshold_deg=orientation_threshold_deg,
+                orientation_threshold_deg=(
+                    VISUAL_PRUNE_ORIENTATION_THRESHOLD_DEG + 1e-9
+                    if (tail_name, frame_b_name) in relaxed_edges
+                    else orientation_threshold_deg
+                ),
+                local_perpendicular_hard_m=(
+                    VISUAL_PRUNE_LOCAL_PERP_HARD_M
+                    if (tail_name, frame_b_name) in relaxed_edges
+                    else ROUTE_LOCAL_PERP_HARD_M
+                ),
             )
             if edge is None:
                 continue
@@ -587,9 +829,59 @@ def find_depth_corridor_auxiliary_route(
         return None
     pre_prune_count = len(selected_names)
     names = list(selected_names)
+    relaxed_edges: set[tuple[str, str]] = set()
+    visual_duplicate_names: set[str] = set()
+    visual_pruned_count = 0
+
+    def path_edges(path_names: tuple[str, ...]) -> set[tuple[str, str]]:
+        full_path = (frame_a_name,) + path_names + (frame_b_name,)
+        return set(zip(full_path, full_path[1:]))
+
+    def visual_prune_pass() -> None:
+        nonlocal evaluated, relaxed_edges, visual_pruned_count
+        if visual_redundancy_for is None:
+            return
+        changed = True
+        while changed:
+            changed = False
+            for index, image_name in enumerate(names):
+                previous_name = frame_a_name if index == 0 else names[index - 1]
+                next_name = frame_b_name if index + 1 == len(names) else names[index + 1]
+                try:
+                    previous_evidence = visual_redundancy_for(
+                        previous_name, image_name
+                    )
+                    is_duplicate = previous_evidence.is_duplicate
+                    if not is_duplicate:
+                        is_duplicate = visual_redundancy_for(
+                            image_name, next_name
+                        ).is_duplicate
+                except (OSError, TypeError, ValueError):
+                    continue
+                if not is_duplicate:
+                    continue
+                visual_duplicate_names.add(image_name)
+                candidate_names = tuple(names[:index] + names[index + 1 :])
+                candidate_edges = path_edges(candidate_names)
+                new_edge = (previous_name, next_name)
+                candidate_relaxed_edges = frozenset(
+                    (relaxed_edges & candidate_edges) | {new_edge}
+                )
+                candidate = evaluate_fixed_path(
+                    candidate_names,
+                    relaxed_edges=candidate_relaxed_edges,
+                )
+                if candidate is None:
+                    continue
+                names.pop(index)
+                relaxed_edges = set(candidate_relaxed_edges)
+                evaluated = candidate
+                visual_pruned_count += 1
+                changed = True
+                break
 
     def prune_pass(*, near_pose_only: bool) -> None:
-        nonlocal evaluated
+        nonlocal evaluated, relaxed_edges
         changed = True
         while changed:
             changed = False
@@ -613,14 +905,23 @@ def find_depth_corridor_auxiliary_route(
                     ):
                         continue
                 candidate_names = tuple(names[:index] + names[index + 1 :])
-                candidate = evaluate_fixed_path(candidate_names)
+                candidate_edges = path_edges(candidate_names)
+                candidate_relaxed_edges = frozenset(
+                    relaxed_edges & candidate_edges
+                )
+                candidate = evaluate_fixed_path(
+                    candidate_names,
+                    relaxed_edges=candidate_relaxed_edges,
+                )
                 if candidate is None or candidate.cost > evaluated.cost + 1e-12:
                     continue
                 names.pop(index)
+                relaxed_edges = set(candidate_relaxed_edges)
                 evaluated = candidate
                 changed = True
                 break
 
+    visual_prune_pass()
     prune_pass(near_pose_only=True)
     prune_pass(near_pose_only=False)
 
@@ -647,6 +948,21 @@ def find_depth_corridor_auxiliary_route(
         depth_sources=tuple(sorted({c.source for c in coverages})),
         pre_prune_auxiliary_count=pre_prune_count,
         pruned_auxiliary_frame_count=pre_prune_count - len(names),
+        visual_pruned_auxiliary_frame_count=visual_pruned_count,
+        visual_duplicate_candidate_count=len(visual_duplicate_names),
+        visual_prune_relaxed_angle_edge_count=sum(
+            1
+            for edge, metric in zip(
+                zip(
+                    (frame_a_name,) + tuple(names),
+                    tuple(names) + (frame_b_name,),
+                ),
+                metrics,
+            )
+            if edge in relaxed_edges
+            and metric.forward_angle_deg > orientation_threshold_deg + 1e-9
+        ),
+        visual_redundancy_metric_version=VISUAL_REDUNDANCY_METRIC_VERSION,
         semantic_rejected_frame_count=semantic_rejected,
     )
 
