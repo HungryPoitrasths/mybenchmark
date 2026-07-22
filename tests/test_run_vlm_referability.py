@@ -699,6 +699,169 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(referability_module._get_vlm_call_failure_count(), 1)
         referability_module._reset_vlm_call_failure_count()
 
+    def test_qwen35_flash_uses_legacy_single_request_path(self) -> None:
+        calls: list[dict] = []
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"status":"ok"}',
+                        reasoning_content=None,
+                    )
+                )
+            ]
+        )
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            return response
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        content = [{"type": "text", "text": "Return JSON."}]
+
+        parsed, raw_text = referability_module._call_vlm_json_impl(
+            client,
+            "qwen3.5-flash",
+            content,
+            {"status": "fallback"},
+            max_tokens=128,
+        )
+
+        self.assertEqual(parsed, {"status": "ok"})
+        self.assertEqual(raw_text, '{"status":"ok"}')
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("extra_body", calls[0])
+        self.assertEqual(calls[0]["max_tokens"], 128)
+        self.assertEqual(calls[0]["messages"][0]["content"], content)
+
+    def test_a3b_model_uses_thinking_controls_and_parse_retry(self) -> None:
+        calls: list[dict] = []
+        responses = [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(content="", reasoning_content="<think>working")
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content='{"status":"ok"}',
+                            reasoning_content=None,
+                        )
+                    )
+                ]
+            ),
+        ]
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            return responses[len(calls) - 1]
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        with patch.object(referability_module, "_EXTRA_BODY_UNSUPPORTED", False):
+            parsed, _ = referability_module._call_vlm_json_impl(
+                client,
+                "qwen36-35b-a3b",
+                [{"type": "text", "text": "Return JSON."}],
+                {"status": "fallback"},
+                max_tokens=128,
+            )
+
+        self.assertEqual(parsed, {"status": "ok"})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[0]["extra_body"],
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        self.assertTrue(
+            calls[0]["messages"][0]["content"][-1]["text"].endswith(" /no_think")
+        )
+        self.assertEqual(
+            [request["max_tokens"] for request in calls],
+            [
+                128 + referability_module.VLM_REASONING_TOKEN_HEADROOM,
+                128
+                + referability_module.VLM_REASONING_TOKEN_HEADROOM
+                + referability_module.VLM_PARSE_RETRY_EXTRA_HEADROOM,
+            ],
+        )
+
+    def test_a3b_timeout_does_not_disable_extra_body_or_fallback_request(self) -> None:
+        referability_module._reset_vlm_call_failure_count()
+        calls: list[dict] = []
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            raise TimeoutError("Request timed out")
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        with patch.object(referability_module, "_EXTRA_BODY_UNSUPPORTED", False):
+            parsed, raw_text = referability_module._call_vlm_json_impl(
+                client,
+                "qwen36-35b-a3b",
+                [{"type": "text", "text": "Return JSON."}],
+                {"status": "fallback"},
+                max_tokens=128,
+            )
+            self.assertFalse(referability_module._EXTRA_BODY_UNSUPPORTED)
+
+        self.assertEqual(parsed, {"status": "fallback"})
+        self.assertEqual(raw_text, "")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("extra_body", calls[0])
+        self.assertEqual(referability_module._get_vlm_call_failure_count(), 1)
+        referability_module._reset_vlm_call_failure_count()
+
+    def test_a3b_explicit_extra_body_rejection_falls_back_once(self) -> None:
+        class UnsupportedExtraBodyError(RuntimeError):
+            status_code = 400
+
+        calls: list[dict] = []
+        response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"status":"ok"}',
+                        reasoning_content=None,
+                    )
+                )
+            ]
+        )
+
+        def create(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise UnsupportedExtraBodyError(
+                    "unknown chat_template_kwargs field enable_thinking"
+                )
+            return response
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+        )
+        with patch.object(referability_module, "_EXTRA_BODY_UNSUPPORTED", False):
+            parsed, _, _ = referability_module._call_vlm_json_once(
+                client,
+                "qwen36-35b-a3b",
+                [{"type": "text", "text": "Return JSON."}],
+                128,
+            )
+            self.assertTrue(referability_module._EXTRA_BODY_UNSUPPORTED)
+
+        self.assertEqual(parsed, {"status": "ok"})
+        self.assertEqual(len(calls), 2)
+        self.assertIn("extra_body", calls[0])
+        self.assertNotIn("extra_body", calls[1])
+
     def test_run_in_thread_pool_preserves_input_order(self) -> None:
         def work_item(value: int) -> int:
             time.sleep(0.01 * (4 - value))

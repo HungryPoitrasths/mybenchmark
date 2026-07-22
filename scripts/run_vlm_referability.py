@@ -131,9 +131,8 @@ FRAME_CLARITY_MAX_TOKENS_PER_IMAGE = 128
 FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
 # Reasoning-mode backends (e.g. Qwen3 "-a3b" thinking variants) may emit a
 # <think>...</think> block before the JSON answer even with enable_thinking
-# disabled server-side; this headroom is added on top of every task's own
-# answer-token budget so the response isn't truncated before the JSON ever
-# appears.
+# disabled server-side; A3B requests add this headroom on top of each task's
+# answer-token budget so the response is not truncated before the JSON appears.
 VLM_REASONING_TOKEN_HEADROOM = 2048
 DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 70
 ATTACHMENT_GROUP_MAX_POSE_ANGLE_DEG = 20.0
@@ -1784,7 +1783,7 @@ def _attachment_pair_group_rename_advice_vlm_review(
         model_name,
         content,
         default=default,
-        max_tokens=1024 + VLM_REASONING_TOKEN_HEADROOM,
+        max_tokens=1024,
     )
     reviews_by_pair_id: dict[str, dict[str, Any]] = {}
     for raw_review in parsed.get("pair_reviews", []):
@@ -1932,6 +1931,23 @@ def _with_no_think_directive(content: list[dict]) -> list[dict]:
     return updated
 
 
+def _model_requires_thinking_controls(model: str) -> bool:
+    """Return whether *model* needs the Qwen A3B no-thinking request path."""
+    return "a3b" in str(model).strip().lower()
+
+
+def _is_enable_thinking_unsupported_error(exc: Exception) -> bool:
+    """Recognize an explicit API rejection of the thinking-control payload."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code not in {400, 422}:
+        return False
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in ("enable_thinking", "chat_template_kwargs", "extra_body")
+    )
+
+
 def _call_vlm_json_once(
     client,
     model: str,
@@ -1940,7 +1956,9 @@ def _call_vlm_json_once(
 ) -> tuple[dict[str, Any] | None, str, bool]:
     """Single VLM call attempt. Returns (parsed_or_None, raw_text, had_thinking)."""
     global _EXTRA_BODY_UNSUPPORTED
-    content = _with_no_think_directive(content)
+    use_thinking_controls = _model_requires_thinking_controls(model)
+    if use_thinking_controls:
+        content = _with_no_think_directive(content)
     kwargs = dict(model=model, messages=[{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0)
     # Belt-and-suspenders against reasoning-mode backends (e.g. Qwen3 "-a3b"
     # thinking variants) emitting a long <think>...</think> block before the
@@ -1949,15 +1967,21 @@ def _call_vlm_json_once(
     # previously dropped over a suspected throughput regression, but an
     # unparsable/empty response is worse than being slower, so it's back —
     # if the server rejects the field, remember that and stop sending it.
-    if not _EXTRA_BODY_UNSUPPORTED:
+    if use_thinking_controls and not _EXTRA_BODY_UNSUPPORTED:
         try:
             resp = client.chat.completions.create(
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
                 **kwargs,
             )
         except Exception as exc:
+            if not _is_enable_thinking_unsupported_error(exc):
+                raise
             _EXTRA_BODY_UNSUPPORTED = True
-            logger.warning("VLM server rejected enable_thinking=False extra_body, disabling it for the rest of this run: %s", exc)
+            logger.warning(
+                "VLM server explicitly rejected enable_thinking=False extra_body; "
+                "disabling it for the rest of this run: %s",
+                exc,
+            )
             resp = client.chat.completions.create(**kwargs)
     else:
         resp = client.chat.completions.create(**kwargs)
@@ -1977,20 +2001,24 @@ def _call_vlm_json_impl(
     model: str,
     content: list[dict],
     default: dict[str, Any],
-    max_tokens: int = 512 + VLM_REASONING_TOKEN_HEADROOM,
+    max_tokens: int = 512,
 ) -> tuple[dict[str, Any], str]:
+    use_thinking_controls = _model_requires_thinking_controls(model)
+    max_attempts = VLM_PARSE_FAILURE_MAX_ATTEMPTS if use_thinking_controls else 1
     last_text = ""
     last_had_thinking = False
-    for attempt in range(1, VLM_PARSE_FAILURE_MAX_ATTEMPTS + 1):
-        attempt_max_tokens = max_tokens + VLM_PARSE_RETRY_EXTRA_HEADROOM * (attempt - 1)
+    for attempt in range(1, max_attempts + 1):
+        attempt_max_tokens = max_tokens
+        if use_thinking_controls:
+            attempt_max_tokens += VLM_REASONING_TOKEN_HEADROOM
+            attempt_max_tokens += VLM_PARSE_RETRY_EXTRA_HEADROOM * (attempt - 1)
         try:
             parsed, text, had_thinking = _call_vlm_json_once(client, model, content, attempt_max_tokens)
         except Exception as exc:
             _record_vlm_call_failure()
-            logger.warning("VLM call failed (attempt %d/%d): %s", attempt, VLM_PARSE_FAILURE_MAX_ATTEMPTS, exc)
+            logger.warning("VLM call failed (attempt %d/%d): %s", attempt, max_attempts, exc)
             _log_vlm_parse_failure(model, "", exception=str(exc))
-            last_text, last_had_thinking = "", False
-            continue
+            return default, ""
         last_text, last_had_thinking = text, had_thinking
         logger.info(
             "VLM response parsed=%s had_thinking=%s (model=%s, response_chars=%d, attempt=%d/%d, max_tokens=%d)",
@@ -1999,7 +2027,7 @@ def _call_vlm_json_impl(
             model,
             len(text),
             attempt,
-            VLM_PARSE_FAILURE_MAX_ATTEMPTS,
+            max_attempts,
             attempt_max_tokens,
         )
         if parsed is not None:
@@ -2010,8 +2038,10 @@ def _call_vlm_json_impl(
             "VLM response stayed empty after %d attempts up to max_tokens=%d while still thinking "
             "(model=%s) - enable_thinking=False is likely not honored by this server; "
             "consider raising VLM_PARSE_RETRY_EXTRA_HEADROOM or checking server-side reasoning config",
-            VLM_PARSE_FAILURE_MAX_ATTEMPTS,
-            max_tokens + VLM_PARSE_RETRY_EXTRA_HEADROOM * (VLM_PARSE_FAILURE_MAX_ATTEMPTS - 1),
+            max_attempts,
+            max_tokens
+            + VLM_REASONING_TOKEN_HEADROOM
+            + VLM_PARSE_RETRY_EXTRA_HEADROOM * (max_attempts - 1),
             model,
         )
     return default, last_text
@@ -2022,7 +2052,7 @@ def _call_vlm_json(
     model: str,
     content: list[dict],
     default: dict[str, Any],
-    max_tokens: int = 512 + VLM_REASONING_TOKEN_HEADROOM,
+    max_tokens: int = 512,
 ) -> tuple[dict[str, Any], str]:
     resolved_client = _resolve_vlm_client(client)
     semaphore = _VLM_REQUEST_SEMAPHORE
@@ -3019,8 +3049,7 @@ def _frame_decision_batch(
         max_tokens=min(
             FRAME_CLARITY_BATCH_MAX_TOKENS,
             FRAME_CLARITY_MAX_TOKENS_PER_IMAGE * max(1, len(ordered_names)),
-        )
-        + VLM_REASONING_TOKEN_HEADROOM,
+        ),
     )
 
     batch_results: dict[str, dict[str, Any]] = {}
@@ -5697,7 +5726,7 @@ def _frame_decision(
             {"type": "text", "text": _frame_prompt()},
         ],
         default=default,
-        max_tokens=128 + VLM_REASONING_TOKEN_HEADROOM,
+        max_tokens=128,
     )
     return _normalize_frame_review({**default, **parsed})
 
@@ -5719,7 +5748,7 @@ def _object_review_decision(
             {"type": "text", "text": _object_review_prompt(label)},
         ],
         default=default,
-        max_tokens=128 + VLM_REASONING_TOKEN_HEADROOM,
+        max_tokens=128,
     )
     status = _normalize_object_review_status(parsed.get("status")) or OBJECT_STATUS_UNSURE
     return status, raw_text
@@ -5751,7 +5780,7 @@ def _object_review_decision_batch(
         model,
         content,
         default={"results": []},
-        max_tokens=min(512, 128 * max(1, batch_size)) + VLM_REASONING_TOKEN_HEADROOM,
+        max_tokens=min(512, 128 * max(1, batch_size)),
     )
     fallback_raw = raw_text or ""
     results: list[tuple[str, str]] = [
@@ -5842,7 +5871,7 @@ def _full_frame_label_vlm_review_batch(
             {"type": "text", "text": _full_frame_label_count_batch_prompt(expected_labels)},
         ],
         default={"results": []},
-        max_tokens=128 * max(1, len(expected_labels)) + VLM_REASONING_TOKEN_HEADROOM,
+        max_tokens=128 * max(1, len(expected_labels)),
     )
 
     raw_items = parsed.get("results") if isinstance(parsed, dict) else None
@@ -5915,7 +5944,7 @@ def _out_of_frame_label_vlm_review(
             {"type": "text", "text": _full_frame_out_of_frame_label_prompt(normalized_label)},
         ],
         default=default,
-        max_tokens=128 + VLM_REASONING_TOKEN_HEADROOM,
+        max_tokens=128,
     )
     status = (
         _normalize_out_of_frame_review_status(parsed.get("status"))
@@ -9194,6 +9223,14 @@ def main():
 
     model_name = args.vlm_model if args.vlm_model else available[0]
     logger.info("Using model: %s", model_name)
+    logger.info(
+        "VLM request mode: %s",
+        (
+            "a3b-thinking-controls"
+            if _model_requires_thinking_controls(model_name)
+            else "legacy-standard"
+        ),
+    )
     _configure_vlm_request_concurrency(int(args.vlm_workers))
     worker_client_factory = _ThreadLocalOpenAIClientFactory(
         OpenAI,
