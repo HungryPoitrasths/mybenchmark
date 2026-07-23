@@ -129,9 +129,9 @@ REFERABILITY_MESH_RAY_VISIBLE_RATIO_MIN = 0.10
 FRAME_CLARITY_BATCH_SIZE = 6
 FRAME_CLARITY_MAX_TOKENS_PER_IMAGE = 128
 FRAME_CLARITY_BATCH_MAX_TOKENS = 1024
-# Reasoning-mode backends (e.g. Qwen3 "-a3b" thinking variants) may emit a
+# Reasoning-mode backends (e.g. Qwen3.5 or Qwen3 "-a3b" variants) may emit a
 # <think>...</think> block before the JSON answer even with enable_thinking
-# disabled server-side; A3B requests add this headroom on top of each task's
+# disabled server-side; controlled requests add this headroom on top of each task's
 # answer-token budget so the response is not truncated before the JSON appears.
 VLM_REASONING_TOKEN_HEADROOM = 2048
 DEFAULT_ATTACHMENT_CLARITY_MIN_SCORE = 70
@@ -1932,7 +1932,23 @@ def _with_no_think_directive(content: list[dict]) -> list[dict]:
 
 
 def _model_requires_thinking_controls(model: str) -> bool:
-    """Return whether *model* needs the Qwen A3B no-thinking request path."""
+    """Return whether *model* needs an explicit Qwen no-thinking request."""
+    normalized = str(model).strip().lower().replace("_", "-")
+    return "a3b" in normalized or "qwen3.5" in normalized or "qwen3-5" in normalized
+
+
+def _thinking_control_extra_body(model: str) -> dict[str, Any]:
+    """Build the provider-specific payload that disables Qwen thinking."""
+    normalized = str(model).strip().lower().replace("_", "-")
+    if "qwen3.5" in normalized or "qwen3-5" in normalized:
+        # DashScope's OpenAI-compatible API exposes this as a top-level field.
+        return {"enable_thinking": False}
+    # Self-hosted Qwen A3B deployments commonly expose the chat-template flag.
+    return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def _model_uses_no_think_directive(model: str) -> bool:
+    """Return whether the model supports Qwen3's prompt-level /no_think flag."""
     return "a3b" in str(model).strip().lower()
 
 
@@ -1957,7 +1973,7 @@ def _call_vlm_json_once(
     """Single VLM call attempt. Returns (parsed_or_None, raw_text, had_thinking)."""
     global _EXTRA_BODY_UNSUPPORTED
     use_thinking_controls = _model_requires_thinking_controls(model)
-    if use_thinking_controls:
+    if _model_uses_no_think_directive(model):
         content = _with_no_think_directive(content)
     kwargs = dict(model=model, messages=[{"role": "user", "content": content}], max_tokens=max_tokens, temperature=0)
     # Belt-and-suspenders against reasoning-mode backends (e.g. Qwen3 "-a3b"
@@ -1970,7 +1986,7 @@ def _call_vlm_json_once(
     if use_thinking_controls and not _EXTRA_BODY_UNSUPPORTED:
         try:
             resp = client.chat.completions.create(
-                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+                extra_body=_thinking_control_extra_body(model),
                 **kwargs,
             )
         except Exception as exc:
@@ -9226,7 +9242,7 @@ def main():
     logger.info(
         "VLM request mode: %s",
         (
-            "a3b-thinking-controls"
+            "thinking-disabled"
             if _model_requires_thinking_controls(model_name)
             else "legacy-standard"
         ),

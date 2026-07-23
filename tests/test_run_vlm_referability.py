@@ -699,7 +699,7 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(referability_module._get_vlm_call_failure_count(), 1)
         referability_module._reset_vlm_call_failure_count()
 
-    def test_qwen35_flash_uses_legacy_single_request_path(self) -> None:
+    def test_qwen35_flash_disables_dashscope_thinking(self) -> None:
         calls: list[dict] = []
         response = SimpleNamespace(
             choices=[
@@ -732,8 +732,11 @@ class RunVlmReferabilityTests(unittest.TestCase):
         self.assertEqual(parsed, {"status": "ok"})
         self.assertEqual(raw_text, '{"status":"ok"}')
         self.assertEqual(len(calls), 1)
-        self.assertNotIn("extra_body", calls[0])
-        self.assertEqual(calls[0]["max_tokens"], 128)
+        self.assertEqual(calls[0]["extra_body"], {"enable_thinking": False})
+        self.assertEqual(
+            calls[0]["max_tokens"],
+            128 + referability_module.VLM_REASONING_TOKEN_HEADROOM,
+        )
         self.assertEqual(calls[0]["messages"][0]["content"], content)
 
     def test_a3b_model_uses_thinking_controls_and_parse_retry(self) -> None:
