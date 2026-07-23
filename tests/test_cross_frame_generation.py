@@ -187,7 +187,7 @@ def test_cross_frame_answer_pair_distance_uses_inclusive_surface_distance_limit(
     assert diagnostics["fallback_type_count"] == 0
 
 
-def test_cross_frame_distance_priority_keeps_in_limit_pairs_farthest_first() -> None:
+def test_cross_frame_distance_priority_keeps_all_routed_pairs_farthest_first() -> None:
     objects = {
         obj_id: make_point_object(obj_id, f"object-{obj_id}", x)
         for obj_id, x in ((1, 0.0), (2, 1.0), (3, 3.0), (4, 4.0), (5, 5.0))
@@ -206,12 +206,14 @@ def test_cross_frame_distance_priority_keeps_in_limit_pairs_farthest_first() -> 
 
     selected, diagnostics = _prioritize_cross_frame_questions_by_distance(questions)
 
-    assert [question["obj_b_id"] for question in selected] == [4, 3, 2]
-    assert diagnostics["over_limit_dropped_question_count"] == 1
+    assert [question["obj_b_id"] for question in selected] == [5, 4, 3, 2]
+    assert diagnostics["over_limit_question_count"] == 1
+    assert diagnostics["over_limit_retained_question_count"] == 1
+    assert diagnostics["over_limit_dropped_question_count"] == 0
     assert diagnostics["fallback_type_count"] == 0
 
 
-def test_cross_frame_distance_priority_falls_back_per_type_to_nearest_pair() -> None:
+def test_cross_frame_distance_priority_keeps_types_with_only_over_limit_pairs() -> None:
     objects = {
         obj_id: make_point_object(obj_id, f"object-{obj_id}", x)
         for obj_id, x in ((1, 0.0), (2, 5.0), (3, 6.0), (4, 4.0))
@@ -240,10 +242,11 @@ def test_cross_frame_distance_priority_falls_back_per_type_to_nearest_pair() -> 
         question["obj_ref_id"]
         for question in selected
         if question["type"] == "object_move_allocentric"
-    ] == [2, 2]
+    ] == [3, 2, 2]
     assert in_limit_question in selected
-    assert diagnostics["fallback_type_count"] == 1
-    assert diagnostics["by_type"]["object_move_allocentric"]["fallback_pair"] == [1, 2]
+    assert diagnostics["fallback_type_count"] == 0
+    assert diagnostics["by_type"]["object_move_allocentric"]["over_limit_question_count"] == 3
+    assert diagnostics["by_type"]["object_move_allocentric"]["kept_question_count"] == 3
 
 
 def test_cross_frame_reference_budget_uses_farthest_in_limit_objects() -> None:
@@ -464,7 +467,7 @@ def test_v2_cross_frame_generation_uses_frame_2_camera_for_occlusion() -> None:
     assert result_a[0]["camera_bindings"] == result_b[0]["camera_bindings"]
 
 
-def test_direct_cross_frame_generation_applies_distance_priority_and_cleans_metadata() -> None:
+def test_direct_cross_frame_generation_keeps_over_limit_pairs_and_cleans_metadata() -> None:
     from src.qa_generator import generate_cross_frame_questions
 
     objects = {
@@ -498,9 +501,55 @@ def test_direct_cross_frame_generation_applies_distance_priority_and_cleans_meta
             only_question_types=["L3_coordinate_rotation_agent"],
         )
 
-    assert [question["obj_b_id"] for question in result] == [2]
+    assert [question["obj_b_id"] for question in result] == [3, 2]
     assert all(
         not any(key.startswith("_cross_frame_answer_pair_") for key in question)
+        for question in result
+    )
+
+
+def test_direct_cross_frame_generation_can_preserve_distance_metadata() -> None:
+    from src.qa_generator import generate_cross_frame_questions
+
+    objects = {
+        1: make_point_object(1, "anchor", 0.0),
+        2: make_point_object(2, "at-limit", 4.0),
+        3: make_point_object(3, "over-limit", 5.0),
+    }
+    generated = [
+        {
+            "type": "coordinate_rotation_agent",
+            "question": f"question-{obj_b_id}",
+            "obj_a_id": 1,
+            "obj_b_id": obj_b_id,
+            "rotation_angle": 90,
+            "correct_value": "left",
+        }
+        for obj_b_id in (2, 3)
+    ]
+
+    with patch(
+        "src.qa_generator.generate_l3_coordinate_rotation",
+        return_value=generated,
+    ):
+        result = generate_cross_frame_questions(
+            objects=list(objects.values()),
+            attachment_graph={},
+            attached_by={},
+            frame_1=make_context("first.jpg", regular={1}),
+            frame_2=make_context("last.jpg", regular={2, 3}),
+            color_intrinsics=make_intrinsics(),
+            only_question_types=["L3_coordinate_rotation_agent"],
+            preserve_distance_metadata=True,
+        )
+
+    assert [question["obj_b_id"] for question in result] == [2, 3]
+    assert [
+        question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY]
+        for question in result
+    ] == [4.0, 5.0]
+    assert all(
+        question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY] == [1, question["obj_b_id"]]
         for question in result
     )
 

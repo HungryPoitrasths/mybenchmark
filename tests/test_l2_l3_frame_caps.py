@@ -203,10 +203,10 @@ def test_attachment_chain_uses_grandparent_as_its_primary_object() -> None:
 
 
 def test_split_candidate_budgets() -> None:
-    assert run_pipeline._default_l1_candidate_budget("val") == 50
-    assert run_pipeline._default_l1_candidate_budget("train") == 100
-    assert run_pipeline._default_l2_l3_candidate_budget("val") == 100
-    assert run_pipeline._default_l2_l3_candidate_budget("train") == 200
+    assert run_pipeline._default_l1_candidate_budget("val") == 75
+    assert run_pipeline._default_l1_candidate_budget("train") == 150
+    assert run_pipeline._default_l2_l3_candidate_budget("val") == 150
+    assert run_pipeline._default_l2_l3_candidate_budget("train") == 300
     assert run_pipeline._default_l1_candidate_budget("all") == 0
     assert run_pipeline._default_l2_l3_candidate_budget(None) == 0
 
@@ -312,8 +312,8 @@ def test_candidate_budget_reaches_zero_for_early_stop() -> None:
 def test_l1_candidate_budget_can_be_overridden() -> None:
     signature = inspect.signature(run_pipeline.run_pipeline)
     assert signature.parameters["scene_type_cap"].default is None
-    assert run_pipeline._default_l1_candidate_budget("train") == 100
-    assert run_pipeline._default_l1_candidate_budget("val") == 50
+    assert run_pipeline._default_l1_candidate_budget("train") == 150
+    assert run_pipeline._default_l1_candidate_budget("val") == 75
     assert run_pipeline._default_l1_candidate_budget("all") == 0
     assert run_pipeline._default_l1_candidate_budget(None) == 0
 

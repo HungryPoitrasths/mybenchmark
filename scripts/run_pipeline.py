@@ -128,8 +128,8 @@ EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
 PIPELINE_SCENE_STATUS_VERSION = 7
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
-L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 50, "train": 100}
-L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 100, "train": 200}
+L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 150}
+L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 300}
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -7159,6 +7159,7 @@ def run_pipeline(
                         max_occlusion_objects=max_occlusion_objects,
                         max_move_sources=max_move_sources,
                         attachment_edges=scene.get("attachment_edges", []),
+                        preserve_distance_metadata=True,
                     )
                     pair_questions = _filter_vertical_object_rotate_questions(
                         pair_questions,
@@ -7782,8 +7783,8 @@ def main():
         help="Dataset split. ScanNet v2: filters discovered scene dirs by the matching "
         "SCANNET_METADATA_SPLIT_FILES entry. ScanNet++: selects the matching "
         "SCANNETPP_METADATA_SPLIT_FILES entry; overridden by --scannetpp_split_file. "
-        "Candidate budgets per scene/type are val L1=50 and L2/L3=100, or "
-        "train L1=100 and L2/L3=200; final type totals are not capped. "
+        "Candidate budgets per scene/type are val L1=75 and L2/L3=150, or "
+        "train L1=150 and L2/L3=300; final type totals are not capped. "
         "'all' or omitted scans every scene directory under --data_root.",
     )
     parser.add_argument(
@@ -7951,7 +7952,7 @@ def main():
         default=None,
         help=(
             "L1 candidate-generation budget per (dataset, scene, type). Defaults "
-            "to 100 for train, 50 for val, and unlimited otherwise; use 0 to disable."
+            "to 75 for val, 150 for train, and unlimited otherwise; use 0 to disable."
         ),
     )
     parser.add_argument(

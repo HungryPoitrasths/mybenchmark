@@ -36,6 +36,7 @@ from .relation_engine import (
     MIN_DIRECTION_DISTANCE,
     _horizontal_direction_from_components,
     compute_all_relations,
+    compute_direction_relations,
     find_changed_relations,
     primary_direction,
     primary_direction_object_centric,
@@ -58,6 +59,7 @@ from .referability_checks import (
 from .virtual_ops import (
     MOVEMENT_CANDIDATES,
     apply_movement,
+    apply_movement_selective,
     apply_removal,
     apply_coordinate_rotation,
     compute_room_bounds,
@@ -66,6 +68,7 @@ from .virtual_ops import (
     get_moved_object_ids,
     has_terminal_bbox_collision,
     is_within_room,
+    apply_movement_for_physics_check,
 )
 from .utils.colmap_loader import CameraPose
 from .utils.colmap_loader import CameraIntrinsics
@@ -2117,6 +2120,42 @@ def _projection_rects_overlap(
     )
 
 
+def _translated_bbox_camera_depth_interval(
+    obj: dict[str, Any],
+    delta: np.ndarray,
+    camera_pose: CameraPose,
+) -> tuple[float, float] | None:
+    corners = _bbox_corner_points(obj)
+    if corners is None:
+        return None
+    camera_points = world_to_camera_batch(
+        corners + np.asarray(delta, dtype=np.float64),
+        camera_pose,
+    )
+    depths = np.asarray(camera_points[:, 2], dtype=np.float64)
+    if len(depths) == 0 or not np.all(np.isfinite(depths)) or np.any(depths <= 0.0):
+        return None
+    return float(np.min(depths)), float(np.max(depths))
+
+
+def _occlusion_depth_order_allows(
+    occluder_obj: dict[str, Any],
+    target_obj: dict[str, Any],
+    occluder_delta: np.ndarray,
+    target_delta: np.ndarray,
+    camera_pose: CameraPose,
+) -> bool:
+    occluder_depth = _translated_bbox_camera_depth_interval(
+        occluder_obj, occluder_delta, camera_pose,
+    )
+    target_depth = _translated_bbox_camera_depth_interval(
+        target_obj, target_delta, camera_pose,
+    )
+    if occluder_depth is None or target_depth is None:
+        return True
+    return occluder_depth[0] < target_depth[1]
+
+
 def _in_frame_surface_sample_subset(
     sample_points: np.ndarray,
     camera_pose: CameraPose,
@@ -2335,6 +2374,48 @@ def _surface_probe_subset(
         else np.empty((0, 3), dtype=np.float64)
     )
     return points[indices], tri_ids, barycentrics
+
+
+def _occlusion_probe_points_for_target(
+    *,
+    target_obj: dict[str, Any],
+    target_delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    instance_mesh_data: InstanceMeshData,
+    max_probe_samples: int,
+    probe_cache: dict[tuple[Any, ...], np.ndarray] | None = None,
+) -> np.ndarray:
+    delta_key = tuple(np.round(np.asarray(target_delta, dtype=np.float64), 6).tolist())
+    cache_key = (int(target_obj["id"]), delta_key, int(max_probe_samples))
+    if probe_cache is not None and cache_key in probe_cache:
+        return probe_cache[cache_key]
+
+    sample_points = _instance_surface_samples(
+        instance_mesh_data,
+        int(target_obj["id"]),
+    )
+    if len(sample_points) == 0:
+        probe_points = np.empty((0, 3), dtype=np.float64)
+    else:
+        translated_points = np.asarray(sample_points, dtype=np.float64) + np.asarray(
+            target_delta,
+            dtype=np.float64,
+        )
+        _, _, in_frame_points, _, _ = _in_frame_surface_sample_subset(
+            translated_points,
+            camera_pose,
+            color_intrinsics,
+        )
+        probe_points, _, _ = _surface_probe_subset(
+            in_frame_points,
+            max_probe_samples,
+        )
+        probe_points = np.asarray(probe_points, dtype=np.float64)
+
+    if probe_cache is not None:
+        probe_cache[cache_key] = probe_points
+    return probe_points
 
 
 def _classify_removed_object_probe_hit_path(
@@ -2817,7 +2898,7 @@ def _match_world_xy_direction_bin(
     return matches[0]
 
 
-def _object_blocks_translated_target_object(
+def _object_move_occlusion_blocking_ratio(
     *,
     occluder_obj: dict[str, Any],
     target_obj: dict[str, Any],
@@ -2826,22 +2907,30 @@ def _object_blocks_translated_target_object(
     camera_pose: CameraPose,
     color_intrinsics: CameraIntrinsics | None,
     instance_mesh_data: InstanceMeshData | None,
-    max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
-    min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
-    hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
-) -> bool:
-    """Test whether one translated object blocks another translated object.
+    max_probe_samples: int,
+    hit_epsilon: float,
+    use_depth_prefilter: bool = True,
+    ratio_cache: dict[tuple[Any, ...], float | None] | None = None,
+    probe_cache: dict[tuple[Any, ...], np.ndarray] | None = None,
+) -> float | None:
+    cache_key = (
+        int(occluder_obj["id"]),
+        int(target_obj["id"]),
+        tuple(np.round(np.asarray(occluder_delta, dtype=np.float64), 6).tolist()),
+        tuple(np.round(np.asarray(target_delta, dtype=np.float64), 6).tolist()),
+        int(max_probe_samples),
+        float(hit_epsilon),
+    )
+    if ratio_cache is not None and cache_key in ratio_cache:
+        return ratio_cache[cache_key]
 
-    Casts rays from the fixed camera to ``target_obj`` surface samples at
-    ``target_delta``, against a caster scoped to ``occluder_obj``. Shifting
-    the ray origin by ``-occluder_delta`` represents the occluder's moved
-    position without rebuilding its instance mesh. Using an
-    instance-scoped caster (rather than the full-scene caster used by
-    ``_removed_object_occludes_target_mesh``) avoids any confusion with
-    either object's original full-scene geometry.
-    """
+    def _finish(value: float | None) -> float | None:
+        if ratio_cache is not None:
+            ratio_cache[cache_key] = value
+        return value
+
     if color_intrinsics is None or instance_mesh_data is None:
-        return False
+        return _finish(None)
     if not _projection_rects_overlap(
         _translated_bbox_projection_rect(
             occluder_obj,
@@ -2856,56 +2945,92 @@ def _object_blocks_translated_target_object(
             color_intrinsics,
         ),
     ):
-        return False
-    occluder_id = int(occluder_obj["id"])
-    occluder_caster = _get_instance_intersector(instance_mesh_data, occluder_id)
-    if occluder_caster is None:
-        return False
-
-    target_obj_id = int(target_obj["id"])
-    sample_points = _instance_surface_samples(instance_mesh_data, target_obj_id)
-    if len(sample_points) == 0:
-        return False
-    translated_points = sample_points + np.asarray(target_delta, dtype=np.float64)
-
-    _projected_area, _in_frame_ratio, in_frame_points, _tri_ids, _barys = (
-        _in_frame_surface_sample_subset(
-            translated_points,
+        return _finish(0.0)
+    if use_depth_prefilter:
+        if not _occlusion_depth_order_allows(
+            occluder_obj,
+            target_obj,
+            occluder_delta,
+            target_delta,
             camera_pose,
-            color_intrinsics,
-        )
-    )
-    if len(in_frame_points) == 0:
-        return False
+        ):
+            return _finish(0.0)
 
-    probe_points, _probe_tri_ids, _probe_barys = _surface_probe_subset(
-        in_frame_points,
-        max_probe_samples,
+    caster = _get_instance_intersector(instance_mesh_data, int(occluder_obj["id"]))
+    if caster is None:
+        return _finish(None)
+    probe_points = _occlusion_probe_points_for_target(
+        target_obj=target_obj,
+        target_delta=target_delta,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        instance_mesh_data=instance_mesh_data,
+        max_probe_samples=max_probe_samples,
+        probe_cache=probe_cache,
     )
     if len(probe_points) == 0:
-        return False
+        return _finish(None)
 
     camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
     directions = probe_points - camera_pos
     target_dists = np.linalg.norm(directions, axis=1)
     valid_mask = np.isfinite(target_dists) & (target_dists > 1e-6)
     if not np.any(valid_mask):
-        return False
-    max_distances = target_dists + float(hit_epsilon)
+        return _finish(None)
     local_origin = camera_pos - np.asarray(occluder_delta, dtype=np.float64)
     origins = np.broadcast_to(local_origin, directions.shape).copy()
     hit_dists = _batch_first_hit_distances_compat(
-        occluder_caster,
+        caster,
         origins=origins,
         directions=directions,
-        max_distances=max_distances,
+        max_distances=target_dists + float(hit_epsilon),
     )
-    blocking_mask = valid_mask & (hit_dists < (target_dists - float(hit_epsilon)))
+    blocking = valid_mask & (hit_dists < (target_dists - float(hit_epsilon)))
     valid_count = int(np.count_nonzero(valid_mask))
     if valid_count <= 0:
-        return False
-    blocking_ratio = float(np.count_nonzero(blocking_mask) / valid_count)
-    return blocking_ratio > float(min_blocking_ratio)
+        return _finish(None)
+    return _finish(float(np.count_nonzero(blocking) / valid_count))
+
+
+def _object_blocks_translated_target_object(
+    *,
+    occluder_obj: dict[str, Any],
+    target_obj: dict[str, Any],
+    occluder_delta: np.ndarray,
+    target_delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics | None,
+    instance_mesh_data: InstanceMeshData | None,
+    max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
+    min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
+    hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
+    blocking_ratio_cache: dict[tuple[Any, ...], float | None] | None = None,
+    probe_cache: dict[tuple[Any, ...], np.ndarray] | None = None,
+) -> bool:
+    """Test whether one translated object blocks another translated object.
+
+    Casts rays from the fixed camera to ``target_obj`` surface samples at
+    ``target_delta``, against a caster scoped to ``occluder_obj``. Shifting
+    the ray origin by ``-occluder_delta`` represents the occluder's moved
+    position without rebuilding its instance mesh. Using an
+    instance-scoped caster (rather than the full-scene caster used by
+    ``_removed_object_occludes_target_mesh``) avoids any confusion with
+    either object's original full-scene geometry.
+    """
+    blocking_ratio = _object_move_occlusion_blocking_ratio(
+        occluder_obj=occluder_obj,
+        target_obj=target_obj,
+        occluder_delta=occluder_delta,
+        target_delta=target_delta,
+        camera_pose=camera_pose,
+        color_intrinsics=color_intrinsics,
+        instance_mesh_data=instance_mesh_data,
+        max_probe_samples=max_probe_samples,
+        hit_epsilon=hit_epsilon,
+        ratio_cache=blocking_ratio_cache,
+        probe_cache=probe_cache,
+    )
+    return blocking_ratio is not None and blocking_ratio > float(min_blocking_ratio)
 
 
 def _occluder_blocks_translated_query_object(
@@ -2919,6 +3044,8 @@ def _occluder_blocks_translated_query_object(
     max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
     min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
     hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
+    blocking_ratio_cache: dict[tuple[Any, ...], float | None] | None = None,
+    probe_cache: dict[tuple[Any, ...], np.ndarray] | None = None,
 ) -> bool:
     """Compatibility wrapper for the original query-behind-ref search."""
     return _object_blocks_translated_target_object(
@@ -2932,6 +3059,8 @@ def _occluder_blocks_translated_query_object(
         max_probe_samples=max_probe_samples,
         min_blocking_ratio=min_blocking_ratio,
         hit_epsilon=hit_epsilon,
+        blocking_ratio_cache=blocking_ratio_cache,
+        probe_cache=probe_cache,
     )
 
 
@@ -2947,6 +3076,9 @@ def _pairwise_occlusion_relation_after_move(
     max_probe_samples: int = _OCCLUSION_DIRECTED_PROBE_SAMPLE_COUNT,
     min_blocking_ratio: float = _OCCLUSION_DIRECTED_MIN_BLOCKING_RATIO,
     hit_epsilon: float = _OCCLUSION_DIRECTED_HIT_EPSILON_M,
+    relation_cache: dict[tuple[Any, ...], tuple[str | None, float, float]] | None = None,
+    blocking_ratio_cache: dict[tuple[Any, ...], float | None] | None = None,
+    probe_cache: dict[tuple[Any, ...], np.ndarray] | None = None,
 ) -> tuple[str | None, float, float]:
     """Classify which member of a moved object pair blocks the other.
 
@@ -2955,25 +3087,30 @@ def _pairwise_occlusion_relation_after_move(
     delta lets the original instance intersector represent its counterfactual
     position without rebuilding the full scene mesh.
     """
-    if color_intrinsics is None or instance_mesh_data is None:
-        return None, 0.0, 0.0
-    if not _projection_rects_overlap(
-        _translated_bbox_projection_rect(
-            query_obj,
-            query_delta,
-            camera_pose,
-            color_intrinsics,
-        ),
-        _translated_bbox_projection_rect(
-            ref_obj,
-            ref_delta,
-            camera_pose,
-            color_intrinsics,
-        ),
-    ):
-        return L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0
+    cache_key = (
+        int(query_obj["id"]),
+        int(ref_obj["id"]),
+        tuple(np.round(np.asarray(query_delta, dtype=np.float64), 6).tolist()),
+        tuple(np.round(np.asarray(ref_delta, dtype=np.float64), 6).tolist()),
+        int(max_probe_samples),
+        float(min_blocking_ratio),
+        float(hit_epsilon),
+    )
+    if relation_cache is not None and cache_key in relation_cache:
+        return relation_cache[cache_key]
 
-    camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    def _finish(value: tuple[str | None, float, float]) -> tuple[str | None, float, float]:
+        if relation_cache is not None:
+            relation_cache[cache_key] = value
+        return value
+
+    if color_intrinsics is None or instance_mesh_data is None:
+        return _finish((None, 0.0, 0.0))
+    if not _projection_rects_overlap(
+        _translated_bbox_projection_rect(query_obj, query_delta, camera_pose, color_intrinsics),
+        _translated_bbox_projection_rect(ref_obj, ref_delta, camera_pose, color_intrinsics),
+    ):
+        return _finish((L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0))
 
     def _blocking_ratio(
         *,
@@ -2982,43 +3119,20 @@ def _pairwise_occlusion_relation_after_move(
         occluder_delta: np.ndarray,
         target_delta: np.ndarray,
     ) -> float | None:
-        caster = _get_instance_intersector(instance_mesh_data, int(occluder["id"]))
-        if caster is None:
-            return None
-        sample_points = _instance_surface_samples(instance_mesh_data, int(target["id"]))
-        if len(sample_points) == 0:
-            return None
-        translated_points = np.asarray(sample_points, dtype=np.float64) + np.asarray(
-            target_delta, dtype=np.float64
+        return _object_move_occlusion_blocking_ratio(
+            occluder_obj=occluder,
+            target_obj=target,
+            occluder_delta=occluder_delta,
+            target_delta=target_delta,
+            camera_pose=camera_pose,
+            color_intrinsics=color_intrinsics,
+            instance_mesh_data=instance_mesh_data,
+            max_probe_samples=max_probe_samples,
+            hit_epsilon=hit_epsilon,
+            use_depth_prefilter=False,
+            ratio_cache=blocking_ratio_cache,
+            probe_cache=probe_cache,
         )
-        _, _, in_frame_points, _, _ = _in_frame_surface_sample_subset(
-            translated_points,
-            camera_pose,
-            color_intrinsics,
-        )
-        if len(in_frame_points) == 0:
-            return None
-        probe_points, _, _ = _surface_probe_subset(in_frame_points, max_probe_samples)
-        if len(probe_points) == 0:
-            return None
-        directions = probe_points - camera_pos
-        target_dists = np.linalg.norm(directions, axis=1)
-        valid_mask = np.isfinite(target_dists) & (target_dists > 1e-6)
-        if not np.any(valid_mask):
-            return None
-        local_origin = camera_pos - np.asarray(occluder_delta, dtype=np.float64)
-        origins = np.broadcast_to(local_origin, directions.shape).copy()
-        hit_dists = _batch_first_hit_distances_compat(
-            caster,
-            origins=origins,
-            directions=directions,
-            max_distances=target_dists + float(hit_epsilon),
-        )
-        blocking = valid_mask & (hit_dists < (target_dists - float(hit_epsilon)))
-        valid_count = int(np.count_nonzero(valid_mask))
-        if valid_count <= 0:
-            return None
-        return float(np.count_nonzero(blocking) / valid_count)
 
     query_by_ref = _blocking_ratio(
         occluder=ref_obj,
@@ -3033,7 +3147,7 @@ def _pairwise_occlusion_relation_after_move(
         target_delta=ref_delta,
     )
     if query_by_ref is None or ref_by_query is None:
-        return None, float(query_by_ref or 0.0), float(ref_by_query or 0.0)
+        return _finish((None, float(query_by_ref or 0.0), float(ref_by_query or 0.0)))
     query_blocked = query_by_ref > float(min_blocking_ratio)
     ref_blocked = ref_by_query > float(min_blocking_ratio)
     if query_blocked and ref_blocked:
@@ -3041,12 +3155,12 @@ def _pairwise_occlusion_relation_after_move(
         # represented by this question type's three answer choices. Returning
         # None makes the generator discard the candidate instead of forcing a
         # direction from ratios or object-center depth.
-        return None, float(query_by_ref), float(ref_by_query)
+        return _finish((None, float(query_by_ref), float(ref_by_query)))
     if query_blocked:
-        return L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, float(query_by_ref), float(ref_by_query)
+        return _finish((L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, float(query_by_ref), float(ref_by_query)))
     if ref_blocked:
-        return L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, float(query_by_ref), float(ref_by_query)
-    return L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, float(query_by_ref), float(ref_by_query)
+        return _finish((L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, float(query_by_ref), float(ref_by_query)))
+    return _finish((L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, float(query_by_ref), float(ref_by_query)))
 
 
 def _iter_pairwise_occlusion_directed_object_move_states(
@@ -3065,6 +3179,9 @@ def _iter_pairwise_occlusion_directed_object_move_states(
     collision_objects: list[dict] | None,
     candidates_tried_counter: list[int] | None = None,
     max_candidates_tried: int | None = None,
+    relation_cache: dict[tuple[Any, ...], tuple[str | None, float, float]] | None = None,
+    blocking_ratio_cache: dict[tuple[Any, ...], float | None] | None = None,
+    probe_cache: dict[tuple[Any, ...], np.ndarray] | None = None,
 ):
     """Yield valid moves producing either directed pairwise occlusion.
 
@@ -3147,6 +3264,8 @@ def _iter_pairwise_occlusion_directed_object_move_states(
                             camera_pose=camera_pose,
                             color_intrinsics=color_intrinsics,
                             instance_mesh_data=instance_mesh_data,
+                            blocking_ratio_cache=blocking_ratio_cache,
+                            probe_cache=probe_cache,
                         )
                     else:
                         expected_relation = L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF
@@ -3157,6 +3276,8 @@ def _iter_pairwise_occlusion_directed_object_move_states(
                             camera_pose=camera_pose,
                             color_intrinsics=color_intrinsics,
                             instance_mesh_data=instance_mesh_data,
+                            blocking_ratio_cache=blocking_ratio_cache,
+                            probe_cache=probe_cache,
                         )
                     if not blocks:
                         continue
@@ -3168,6 +3289,9 @@ def _iter_pairwise_occlusion_directed_object_move_states(
                         camera_pose=camera_pose,
                         color_intrinsics=color_intrinsics,
                         instance_mesh_data=instance_mesh_data,
+                        relation_cache=relation_cache,
+                        blocking_ratio_cache=blocking_ratio_cache,
+                        probe_cache=probe_cache,
                     )
                     if relation == expected_relation and relation not in seen_relations:
                         seen_relations.add(relation)
@@ -5831,13 +5955,18 @@ def _iter_valid_object_move_states(
     target_id: int,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    lightweight: bool = False,
 ):
     """Yield physically valid movement candidates in the canonical search order."""
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
     moved_ids = get_moved_object_ids(target_id, attachment_graph)
 
     for delta in MOVEMENT_CANDIDATES:
-        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
+        new_objects = (
+            apply_movement_for_physics_check(objects, moved_ids, delta)
+            if lightweight
+            else apply_movement(objects, attachment_graph, target_id, delta)
+        )
         if not is_within_room(new_objects, room_min, room_max):
             continue
         if has_terminal_bbox_collision(
@@ -7000,6 +7129,34 @@ def _classify_pair_movement(
     return (b_in != c_in), (b_in and c_in)
 
 
+def _cached_move_distance_details(
+    moved_map: dict[int, dict[str, Any]],
+    obj_a_id: int,
+    obj_b_id: int,
+    delta: np.ndarray,
+    *,
+    force_aabb: bool,
+    cache: dict[tuple[Any, ...], dict[str, Any]] | None,
+) -> dict[str, Any]:
+    pair_key = tuple(sorted((int(obj_a_id), int(obj_b_id))))
+    cache_key = (
+        "aabb" if force_aabb else "exact",
+        _delta_key(delta),
+        pair_key[0],
+        pair_key[1],
+    )
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    details = compute_distance_details(
+        moved_map[int(obj_a_id)],
+        moved_map[int(obj_b_id)],
+        force_aabb=force_aabb,
+    )
+    if cache is not None:
+        cache[cache_key] = details
+    return details
+
+
 def _find_stable_distance_move_for_relation(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -7010,6 +7167,9 @@ def _find_stable_distance_move_for_relation(
     collision_objects: list[dict] | None = None,
     movement_objects: list[dict] | None = None,
     allow_unchanged_fallback: bool = False,
+    valid_move_deltas: list[np.ndarray] | None = None,
+    distance_state_cache: dict[tuple[float, ...], dict[int, dict[str, Any]]] | None = None,
+    distance_details_cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray | None, str | None, str | None, bool]:
     """Find a valid move for distance questions.
 
@@ -7038,26 +7198,60 @@ def _find_stable_distance_move_for_relation(
     if obj_a_id not in obj_map or obj_b_id not in obj_map:
         return None, None, None, False
 
+    moved_map_cache = distance_state_cache if distance_state_cache is not None else {}
+
+    def _moved_map_for_delta(delta: np.ndarray) -> dict[int, dict[str, Any]]:
+        delta_key = _delta_key(delta)
+        moved_map = moved_map_cache.get(delta_key)
+        if moved_map is None or obj_a_id not in moved_map or obj_b_id not in moved_map:
+            moved_map = {
+                int(obj["id"]): obj
+                for obj in apply_movement_selective(
+                    objects,
+                    attachment_graph,
+                    target_id,
+                    delta,
+                )
+            }
+            moved_map_cache[delta_key] = moved_map
+        return moved_map
+
     # pair_moves_apart: search for a distance-bin change
     if pair_moves_apart:
-        for delta in _iter_distance_move_deltas():
-            moved_check_objects = apply_movement(movement_check_objects, attachment_graph, target_id, delta)
-            if not is_within_room(moved_check_objects, room_min, room_max):
-                continue
-            if has_terminal_bbox_collision(
-                movement_check_objects,
-                moved_check_objects,
-                moved_ids,
-                collision_objects=collision_objects,
-            ):
-                continue
+        if valid_move_deltas is None:
+            candidate_deltas = _iter_distance_move_deltas()
+        else:
+            candidate_deltas = (
+                np.asarray(delta, dtype=np.float64)
+                for delta in valid_move_deltas
+                if np.allclose(np.asarray(delta, dtype=np.float64)[2], 0.0)
+            )
+        for delta in candidate_deltas:
+            if valid_move_deltas is None:
+                moved_check_objects = apply_movement(
+                    movement_check_objects,
+                    attachment_graph,
+                    target_id,
+                    delta,
+                )
+                if not is_within_room(moved_check_objects, room_min, room_max):
+                    continue
+                if has_terminal_bbox_collision(
+                    movement_check_objects,
+                    moved_check_objects,
+                    moved_ids,
+                    collision_objects=collision_objects,
+                ):
+                    continue
 
-            new_objects = apply_movement(objects, attachment_graph, target_id, delta)
-            new_map = {int(obj["id"]): obj for obj in new_objects}
-            approx_details = compute_distance_details(
-                new_map[obj_a_id],
-                new_map[obj_b_id],
+            new_map = _moved_map_for_delta(delta)
+            approx_details = _cached_move_distance_details(
+                new_map,
+                obj_a_id,
+                obj_b_id,
+                delta,
                 force_aabb=True,
+                cache=distance_details_cache,
             )
             approx_idx = _distance_bin_index(
                 str(approx_details.get("distance_bin", "")),
@@ -7068,9 +7262,13 @@ def _find_stable_distance_move_for_relation(
             if approx_idx == old_idx and not bool(approx_details.get("near_boundary", False)):
                 continue
 
-            exact_details = compute_distance_details(
-                new_map[obj_a_id],
-                new_map[obj_b_id],
+            exact_details = _cached_move_distance_details(
+                new_map,
+                obj_a_id,
+                obj_b_id,
+                delta,
+                force_aabb=False,
+                cache=distance_details_cache,
             )
             new_label = str(exact_details["distance_bin"])
             new_near_boundary = bool(exact_details["near_boundary"])
@@ -7084,18 +7282,31 @@ def _find_stable_distance_move_for_relation(
                 continue
             return np.asarray(delta, dtype=np.float64), old_label, new_label, False
 
-        for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
-            movement_check_objects,
-            attachment_graph,
-            target_id,
-            room_bounds=room_bounds,
-            collision_objects=collision_objects,
-        ):
-            new_objects = apply_movement(objects, attachment_graph, target_id, delta)
-            new_map = {int(obj["id"]): obj for obj in new_objects}
-            exact_details = compute_distance_details(
-                new_map[obj_a_id],
-                new_map[obj_b_id],
+        if valid_move_deltas is None:
+            valid_deltas = (
+                delta
+                for delta, _new_objects, _moved_ids in _iter_valid_object_move_states(
+                    movement_check_objects,
+                    attachment_graph,
+                    target_id,
+                    room_bounds=room_bounds,
+                    collision_objects=collision_objects,
+                )
+            )
+        else:
+            valid_deltas = (
+                np.asarray(delta, dtype=np.float64)
+                for delta in valid_move_deltas
+            )
+        for delta in valid_deltas:
+            new_map = _moved_map_for_delta(delta)
+            exact_details = _cached_move_distance_details(
+                new_map,
+                obj_a_id,
+                obj_b_id,
+                delta,
+                force_aabb=False,
+                cache=distance_details_cache,
             )
             new_label = str(exact_details["distance_bin"])
             new_idx = _distance_bin_index(
@@ -7111,18 +7322,31 @@ def _find_stable_distance_move_for_relation(
     # Attachment priority children may still be useful when their distance bin
     # stays stable after a valid move, especially when no crossing is possible.
     if allow_unchanged_fallback and (pair_moves_together or pair_moves_apart):
-        for delta, new_objects, _moved_ids in _iter_valid_object_move_states(
-            movement_check_objects,
-            attachment_graph,
-            target_id,
-            room_bounds=room_bounds,
-            collision_objects=collision_objects,
-        ):
-            new_objects = apply_movement(objects, attachment_graph, target_id, delta)
-            new_map = {int(obj["id"]): obj for obj in new_objects}
-            exact_details = compute_distance_details(
-                new_map[obj_a_id],
-                new_map[obj_b_id],
+        if valid_move_deltas is None:
+            valid_deltas = (
+                delta
+                for delta, _new_objects, _moved_ids in _iter_valid_object_move_states(
+                    movement_check_objects,
+                    attachment_graph,
+                    target_id,
+                    room_bounds=room_bounds,
+                    collision_objects=collision_objects,
+                )
+            )
+        else:
+            valid_deltas = (
+                np.asarray(delta, dtype=np.float64)
+                for delta in valid_move_deltas
+            )
+        for delta in valid_deltas:
+            new_map = _moved_map_for_delta(delta)
+            exact_details = _cached_move_distance_details(
+                new_map,
+                obj_a_id,
+                obj_b_id,
+                delta,
+                force_aabb=False,
+                cache=distance_details_cache,
             )
             if float(exact_details.get("distance_m", 0.0)) < MIN_DISTANCE_QUESTION_DISTANCE_M:
                 continue
@@ -7156,6 +7380,9 @@ def _generate_l2_distance_questions_for_object(
     collision_objects: list[dict] | None = None,
     allow_unchanged_fallback: bool = False,
     fixed_delta: np.ndarray | None = None,
+    valid_move_deltas: list[np.ndarray] | None = None,
+    distance_state_cache: dict[tuple[float, ...], dict[int, dict[str, Any]]] | None = None,
+    distance_details_cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate L2 distance questions using stable or prevalidated moves."""
     tpl_list = templates.get(
@@ -7236,13 +7463,21 @@ def _generate_l2_distance_questions_for_object(
                 or obj_b_id not in fixed_moved_map
             ):
                 continue
-            old_distance = compute_distance_details(
-                fixed_old_map[obj_a_id],
-                fixed_old_map[obj_b_id],
+            old_distance = _cached_move_distance_details(
+                fixed_old_map,
+                obj_a_id,
+                obj_b_id,
+                np.zeros(3, dtype=np.float64),
+                force_aabb=False,
+                cache=distance_details_cache,
             )
-            new_distance = compute_distance_details(
-                fixed_moved_map[obj_a_id],
-                fixed_moved_map[obj_b_id],
+            new_distance = _cached_move_distance_details(
+                fixed_moved_map,
+                obj_a_id,
+                obj_b_id,
+                fixed_delta_array,
+                force_aabb=False,
+                cache=distance_details_cache,
             )
             old_value = str(old_distance.get("distance_bin", "")).strip()
             answer_value = str(new_distance.get("distance_bin", "")).strip()
@@ -7279,19 +7514,37 @@ def _generate_l2_distance_questions_for_object(
                 collision_objects=collision_objects,
                 movement_objects=movement_scene_objects,
                 allow_unchanged_fallback=pair_moves_together or allow_unchanged_fallback,
+                valid_move_deltas=valid_move_deltas,
+                distance_state_cache=distance_state_cache,
+                distance_details_cache=distance_details_cache,
             )
             if delta is None or answer_value is None or old_value is None:
                 continue
-            moved_state = apply_movement(
-                distance_scene_objects,
-                attachment_graph,
-                move_source_id,
-                delta,
+            delta_key = _delta_key(delta)
+            moved_map = (
+                distance_state_cache.get(delta_key)
+                if distance_state_cache is not None
+                else None
             )
-            moved_map = {int(obj["id"]): obj for obj in moved_state}
-            new_distance = compute_distance_details(
-                moved_map[obj_a_id],
-                moved_map[obj_b_id],
+            if moved_map is None:
+                moved_map = {
+                    int(obj["id"]): obj
+                    for obj in apply_movement(
+                        distance_scene_objects,
+                        attachment_graph,
+                        move_source_id,
+                        delta,
+                    )
+                }
+                if distance_state_cache is not None:
+                    distance_state_cache[delta_key] = moved_map
+            new_distance = _cached_move_distance_details(
+                moved_map,
+                obj_a_id,
+                obj_b_id,
+                delta,
+                force_aabb=False,
+                cache=distance_details_cache,
             )
             answer_value = str(new_distance.get("distance_bin", answer_value))
         obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
@@ -7541,6 +7794,11 @@ def generate_l2_object_move(
         min_cap=_OCCLUSION_DIRECTED_MIN_CANDIDATES_TRIED_PER_SCENE,
         max_cap=OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE,
     )
+    occlusion_relation_cache: dict[
+        tuple[Any, ...], tuple[str | None, float, float]
+    ] = {}
+    occlusion_blocking_ratio_cache: dict[tuple[Any, ...], float | None] = {}
+    occlusion_probe_cache: dict[tuple[Any, ...], np.ndarray] = {}
 
     logger.info("L2 object_move: precompute done, entering main loop (%d source objects, max_move_sources=%s)",
                 len(movement_scene_objects), max_move_sources)
@@ -7578,6 +7836,7 @@ def generate_l2_object_move(
         if move_source_id not in attachment_referable_ids:
             continue
         _source_loop_count += 1
+        _source_started_at = _time_mod.time()
         if _source_loop_count == 1 or _source_loop_count % 10 == 0:
             logger.info("L2 object_move: source_obj %d (id=%d, label=%s), elapsed=%.1fs",
                         _source_loop_count, move_source_id,
@@ -7674,14 +7933,15 @@ def generate_l2_object_move(
             delta_key = _delta_key(state.delta)
             relation_map = state_relation_cache.get(delta_key)
             if relation_map is None:
-                moved_relation_objects = apply_movement(
-                    relation_scene_objects,
-                    attachment_graph,
-                    move_source_id,
-                    state.delta,
-                )
+                moved_objects_by_id = {
+                    int(obj["id"]): obj for obj in state.moved_objects
+                }
+                moved_relation_objects = [
+                    moved_objects_by_id.get(int(obj["id"]), obj)
+                    for obj in relation_scene_objects
+                ]
                 relation_map = _relation_map_by_pair(
-                    compute_all_relations(moved_relation_objects, camera_pose, None, None)
+                    compute_direction_relations(moved_relation_objects, camera_pose)
                 )
                 state_relation_cache[delta_key] = relation_map
             return relation_map
@@ -7702,6 +7962,43 @@ def generate_l2_object_move(
                 )
             return alternative_states
 
+        distance_valid_move_deltas: list[np.ndarray] | None = None
+        distance_state_cache: dict[
+            tuple[float, ...], dict[int, dict[str, Any]]
+        ] = {}
+        distance_details_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+        if enable_distance and not reuse_move_state_for_distance:
+            valid_delta_by_key: dict[tuple[float, ...], np.ndarray] = {}
+            if selected_state is not None:
+                valid_delta_by_key[_delta_key(selected_state.delta)] = np.asarray(
+                    selected_state.delta,
+                    dtype=np.float64,
+                )
+                relation_object_ids = {int(obj["id"]) for obj in relation_scene_objects}
+                distance_state_cache[_delta_key(selected_state.delta)] = {
+                    int(obj["id"]): obj
+                    for obj in selected_state.moved_objects
+                    if int(obj["id"]) in relation_object_ids
+                }
+            for candidate_delta, _moved_objects, _moved_ids in _iter_valid_object_move_states(
+                movement_scene_objects,
+                attachment_graph,
+                move_source_id,
+                room_bounds=room_bounds,
+                collision_objects=collision_objects,
+                lightweight=True,
+            ):
+                valid_delta_by_key[_delta_key(candidate_delta)] = np.asarray(
+                    candidate_delta,
+                    dtype=np.float64,
+                )
+            distance_valid_move_deltas = [
+                valid_delta_by_key[_delta_key(candidate_delta)]
+                for candidate_delta in MOVEMENT_CANDIDATES
+                if _delta_key(candidate_delta) in valid_delta_by_key
+            ]
+
+        source_question_count = 0
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
             is_priority_query = query_obj_id in priority_query_ids
@@ -7969,6 +8266,9 @@ def generate_l2_object_move(
                             camera_pose=visibility_camera_pose,
                             color_intrinsics=color_intrinsics,
                             instance_mesh_data=instance_mesh_data,
+                            relation_cache=occlusion_relation_cache,
+                            blocking_ratio_cache=occlusion_blocking_ratio_cache,
+                            probe_cache=occlusion_probe_cache,
                         )
                         if relation is None:
                             continue
@@ -8018,6 +8318,9 @@ def generate_l2_object_move(
                             collision_objects=collision_objects,
                             candidates_tried_counter=_occlusion_directed_candidates_tried,
                             max_candidates_tried=_occlusion_directed_max_candidates_tried,
+                            relation_cache=occlusion_relation_cache,
+                            blocking_ratio_cache=occlusion_blocking_ratio_cache,
+                            probe_cache=occlusion_probe_cache,
                         ):
                             query_delta = np.asarray(candidate_state.delta, dtype=np.float64)
                             moved_map = {
@@ -8146,6 +8449,9 @@ def generate_l2_object_move(
                             if reuse_move_state_for_distance and selected_state is not None
                             else None
                         ),
+                        valid_move_deltas=distance_valid_move_deltas,
+                        distance_state_cache=distance_state_cache,
+                        distance_details_cache=distance_details_cache,
                     )
                 )
                 if is_priority_query:
@@ -8160,9 +8466,25 @@ def generate_l2_object_move(
 
             if query_obj_questions:
                 questions_by_object.setdefault(query_obj_id, []).extend(query_obj_questions)
+                source_question_count += len(query_obj_questions)
+
+        logger.info(
+            "L2 object_move: source_obj done (id=%d, label=%s), elapsed=%.1fs queries=%d questions=%d",
+            move_source_id,
+            source_obj.get("label", "?"),
+            _time_mod.time() - _source_started_at,
+            len(query_objects),
+            source_question_count,
+        )
 
         # --- Memory cleanup between source objects ---
-        del state_relation_cache, alternative_states
+        del (
+            state_relation_cache,
+            alternative_states,
+            distance_state_cache,
+            distance_details_cache,
+            distance_valid_move_deltas,
+        )
         _inst_dict = (
             getattr(instance_mesh_data, "__dict__", None)
             if instance_mesh_data is not None
@@ -10484,9 +10806,7 @@ def _prioritize_cross_frame_questions_by_distance(
 
     selected: list[dict[str, Any]] = []
     by_type: dict[str, dict[str, Any]] = {}
-    fallback_type_count = 0
-    fallback_question_count = 0
-    over_limit_dropped_count = 0
+    over_limit_count = 0
     within_limit_count = 0
     for question_type in sorted(questions_by_type):
         candidates = questions_by_type[question_type]
@@ -10495,45 +10815,24 @@ def _prioritize_cross_frame_questions_by_distance(
             for question in candidates
             if float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY]) <= max_distance_m
         ]
+        over_limit = [
+            question
+            for question in candidates
+            if float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY]) > max_distance_m
+        ]
         within_limit_count += len(within_limit)
-        fallback_pair: tuple[int, int] | None = None
-        if within_limit:
-            kept_for_type = within_limit
-            dropped_for_type = len(candidates) - len(kept_for_type)
-        else:
-            fallback_type_count += 1
-            distance_by_pair: dict[tuple[int, int], float] = {}
-            for question in candidates:
-                pair = tuple(
-                    int(value) for value in question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY]
-                )
-                distance_m = float(question[_CROSS_FRAME_ANSWER_PAIR_DISTANCE_M_KEY])
-                distance_by_pair[pair] = min(
-                    distance_m,
-                    distance_by_pair.get(pair, float("inf")),
-                )
-            fallback_pair = min(
-                distance_by_pair,
-                key=lambda pair: (distance_by_pair[pair], pair),
-            )
-            kept_for_type = [
-                question
-                for question in candidates
-                if tuple(
-                    int(value) for value in question[_CROSS_FRAME_ANSWER_PAIR_IDS_KEY]
-                ) == fallback_pair
-            ]
-            fallback_question_count += len(kept_for_type)
-            dropped_for_type = len(candidates) - len(kept_for_type)
-        over_limit_dropped_count += dropped_for_type
+        over_limit_count += len(over_limit)
+        kept_for_type = list(candidates)
         kept_for_type.sort(key=_cross_frame_distance_priority_key)
         selected.extend(kept_for_type)
         by_type[question_type] = {
             "input_question_count": len(candidates),
             "within_limit_question_count": len(within_limit),
+            "over_limit_question_count": len(over_limit),
+            "over_limit_retained_question_count": len(over_limit),
             "kept_question_count": len(kept_for_type),
-            "over_limit_dropped_question_count": dropped_for_type,
-            "fallback_pair": list(fallback_pair) if fallback_pair is not None else None,
+            "over_limit_dropped_question_count": 0,
+            "fallback_pair": None,
         }
 
     diagnostics = {
@@ -10542,9 +10841,11 @@ def _prioritize_cross_frame_questions_by_distance(
         "valid_distance_question_count": sum(len(values) for values in questions_by_type.values()),
         "invalid_distance_question_count": invalid_distance_count,
         "within_limit_question_count": within_limit_count,
-        "fallback_type_count": fallback_type_count,
-        "fallback_question_count": fallback_question_count,
-        "over_limit_dropped_question_count": over_limit_dropped_count,
+        "over_limit_question_count": over_limit_count,
+        "over_limit_retained_question_count": over_limit_count,
+        "fallback_type_count": 0,
+        "fallback_question_count": 0,
+        "over_limit_dropped_question_count": 0,
         "kept_question_count": len(selected),
         "by_type": by_type,
     }
@@ -10719,8 +11020,14 @@ def generate_cross_frame_questions(
     max_occlusion_objects: int | str | None = None,
     max_move_sources: int | None = None,
     attachment_edges: list[dict[str, Any]] | None = None,
+    preserve_distance_metadata: bool = False,
 ) -> list[dict[str, Any]]:
-    """Generate spatial questions after both flash main frames are fixed."""
+    """Generate spatial questions after both flash main frames are fixed.
+
+    When ``preserve_distance_metadata`` is true, keep the answer-pair distance
+    fields for the caller to apply distance prioritization after combining
+    questions from multiple frame pairs.
+    """
     templates = templates or _load_templates()
     requested = (
         _CROSS_FRAME_PUBLIC_TYPES
@@ -10967,6 +11274,8 @@ def generate_cross_frame_questions(
             continue
         seen.add(key)
         deduped.append(question)
+    if preserve_distance_metadata:
+        return deduped
     prioritized, _diagnostics = _prioritize_cross_frame_questions_by_distance(deduped)
     for question in prioritized:
         _clear_cross_frame_distance_metadata(question)
