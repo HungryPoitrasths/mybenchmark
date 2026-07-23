@@ -1099,6 +1099,49 @@ def compute_occlusion_per_object(
 # ---- Batch computation ----
 
 
+def compute_direction_relations(
+    objects: list[dict],
+    camera_pose: CameraPose,
+    *,
+    pair_object_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Compute direction-only relations, optionally limited to affected pairs."""
+    relations: list[dict[str, Any]] = []
+    relevant_ids = (
+        {int(obj_id) for obj_id in pair_object_ids}
+        if pair_object_ids is not None
+        else None
+    )
+
+    for i, obj_a in enumerate(objects):
+        obj_a_id = int(obj_a["id"])
+        for obj_b in objects[i + 1:]:
+            obj_b_id = int(obj_b["id"])
+            if (
+                relevant_ids is not None
+                and obj_a_id not in relevant_ids
+                and obj_b_id not in relevant_ids
+            ):
+                continue
+            direction, ambiguity = compute_pairwise_direction(
+                obj_a,
+                obj_b,
+                camera_pose,
+            )
+            relations.append(
+                {
+                    "obj_a_id": obj_a_id,
+                    "obj_a_label": obj_a["label"],
+                    "obj_b_id": obj_b_id,
+                    "obj_b_label": obj_b["label"],
+                    "direction_b_rel_a": direction,
+                    "ambiguity_score": ambiguity,
+                }
+            )
+
+    return relations
+
+
 def compute_all_relations(
     objects: list[dict],
     camera_pose: CameraPose,
@@ -1117,7 +1160,10 @@ def compute_all_relations(
             if i >= j:
                 continue
             dir_label, ambiguity = compute_pairwise_direction(a, b, camera_pose)
-            horizontal_dir, _ = compute_pairwise_horizontal_direction(a, b, camera_pose)
+            if dir_label in VERTICAL_DIRECTIONS:
+                horizontal_dir, _ = compute_pairwise_horizontal_direction(a, b, camera_pose)
+            else:
+                horizontal_dir = dir_label
             distance = compute_distance_details(a, b)
 
             relations.append(

@@ -4,6 +4,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.qa_generator import (
+    _cached_move_distance_details,
     _default_templates,
     _find_stable_distance_move_for_relation,
     _generate_l2_distance_questions_for_object,
@@ -12,8 +13,13 @@ from src.qa_generator import (
     generate_l2_object_move,
 )
 from src.quality_control import quality_filter
-from src.relation_engine import compute_distance, compute_distance_details
+from src.relation_engine import (
+    DISTANCE_SURFACE_POINTS_KEY,
+    compute_distance,
+    compute_distance_details,
+)
 from src.utils.colmap_loader import CameraPose
+from src.virtual_ops import apply_movement_selective
 
 
 def make_camera_pose() -> CameraPose:
@@ -148,6 +154,154 @@ class DistanceRelationTests(unittest.TestCase):
 
 
 class DistanceMovementSearchTests(unittest.TestCase):
+    def test_aabb_prefilter_keeps_possible_exact_bin_change(self) -> None:
+        obj_a = make_object(1, "box", (0.0, 0.0, 0.0))
+        obj_b = make_object(2, "chair", (2.5, 0.0, 0.0))
+        obj_a[DISTANCE_SURFACE_POINTS_KEY] = np.array(
+            [[0.0, 0.0, 0.0]], dtype=np.float64,
+        )
+        obj_b[DISTANCE_SURFACE_POINTS_KEY] = np.array(
+            [[2.5, 0.0, 0.0]], dtype=np.float64,
+        )
+        relation = {
+            "obj_a_id": 1,
+            "obj_b_id": 2,
+            "distance_bin": "moderate (2.0-3.3m)",
+            "distance_bin_id": "moderate",
+            "distance_m": 2.5,
+            "distance_m_raw": 2.5,
+        }
+        delta = np.array([-1.0, 0.0, 0.0], dtype=np.float64)
+
+        with patch(
+            "src.qa_generator.compute_distance_details",
+            side_effect=[
+                {
+                    "distance_m": 2.4,
+                    "distance_bin": "moderate (2.0-3.3m)",
+                    "distance_bin_id": "moderate",
+                    "near_boundary": False,
+                    "distance_definition": "aabb_closest_point_approx",
+                },
+                {
+                    "distance_m": 3.5,
+                    "distance_bin": "far (>3.3m)",
+                    "distance_bin_id": "far",
+                    "near_boundary": False,
+                    "distance_definition": "surface_sample_min_euclidean",
+                },
+            ],
+        ) as distance_mock:
+            selected, _old_label, new_label, relation_unchanged = (
+                _find_stable_distance_move_for_relation(
+                    [obj_a, obj_b],
+                    attachment_graph={},
+                    target_id=1,
+                    relation=relation,
+                    valid_move_deltas=[delta],
+                    distance_details_cache={},
+                )
+            )
+
+        np.testing.assert_allclose(selected, delta)
+        self.assertEqual(new_label, "far (>3.3m)")
+        self.assertFalse(relation_unchanged)
+        self.assertEqual(distance_mock.call_count, 2)
+
+    def test_move_distance_cache_separates_aabb_and_exact_modes(self) -> None:
+        obj_a = make_object(1, "box", (0.0, 0.0, 0.0))
+        obj_b = make_object(2, "chair", (2.0, 0.0, 0.0))
+        moved_map = {1: obj_a, 2: obj_b}
+        delta = np.array([0.5, 0.0, 0.0], dtype=np.float64)
+        cache = {}
+
+        with patch(
+            "src.qa_generator.compute_distance_details",
+            side_effect=lambda left, right, *, force_aabb=False: {
+                "distance_m": 1.8 if force_aabb else 1.9,
+                "distance_bin": "close (1.0-2.0m)",
+                "distance_bin_id": "close",
+                "near_boundary": False,
+                "distance_definition": (
+                    "aabb_closest_point_approx"
+                    if force_aabb
+                    else "surface_sample_min_euclidean"
+                ),
+            },
+        ) as distance_mock:
+            aabb_first = _cached_move_distance_details(
+                moved_map, 1, 2, delta, force_aabb=True, cache=cache,
+            )
+            aabb_second = _cached_move_distance_details(
+                moved_map, 2, 1, delta, force_aabb=True, cache=cache,
+            )
+            exact_first = _cached_move_distance_details(
+                moved_map, 1, 2, delta, force_aabb=False, cache=cache,
+            )
+            exact_second = _cached_move_distance_details(
+                moved_map, 2, 1, delta, force_aabb=False, cache=cache,
+            )
+
+        self.assertIs(aabb_first, aabb_second)
+        self.assertIs(exact_first, exact_second)
+        self.assertEqual(aabb_first["distance_m"], 1.8)
+        self.assertEqual(exact_first["distance_m"], 1.9)
+        self.assertEqual(distance_mock.call_count, 2)
+
+    def test_distance_generation_reuses_moved_state_across_relations(self) -> None:
+        source = make_object(1, "table", (0.0, 0.0, 0.0))
+        query = make_object(2, "book", (3.5, 0.0, 0.0))
+        reference = make_object(4, "chair", (3.5, 1.0, 0.0))
+        relations = [
+            {
+                "obj_a_id": 1,
+                "obj_b_id": 2,
+                "distance_bin": "moderate (2.0-3.3m)",
+                "distance_bin_id": "moderate",
+                "distance_m": 2.5,
+            },
+            {
+                "obj_a_id": 2,
+                "obj_b_id": 4,
+                "distance_bin": "moderate (2.0-3.3m)",
+                "distance_bin_id": "moderate",
+                "distance_m": 2.5,
+            },
+        ]
+        moved_distance = {
+            "distance_m": 1.4,
+            "distance_bin": "close (1.0-2.0m)",
+            "distance_bin_id": "close",
+            "near_boundary": False,
+            "distance_definition": "aabb_closest_point_approx",
+        }
+
+        with (
+            patch(
+                "src.qa_generator.apply_movement_selective",
+                wraps=apply_movement_selective,
+            ) as movement_mock,
+            patch("src.qa_generator.compute_distance_details", return_value=moved_distance),
+        ):
+            questions = _generate_l2_distance_questions_for_object(
+                query_obj=query,
+                move_source=source,
+                move_source_id=1,
+                attachment_remapped=False,
+                relations=relations,
+                movement_scene_objects=[source, query, reference],
+                relation_scene_objects=[source, query, reference],
+                attachment_graph={1: [4]},
+                camera_pose=make_camera_pose(),
+                templates=_default_templates(),
+                obj_map={1: source, 2: query, 4: reference},
+                valid_move_deltas=[np.array([3.0, 0.0, 0.0], dtype=np.float64)],
+                distance_state_cache={},
+            )
+
+        self.assertEqual(len(questions), 2)
+        self.assertEqual(movement_mock.call_count, 1)
+
     def test_iter_distance_move_deltas_uses_descending_shared_move_order(self) -> None:
         deltas = list(_iter_distance_move_deltas())
 

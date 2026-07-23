@@ -7157,6 +7157,66 @@ def _cached_move_distance_details(
     return details
 
 
+def _coarse_surface_distance_upper_bound(
+    obj_a: dict[str, Any],
+    obj_b: dict[str, Any],
+    *,
+    max_samples_per_object: int = 8,
+) -> float | None:
+    points_a = np.asarray(obj_a.get(DISTANCE_SURFACE_POINTS_KEY, []), dtype=np.float64)
+    points_b = np.asarray(obj_b.get(DISTANCE_SURFACE_POINTS_KEY, []), dtype=np.float64)
+    if (
+        points_a.ndim != 2
+        or points_a.shape[1:] != (3,)
+        or len(points_a) == 0
+        or points_b.ndim != 2
+        or points_b.shape[1:] != (3,)
+        or len(points_b) == 0
+    ):
+        return None
+
+    def _sample(points: np.ndarray) -> np.ndarray:
+        count = min(len(points), max(1, int(max_samples_per_object)))
+        indices = np.linspace(0, len(points) - 1, num=count, dtype=np.int64)
+        return points[indices]
+
+    sampled_a = _sample(points_a)
+    sampled_b = _sample(points_b)
+    diffs = sampled_a[:, None, :] - sampled_b[None, :, :]
+    squared_distances = np.einsum("ijk,ijk->ij", diffs, diffs, dtype=np.float64)
+    if squared_distances.size == 0 or not np.all(np.isfinite(squared_distances)):
+        return None
+    return float(np.sqrt(max(float(np.min(squared_distances)), 0.0)))
+
+
+def _aabb_bounds_prove_distance_bin_unchanged(
+    moved_map: dict[int, dict[str, Any]],
+    obj_a_id: int,
+    obj_b_id: int,
+    old_bin_idx: int,
+    aabb_details: dict[str, Any],
+) -> bool:
+    """Conservatively reject candidates whose exact distance cannot leave a bin."""
+    try:
+        lower_bound = float(aabb_details["distance_m"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not np.isfinite(lower_bound):
+        return False
+
+    obj_a = moved_map[int(obj_a_id)]
+    obj_b = moved_map[int(obj_b_id)]
+    upper_bound = _coarse_surface_distance_upper_bound(obj_a, obj_b)
+    if upper_bound is None:
+        # The exact implementation falls back to AABB when either object has
+        # no runtime surface samples.
+        upper_bound = lower_bound
+
+    lower_edge = 0.0 if old_bin_idx == 0 else float(DISTANCE_BINS[old_bin_idx - 1][0])
+    upper_edge = float(DISTANCE_BINS[old_bin_idx][0])
+    return lower_bound >= lower_edge and upper_bound < upper_edge
+
+
 def _find_stable_distance_move_for_relation(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -7259,7 +7319,13 @@ def _find_stable_distance_move_for_relation(
             )
             if approx_idx is None:
                 continue
-            if approx_idx == old_idx and not bool(approx_details.get("near_boundary", False)):
+            if approx_idx == old_idx and _aabb_bounds_prove_distance_bin_unchanged(
+                new_map,
+                obj_a_id,
+                obj_b_id,
+                old_idx,
+                approx_details,
+            ):
                 continue
 
             exact_details = _cached_move_distance_details(

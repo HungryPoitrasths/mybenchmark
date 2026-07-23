@@ -1167,8 +1167,10 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             side_effect=helper_side_effect,
         ) as mocked_helper, patch(
             "src.qa_generator.compute_all_relations",
+            return_value=base_relations,
+        ), patch(
+            "src.qa_generator.compute_direction_relations",
             side_effect=[
-                base_relations,
                 moved_relations_box,
                 moved_relations_cup,
             ],
@@ -1254,8 +1256,10 @@ class L2ObjectMoveOcclusionTests(unittest.TestCase):
             side_effect=fallback_states_for_source,
         ), patch(
             "src.qa_generator.compute_all_relations",
+            return_value=base_relations,
+        ), patch(
+            "src.qa_generator.compute_direction_relations",
             side_effect=[
-                base_relations,
                 fallback_relations,
                 [],
             ],
@@ -1524,6 +1528,70 @@ class OcclusionDirectedSearchTests(unittest.TestCase):
             )
 
         self.assertFalse(blocked)
+
+    def test_occluder_blocking_ratio_cache_reuses_batch_ray_result(self) -> None:
+        query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
+        obj_ref = make_object(2, "shelf", (0.0, 0.0, 1.0))
+        ratio_cache = {}
+        probe_cache = {}
+
+        with (
+            patch("src.qa_generator._get_instance_intersector", return_value=object()),
+            patch(
+                "src.qa_generator._instance_surface_samples",
+                return_value=np.array([[0.0, 0.0, 2.0]], dtype=np.float64),
+            ),
+            patch(
+                "src.qa_generator._batch_first_hit_distances_compat",
+                return_value=np.array([1.0], dtype=np.float64),
+            ) as batch_mock,
+            patch("src.qa_generator._projection_rects_overlap", return_value=True),
+        ):
+            first = _occluder_blocks_translated_query_object(
+                obj_ref=obj_ref,
+                query_obj=query_obj,
+                target_delta=np.zeros(3, dtype=np.float64),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=object(),
+                blocking_ratio_cache=ratio_cache,
+                probe_cache=probe_cache,
+            )
+            second = _occluder_blocks_translated_query_object(
+                obj_ref=obj_ref,
+                query_obj=query_obj,
+                target_delta=np.zeros(3, dtype=np.float64),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=object(),
+                blocking_ratio_cache=ratio_cache,
+                probe_cache=probe_cache,
+            )
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(batch_mock.call_count, 1)
+
+    def test_occluder_depth_prefilter_skips_ray_when_occluder_is_behind(self) -> None:
+        query_obj = make_object(1, "cushion", (0.0, 0.0, 1.0))
+        obj_ref = make_object(2, "shelf", (0.0, 0.0, 3.0))
+
+        with (
+            patch("src.qa_generator._get_instance_intersector", return_value=object()),
+            patch("src.qa_generator._batch_first_hit_distances_compat") as batch_mock,
+            patch("src.qa_generator._projection_rects_overlap", return_value=True),
+        ):
+            blocked = _occluder_blocks_translated_query_object(
+                obj_ref=obj_ref,
+                query_obj=query_obj,
+                target_delta=np.zeros(3, dtype=np.float64),
+                camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                instance_mesh_data=object(),
+            )
+
+        self.assertFalse(blocked)
+        batch_mock.assert_not_called()
 
     def test_find_occlusion_directed_delta_for_occluder_picks_smallest_passing_magnitude(self) -> None:
         query_obj = make_object(1, "cushion", (0.0, 0.0, 2.0))
