@@ -27,7 +27,7 @@ from .relation_engine import (
     DISTANCE_SURFACE_POINTS_KEY,
     DISTANCE_SURFACE_TRIANGLE_VERTICES_KEY,
     HORIZONTAL_DIRECTIONS,
-    compute_all_relations,
+    compute_direction_relations,
     find_changed_relations,
 )
 from .support_graph import get_attachment_chain
@@ -236,6 +236,25 @@ def apply_movement(
     return updated
 
 
+def apply_movement_selective(
+    objects: list[dict],
+    attachment_graph: dict[int, list[int]],
+    target_obj_id: int,
+    delta_position: np.ndarray,
+) -> list[dict]:
+    """Move a chain while reusing read-only static object dictionaries."""
+    moved_ids = get_moved_object_ids(target_obj_id, attachment_graph)
+    updated: list[dict] = []
+    for obj in objects:
+        if int(obj["id"]) not in moved_ids:
+            updated.append(obj)
+            continue
+        moved_obj = copy.deepcopy(obj)
+        _translate_object_in_place(moved_obj, delta_position)
+        updated.append(moved_obj)
+    return updated
+
+
 def is_within_room(
     objects: list[dict],
     room_bbox_min: np.ndarray,
@@ -330,6 +349,51 @@ def _max_horizontal_direction_change_steps(changed_relations: list[dict]) -> int
     )
 
 
+def _apply_movement_for_direction_search(
+    objects: list[dict],
+    moved_ids: set[int],
+    delta_position: np.ndarray,
+) -> list[dict]:
+    """Translate only direction-relevant geometry without copying mesh samples."""
+    updated: list[dict] = []
+    delta = np.asarray(delta_position, dtype=float)
+    for obj in objects:
+        if int(obj["id"]) not in moved_ids:
+            updated.append(obj)
+            continue
+
+        moved_obj = obj.copy()
+        support_geom = obj.get("support_geom")
+        if isinstance(support_geom, dict):
+            moved_obj["support_geom"] = copy.deepcopy(support_geom)
+        moved_obj["center"] = (np.asarray(obj["center"], dtype=float) + delta).tolist()
+        moved_obj["bbox_min"] = (np.asarray(obj["bbox_min"], dtype=float) + delta).tolist()
+        moved_obj["bbox_max"] = (np.asarray(obj["bbox_max"], dtype=float) + delta).tolist()
+        _translate_support_geom_in_place(moved_obj, delta)
+        updated.append(moved_obj)
+    return updated
+
+
+def apply_movement_for_physics_check(
+    objects: list[dict],
+    moved_ids: set[int],
+    delta_position: np.ndarray,
+) -> list[dict]:
+    """Translate only bbox fields needed for room and collision validation."""
+    delta = np.asarray(delta_position, dtype=float)
+    updated: list[dict] = []
+    for obj in objects:
+        if int(obj["id"]) not in moved_ids:
+            updated.append(obj)
+            continue
+        moved_obj = obj.copy()
+        moved_obj["center"] = (np.asarray(obj["center"], dtype=float) + delta).tolist()
+        moved_obj["bbox_min"] = (np.asarray(obj["bbox_min"], dtype=float) + delta).tolist()
+        moved_obj["bbox_max"] = (np.asarray(obj["bbox_max"], dtype=float) + delta).tolist()
+        updated.append(moved_obj)
+    return updated
+
+
 def find_meaningful_movement(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -344,13 +408,17 @@ def find_meaningful_movement(
     change, then the first legal delta with a 45° horizontal direction change.
     Returns (None, []) if no legal delta meets either direction threshold.
     """
-    original_relations = compute_all_relations(objects, camera_pose, None, None)
     room_min, room_max = compute_room_bounds(objects, room_bounds=room_bounds)
     moved_ids = get_moved_object_ids(target_id, attachment_graph)
+    original_relations = compute_direction_relations(
+        objects,
+        camera_pose,
+        pair_object_ids=moved_ids,
+    )
     first_45_degree_change: tuple[np.ndarray, list[dict]] | None = None
 
     for delta in MOVEMENT_CANDIDATES:
-        new_objects = apply_movement(objects, attachment_graph, target_id, delta)
+        new_objects = _apply_movement_for_direction_search(objects, moved_ids, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue
         if has_terminal_bbox_collision(
@@ -360,7 +428,11 @@ def find_meaningful_movement(
             collision_objects=collision_objects,
         ):
             continue
-        new_relations = compute_all_relations(new_objects, camera_pose, None, None)
+        new_relations = compute_direction_relations(
+            new_objects,
+            camera_pose,
+            pair_object_ids=moved_ids,
+        )
         changed = find_changed_relations(original_relations, new_relations)
         if changed:
             direction_steps = _max_horizontal_direction_change_steps(changed)

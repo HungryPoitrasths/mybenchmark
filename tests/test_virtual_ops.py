@@ -306,12 +306,12 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         with (
             patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front")],
                     [make_direction_relation("right")],
                 ],
-            ),
+            ) as direction_relations_mock,
         ):
             delta, changed = find_meaningful_movement(
                 objects,
@@ -323,6 +323,48 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
 
         np.testing.assert_allclose(delta, candidates[0])
         self.assertEqual(changed[0]["changes"]["direction_b_rel_a"]["new"], "right")
+        self.assertEqual(direction_relations_mock.call_count, 2)
+        self.assertTrue(
+            all(
+                call.kwargs["pair_object_ids"] == {1}
+                for call in direction_relations_mock.call_args_list
+            )
+        )
+
+    def test_find_meaningful_movement_does_not_deepcopy_scene_geometry(self) -> None:
+        objects = [
+            make_object(1, (0.0, 0.0, 0.0), (-0.1, -0.1, -0.1), (0.1, 0.1, 0.1), label="mover"),
+            make_object(2, (5.0, 5.0, 0.0), (4.9, 4.9, -0.1), (5.1, 5.1, 0.1), label="ref"),
+        ]
+        objects[0][DISTANCE_SURFACE_POINTS_KEY] = np.ones((100, 3), dtype=np.float64)
+
+        with (
+            patch(
+                "src.virtual_ops.MOVEMENT_CANDIDATES",
+                [np.array([3.0, 0.0, 0.0], dtype=np.float64)],
+            ),
+            patch(
+                "src.virtual_ops.compute_direction_relations",
+                side_effect=[
+                    [make_direction_relation("front")],
+                    [make_direction_relation("right")],
+                ],
+            ),
+            patch(
+                "src.virtual_ops.copy.deepcopy",
+                side_effect=AssertionError("direction search must not deep-copy scene geometry"),
+            ),
+        ):
+            delta, changed = find_meaningful_movement(
+                objects,
+                attachment_graph={},
+                target_id=1,
+                camera_pose=make_camera_pose(),
+                room_bounds={"bbox_min": [-10.0, -10.0, -10.0], "bbox_max": [10.0, 10.0, 10.0]},
+            )
+
+        np.testing.assert_allclose(delta, [3.0, 0.0, 0.0])
+        self.assertTrue(changed)
 
     def test_find_meaningful_movement_prefers_90_degree_over_larger_45_degree_change(self) -> None:
         objects = [
@@ -337,7 +379,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         with (
             patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front")],
                     [make_direction_relation("front-right")],
@@ -369,7 +411,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         with (
             patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front")],
                     [make_direction_relation("front-right")],
@@ -401,7 +443,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         with (
             patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front", distance_bin="near", distance_bin_id="near")],
                     [make_direction_relation("front", distance_bin="moderate", distance_bin_id="moderate")],
@@ -439,7 +481,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
                 ],
             ),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front")],
                     [make_direction_relation("right")],
@@ -476,7 +518,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         with (
             patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front")],
                     [make_direction_relation("front-right")],
@@ -495,7 +537,7 @@ class VirtualOpsIntegrationTests(unittest.TestCase):
         with (
             patch("src.virtual_ops.MOVEMENT_CANDIDATES", candidates),
             patch(
-                "src.virtual_ops.compute_all_relations",
+                "src.virtual_ops.compute_direction_relations",
                 side_effect=[
                     [make_direction_relation("front")],
                     [make_direction_relation("front-left")],
