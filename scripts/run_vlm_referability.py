@@ -538,6 +538,7 @@ def _find_completed_scenes_with_failed_review_attempts(
     scene_status_doc: dict[str, Any],
     *,
     scene_status_path: Path,
+    eligible_scene_ids: set[str] | None = None,
 ) -> list[str]:
     """Scan every already-completed scene's recorded batch file (which may be from a
     prior process invocation, possibly predating this check) for a frame whose VLM
@@ -548,6 +549,8 @@ def _find_completed_scenes_with_failed_review_attempts(
     loaded_batch_docs: dict[str, dict[str, Any]] = {}
     flagged_scene_ids: list[str] = []
     for scene_id, record in completed_scenes.items():
+        if eligible_scene_ids is not None and str(scene_id) not in eligible_scene_ids:
+            continue
         if not isinstance(record, dict):
             continue
         batch_file = str(record.get("batch_file", "")).strip()
@@ -575,6 +578,7 @@ def _find_completed_scenes_needing_more_frames(
     *,
     scene_status_path: Path,
     target_max_frames: int,
+    eligible_scene_ids: set[str] | None = None,
 ) -> list[str]:
     """Scan every already-completed scene's recorded batch file for how many frames were
     actually cached last time. If that count is below this run's --max_frames, the scene is
@@ -587,6 +591,8 @@ def _find_completed_scenes_needing_more_frames(
     loaded_batch_docs: dict[str, dict[str, Any]] = {}
     flagged_scene_ids: list[str] = []
     for scene_id, record in completed_scenes.items():
+        if eligible_scene_ids is not None and str(scene_id) not in eligible_scene_ids:
+            continue
         if not isinstance(record, dict):
             continue
         batch_file = str(record.get("batch_file", "")).strip()
@@ -673,6 +679,32 @@ def _frame_cache_sidecar_path(output_path: Path, scene_id: str) -> Path:
     return _frame_cache_artifact_dir(output_path) / f"{str(scene_id).strip()}.json"
 
 
+def _frame_cache_sidecar_candidate_paths(output_path: Path, scene_id: str) -> list[Path]:
+    current_path = _frame_cache_sidecar_path(output_path, scene_id)
+    output_dir = output_path.parent
+    if re.fullmatch(r"\d+-\d+", output_dir.name) is None:
+        return [current_path]
+
+    sibling_paths: list[Path] = []
+    try:
+        sibling_dirs = sorted(
+            path
+            for path in output_dir.parent.iterdir()
+            if path.is_dir()
+            and path != output_dir
+            and re.fullmatch(r"\d+-\d+", path.name) is not None
+        )
+    except OSError:
+        sibling_dirs = []
+    for sibling_dir in sibling_dirs:
+        sibling_path = sibling_dir / FRAME_CACHE_SIDECAR_DIR_NAME / f"{str(scene_id).strip()}.json"
+        if sibling_path.exists():
+            sibling_paths.append(sibling_path)
+    # Merge older shard locations first, then let the current shard supply the
+    # newest frame metadata and valid VLM entries.
+    return [*sibling_paths, current_path]
+
+
 def _normalize_frame_sidecar_record(record: Any) -> dict[str, Any] | None:
     if not isinstance(record, dict):
         return None
@@ -708,51 +740,79 @@ def _load_frame_sidecar_scene_cache(
     model_name: str,
     referability_backend: str,
 ) -> dict[str, dict[str, Any]]:
-    sidecar_path = _frame_cache_sidecar_path(output_path, scene_id)
-    if not sidecar_path.exists():
-        return {}
-    try:
-        sidecar_doc = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("Ignoring unreadable frame sidecar %s: %s", sidecar_path, exc)
-        return {}
-    if not isinstance(sidecar_doc, dict):
-        logger.warning("Ignoring malformed frame sidecar %s: expected object", sidecar_path)
-        return {}
     expected_meta = {
         "scene_id": str(scene_id),
         "version": REFERABILITY_CACHE_VERSION,
         "alias_config_version": ALIAS_CONFIG_VERSION,
         "referability_backend": str(referability_backend),
     }
-    for key, expected_value in expected_meta.items():
-        if sidecar_doc.get(key) != expected_value:
-            return {}
-    sidecar_model_name = sidecar_doc.get("vlm_model")
-    if sidecar_model_name != str(model_name):
-        logger.info(
-            "Reusing frame sidecar %s across VLM model change: cached=%r current=%r",
-            sidecar_path,
-            sidecar_model_name,
-            str(model_name),
-        )
-    raw_frames = sidecar_doc.get("frames")
-    if not isinstance(raw_frames, dict):
-        logger.warning("Ignoring malformed frame sidecar %s: missing frames mapping", sidecar_path)
-        return {}
-
-    normalized_frames: dict[str, dict[str, Any]] = {}
-    for image_name, record in raw_frames.items():
-        normalized_record = _normalize_frame_sidecar_record(record)
-        if normalized_record is None:
-            logger.warning(
-                "Ignoring malformed frame sidecar %s: invalid record for %s",
+    current_path = _frame_cache_sidecar_path(output_path, scene_id)
+    merged_frames: dict[str, dict[str, Any]] = {}
+    loaded_paths: list[Path] = []
+    for sidecar_path in _frame_cache_sidecar_candidate_paths(output_path, scene_id):
+        if not sidecar_path.exists():
+            continue
+        try:
+            sidecar_doc = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Ignoring unreadable frame sidecar %s: %s", sidecar_path, exc)
+            continue
+        if not isinstance(sidecar_doc, dict):
+            logger.warning("Ignoring malformed frame sidecar %s: expected object", sidecar_path)
+            continue
+        if any(sidecar_doc.get(key) != expected_value for key, expected_value in expected_meta.items()):
+            continue
+        sidecar_model_name = sidecar_doc.get("vlm_model")
+        if sidecar_model_name != str(model_name):
+            logger.info(
+                "Reusing frame sidecar %s across VLM model change: cached=%r current=%r",
                 sidecar_path,
-                image_name,
+                sidecar_model_name,
+                str(model_name),
             )
-            return {}
-        normalized_frames[str(image_name)] = normalized_record
-    return normalized_frames
+        raw_frames = sidecar_doc.get("frames")
+        if not isinstance(raw_frames, dict):
+            logger.warning("Ignoring malformed frame sidecar %s: missing frames mapping", sidecar_path)
+            continue
+
+        normalized_frames: dict[str, dict[str, Any]] = {}
+        malformed = False
+        for image_name, record in raw_frames.items():
+            normalized_record = _normalize_frame_sidecar_record(record)
+            if normalized_record is None:
+                logger.warning(
+                    "Ignoring malformed frame sidecar %s: invalid record for %s",
+                    sidecar_path,
+                    image_name,
+                )
+                malformed = True
+                break
+            normalized_frames[str(image_name)] = normalized_record
+        if malformed:
+            continue
+
+        for image_name, normalized_record in normalized_frames.items():
+            previous_record = merged_frames.get(image_name)
+            if (
+                isinstance(previous_record, dict)
+                and normalized_record.get("referability_entry") is None
+                and isinstance(previous_record.get("referability_entry"), dict)
+            ):
+                normalized_record = dict(normalized_record)
+                normalized_record["referability_entry"] = dict(previous_record["referability_entry"])
+            merged_frames[image_name] = normalized_record
+        loaded_paths.append(sidecar_path)
+
+    sibling_paths = [path for path in loaded_paths if path != current_path]
+    if sibling_paths:
+        logger.info(
+            "Merged %d frame sidecar(s) from sibling shard directories for scene %s (%d cached frames): %s",
+            len(sibling_paths),
+            scene_id,
+            len(merged_frames),
+            ", ".join(str(path) for path in sibling_paths),
+        )
+    return merged_frames
 
 
 def _build_frame_sidecar_scene_doc(
@@ -9286,6 +9346,16 @@ def main():
             len(scene_entries),
             selected_split,
         )
+    if scene_number_range is not None:
+        scoped_scene_entries = _select_scene_entries_by_closed_range(
+            scene_entries,
+            start=scene_number_range[0],
+            end=scene_number_range[1],
+        )
+        scoped_scene_ids = {scene_dir.name for _, scene_dir in scoped_scene_entries}
+    else:
+        scoped_scene_entries = list(scene_entries)
+        scoped_scene_ids = None
     output_arg = Path(args.output)
     batch_output_path = _build_batch_output_path(output_arg)
     scene_status_path = _scene_status_output_path(output_arg)
@@ -9334,12 +9404,15 @@ def main():
         if isinstance(completed_scene_records, dict)
         else set()
     )
+    if scoped_scene_ids is not None:
+        completed_scene_ids &= scoped_scene_ids
     if args.force:
         completed_scene_ids = set()
     if args.retry_failed_reviews:
         stale_failed_scene_ids = _find_completed_scenes_with_failed_review_attempts(
             scene_status_doc,
             scene_status_path=scene_status_path,
+            eligible_scene_ids=scoped_scene_ids,
         )
         if stale_failed_scene_ids:
             completed_scene_ids -= set(stale_failed_scene_ids)
@@ -9358,6 +9431,7 @@ def main():
             scene_status_doc,
             scene_status_path=scene_status_path,
             target_max_frames=int(args.max_frames),
+            eligible_scene_ids=scoped_scene_ids,
         )
         if stale_frame_count_scene_ids:
             completed_scene_ids -= set(stale_frame_count_scene_ids)
@@ -10504,11 +10578,7 @@ def main():
 
     if scene_number_range is not None:
         shard_start, shard_end = scene_number_range
-        selected_scene_entries = _select_scene_entries_by_closed_range(
-            scene_entries,
-            start=shard_start,
-            end=shard_end,
-        )
+        selected_scene_entries = scoped_scene_entries
         logger.info(
             "Fixed scene shard for split=%s interval=%d-%d resolved to %d scene(s)",
             selected_split,

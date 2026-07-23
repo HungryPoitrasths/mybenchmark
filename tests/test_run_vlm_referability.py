@@ -606,6 +606,38 @@ class RunVlmReferabilityTests(unittest.TestCase):
             ["scene0001_00", "scene0003_00"],
         )
 
+    def test_find_completed_scenes_needing_more_frames_respects_eligible_scene_ids(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"extend_frames_scope_{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, root, True)
+        batch_path = root / "batch.json"
+        batch_path.write_text(
+            json.dumps(
+                {
+                    "scene_status": {
+                        "scene0001_00": {"final_cacheable_frame_count": 5},
+                        "scene0002_00": {"final_cacheable_frame_count": 5},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        scene_status_doc = {
+            "completed_scenes": {
+                "scene0001_00": {"batch_file": batch_path.name},
+                "scene0002_00": {"batch_file": batch_path.name},
+            }
+        }
+
+        flagged = referability_module._find_completed_scenes_needing_more_frames(
+            scene_status_doc,
+            scene_status_path=root / "scene_status.json",
+            target_max_frames=30,
+            eligible_scene_ids={"scene0002_00"},
+        )
+
+        self.assertEqual(flagged, ["scene0002_00"])
+
     def test_default_review_output_prefix_uses_trailing_flash_suffix(self) -> None:
         output_path = Path("output/pilot_referability_cache_qwen3_vl_flash12.json")
 
@@ -6389,6 +6421,102 @@ class RunVlmReferabilityTests(unittest.TestCase):
                 referability_backend=referability_module.REFERABILITY_BACKEND,
             )
             self.assertEqual(loaded, {})
+
+    def test_load_frame_sidecar_scene_cache_merges_sibling_shards(self) -> None:
+        root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_siblings_{uuid.uuid4().hex}"
+        output_path = root / "output" / "40-49" / "referability_cache.json"
+        sibling_output_path = root / "output" / "10-19" / "referability_cache.json"
+        scene_id = "scene0001_00"
+        self.addCleanup(shutil.rmtree, root, True)
+
+        sibling_entry = make_debug_cache_entry()
+        sibling_entry["selector_visible_object_ids"] = [11]
+        sibling_records = {
+            "000001.jpg": {
+                "frame_info": {
+                    "clear": True,
+                    "clarity_score": 80,
+                    "frame_usable": True,
+                    "reason": "sibling",
+                },
+                "frame_selection_score": 100080,
+                "referability_entry": sibling_entry,
+            }
+        }
+        sibling_sidecar_path = referability_module._frame_cache_sidecar_path(
+            sibling_output_path,
+            scene_id,
+        )
+        sibling_sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sibling_sidecar_path.write_text(
+            json.dumps(
+                referability_module._build_frame_sidecar_scene_doc(
+                    scene_id=scene_id,
+                    model_name="fake-vlm",
+                    referability_backend=referability_module.REFERABILITY_BACKEND,
+                    frame_records=sibling_records,
+                ),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        current_entry = make_debug_cache_entry()
+        current_entry["selector_visible_object_ids"] = [22]
+        current_records = {
+            "000001.jpg": {
+                "frame_info": {
+                    "clear": True,
+                    "clarity_score": 90,
+                    "frame_usable": True,
+                    "reason": "current-partial",
+                },
+                "frame_selection_score": 100090,
+                "referability_entry": None,
+            },
+            "000002.jpg": {
+                "frame_info": {
+                    "clear": True,
+                    "clarity_score": 95,
+                    "frame_usable": True,
+                    "reason": "current",
+                },
+                "frame_selection_score": 100095,
+                "referability_entry": current_entry,
+            },
+        }
+        current_sidecar_path = referability_module._frame_cache_sidecar_path(output_path, scene_id)
+        current_sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        current_sidecar_path.write_text(
+            json.dumps(
+                referability_module._build_frame_sidecar_scene_doc(
+                    scene_id=scene_id,
+                    model_name="fake-vlm",
+                    referability_backend=referability_module.REFERABILITY_BACKEND,
+                    frame_records=current_records,
+                ),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = referability_module._load_frame_sidecar_scene_cache(
+            output_path=output_path,
+            scene_id=scene_id,
+            model_name="fake-vlm",
+            referability_backend=referability_module.REFERABILITY_BACKEND,
+        )
+
+        self.assertEqual(sorted(loaded), ["000001.jpg", "000002.jpg"])
+        self.assertEqual(loaded["000001.jpg"]["frame_info"]["reason"], "current-partial")
+        self.assertEqual(
+            loaded["000001.jpg"]["referability_entry"]["selector_visible_object_ids"],
+            [11],
+        )
+        self.assertEqual(
+            loaded["000002.jpg"]["referability_entry"]["selector_visible_object_ids"],
+            [22],
+        )
 
     def test_main_reuses_frame_sidecar_across_reset_runs_and_model_changes(self) -> None:
         root = Path(__file__).resolve().parent / "_tmp" / f"frame_sidecar_main_{uuid.uuid4().hex}"
