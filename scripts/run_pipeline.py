@@ -67,6 +67,10 @@ from src.qa_generator import (
     generate_all_questions,
     generate_cross_frame_questions,
     ReasoningFrameContext,
+    OcclusionDirectedSearchBudget,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+    L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
     recompute_coordinate_rotation_agent_answer,
     MAX_OCCLUSION_OBJECTS_AUTO,
 )
@@ -710,6 +714,124 @@ def _retain_best_cross_frame_views(
             question.pop("_cross_frame_pair_score", None)
             kept.append(question)
     return kept
+
+
+def _is_object_move_occlusion_question(question: dict) -> bool:
+    return str(question.get("type", "")).strip() == "object_move_occlusion"
+
+
+def _is_positive_object_move_occlusion(question: dict) -> bool:
+    return (
+        _is_object_move_occlusion_question(question)
+        and str(question.get("new_pairwise_occlusion_relation", "")).strip()
+        in {
+            L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+            L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+        }
+    )
+
+
+def _has_strict_object_move_occlusion_frame_roles(question: dict) -> bool:
+    if not _is_object_move_occlusion_question(question):
+        return True
+    groups = question.get("object_frame_groups")
+    if not isinstance(groups, dict):
+        return False
+    try:
+        frame_1_ids = [int(value) for value in groups.get("frame_1", [])]
+        frame_2_ids = [int(value) for value in groups.get("frame_2", [])]
+        expected_frame_1 = [
+            int(question["moved_obj_id"]),
+            int(question["query_obj_id"]),
+        ]
+        expected_frame_2 = [int(question["obj_ref_id"])]
+    except (KeyError, TypeError, ValueError):
+        return False
+    relation = str(question.get("new_pairwise_occlusion_relation", "")).strip()
+    return (
+        frame_1_ids == expected_frame_1
+        and frame_2_ids == expected_frame_2
+        and set(frame_1_ids).isdisjoint(frame_2_ids)
+        and relation in {
+            L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+            L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+            L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
+        }
+        and bool(str(question.get("image_name", "")).strip())
+        and bool(str(question.get("reasoning_frame_2", "")).strip())
+        and str(question.get("image_name")) != str(question.get("reasoning_frame_2"))
+    )
+
+
+def _prioritize_object_move_occlusion_positives(questions: list[dict]) -> list[dict]:
+    positives = [question for question in questions if _is_positive_object_move_occlusion(question)]
+    other = [
+        question for question in questions
+        if not _is_object_move_occlusion_question(question)
+    ]
+    negatives = [
+        question for question in questions
+        if _is_object_move_occlusion_question(question)
+        and not _is_positive_object_move_occlusion(question)
+    ]
+    return positives + other + negatives
+
+
+def _balance_scene_object_move_occlusion_negatives(
+    questions: list[dict],
+) -> tuple[list[dict], dict[str, int]]:
+    valid_questions = [
+        question for question in questions
+        if _has_strict_object_move_occlusion_frame_roles(question)
+    ]
+    positives = [
+        question for question in valid_questions
+        if _is_positive_object_move_occlusion(question)
+    ]
+    negatives = [
+        question for question in valid_questions
+        if _is_object_move_occlusion_question(question)
+        and str(question.get("new_pairwise_occlusion_relation", "")).strip()
+        == L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER
+    ]
+    negative_limit = len(positives) if positives else 3
+
+    def _negative_key(question: dict) -> tuple[float, float, str, str, int, int]:
+        blocking = max(
+            float(question.get("new_query_blocking_ratio", 0.0) or 0.0),
+            float(question.get("new_ref_blocking_ratio", 0.0) or 0.0),
+        )
+        score = question.get("directed_search_score")
+        predicted_coverage = (
+            float(score.get("predicted_coverage", 0.0) or 0.0)
+            if isinstance(score, dict) else 0.0
+        )
+        return (
+            -blocking,
+            -predicted_coverage,
+            str(question.get("image_name", "")),
+            str(question.get("reasoning_frame_2", "")),
+            int(question.get("query_obj_id", -1)),
+            int(question.get("obj_ref_id", -1)),
+        )
+
+    kept_negative_ids = {
+        id(question)
+        for question in sorted(negatives, key=_negative_key)[:negative_limit]
+    }
+    balanced = [
+        question for question in valid_questions
+        if not _is_object_move_occlusion_question(question)
+        or _is_positive_object_move_occlusion(question)
+        or id(question) in kept_negative_ids
+    ]
+    return balanced, {
+        "positive_count": len(positives),
+        "negative_input_count": len(negatives),
+        "negative_kept_count": min(len(negatives), negative_limit),
+        "negative_dropped_count": max(0, len(negatives) - negative_limit),
+        "invalid_frame_role_dropped_count": len(questions) - len(valid_questions),
+    }
 
 
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
@@ -6782,6 +6904,7 @@ def run_pipeline(
                         "note": "routes_are_computed_per_question_after_object_role_binding",
                     }
             cross_candidates: list[dict] = []
+            occlusion_search_budget = OcclusionDirectedSearchBudget()
             cross_candidate_type_counts = scene_candidate_type_counts
 
             def _cross_type_budget_available(canonical_type: str) -> bool:
@@ -7160,6 +7283,7 @@ def run_pipeline(
                         max_move_sources=max_move_sources,
                         attachment_edges=scene.get("attachment_edges", []),
                         preserve_distance_metadata=True,
+                        occlusion_search_budget=occlusion_search_budget,
                     )
                     pair_questions = _filter_vertical_object_rotate_questions(
                         pair_questions,
@@ -7303,6 +7427,9 @@ def run_pipeline(
             retained_cross_questions = _retain_best_cross_frame_views(
                 prioritized_cross_questions
             )
+            retained_cross_questions = _prioritize_object_move_occlusion_positives(
+                retained_cross_questions
+            )
             retained_cross_questions = _apply_scene_type_cap(
                 retained_cross_questions,
                 scene_type_cap=scene_type_cap,
@@ -7311,6 +7438,21 @@ def run_pipeline(
                 type_counts=scene_question_type_counts,
                 pair_counts=scene_pair_counts,
             )
+            retained_cross_questions, occlusion_balance_diagnostics = (
+                _balance_scene_object_move_occlusion_negatives(
+                    retained_cross_questions
+                )
+            )
+            funnel["object_move_occlusion_balance"] = {
+                **occlusion_balance_diagnostics,
+                "directed_combinations_attempted": int(
+                    occlusion_search_budget.combinations_attempted
+                ),
+                "raycast_states": int(occlusion_search_budget.raycast_states),
+                "max_directed_combinations": int(
+                    occlusion_search_budget.max_combinations
+                ),
+            }
             for question in retained_cross_questions:
                 _clear_cross_frame_distance_metadata(question)
             kept_counts: Counter = funnel["question_type_kept_counts"]

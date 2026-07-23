@@ -2156,6 +2156,345 @@ def _occlusion_depth_order_allows(
     return occluder_depth[0] < target_depth[1]
 
 
+def _projected_bbox_rect_metrics(
+    obj: dict[str, Any],
+    delta: np.ndarray,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+) -> tuple[tuple[float, float, float, float], float, int] | None:
+    """Project a translated bbox with either pinhole or distorted intrinsics."""
+    corners = _bbox_corner_points(obj)
+    if corners is None:
+        return None
+    records = _project_sample_point_records(
+        corners + np.asarray(delta, dtype=np.float64),
+        camera_pose,
+        color_intrinsics,
+    )
+    if len(records) < 4:
+        return None
+    u_min = max(0.0, min(float(record["u"]) for record in records))
+    v_min = max(0.0, min(float(record["v"]) for record in records))
+    u_max = min(float(color_intrinsics.width), max(float(record["u"]) for record in records))
+    v_max = min(float(color_intrinsics.height), max(float(record["v"]) for record in records))
+    area = max(0.0, u_max - u_min) * max(0.0, v_max - v_min)
+    if area <= 0.0:
+        return None
+    visible_corners = sum(bool(record["in_frame"]) for record in records)
+    return (u_min, v_min, u_max, v_max), float(area), int(visible_corners)
+
+
+def _projection_overlap_metrics(
+    first_rect: tuple[float, float, float, float],
+    first_area: float,
+    second_rect: tuple[float, float, float, float],
+    second_area: float,
+    *,
+    target_area: float,
+) -> tuple[float, float]:
+    left = max(first_rect[0], second_rect[0])
+    top = max(first_rect[1], second_rect[1])
+    right = min(first_rect[2], second_rect[2])
+    bottom = min(first_rect[3], second_rect[3])
+    intersection = max(0.0, right - left) * max(0.0, bottom - top)
+    if intersection <= 0.0:
+        return 0.0, 0.0
+    reachability = intersection / max(1e-9, min(float(first_area), float(second_area)))
+    coverage = intersection / max(1e-9, float(target_area))
+    return float(np.clip(reachability, 0.0, 1.0)), float(np.clip(coverage, 0.0, 1.0))
+
+
+def _projective_occlusion_state_metrics(
+    *,
+    query_obj: dict[str, Any],
+    ref_obj: dict[str, Any],
+    query_delta: np.ndarray,
+    desired_relation: str,
+    camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    ref_projection: tuple[tuple[float, float, float, float], float, int],
+    ref_depth: tuple[float, float],
+) -> tuple[float, float, float] | None:
+    query_projection = _projected_bbox_rect_metrics(
+        query_obj, query_delta, camera_pose, color_intrinsics,
+    )
+    if query_projection is None or query_projection[2] < 6 or ref_projection[2] < 6:
+        return None
+    query_depth = _translated_bbox_camera_depth_interval(query_obj, query_delta, camera_pose)
+    if query_depth is None:
+        return None
+
+    query_mid = 0.5 * (query_depth[0] + query_depth[1])
+    ref_mid = 0.5 * (ref_depth[0] + ref_depth[1])
+    if desired_relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF:
+        signed_depth_margin = query_mid - ref_mid
+        target_area = query_projection[1]
+    elif desired_relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY:
+        signed_depth_margin = ref_mid - query_mid
+        target_area = ref_projection[1]
+    else:
+        return None
+    if signed_depth_margin <= 0.0:
+        return None
+
+    reachability, coverage = _projection_overlap_metrics(
+        query_projection[0], query_projection[1],
+        ref_projection[0], ref_projection[1],
+        target_area=target_area,
+    )
+    if reachability <= 0.0 or coverage <= 0.0:
+        return None
+    combined_depth_span = (
+        (query_depth[1] - query_depth[0]) + (ref_depth[1] - ref_depth[0])
+    )
+    depth_switchability = float(
+        np.clip(signed_depth_margin / max(1e-6, combined_depth_span), 0.0, 1.0)
+    )
+    return reachability, depth_switchability, coverage
+
+
+def _build_camera_direction_move_states(
+    *,
+    movement_scene_objects: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]],
+    move_source_id: int,
+    moved_ids: set[int],
+    movement_camera_pose: CameraPose,
+    room_min: np.ndarray,
+    room_max: np.ndarray,
+    collision_objects: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Precompute legal terminal states for all eight frame-1 actions."""
+    directions = _camera_ground_move_directions(movement_camera_pose)
+    if not directions:
+        return []
+    magnitudes = np.linspace(
+        MIN_DISTANCE_QUESTION_DISTANCE_M,
+        _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M,
+        num=_PAIRWISE_OCCLUSION_PROJECTION_SCAN_STATES,
+        dtype=np.float64,
+    )
+    result: list[dict[str, Any]] = []
+    for direction_index, (direction_label, unit_direction) in enumerate(directions):
+        legal_states: list[_SelectedObjectMoveState] = []
+        for magnitude in magnitudes:
+            delta = np.asarray(unit_direction, dtype=np.float64) * float(magnitude)
+            moved_objects = apply_movement_selective(
+                movement_scene_objects, attachment_graph, move_source_id, delta,
+            )
+            if not is_within_room(moved_objects, room_min, room_max):
+                continue
+            if has_terminal_bbox_collision(
+                movement_scene_objects,
+                moved_objects,
+                moved_ids,
+                collision_objects=collision_objects,
+            ):
+                continue
+            legal_states.append(_make_selected_object_move_state(delta, moved_objects, moved_ids))
+        if legal_states:
+            result.append({
+                "direction_index": direction_index,
+                "direction_label": direction_label,
+                "unit_direction": unit_direction,
+                "legal_fraction": len(legal_states) / float(len(magnitudes)),
+                "states": legal_states,
+            })
+    return result
+
+
+def _rank_projective_occlusion_candidates(
+    *,
+    query_obj: dict[str, Any],
+    reference_candidates: list[dict[str, Any]],
+    direction_states: list[dict[str, Any]],
+    answer_camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    max_references: int,
+) -> list[dict[str, Any]]:
+    """Rank reference/direction/depth-order combinations without ray casting."""
+    candidates: list[dict[str, Any]] = []
+    best_score_by_ref: dict[int, tuple[float, ...]] = {}
+    for ref_obj in reference_candidates:
+        ref_id = int(ref_obj["id"])
+        ref_projection = _projected_bbox_rect_metrics(
+            ref_obj, np.zeros(3, dtype=np.float64), answer_camera_pose, color_intrinsics,
+        )
+        ref_depth = _translated_bbox_camera_depth_interval(
+            ref_obj, np.zeros(3, dtype=np.float64), answer_camera_pose,
+        )
+        if ref_projection is None or ref_projection[2] < 6 or ref_depth is None:
+            continue
+        for direction_record in direction_states:
+            for desired_relation in (
+                L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+                L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+            ):
+                metric_states: list[tuple[tuple[float, ...], _SelectedObjectMoveState]] = []
+                for state in direction_record["states"]:
+                    metrics = _projective_occlusion_state_metrics(
+                        query_obj=query_obj,
+                        ref_obj=ref_obj,
+                        query_delta=np.asarray(state.delta, dtype=np.float64),
+                        desired_relation=desired_relation,
+                        camera_pose=answer_camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        ref_projection=ref_projection,
+                        ref_depth=ref_depth,
+                    )
+                    if metrics is None:
+                        continue
+                    reachability, depth_switchability, coverage = metrics
+                    metric_states.append(((
+                        coverage,
+                        reachability,
+                        depth_switchability,
+                        -float(np.linalg.norm(state.delta)),
+                    ), state))
+                if not metric_states:
+                    continue
+                directional_free_space = float(direction_record["legal_fraction"]) * (
+                    len(metric_states) / max(1.0, float(len(direction_record["states"])))
+                )
+                scored_states = [
+                    ((
+                        metrics[0],
+                        metrics[1],
+                        metrics[2],
+                        directional_free_space,
+                        metrics[3],
+                    ), state)
+                    for metrics, state in metric_states
+                ]
+                scored_states.sort(key=lambda item: tuple(-value for value in item[0]))
+                candidate_score = scored_states[0][0]
+                candidates.append({
+                    "ref_obj": ref_obj,
+                    "desired_relation": desired_relation,
+                    "direction_index": int(direction_record["direction_index"]),
+                    "direction_label": str(direction_record["direction_label"]),
+                    "unit_direction": np.asarray(direction_record["unit_direction"], dtype=np.float64),
+                    "score": candidate_score,
+                    "states": [item[1] for item in scored_states],
+                    "ref_projection": ref_projection,
+                    "ref_depth": ref_depth,
+                })
+                previous = best_score_by_ref.get(ref_id)
+                if previous is None or candidate_score > previous:
+                    best_score_by_ref[ref_id] = candidate_score
+
+    selected_ref_ids = {
+        ref_id
+        for ref_id, _score in sorted(
+            best_score_by_ref.items(),
+            key=lambda item: (tuple(-value for value in item[1]), item[0]),
+        )[:max(0, int(max_references))]
+    }
+    candidates = [
+        candidate for candidate in candidates
+        if int(candidate["ref_obj"]["id"]) in selected_ref_ids
+    ]
+    candidates.sort(key=lambda candidate: (
+        tuple(-value for value in candidate["score"]),
+        int(candidate["ref_obj"]["id"]),
+        int(candidate["direction_index"]),
+        str(candidate["desired_relation"]),
+    ))
+    return candidates
+
+
+def _projective_occlusion_query_priority_key(
+    query_obj: dict[str, Any],
+    ranked_candidates: list[dict[str, Any]],
+    priority_query_ids: set[int],
+) -> tuple[Any, ...]:
+    """Put the query with the strongest projective candidate first."""
+    best_score = (
+        tuple(float(value) for value in ranked_candidates[0]["score"])
+        if ranked_candidates
+        else (float("-inf"),) * 5
+    )
+    query_id = int(query_obj["id"])
+    return (
+        not bool(ranked_candidates),
+        tuple(-value for value in best_score),
+        query_id not in priority_query_ids,
+        query_id,
+    )
+
+
+def _refine_projective_occlusion_candidate_states(
+    *,
+    candidate: dict[str, Any],
+    query_obj: dict[str, Any],
+    movement_scene_objects: list[dict[str, Any]],
+    attachment_graph: dict[int, list[int]],
+    move_source_id: int,
+    moved_ids: set[int],
+    answer_camera_pose: CameraPose,
+    color_intrinsics: CameraIntrinsics,
+    room_min: np.ndarray,
+    room_max: np.ndarray,
+    collision_objects: list[dict[str, Any]] | None,
+) -> list[_SelectedObjectMoveState]:
+    """Densely refine the best coarse projection states before ray casting."""
+    magnitudes = {
+        round(float(np.linalg.norm(state.delta)), 6)
+        for state in candidate["states"][:_PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES]
+    }
+    for anchor_state in candidate["states"][:3]:
+        anchor = float(np.linalg.norm(anchor_state.delta))
+        for offset_steps in range(-3, 4):
+            magnitude = anchor + offset_steps * _PAIRWISE_OCCLUSION_REFINEMENT_STEP_M
+            if MIN_DISTANCE_QUESTION_DISTANCE_M <= magnitude <= _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M:
+                magnitudes.add(round(magnitude, 6))
+
+    scored: list[tuple[tuple[float, ...], _SelectedObjectMoveState]] = []
+    unit_direction = np.asarray(candidate["unit_direction"], dtype=np.float64)
+    for magnitude in sorted(magnitudes):
+        delta = unit_direction * float(magnitude)
+        moved_objects = apply_movement_selective(
+            movement_scene_objects, attachment_graph, move_source_id, delta,
+        )
+        if not is_within_room(moved_objects, room_min, room_max):
+            continue
+        if has_terminal_bbox_collision(
+            movement_scene_objects,
+            moved_objects,
+            moved_ids,
+            collision_objects=collision_objects,
+        ):
+            continue
+        metrics = _projective_occlusion_state_metrics(
+            query_obj=query_obj,
+            ref_obj=candidate["ref_obj"],
+            query_delta=delta,
+            desired_relation=str(candidate["desired_relation"]),
+            camera_pose=answer_camera_pose,
+            color_intrinsics=color_intrinsics,
+            ref_projection=candidate["ref_projection"],
+            ref_depth=candidate["ref_depth"],
+        )
+        if metrics is None:
+            continue
+        reachability, depth_switchability, coverage = metrics
+        score = (
+            coverage,
+            reachability,
+            depth_switchability,
+            float(candidate["score"][3]),
+            -float(magnitude),
+        )
+        scored.append((
+            score,
+            _make_selected_object_move_state(delta, moved_objects, moved_ids),
+        ))
+    scored.sort(key=lambda item: tuple(-value for value in item[0]))
+    return [
+        state for _score, state in scored[:_PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES]
+    ]
+
+
 def _in_frame_surface_sample_subset(
     sample_points: np.ndarray,
     camera_pose: CameraPose,
@@ -2722,21 +3061,86 @@ _OCCLUSION_DIRECTED_MIN_DISTANCE_STEP_M = 0.05
 _OCCLUSION_DIRECTED_MAX_DISTANCE_STEP_M = 1.0
 _PAIRWISE_OCCLUSION_MAX_REFERENCES_PER_QUERY = 16
 _PAIRWISE_OCCLUSION_MAX_DIRECTED_SCAN_STATES = 16
-# Scene-wide budget for this occluder-directed search: with candidates drawn
-# from the whole scene (not just one frame) there can be many more
-# (query_obj, obj_ref) pairs to try than before, so cap total accepted
-# object_move_occlusion questions and total occluder attempts per scene to
-# bound generation cost. The legacy constant name is kept for compatibility.
+_PAIRWISE_OCCLUSION_PROJECTION_SCAN_STATES = 33
+_PAIRWISE_OCCLUSION_REFINEMENT_STEP_M = 0.05
+# The legacy changed-question cap remains for compatibility with older callers.
 OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE = 40
-# Scene-wide try budget: clamp(round(fraction * len(movement_scene_objects)),
-# min, max) via _adaptive_scene_scaled_cap, so a larger multi-frame candidate
-# pool gets proportionally more attempts instead of being diluted by one
-# fixed constant. min=20 keeps today's behavior for scenes with <=20
-# movement objects unchanged; max=100 bounds cost since each attempt runs a
-# ray-cast scan (the most expensive of the three occlusion-directed caps).
+# Legacy adaptive-budget constants are retained for helper compatibility. New
+# projective search uses the fixed scene-wide limit below.
 _OCCLUSION_DIRECTED_CANDIDATES_TRIED_FRACTION = 1.0
 _OCCLUSION_DIRECTED_MIN_CANDIDATES_TRIED_PER_SCENE = 20
-OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE = 100
+OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE = 320
+
+
+@dataclass
+class OcclusionDirectedSearchBudget:
+    """Shared scene-level budget for expensive directed occlusion searches."""
+
+    max_combinations: int = OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE
+    combinations_attempted: int = 0
+    raycast_states: int = 0
+
+    def reserve_combination(self) -> bool:
+        if self.combinations_attempted >= max(0, int(self.max_combinations)):
+            return False
+        self.combinations_attempted += 1
+        return True
+
+    @property
+    def exhausted(self) -> bool:
+        return self.combinations_attempted >= max(0, int(self.max_combinations))
+
+
+_CAMERA_GROUND_MOVE_LABELS = (
+    "forward",
+    "forward-right",
+    "right",
+    "backward-right",
+    "backward",
+    "backward-left",
+    "left",
+    "forward-left",
+)
+
+
+def _camera_ground_move_directions(
+    camera_pose: CameraPose,
+) -> tuple[tuple[str, np.ndarray], ...]:
+    """Return the eight legal horizontal actions in the camera ground frame."""
+    rotation_t = np.asarray(camera_pose.rotation, dtype=np.float64).T
+    forward = rotation_t[:, 2].copy()
+    right_hint = rotation_t[:, 0].copy()
+    forward[2] = 0.0
+    right_hint[2] = 0.0
+    forward_norm = float(np.linalg.norm(forward))
+    if not np.isfinite(forward_norm) or forward_norm <= 1e-6:
+        return ()
+    forward /= forward_norm
+
+    # Ground-projecting pitched/rolled axes independently does not guarantee
+    # orthogonality. Gram-Schmidt keeps the diagonal actions exactly 45 degrees.
+    right = right_hint - float(np.dot(right_hint, forward)) * forward
+    right_norm = float(np.linalg.norm(right))
+    if not np.isfinite(right_norm) or right_norm <= 1e-6:
+        return ()
+    right /= right_norm
+    if float(np.dot(right, right_hint)) < 0.0:
+        right = -right
+
+    vectors = (
+        forward,
+        forward + right,
+        right,
+        -forward + right,
+        -forward,
+        -forward - right,
+        -right,
+        forward - right,
+    )
+    return tuple(
+        (label, np.asarray(vector / np.linalg.norm(vector), dtype=np.float64))
+        for label, vector in zip(_CAMERA_GROUND_MOVE_LABELS, vectors)
+    )
 
 
 def _aabb_extent_along_direction(obj: dict[str, Any], unit_direction: np.ndarray) -> float:
@@ -7712,6 +8116,7 @@ def generate_l2_object_move(
     max_move_sources: int | None = None,
     pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
     reuse_move_state_for_distance: bool = False,
+    occlusion_search_budget: OcclusionDirectedSearchBudget | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     if enabled_l2_object_move_types is None:
@@ -7750,10 +8155,6 @@ def generate_l2_object_move(
         {int(obj_id) for obj_id in reference_object_ids}
         if reference_object_ids is not None
         else set(referable_object_ids)
-    )
-    cross_frame_role_constrained = (
-        allowed_move_source_ids is not None
-        and reference_object_ids is not None
     )
     visibility_camera_pose = occlusion_camera_pose or camera_pose
     question_attachment_graph = (
@@ -7843,23 +8244,14 @@ def generate_l2_object_move(
     occlusion_directed_room_min, occlusion_directed_room_max = compute_room_bounds(
         movement_scene_objects, room_bounds=room_bounds,
     )
-    # Scene-wide budget for the occluder-directed search (Phase 1.5): with
-    # candidates drawn from the whole scene, there can be far more
-    # (query_obj, obj_ref) pairs to try than the old blind-grid search ever
-    # considered, so bound total generation cost per scene rather than per
-    # query_obj alone. `_occlusion_directed_candidates_tried` is a
-    # single-element list (not a plain int) because it's incremented from
-    # inside `_iter_occlusion_directed_object_move_states`, a separate
-    # top-level function -- passing it by reference avoids needing a return
-    # channel just for the counter.
-    _occlusion_directed_accepted_count = 0
-    _occlusion_directed_candidates_tried = [0]
-    _occlusion_directed_max_candidates_tried = _adaptive_scene_scaled_cap(
-        len(movement_scene_objects),
-        fraction=_OCCLUSION_DIRECTED_CANDIDATES_TRIED_FRACTION,
-        min_cap=_OCCLUSION_DIRECTED_MIN_CANDIDATES_TRIED_PER_SCENE,
-        max_cap=OCCLUSION_DIRECTED_MAX_CANDIDATES_TRIED_PER_SCENE,
+    # The pipeline passes one shared instance across all frame pairs so this
+    # remains a true scene-level limit. Direct callers get the same fixed cap.
+    directed_search_budget = (
+        occlusion_search_budget
+        if occlusion_search_budget is not None
+        else OcclusionDirectedSearchBudget()
     )
+    _occlusion_directed_max_candidates_tried = directed_search_budget.max_combinations
     occlusion_relation_cache: dict[
         tuple[Any, ...], tuple[str | None, float, float]
     ] = {}
@@ -7948,7 +8340,7 @@ def generate_l2_object_move(
                 # expensive collision-search state selection below entirely.
                 continue
         selected_state = None
-        if enable_agent or enable_occlusion or (enable_distance and reuse_move_state_for_distance):
+        if enable_agent or (enable_distance and reuse_move_state_for_distance):
             if reuse_move_state_for_distance and not enable_occlusion:
                 selected_state = _first_valid_object_move_state(
                     movement_scene_objects,
@@ -7992,6 +8384,70 @@ def generate_l2_object_move(
                 key=lambda candidate_obj: (
                     int(candidate_obj["id"]) not in priority_query_ids,
                     int(candidate_obj["id"]),
+                )
+            )
+
+        occlusion_direction_states = (
+            _build_camera_direction_move_states(
+                movement_scene_objects=movement_scene_objects,
+                attachment_graph=attachment_graph,
+                move_source_id=move_source_id,
+                moved_ids=moved_ids,
+                movement_camera_pose=camera_pose,
+                room_min=occlusion_directed_room_min,
+                room_max=occlusion_directed_room_max,
+                collision_objects=collision_objects,
+            )
+            if (
+                pairwise_occlusion_enabled
+                and enable_occlusion
+                and not directed_search_budget.exhausted
+            )
+            else []
+        )
+        occlusion_ranked_candidates_by_query: dict[int, list[dict[str, Any]]] = {}
+        if occlusion_direction_states:
+            reference_limit = _PAIRWISE_OCCLUSION_MAX_REFERENCES_PER_QUERY
+            if (
+                max_occlusion_objects is not None
+                and max_occlusion_objects != MAX_OCCLUSION_OBJECTS_AUTO
+            ):
+                reference_limit = min(
+                    reference_limit,
+                    max(0, int(max_occlusion_objects)),
+                )
+            for candidate_query in query_objects:
+                candidate_query_id = int(candidate_query["id"])
+                reference_candidates = [
+                    obj_map[int(ref_id)]
+                    for ref_id in sorted(allowed_reference_ids)
+                    if int(ref_id) in obj_map
+                    and int(ref_id) not in moved_ids
+                    and int(ref_id) != candidate_query_id
+                    and not _has_duplicate_labels_for_distinct_objects(
+                        move_source,
+                        candidate_query,
+                        obj_map[int(ref_id)],
+                    )
+                ]
+                occlusion_ranked_candidates_by_query[candidate_query_id] = (
+                    _rank_projective_occlusion_candidates(
+                        query_obj=candidate_query,
+                        reference_candidates=reference_candidates,
+                        direction_states=occlusion_direction_states,
+                        answer_camera_pose=visibility_camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        max_references=reference_limit,
+                    )
+                )
+            query_objects.sort(
+                key=lambda candidate_query: _projective_occlusion_query_priority_key(
+                    candidate_query,
+                    occlusion_ranked_candidates_by_query.get(
+                        int(candidate_query["id"]),
+                        [],
+                    ),
+                    priority_query_ids,
                 )
             )
 
@@ -8237,93 +8693,61 @@ def generate_l2_object_move(
                     "distance_generated": 0,  # filled below
                 })
 
-            # Pairwise occlusion is evaluated from the movement frame.  The
-            # reference object is static and is supplied by the deferred
-            # frame-2 referability pool; it is deliberately not required to be
-            # an attachment descendant.
+            # Movement actions are defined by frame 1, while projection,
+            # depth order, and the final answer are evaluated from frame 2.
             if pairwise_occlusion_enabled and enable_occlusion:
-                reference_candidates = [
-                    obj_map[int(ref_id)]
-                    for ref_id in sorted(allowed_reference_ids)
-                    if int(ref_id) in obj_map
-                    and int(ref_id) not in moved_ids
-                    and int(ref_id) != query_obj_id
-                ]
-                reference_limit = _PAIRWISE_OCCLUSION_MAX_REFERENCES_PER_QUERY
-                if max_occlusion_objects is not None and max_occlusion_objects != MAX_OCCLUSION_OBJECTS_AUTO:
-                    reference_limit = min(reference_limit, max(0, int(max_occlusion_objects)))
-                if cross_frame_role_constrained:
-                    reference_candidates = _prioritize_cross_frame_reference_objects(
-                        query_obj,
-                        reference_candidates,
-                        max_candidates=reference_limit,
-                    )
-                else:
-                    query_center = np.asarray(query_obj["center"], dtype=np.float64)
-                    reference_candidates = [
-                        ref_obj for ref_obj in reference_candidates
-                        if float(
-                            np.linalg.norm(
-                                np.asarray(ref_obj["center"], dtype=np.float64) - query_center
-                            )
-                        ) <= _OCCLUSION_DIRECTED_MAX_MAGNITUDE_M
+                ranked_candidates = occlusion_ranked_candidates_by_query.get(
+                    query_obj_id,
+                    [],
+                )
+                relation_queues = {
+                    relation: [
+                        candidate for candidate in ranked_candidates
+                        if candidate["desired_relation"] == relation
                     ]
-                    reference_candidates.sort(
-                        key=lambda ref_obj: float(
-                            np.linalg.norm(
-                                np.asarray(ref_obj["center"], dtype=np.float64) - query_center
-                            )
-                        )
+                    for relation in (
+                        L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+                        L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
                     )
-                    reference_candidates = reference_candidates[:reference_limit]
+                }
+                balanced_candidates: list[dict[str, Any]] = []
+                queue_index = 0
+                while any(queue_index < len(queue) for queue in relation_queues.values()):
+                    for relation in (
+                        L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+                        L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
+                    ):
+                        queue = relation_queues[relation]
+                        if queue_index < len(queue):
+                            balanced_candidates.append(queue[queue_index])
+                    queue_index += 1
 
-                def _pair_in_frame(obj: dict[str, Any], delta: np.ndarray) -> bool:
-                    moved_obj = obj
-                    if np.any(np.asarray(delta, dtype=np.float64)):
-                        moved_obj = dict(obj)
-                        bbox_min, bbox_max = _translated_bbox(obj, np.asarray(delta, dtype=np.float64))
-                        moved_obj["bbox_min"] = bbox_min.tolist()
-                        moved_obj["bbox_max"] = bbox_max.tolist()
-                    visible_corners, total_corners = _bbox_in_frame_corner_count(
-                        moved_obj,
-                        visibility_camera_pose,
-                        color_intrinsics,
-                    )
-                    return total_corners > 0 and visible_corners >= 6
-
+                selected_by_ref: dict[int, dict[str, Any]] = {}
+                neither_by_ref: dict[int, dict[str, Any]] = {}
                 zero_delta = np.zeros(3, dtype=np.float64)
-                for ref_obj in reference_candidates:
-                    if _has_duplicate_labels_for_distinct_objects(move_source, query_obj, ref_obj):
+                for candidate in balanced_candidates:
+                    ref_obj = candidate["ref_obj"]
+                    ref_id = int(ref_obj["id"])
+                    if ref_id in selected_by_ref or directed_search_budget.exhausted:
                         continue
-                    # The query is evaluated only after movement. The static
-                    # reference must be visible from the occlusion (frame-2)
-                    # camera, not from the movement (frame-1) camera.
-                    if not _pair_in_frame(ref_obj, zero_delta):
-                        continue
-                    selected_record: dict[str, Any] | None = None
-                    neither_record: dict[str, Any] | None = None
-                    seen_state_deltas: set[tuple[float, ...]] = set()
-                    candidate_states: list[_SelectedObjectMoveState] = []
-                    if selected_state is not None:
-                        candidate_states.append(selected_state)
-                    else:
-                        # One generic fallback may already place the query
-                        # behind this reference. The targeted crossing scan
-                        # below handles the remaining cases.
-                        for candidate_state in _fallback_states():
-                            candidate_states.append(candidate_state)
-                            break
-
-                    for candidate_state in candidate_states:
-                        delta_key = _delta_key(candidate_state.delta)
-                        if delta_key in seen_state_deltas:
-                            continue
-                        seen_state_deltas.add(delta_key)
-                        moved_map = {int(obj["id"]): obj for obj in candidate_state.moved_objects}
-                        moved_query = moved_map.get(query_obj_id, query_obj)
+                    if not directed_search_budget.reserve_combination():
+                        break
+                    refined_states = _refine_projective_occlusion_candidate_states(
+                        candidate=candidate,
+                        query_obj=query_obj,
+                        movement_scene_objects=movement_scene_objects,
+                        attachment_graph=attachment_graph,
+                        move_source_id=move_source_id,
+                        moved_ids=moved_ids,
+                        answer_camera_pose=visibility_camera_pose,
+                        color_intrinsics=color_intrinsics,
+                        room_min=occlusion_directed_room_min,
+                        room_max=occlusion_directed_room_max,
+                        collision_objects=collision_objects,
+                    )
+                    for candidate_state in refined_states:
+                        directed_search_budget.raycast_states += 1
                         query_delta = np.asarray(candidate_state.delta, dtype=np.float64)
-                        if not _pair_in_frame(moved_query, zero_delta) or not _pair_in_frame(ref_obj, zero_delta):
-                            continue
                         relation, query_ratio, ref_ratio = _pairwise_occlusion_relation_after_move(
                             query_obj=query_obj,
                             ref_obj=ref_obj,
@@ -8341,7 +8765,7 @@ def generate_l2_object_move(
                         record = {
                             "candidate_index": len(occlusion_candidate_records),
                             "query_obj_id": query_obj_id,
-                            "ref_obj_id": int(ref_obj["id"]),
+                            "ref_obj_id": ref_id,
                             "question": None,
                             "relation_unchanged": False,
                             "new_relation": relation,
@@ -8352,71 +8776,25 @@ def generate_l2_object_move(
                             "state": candidate_state,
                             "query_obj": query_obj,
                             "ref_obj": ref_obj,
+                            "direction_label": candidate["direction_label"],
+                            "desired_relation": candidate["desired_relation"],
+                            "search_score": candidate["score"],
                         }
-                        if relation == L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER:
-                            neither_record = record
-                        else:
-                            selected_record = record
+                        if relation != L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER:
+                            selected_by_ref[ref_id] = record
                             break
-
-                    if (
-                        selected_record is None
-                        and _occlusion_directed_accepted_count
-                        < OCCLUSION_DIRECTED_MAX_CHANGED_QUESTIONS_PER_SCENE
-                    ):
-                        for (
-                            candidate_state,
-                            relation,
-                            query_ratio,
-                            ref_ratio,
-                        ) in _iter_pairwise_occlusion_directed_object_move_states(
-                            query_obj=query_obj,
-                            ref_obj=ref_obj,
-                            move_source_id=move_source_id,
-                            moved_ids=moved_ids,
-                            movement_scene_objects=movement_scene_objects,
-                            attachment_graph=attachment_graph,
-                            camera_pose=visibility_camera_pose,
-                            color_intrinsics=color_intrinsics,
-                            instance_mesh_data=instance_mesh_data,
-                            room_min=occlusion_directed_room_min,
-                            room_max=occlusion_directed_room_max,
-                            collision_objects=collision_objects,
-                            candidates_tried_counter=_occlusion_directed_candidates_tried,
-                            max_candidates_tried=_occlusion_directed_max_candidates_tried,
-                            relation_cache=occlusion_relation_cache,
-                            blocking_ratio_cache=occlusion_blocking_ratio_cache,
-                            probe_cache=occlusion_probe_cache,
+                        previous = neither_by_ref.get(ref_id)
+                        if previous is None or max(query_ratio, ref_ratio) > max(
+                            previous["new_query_blocking_ratio"],
+                            previous["new_ref_blocking_ratio"],
                         ):
-                            query_delta = np.asarray(candidate_state.delta, dtype=np.float64)
-                            moved_map = {
-                                int(obj["id"]): obj for obj in candidate_state.moved_objects
-                            }
-                            moved_query = moved_map.get(query_obj_id, query_obj)
-                            if not _pair_in_frame(moved_query, zero_delta):
-                                continue
-                            selected_record = {
-                                "candidate_index": len(occlusion_candidate_records),
-                                "query_obj_id": query_obj_id,
-                                "ref_obj_id": int(ref_obj["id"]),
-                                "question": None,
-                                "relation_unchanged": False,
-                                "new_relation": relation,
-                                "new_query_blocking_ratio": query_ratio,
-                                "new_ref_blocking_ratio": ref_ratio,
-                                "move_source_id": move_source_id,
-                                "delta": query_delta.tolist(),
-                                "state": candidate_state,
-                                "query_obj": query_obj,
-                                "ref_obj": ref_obj,
-                            }
-                            _occlusion_directed_accepted_count += 1
-                            break
+                            neither_by_ref[ref_id] = record
 
-                    if selected_record is None:
-                        selected_record = neither_record
+                for ref_id in sorted(set(selected_by_ref) | set(neither_by_ref)):
+                    selected_record = selected_by_ref.get(ref_id) or neither_by_ref.get(ref_id)
                     if selected_record is None:
                         continue
+                    ref_obj = selected_record["ref_obj"]
                     delta = np.asarray(selected_record["delta"], dtype=np.float64)
                     query_label = str(query_obj.get("label", "object"))
                     ref_label = str(ref_obj.get("label", "object"))
@@ -8439,9 +8817,9 @@ def generate_l2_object_move(
                         obj_ref=_the(ref_label),
                         obj_c=_the(ref_label),
                         direction_with_camera_hint=_direction_with_camera_hint(
-                            _delta_to_description(delta, camera_pose)
+                            selected_record["direction_label"]
                         ),
-                        direction=_delta_to_description(delta, camera_pose),
+                        direction=selected_record["direction_label"],
                         distance=f"{np.linalg.norm(delta):.1f}m",
                     )
                     question_text = _with_occlusion_definition(question_text)
@@ -8472,6 +8850,14 @@ def generate_l2_object_move(
                         "relation_unchanged": False,
                         "new_query_blocking_ratio": selected_record["new_query_blocking_ratio"],
                         "new_ref_blocking_ratio": selected_record["new_ref_blocking_ratio"],
+                        "movement_direction": selected_record["direction_label"],
+                        "directed_search_target_relation": selected_record["desired_relation"],
+                        "directed_search_score": {
+                            "predicted_coverage": float(selected_record["search_score"][0]),
+                            "projection_reachability": float(selected_record["search_score"][1]),
+                            "depth_order_switchability": float(selected_record["search_score"][2]),
+                            "directional_free_space": float(selected_record["search_score"][3]),
+                        },
                         "mentioned_objects": [
                             _mention("moved_object", move_source["label"], move_source_id),
                             _mention("query_object", query_label, query_obj_id),
@@ -8589,7 +8975,8 @@ def generate_l2_object_move(
         _debug_log["final_count"] = len(result)
         _debug_log["final_types"] = dict(_types)
         _debug_log["occlusion_directed_max_candidates_tried_resolved"] = _occlusion_directed_max_candidates_tried
-        _debug_log["occlusion_directed_candidates_tried_actual"] = _occlusion_directed_candidates_tried[0]
+        _debug_log["occlusion_directed_candidates_tried_actual"] = directed_search_budget.combinations_attempted
+        _debug_log["occlusion_directed_raycast_states_actual"] = directed_search_budget.raycast_states
         _debug_log["frame"] = str(camera_pose.image_name) if hasattr(camera_pose, 'image_name') else "unknown"
         # scene_id from first object if available
         _scene_id = objects[0].get("scene_id", "") if objects else ""
@@ -11087,6 +11474,7 @@ def generate_cross_frame_questions(
     max_move_sources: int | None = None,
     attachment_edges: list[dict[str, Any]] | None = None,
     preserve_distance_metadata: bool = False,
+    occlusion_search_budget: OcclusionDirectedSearchBudget | None = None,
 ) -> list[dict[str, Any]]:
     """Generate spatial questions after both flash main frames are fixed.
 
@@ -11224,6 +11612,7 @@ def generate_cross_frame_questions(
             max_occlusion_objects=max_occlusion_objects,
             max_move_sources=max_move_sources,
             reuse_move_state_for_distance=True,
+            occlusion_search_budget=occlusion_search_budget,
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
@@ -11327,6 +11716,28 @@ def generate_cross_frame_questions(
         return questions
     seen: set[tuple[Any, ...]] = set()
     for question in questions:
+        if question.get("type") == "object_move_occlusion":
+            groups = question.get("object_frame_groups")
+            try:
+                expected_frame_1 = [
+                    int(question["moved_obj_id"]),
+                    int(question["query_obj_id"]),
+                ]
+                expected_frame_2 = [int(question["obj_ref_id"])]
+                actual_frame_1 = [int(value) for value in groups["frame_1"]]
+                actual_frame_2 = [int(value) for value in groups["frame_2"]]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (
+                not isinstance(groups, dict)
+                or actual_frame_1 != expected_frame_1
+                or actual_frame_2 != expected_frame_2
+                or not set(actual_frame_1).isdisjoint(actual_frame_2)
+                or str(question.get("image_name", "")) != frame_1.image_name
+                or str(question.get("reasoning_frame_2", "")) != frame_2.image_name
+                or frame_1.image_name == frame_2.image_name
+            ):
+                continue
         groups = question.get("object_frame_groups", {})
         key = (
             question.get("type"), question.get("reference_frame"),

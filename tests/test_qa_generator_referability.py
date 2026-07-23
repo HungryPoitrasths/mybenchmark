@@ -61,7 +61,7 @@ def make_l2_object_move_question(
 
 
 class QaGeneratorReferabilityTests(unittest.TestCase):
-    def test_object_move_occlusion_selector_caps_priority_unchanged_record(self) -> None:
+    def test_object_move_occlusion_selector_defers_negative_balancing_to_pipeline(self) -> None:
         records = [
             {
                 "candidate_index": 0,
@@ -80,9 +80,9 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         selected = _select_l2_object_move_occlusion_records(records)
 
-        self.assertEqual(selected, [])
+        self.assertEqual([record["query_obj_id"] for record in selected], [1, 2])
 
-    def test_object_move_occlusion_selector_counts_priority_unchanged_in_ratio(self) -> None:
+    def test_object_move_occlusion_selector_preserves_generation_order(self) -> None:
         records = [
             *[
                 {
@@ -112,7 +112,7 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
 
         self.assertEqual(
             [record["query_obj_id"] for record in selected],
-            [0, 1, 2, 3, 40],
+            [0, 1, 2, 3, 40, 50],
         )
 
     def test_generate_all_questions_passes_l2_move_internal_type_filter(self) -> None:
@@ -2318,18 +2318,19 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
             patch(
                 "src.qa_generator.compute_all_relations",
-                side_effect=[
-                    [{
-                        "obj_a_id": 1,
-                        "obj_b_id": 3,
-                        "direction_b_rel_a": "left",
-                    }],
-                    [{
-                        "obj_a_id": 1,
-                        "obj_b_id": 3,
-                        "direction_b_rel_a": "front-left",
-                    }],
-                ],
+                return_value=[{
+                    "obj_a_id": 1,
+                    "obj_b_id": 3,
+                    "direction_b_rel_a": "left",
+                }],
+            ),
+            patch(
+                "src.qa_generator.compute_direction_relations",
+                return_value=[{
+                    "obj_a_id": 1,
+                    "obj_b_id": 3,
+                    "direction_b_rel_a": "front-left",
+                }],
             ),
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
@@ -2447,18 +2448,19 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator._select_object_move_state", side_effect=select_parent_state),
             patch(
                 "src.qa_generator.compute_all_relations",
-                side_effect=[
-                    [{
-                        "obj_a_id": 1,
-                        "obj_b_id": 3,
-                        "direction_b_rel_a": "left",
-                    }],
-                    [{
-                        "obj_a_id": 1,
-                        "obj_b_id": 3,
-                        "direction_b_rel_a": "front-left",
-                    }],
-                ],
+                return_value=[{
+                    "obj_a_id": 1,
+                    "obj_b_id": 3,
+                    "direction_b_rel_a": "left",
+                }],
+            ),
+            patch(
+                "src.qa_generator.compute_direction_relations",
+                return_value=[{
+                    "obj_a_id": 1,
+                    "obj_b_id": 3,
+                    "direction_b_rel_a": "front-left",
+                }],
             ),
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
@@ -2719,18 +2721,19 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
             patch(
                 "src.qa_generator.compute_all_relations",
-                side_effect=[
-                    [{
-                        "obj_a_id": 4,
-                        "obj_b_id": 3,
-                        "direction_b_rel_a": "left",
-                    }],
-                    [{
-                        "obj_a_id": 4,
-                        "obj_b_id": 3,
-                        "direction_b_rel_a": "front-left",
-                    }],
-                ],
+                return_value=[{
+                    "obj_a_id": 4,
+                    "obj_b_id": 3,
+                    "direction_b_rel_a": "left",
+                }],
+            ),
+            patch(
+                "src.qa_generator.compute_direction_relations",
+                return_value=[{
+                    "obj_a_id": 4,
+                    "obj_b_id": 3,
+                    "direction_b_rel_a": "front-left",
+                }],
             ),
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
@@ -2779,18 +2782,19 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
             patch(
                 "src.qa_generator.compute_all_relations",
-                side_effect=[
-                    [{
-                        "obj_a_id": 1,
-                        "obj_b_id": 2,
-                        "direction_b_rel_a": "right",
-                    }],
-                    [{
-                        "obj_a_id": 1,
-                        "obj_b_id": 2,
-                        "direction_b_rel_a": "right",
-                    }],
-                ],
+                return_value=[{
+                    "obj_a_id": 1,
+                    "obj_b_id": 2,
+                    "direction_b_rel_a": "right",
+                }],
+            ),
+            patch(
+                "src.qa_generator.compute_direction_relations",
+                return_value=[{
+                    "obj_a_id": 1,
+                    "obj_b_id": 2,
+                    "direction_b_rel_a": "right",
+                }],
             ),
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
@@ -2881,27 +2885,25 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             moved_objects=[moved_parent, moved_first_child, moved_priority_child, ref],
             moved_ids={1, 2, 3},
         )
-        relation_call_count = 0
-
-        def fake_relations(*_args, **_kwargs):
-            nonlocal relation_call_count
-            relation_call_count += 1
-            if relation_call_count == 1:
-                return [{
-                    "obj_a_id": 3,
-                    "obj_b_id": 4,
-                    "direction_b_rel_a": "left",
-                }]
-            return [{
-                "obj_a_id": 3,
-                "obj_b_id": 4,
-                "direction_b_rel_a": "front-left",
-            }]
-
         with (
             patch("src.qa_generator._select_object_move_state", return_value=selected_state),
             patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
-            patch("src.qa_generator.compute_all_relations", side_effect=fake_relations),
+            patch(
+                "src.qa_generator.compute_all_relations",
+                return_value=[{
+                    "obj_a_id": 3,
+                    "obj_b_id": 4,
+                    "direction_b_rel_a": "left",
+                }],
+            ),
+            patch(
+                "src.qa_generator.compute_direction_relations",
+                return_value=[{
+                    "obj_a_id": 3,
+                    "obj_b_id": 4,
+                    "direction_b_rel_a": "front-left",
+                }],
+            ),
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
             questions = generate_l2_object_move(
@@ -2937,6 +2939,14 @@ class QaGeneratorReferabilityTests(unittest.TestCase):
             patch("src.qa_generator._iter_valid_object_move_states", return_value=[]),
             patch(
                 "src.qa_generator.compute_all_relations",
+                return_value=[{
+                    "obj_a_id": 3,
+                    "obj_b_id": 4,
+                    "direction_b_rel_a": "left",
+                }],
+            ),
+            patch(
+                "src.qa_generator.compute_direction_relations",
                 return_value=[{
                     "obj_a_id": 3,
                     "obj_b_id": 4,

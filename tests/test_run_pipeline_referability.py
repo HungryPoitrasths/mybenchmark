@@ -4993,6 +4993,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             requested = tuple(kwargs.get("only_question_types") or [])
             if requested == ("L2_object_move_occlusion",):
                 occlusion_calls.append((frame_1.image_name, frame_2.image_name))
+                reference_id = min(frame_2.regular_referable_ids)
                 raw = {
                     "level": "L2",
                     "type": "object_move_occlusion",
@@ -5001,8 +5002,10 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                     "answer": "A",
                     "correct_value": "visible",
                     "moved_obj_id": 1,
-                    "target_obj_id": 6,
-                    "query_obj_id": 6,
+                    "target_obj_id": 5,
+                    "query_obj_id": 5,
+                    "obj_ref_id": reference_id,
+                    "new_pairwise_occlusion_relation": "neither",
                 }
                 return run_pipeline_module._annotate_cross_frame_questions(
                     [raw],
@@ -5213,7 +5216,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         )
         self.assertEqual(Counter(question["type"] for question in questions), {
             "object_move_agent": 2,
-            "object_move_occlusion": 1,
+            "object_move_occlusion": 2,
         })
         self.assertEqual(
             {question.get("reasoning_frame_2") for question in questions},

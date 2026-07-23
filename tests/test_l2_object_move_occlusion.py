@@ -12,11 +12,13 @@ from src.qa_generator import (
     L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
     MAX_OCCLUSION_OBJECTS_AUTO,
     MOVEMENT_CANDIDATES,
+    OcclusionDirectedSearchBudget,
     _aabb_extent_along_direction,
     _adaptive_occlusion_directed_step,
     _adaptive_scene_scaled_cap,
     _bbox_has_min_in_frame_corners,
     _bbox_fully_in_frame,
+    _camera_ground_move_directions,
     _counterfactual_occlusion_backend,
     _find_object_move_occlusion_changes,
     _find_occlusion_directed_delta_for_occluder,
@@ -27,6 +29,8 @@ from src.qa_generator import (
     _occluder_blocks_translated_query_object,
     _pairwise_occlusion_relation_after_move,
     _iter_pairwise_occlusion_directed_object_move_states,
+    _projective_occlusion_query_priority_key,
+    _rank_projective_occlusion_candidates,
     _select_l2_object_move_occlusion_records,
     _select_object_move_state,
     _select_occlusion_directed_occluder_candidates,
@@ -2633,10 +2637,22 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
             rotation=np.eye(3, dtype=np.float64),
             translation=np.array([-0.2, 0.0, 0.0], dtype=np.float64),
         )
+        projected_candidate = {
+            "ref_obj": reference,
+            "desired_relation": L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
+            "direction_index": 2,
+            "direction_label": "right",
+            "unit_direction": np.array([1.0, 0.0, 0.0]),
+            "score": (0.8, 0.9, 0.7, 0.6, -0.5),
+            "states": [selected_state],
+            "ref_projection": ((0.0, 0.0, 1.0, 1.0), 1.0, 8),
+            "ref_depth": (1.0, 2.0),
+        }
         with (
-            patch("src.qa_generator._select_object_move_state", return_value=selected_state),
-            patch("src.qa_generator._iter_additional_object_move_states", return_value=[]),
             patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator._build_camera_direction_move_states", return_value=[{}]),
+            patch("src.qa_generator._rank_projective_occlusion_candidates", return_value=[projected_candidate]),
+            patch("src.qa_generator._refine_projective_occlusion_candidate_states", return_value=[selected_state]),
             patch(
                 "src.qa_generator._pairwise_occlusion_relation_after_move",
                 return_value=(
@@ -2645,10 +2661,6 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
                     0.0,
                 ),
             ) as relation_mock,
-            patch(
-                "src.qa_generator._bbox_in_frame_corner_count",
-                return_value=(8, 8),
-            ) as bbox_mock,
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
             questions = generate_l2_object_move(
@@ -2683,15 +2695,8 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
         self.assertEqual(relation_mock.call_count, 1)
         self.assertTrue(np.any(np.asarray(relation_mock.call_args.kwargs["query_delta"])))
         self.assertIs(relation_mock.call_args.kwargs["camera_pose"], occlusion_camera)
-        self.assertEqual(
-            [int(call.args[0]["id"]) for call in bbox_mock.call_args_list],
-            [3, 2, 3],
-        )
-        self.assertTrue(all(
-            call.args[1] is occlusion_camera
-            for call in bbox_mock.call_args_list
-        ))
-        self.assertEqual(bbox_mock.call_args_list[1].args[0]["center"], moved_query["center"])
+        self.assertEqual(question["movement_direction"], "right")
+        self.assertEqual(question["directed_search_target_relation"], L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF)
         self.assertNotIn("old_correct_value", question)
         self.assertNotIn("old_pairwise_occlusion_relation", question)
         self.assertNotIn("old_query_blocking_ratio", question)
@@ -2716,26 +2721,39 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
             rotation=np.eye(3, dtype=np.float64),
             translation=np.array([-0.2, 0.0, 0.0], dtype=np.float64),
         )
+        candidates = [
+            {
+                "ref_obj": reference,
+                "desired_relation": desired_relation,
+                "direction_index": index,
+                "direction_label": direction_label,
+                "unit_direction": np.array([1.0, 0.0, 0.0]),
+                "score": (0.8 - 0.1 * index, 0.9, 0.7, 0.6, -0.5),
+                "states": [state],
+                "ref_projection": ((0.0, 0.0, 1.0, 1.0), 1.0, 8),
+                "ref_depth": (1.0, 2.0),
+            }
+            for index, (desired_relation, direction_label, state) in enumerate((
+                (L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF, "right", generic_state),
+                (L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, "forward-right", directed_state),
+            ))
+        ]
 
         with (
-            patch("src.qa_generator._select_object_move_state", return_value=generic_state),
-            patch("src.qa_generator._iter_additional_object_move_states", return_value=[]),
             patch("src.qa_generator.compute_all_relations", return_value=[]),
+            patch("src.qa_generator._build_camera_direction_move_states", return_value=[{}]),
+            patch("src.qa_generator._rank_projective_occlusion_candidates", return_value=candidates),
+            patch(
+                "src.qa_generator._refine_projective_occlusion_candidate_states",
+                side_effect=[[generic_state], [directed_state]],
+            ) as directed_mock,
             patch(
                 "src.qa_generator._pairwise_occlusion_relation_after_move",
-                return_value=(L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0),
-            ),
-            patch(
-                "src.qa_generator._iter_pairwise_occlusion_directed_object_move_states",
-                return_value=[
-                    (
-                        directed_state,
-                        L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
-                        0.0,
-                        0.8,
-                    )
+                side_effect=[
+                    (L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER, 0.0, 0.0),
+                    (L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY, 0.0, 0.8),
                 ],
-            ) as directed_mock,
+            ),
             patch("src.qa_generator._generate_l2_distance_questions_for_object", return_value=[]),
         ):
             questions = generate_l2_object_move(
@@ -2765,15 +2783,105 @@ class PairwiseOcclusionV2Tests(unittest.TestCase):
             if question.get("type") == "object_move_occlusion"
         ]
         self.assertEqual(len(occlusion_questions), 1)
-        self.assertEqual(directed_mock.call_count, 1)
-        self.assertIs(
-            directed_mock.call_args.kwargs["camera_pose"],
-            occlusion_camera,
-        )
+        self.assertEqual(directed_mock.call_count, 2)
         self.assertEqual(
             occlusion_questions[0]["new_pairwise_occlusion_relation"],
             L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
         )
+
+    def test_camera_ground_move_directions_are_eight_discrete_actions(self) -> None:
+        camera_to_world = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, -1.0, 0.0],
+        ])
+        pose = CameraPose(
+            image_name="movement.jpg",
+            rotation=camera_to_world.T,
+            translation=np.zeros(3),
+        )
+        directions = _camera_ground_move_directions(pose)
+
+        self.assertEqual([label for label, _vector in directions], [
+            "forward", "forward-right", "right", "backward-right",
+            "backward", "backward-left", "left", "forward-left",
+        ])
+        self.assertEqual(len(directions), 8)
+        self.assertTrue(all(abs(float(vector[2])) < 1e-9 for _label, vector in directions))
+        self.assertTrue(all(abs(float(np.linalg.norm(vector)) - 1.0) < 1e-9 for _label, vector in directions))
+
+    def test_scene_search_budget_is_fixed_and_shared(self) -> None:
+        budget = OcclusionDirectedSearchBudget(max_combinations=2)
+
+        self.assertTrue(budget.reserve_combination())
+        self.assertTrue(budget.reserve_combination())
+        self.assertFalse(budget.reserve_combination())
+        self.assertTrue(budget.exhausted)
+        self.assertEqual(budget.combinations_attempted, 2)
+
+    def test_projective_ranking_keeps_only_top_sixteen_references(self) -> None:
+        query = make_object(1, "lamp", (0.0, 0.0, 2.0))
+        references = [
+            make_object(ref_id, f"reference-{ref_id}", (0.0, 0.0, 3.0))
+            for ref_id in range(2, 22)
+        ]
+        state = SimpleNamespace(delta=np.array([0.5, 0.0, 0.0], dtype=np.float64))
+        direction_states = [{
+            "direction_index": 2,
+            "direction_label": "right",
+            "unit_direction": np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            "legal_fraction": 1.0,
+            "states": [state],
+        }]
+
+        def fake_metrics(**kwargs):
+            coverage = float(kwargs["ref_obj"]["id"]) / 100.0
+            return 0.5, 0.5, coverage
+
+        with (
+            patch(
+                "src.qa_generator._projected_bbox_rect_metrics",
+                return_value=((0.0, 0.0, 10.0, 10.0), 100.0, 8),
+            ),
+            patch(
+                "src.qa_generator._translated_bbox_camera_depth_interval",
+                return_value=(1.0, 2.0),
+            ),
+            patch(
+                "src.qa_generator._projective_occlusion_state_metrics",
+                side_effect=fake_metrics,
+            ),
+        ):
+            candidates = _rank_projective_occlusion_candidates(
+                query_obj=query,
+                reference_candidates=references,
+                direction_states=direction_states,
+                answer_camera_pose=make_camera_pose(),
+                color_intrinsics=make_camera_intrinsics(),
+                max_references=16,
+            )
+
+        selected_ids = {int(candidate["ref_obj"]["id"]) for candidate in candidates}
+        self.assertEqual(selected_ids, set(range(6, 22)))
+
+    def test_projective_query_priority_uses_best_candidate_before_object_id(self) -> None:
+        low_id_query = make_object(2, "small lamp", (0.0, 0.0, 2.0))
+        high_id_query = make_object(9, "large lamp", (0.0, 0.0, 2.0))
+        candidates_by_query = {
+            2: [{"score": (0.2, 0.9, 0.9, 0.9, -0.2)}],
+            9: [{"score": (0.8, 0.7, 0.7, 0.7, -0.5)}],
+        }
+
+        ordered = sorted(
+            [low_id_query, high_id_query],
+            key=lambda query: _projective_occlusion_query_priority_key(
+                query,
+                candidates_by_query[int(query["id"])],
+                set(),
+            ),
+        )
+
+        self.assertEqual([int(query["id"]) for query in ordered], [9, 2])
 
 
 if __name__ == "__main__":

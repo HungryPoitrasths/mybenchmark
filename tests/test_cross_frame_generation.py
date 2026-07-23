@@ -467,6 +467,39 @@ def test_v2_cross_frame_generation_uses_frame_2_camera_for_occlusion() -> None:
     assert result_a[0]["camera_bindings"] == result_b[0]["camera_bindings"]
 
 
+def test_cross_frame_generation_drops_malformed_occlusion_roles() -> None:
+    from src.qa_generator import generate_cross_frame_questions
+
+    malformed = {
+        "type": "object_move_occlusion",
+        "image_name": "first.jpg",
+        "reasoning_frame_2": "last.jpg",
+        "object_frame_groups": {"frame_1": [1, 2], "frame_2": [3]},
+        "moved_obj_id": 1,
+        "query_obj_id": 2,
+        "obj_ref_id": None,
+    }
+    with (
+        patch("src.qa_generator.generate_l2_object_move", return_value=[malformed]),
+        patch("src.qa_generator._annotate_cross_frame_questions", return_value=[malformed]),
+    ):
+        result = generate_cross_frame_questions(
+            objects=[
+                make_object(1, "table"),
+                make_object(2, "lamp"),
+                make_object(3, "sofa"),
+            ],
+            attachment_graph={1: [2]},
+            attached_by={2: 1},
+            frame_1=make_context("first.jpg", regular=set(), attachment={1, 2}),
+            frame_2=make_context("last.jpg", regular={3}),
+            color_intrinsics=make_intrinsics(),
+            only_question_types=["L2_object_move_occlusion"],
+        )
+
+    assert result == []
+
+
 def test_direct_cross_frame_generation_keeps_over_limit_pairs_and_cleans_metadata() -> None:
     from src.qa_generator import generate_cross_frame_questions
 
