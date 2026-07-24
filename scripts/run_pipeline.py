@@ -132,8 +132,8 @@ EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
 PIPELINE_SCENE_STATUS_VERSION = 7
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
-L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 150}
-L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 300}
+L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
+L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -7926,7 +7926,7 @@ def main():
         "SCANNET_METADATA_SPLIT_FILES entry. ScanNet++: selects the matching "
         "SCANNETPP_METADATA_SPLIT_FILES entry; overridden by --scannetpp_split_file. "
         "Candidate budgets per scene/type are val L1=75 and L2/L3=150, or "
-        "train L1=150 and L2/L3=300; final type totals are not capped. "
+        "train L1=300 and L2/L3=600; final type totals are not capped. "
         "'all' or omitted scans every scene directory under --data_root.",
     )
     parser.add_argument(
@@ -8094,7 +8094,7 @@ def main():
         default=None,
         help=(
             "L1 candidate-generation budget per (dataset, scene, type). Defaults "
-            "to 75 for val, 150 for train, and unlimited otherwise; use 0 to disable."
+            "to 75 for val, 300 for train, and unlimited otherwise; use 0 to disable."
         ),
     )
     parser.add_argument(
