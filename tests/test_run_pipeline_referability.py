@@ -1,4 +1,5 @@
 ﻿import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -176,6 +177,36 @@ def make_referability_batch_doc(
             }
         },
     }
+
+
+def add_referability_batch_scene(batch_doc: dict, scene_id: str) -> None:
+    scene_doc = make_referability_batch_doc(scene_id=scene_id)
+    for field_name in ("frames", "scene_grouping", "scene_status"):
+        batch_doc[field_name].update(scene_doc[field_name])
+
+
+def write_referability_scene_status(
+    status_path: Path,
+    scene_batch_files: dict[str, str],
+) -> None:
+    status_path.write_text(
+        json.dumps(
+            {
+                "version": referability_module.SCENE_STATUS_VERSION,
+                "split": "train",
+                "completed_scenes": {
+                    scene_id: {
+                        "status": "completed",
+                        "batch_file": batch_file,
+                        "updated_at": "2026-07-24T00:00:00Z",
+                    }
+                    for scene_id, batch_file in scene_batch_files.items()
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def make_attachment_pair_review_html(
@@ -3128,6 +3159,171 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "matched no files"):
             run_pipeline_module._load_referability_cache(str(case_dir / "flash*.json"))
+
+    def test_load_referability_cache_scene_status_selects_current_batch_scenes(self) -> None:
+        case_dir = make_case_dir("cache_scene_status")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_a = case_dir / "flash_a.json"
+        batch_b = case_dir / "flash_b.json"
+        status_path = case_dir / "scene_status.json"
+        scene_a = "scene0000_00"
+        scene_b = "scene0001_00"
+        scene_c = "scene0002_00"
+
+        batch_a_doc = make_referability_batch_doc(scene_id=scene_a)
+        add_referability_batch_scene(batch_a_doc, scene_b)
+        add_referability_batch_scene(batch_a_doc, scene_c)
+        batch_a_doc["scene_status"][scene_b]["pipeline_outcome"] = "stale"
+        batch_a.write_text(json.dumps(batch_a_doc, ensure_ascii=False), encoding="utf-8")
+        batch_b.write_text(
+            json.dumps(make_referability_batch_doc(scene_id=scene_b), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_referability_scene_status(
+            status_path,
+            {
+                scene_a: batch_a.name,
+                scene_b: batch_b.name,
+                scene_c: batch_a.name,
+            },
+        )
+
+        loaded = run_pipeline_module._load_referability_cache(status_path)
+
+        self.assertEqual(
+            sorted(loaded["scene_status"]),
+            [scene_a, scene_b, scene_c],
+        )
+        self.assertEqual(loaded["scene_status"][scene_b]["pipeline_outcome"], "processed")
+        self.assertEqual(sorted(loaded["scene_grouping"]), [scene_a, scene_b, scene_c])
+        self.assertEqual(loaded["frames"], {})
+
+    def test_load_referability_cache_scene_status_forwards_load_options(self) -> None:
+        case_dir = make_case_dir("cache_scene_status_options")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_path = case_dir / "flash.json"
+        status_path = case_dir / "scene_status.json"
+        scene_id = "scene0000_00"
+        batch_path.write_text(
+            json.dumps(make_referability_batch_doc(scene_id=scene_id), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        write_referability_scene_status(status_path, {scene_id: batch_path.name})
+
+        with patch.object(
+            run_pipeline_module,
+            "_load_single_referability_cache",
+            wraps=run_pipeline_module._load_single_referability_cache,
+        ) as load_single:
+            run_pipeline_module._load_referability_cache(
+                status_path,
+                repair_inconsistent_entries=True,
+                persist_repaired_entries=True,
+                no_salvage=True,
+            )
+
+        load_single.assert_called_once_with(
+            batch_path,
+            repair_inconsistent_entries=True,
+            persist_repaired_entries=True,
+            no_salvage=True,
+        )
+
+    def test_load_referability_cache_scene_status_rejects_missing_batch(self) -> None:
+        case_dir = make_case_dir("cache_scene_status_missing_batch")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        status_path = case_dir / "scene_status.json"
+        write_referability_scene_status(
+            status_path,
+            {"scene0000_00": "missing.json"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "batch file does not exist"):
+            run_pipeline_module._load_referability_cache(status_path)
+
+    def test_load_referability_cache_scene_status_rejects_missing_scene(self) -> None:
+        case_dir = make_case_dir("cache_scene_status_missing_scene")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_path = case_dir / "flash.json"
+        status_path = case_dir / "scene_status.json"
+        batch_path.write_text(
+            json.dumps(
+                make_referability_batch_doc(scene_id="scene0000_00"),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        write_referability_scene_status(
+            status_path,
+            {"scene0001_00": batch_path.name},
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not contain the scene"):
+            run_pipeline_module._load_referability_cache(status_path)
+
+    def test_load_referability_cache_scene_status_rejects_invalid_status(self) -> None:
+        case_dir = make_case_dir("cache_scene_status_invalid")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        status_path = case_dir / "scene_status.json"
+
+        invalid_docs = (
+            ({"version": 999, "completed_scenes": {}}, "Unsupported.*version"),
+            ({"version": referability_module.SCENE_STATUS_VERSION}, "completed_scenes"),
+            (
+                {
+                    "version": referability_module.SCENE_STATUS_VERSION,
+                    "completed_scenes": {"scene0000_00": {}},
+                },
+                "missing batch_file",
+            ),
+        )
+        for status_doc, expected_error in invalid_docs:
+            with self.subTest(expected_error=expected_error):
+                status_path.write_text(
+                    json.dumps(status_doc, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    run_pipeline_module._load_referability_cache(status_path)
+
+    def test_load_referability_cache_scene_status_reports_invalid_json_path(self) -> None:
+        case_dir = make_case_dir("cache_scene_status_invalid_json")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        status_path = case_dir / "scene_status.json"
+        status_path.write_text("{", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, re.escape(str(status_path))):
+            run_pipeline_module._load_referability_cache(status_path)
+
+    def test_load_referability_cache_scene_status_rejects_metadata_mismatch(self) -> None:
+        case_dir = make_case_dir("cache_scene_status_metadata")
+        self.addCleanup(shutil.rmtree, case_dir, True)
+        batch_a = case_dir / "flash_a.json"
+        batch_b = case_dir / "flash_b.json"
+        status_path = case_dir / "scene_status.json"
+        scene_a = "scene0000_00"
+        scene_b = "scene0001_00"
+        batch_a.write_text(
+            json.dumps(
+                make_referability_batch_doc(scene_id=scene_a, model="model-a"),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        batch_b.write_text(
+            json.dumps(
+                make_referability_batch_doc(scene_id=scene_b, model="model-b"),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        write_referability_scene_status(
+            status_path,
+            {scene_a: batch_a.name, scene_b: batch_b.name},
+        )
+
+        with self.assertRaisesRegex(ValueError, "metadata mismatch"):
+            run_pipeline_module._load_referability_cache(status_path)
 
     def test_has_l1_visibility_candidates_only_keeps_vlm_out_of_frame_labels(self) -> None:
         self.assertTrue(

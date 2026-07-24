@@ -105,6 +105,7 @@ from src.utils.colmap_loader import (
 from src.utils.depth_occlusion import load_depth_image
 from src.utils import RayCaster
 from scripts.run_vlm_referability import (
+    SCENE_STATUS_VERSION as REFERABILITY_SCENE_STATUS_VERSION,
     SCANNET_METADATA_SPLIT_FILES,
     SCANNETPP_METADATA_SPLIT_FILES,
     SEGMENTATION_EXTREME_NOISE_MIN_SCORE as QUESTION_DINOX_LOOSE_MIN_SCORE,
@@ -2002,6 +2003,165 @@ def _merge_referability_cache_docs(
     return merged_doc
 
 
+def _referability_cache_doc_contains_scene(
+    cache_doc: dict[str, object],
+    scene_id: str,
+) -> bool:
+    for field_name in ("scene_grouping", "scene_status"):
+        field_value = cache_doc.get(field_name)
+        if isinstance(field_value, dict) and scene_id in field_value:
+            return True
+
+    frames = cache_doc.get("frames", cache_doc)
+    if not isinstance(frames, dict):
+        return False
+    if scene_id in frames:
+        return True
+    prefix = f"{scene_id}/"
+    return any(isinstance(key, str) and key.startswith(prefix) for key in frames)
+
+
+def _project_referability_cache_doc(
+    cache_doc: dict[str, object],
+    *,
+    scene_ids: set[str],
+) -> dict[str, object]:
+    projected = {
+        key: value
+        for key, value in cache_doc.items()
+        if key not in {"frames", "scene_grouping", "scene_status"}
+    }
+    for field_name in ("frames", "scene_grouping", "scene_status"):
+        field_value = cache_doc.get(field_name, {})
+        projected_field: dict[str, object] = {}
+        if isinstance(field_value, dict):
+            for key, value in field_value.items():
+                key_text = str(key)
+                scene_id = key_text.split("/", 1)[0] if field_name == "frames" else key_text
+                if scene_id in scene_ids:
+                    projected_field[key_text] = value
+        projected[field_name] = projected_field
+    return projected
+
+
+def _load_referability_cache_from_scene_status(
+    scene_status_path: Path,
+    *,
+    repair_inconsistent_entries: bool = False,
+    persist_repaired_entries: bool = False,
+    no_salvage: bool = False,
+) -> dict[str, object]:
+    if not scene_status_path.exists():
+        raise ValueError(f"Referability scene status not found: {scene_status_path}")
+    try:
+        with open(scene_status_path, "r", encoding="utf-8") as f:
+            scene_status_doc = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Failed to load referability scene status JSON: {scene_status_path}"
+        ) from exc
+    if not isinstance(scene_status_doc, dict):
+        raise ValueError(
+            f"Invalid referability scene status at {scene_status_path}: expected JSON object"
+        )
+
+    try:
+        status_version = int(scene_status_doc.get("version", 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid referability scene status version at {scene_status_path}: "
+            f"{scene_status_doc.get('version')!r}"
+        ) from exc
+    if status_version != REFERABILITY_SCENE_STATUS_VERSION:
+        raise ValueError(
+            f"Unsupported referability scene status version {status_version or '<missing>'} "
+            f"at {scene_status_path}; expected {REFERABILITY_SCENE_STATUS_VERSION}."
+        )
+
+    completed_scenes = scene_status_doc.get("completed_scenes")
+    if not isinstance(completed_scenes, dict):
+        raise ValueError(
+            f"Invalid referability scene status at {scene_status_path}: "
+            "completed_scenes must be an object"
+        )
+    if not completed_scenes:
+        raise ValueError(
+            f"Referability scene status contains no completed scenes: {scene_status_path}"
+        )
+
+    batch_scene_ids: dict[Path, set[str]] = defaultdict(set)
+    for raw_scene_id, record in completed_scenes.items():
+        scene_id = str(raw_scene_id).strip()
+        if not scene_id:
+            raise ValueError(
+                f"Invalid empty scene id in referability scene status: {scene_status_path}"
+            )
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"Invalid referability scene status record for {scene_id} at "
+                f"{scene_status_path}: expected object"
+            )
+        batch_file = str(record.get("batch_file", "")).strip()
+        if not batch_file:
+            raise ValueError(
+                f"Invalid referability scene status record for {scene_id} at "
+                f"{scene_status_path}: missing batch_file"
+            )
+        batch_path = (scene_status_path.parent / batch_file).resolve()
+        if not batch_path.exists():
+            raise ValueError(
+                f"Referability scene status says {scene_id} is stored in {batch_file}, "
+                f"but the batch file does not exist: {batch_path}"
+            )
+        batch_scene_ids[batch_path].add(scene_id)
+
+    active_batch_docs: list[tuple[Path, dict[str, object]]] = []
+    for batch_path, active_scene_ids in sorted(
+        batch_scene_ids.items(),
+        key=lambda item: str(item[0]),
+    ):
+        try:
+            batch_doc = _load_single_referability_cache(
+                batch_path,
+                repair_inconsistent_entries=repair_inconsistent_entries,
+                persist_repaired_entries=persist_repaired_entries,
+                no_salvage=no_salvage,
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"Failed to load referability batch JSON {batch_path} referenced by "
+                f"{scene_status_path}"
+            ) from exc
+        if batch_doc is None:
+            raise ValueError(f"Referability cache not found: {batch_path}")
+        for scene_id in sorted(active_scene_ids):
+            if not _referability_cache_doc_contains_scene(batch_doc, scene_id):
+                raise ValueError(
+                    f"Referability scene status says {scene_id} is stored in "
+                    f"{batch_path.name}, but that batch does not contain the scene: "
+                    f"{batch_path}"
+                )
+        active_batch_docs.append(
+            (
+                batch_path,
+                _project_referability_cache_doc(
+                    batch_doc,
+                    scene_ids=active_scene_ids,
+                ),
+            )
+        )
+
+    merged = _merge_referability_cache_docs(active_batch_docs)
+    logger.info(
+        "Loaded %d active referability scene(s) from %d batch cache file(s) "
+        "referenced by %s",
+        len(completed_scenes),
+        len(active_batch_docs),
+        scene_status_path,
+    )
+    return merged
+
+
 def _load_referability_cache(
     path_or_pattern: str | Path,
     *,
@@ -2011,6 +2171,13 @@ def _load_referability_cache(
 ) -> dict | None:
     paths, used_glob = _expand_referability_cache_paths(path_or_pattern)
     if len(paths) == 1 and not used_glob:
+        if paths[0].name.lower() == "scene_status.json":
+            return _load_referability_cache_from_scene_status(
+                paths[0],
+                repair_inconsistent_entries=repair_inconsistent_entries,
+                persist_repaired_entries=persist_repaired_entries,
+                no_salvage=no_salvage,
+            )
         return _load_single_referability_cache(
             paths[0],
             repair_inconsistent_entries=repair_inconsistent_entries,
@@ -7981,7 +8148,11 @@ def main():
     )
     parser.add_argument(
         "--referability_cache", type=str, required=True,
-        help="Referability cache JSON path or glob (for example output/referability_cache/flash*.json) produced by scripts/run_vlm_referability.py",
+        help=(
+            "Referability batch cache JSON path, batch glob, or scene_status.json produced "
+            "by scripts/run_vlm_referability.py; passing scene_status.json automatically "
+            "loads every currently active batch"
+        ),
     )
     parser.add_argument(
         "--label_map", type=str, default=None,
