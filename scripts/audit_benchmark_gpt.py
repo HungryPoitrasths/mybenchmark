@@ -47,6 +47,7 @@ DEFAULT_MAX_IMAGE_EDGE = 2048
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_FAILED_API_RETRIES = 1
 DEFAULT_FAILED_API_RETRY_DELAY = 5.0
+DEFAULT_REQUEST_INTERVAL = 0.0
 MAX_API_ATTEMPTS = 4
 DEFAULT_API_KEY_ENV_NAMES = ("OPENAI_API_KEY", "API_KEY")
 
@@ -587,6 +588,33 @@ def _is_retryable(exc: Exception) -> bool:
     return any(token in text for token in ("rate limit", "timeout", "timed out", "overloaded", "connection reset"))
 
 
+class ApiRequestLimiter:
+    """Enforce a process-wide minimum interval between API request starts."""
+
+    def __init__(
+        self,
+        interval_seconds: float,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.interval_seconds = max(0.0, interval_seconds)
+        self._clock = clock
+        self._sleeper = sleeper
+        self._lock = threading.Lock()
+        self._next_allowed_at = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = self._clock()
+            delay = max(0.0, self._next_allowed_at - now)
+            request_start = now + delay
+            self._next_allowed_at = request_start + self.interval_seconds
+        if delay > 0:
+            logger.info("API rate limit: waiting %.1fs before the next request", delay)
+            self._sleeper(delay)
+
+
 def _get_openai_client(api_key: str, base_url: str | None):
     key = (api_key, base_url)
     cache = getattr(_CLIENT_LOCAL, "clients", None)
@@ -596,7 +624,9 @@ def _get_openai_client(api_key: str, base_url: str | None):
     if key not in cache:
         from openai import OpenAI
 
-        kwargs: dict[str, Any] = {"api_key": api_key}
+        # Retries are handled below so every HTTP attempt passes through the
+        # shared request limiter instead of the SDK retrying immediately.
+        kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
         if base_url:
             kwargs["base_url"] = base_url
         cache[key] = OpenAI(**kwargs)
@@ -611,10 +641,13 @@ def call_openai_responses(
     base_url: str | None,
     max_output_tokens: int,
     timeout: float,
+    request_limiter: ApiRequestLimiter | None = None,
 ) -> tuple[dict[str, Any], str, dict[str, Any] | None, str | None]:
     last_error: Exception | None = None
     for attempt in range(1, MAX_API_ATTEMPTS + 1):
         try:
+            if request_limiter is not None:
+                request_limiter.wait()
             client = _get_openai_client(api_key, base_url)
             response = client.responses.create(
                 model=model,
@@ -1087,6 +1120,7 @@ def run_audit(
     resume: bool,
     failed_api_retries: int,
     failed_api_retry_delay: float,
+    request_interval: float = DEFAULT_REQUEST_INTERVAL,
     caller: Callable[..., tuple[dict[str, Any], str, dict[str, Any] | None, str | None]] = call_openai_responses,
 ) -> list[dict[str, Any]]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1097,6 +1131,22 @@ def run_audit(
     results_by_index: dict[int, dict[str, Any]] = {}
     pending: list[tuple[int, dict[str, Any], str]] = []
     rejected_cached_results = 0
+    effective_caller = caller
+    if request_interval > 0:
+        request_limiter = ApiRequestLimiter(request_interval)
+        if caller is call_openai_responses:
+            effective_caller = partial(caller, request_limiter=request_limiter)
+        else:
+            def rate_limited_caller(**kwargs: Any):
+                request_limiter.wait()
+                return caller(**kwargs)
+
+            effective_caller = rate_limited_caller
+        logger.info(
+            "Global API request interval enabled: %.1fs (effective maximum %.2f RPM)",
+            request_interval,
+            60.0 / request_interval,
+        )
 
     for source_index, question in enumerate(questions):
         key = cache_key(
@@ -1146,7 +1196,7 @@ def run_audit(
                         timeout=timeout,
                         api_key=api_key,
                         base_url=base_url,
-                        caller=caller,
+                        caller=effective_caller,
                     ),
                     source_index=source_index,
                     failed_api_retries=failed_api_retries,
@@ -1231,6 +1281,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_FAILED_API_RETRY_DELAY,
         help="Initial delay in seconds between whole-question API retries",
     )
+    parser.add_argument(
+        "--request_interval",
+        type=float,
+        default=DEFAULT_REQUEST_INTERVAL,
+        help="Minimum seconds between all API request starts; use 65 for an RPM=1 key",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=None, help="Audit only the first N questions")
     parser.add_argument("--viewer_output", type=Path, default=None, help="Viewer path; defaults to <output_dir>/review.html")
@@ -1265,6 +1321,8 @@ def main() -> None:
         parser.error("--failed_api_retries must be non-negative")
     if args.failed_api_retry_delay < 0:
         parser.error("--failed_api_retry_delay must be non-negative")
+    if args.request_interval < 0:
+        parser.error("--request_interval must be non-negative")
 
     metadata_root = (
         args.scene_metadata_root.resolve()
@@ -1308,6 +1366,7 @@ def main() -> None:
         resume=args.resume,
         failed_api_retries=args.failed_api_retries,
         failed_api_retry_delay=args.failed_api_retry_delay,
+        request_interval=args.request_interval,
     )
     full_report = compile_report(
         results,

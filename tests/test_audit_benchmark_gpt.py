@@ -7,6 +7,7 @@ from unittest import mock
 from PIL import Image
 
 from scripts.audit_benchmark_gpt import (
+    ApiRequestLimiter,
     CHECK_NAMES,
     SceneMetadataResolver,
     applicable_checks,
@@ -55,6 +56,20 @@ def model_payload(overrides: dict[str, str] | None = None) -> dict:
 
 
 class AuditBenchmarkGptTests(unittest.TestCase):
+    def test_api_request_limiter_serializes_request_starts(self) -> None:
+        now = 100.0
+        sleeps: list[float] = []
+
+        def clock() -> float:
+            return now + sum(sleeps)
+
+        limiter = ApiRequestLimiter(65, clock=clock, sleeper=sleeps.append)
+        limiter.wait()
+        limiter.wait()
+        limiter.wait()
+
+        self.assertEqual(sleeps, [65.0, 65.0])
+
     @staticmethod
     def api_error_result() -> dict:
         stage = {
@@ -231,6 +246,53 @@ class AuditBenchmarkGptTests(unittest.TestCase):
         self.assertNotIn("verbosity", text_config)
         self.assertTrue(text_config["format"]["strict"])
         self.assertEqual(text_config["format"]["type"], "json_schema")
+
+    def test_responses_api_limits_every_retry_attempt(self) -> None:
+        payload = model_payload({"referability": "pass"})
+
+        class FakeResponse:
+            output_text = json.dumps(payload)
+            usage = None
+            id = "response-1"
+
+        class FakeResponses:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def create(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    error = RuntimeError("rate limit")
+                    error.status_code = 429
+                    raise error
+                return FakeResponse()
+
+        class FakeLimiter:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def wait(self) -> None:
+                self.calls += 1
+
+        fake_responses = FakeResponses()
+        fake_limiter = FakeLimiter()
+        fake_client = type("FakeClient", (), {"responses": fake_responses})()
+        with (
+            mock.patch("scripts.audit_benchmark_gpt._get_openai_client", return_value=fake_client),
+            mock.patch("scripts.audit_benchmark_gpt.time.sleep"),
+        ):
+            call_openai_responses(
+                model="gpt-4.1-mini",
+                content=[{"type": "input_text", "text": "audit"}],
+                api_key="test",
+                base_url=None,
+                max_output_tokens=100,
+                timeout=1,
+                request_limiter=fake_limiter,
+            )
+
+        self.assertEqual(fake_responses.calls, 2)
+        self.assertEqual(fake_limiter.calls, 2)
 
     def test_ordered_images_put_reasoning_frame_last_and_deduplicate(self) -> None:
         question = {
