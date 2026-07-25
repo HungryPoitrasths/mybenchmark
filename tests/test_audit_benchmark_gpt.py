@@ -14,6 +14,7 @@ from scripts.audit_benchmark_gpt import (
     audit_question,
     call_openai_responses,
     ordered_image_names,
+    resolve_api_key,
     response_json_schema,
 )
 
@@ -49,6 +50,14 @@ def model_payload(overrides: dict[str, str] | None = None) -> dict:
 
 
 class AuditBenchmarkGptTests(unittest.TestCase):
+    def test_api_key_falls_back_to_api_key_environment_variable(self) -> None:
+        with mock.patch.dict("os.environ", {"API_KEY": "lab-secret"}, clear=True):
+            self.assertEqual(resolve_api_key(), ("lab-secret", "API_KEY"))
+
+    def test_explicit_api_key_environment_variable_is_strict(self) -> None:
+        with mock.patch.dict("os.environ", {"API_KEY": "lab-secret"}, clear=True):
+            self.assertIsNone(resolve_api_key("CUSTOM_API_KEY"))
+
     def test_responses_api_uses_strict_json_schema_without_verbosity(self) -> None:
         payload = model_payload({"referability": "pass"})
 

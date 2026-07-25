@@ -25,7 +25,11 @@ from scripts.audit_benchmark_gpt import (
     image_roles,
     question_fingerprint,
 )
-from scripts.make_viewer import _resolve_image_path
+from scripts.make_viewer import (
+    _build_simple_sections,
+    _render_simple_section,
+    _resolve_image_path,
+)
 
 
 CHECK_LABELS = {
@@ -265,10 +269,17 @@ def _render_card(
         f'<span>#{source_index}</span><span>{html.escape(str(question.get("level") or ""))}</span>'
         f'<span>{html.escape(qtype)}</span><span>scene {html.escape(str(question.get("scene_id") or ""))}</span>'
     )
+    objects, relations = _build_simple_sections(question)
+    simple_fields = (
+        '<section class="simple-panel">'
+        + _render_simple_section("Objects", objects)
+        + _render_simple_section("Relations", relations)
+        + "</section>"
+    )
     return (
         f'<article class="audit-card" data-source-index="{source_index}" data-deleted="false" data-type="{html.escape(qtype, quote=True)}" '
         f'data-categories="{html.escape(category_value, quote=True)}">'
-        '<header class="card-head"><div class="metadata">' + metadata + '</div><div class="tags">' + tags + '</div></header>'
+        + '<div class="visual-column">'
         + _render_images(
             question,
             scannet_roots=scannet_roots,
@@ -276,13 +287,23 @@ def _render_card(
             scannetpp_sensor=scannetpp_sensor,
             max_image_width=max_image_width,
         )
-        + '<section class="question-block"><h2>原题</h2>' + _render_question(question) + "</section>"
-        + '<section class="problem-block"><h2>需人工检查</h2>' + _render_issues(result) + "</section>"
+        + "</div>"
+        + '<div class="card-body"><header class="card-head"><div class="metadata">'
+        + metadata
+        + '</div><div class="tags">'
+        + tags
+        + '</div></header><section class="question-block"><h2>原题</h2>'
+        + _render_question(question)
+        + "</section>"
+        + simple_fields
+        + '<section class="problem-block"><h2>需人工检查</h2>'
+        + _render_issues(result)
+        + "</section>"
         + '<section class="trace-block"><h2>审核轨迹</h2>'
         + _render_stage("GPT-4.1-mini 初审", result.get("primary_result"))
         + _render_stage("GPT-5.2 复核", result.get("review_result"), open_by_default=True)
         + "</section>"
-        + '<footer><button type="button" class="delete-toggle">Delete</button></footer></article>'
+        + '<footer><button type="button" class="delete-toggle">Delete</button></footer></div></article>'
     )
 
 
@@ -294,7 +315,7 @@ def build_viewer_html(
     scannet_roots: list[Path],
     scannetpp_roots: list[Path],
     scannetpp_sensor: str = "iphone",
-    max_image_width: int = 1200,
+    max_image_width: int = 480,
 ) -> str:
     types = sorted({str(question.get("type") or "unknown") for question, _ in joined})
     category_counts = Counter(
@@ -328,33 +349,39 @@ def build_viewer_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
 <style>
-:root{{--bg:#f4f5f6;--paper:#fff;--text:#17191c;--muted:#687079;--line:#d9dde1;--red:#a52620;--red-bg:#fff1ef;--green:#176b45;--green-bg:#eaf7f0;--blue:#215d8f;--amber:#8a5a0a}}
+:root{{--bg:#f0f2f5;--paper:#fff;--text:#17191c;--muted:#687079;--line:#d9dde1;--red:#a52620;--red-bg:#fff1ef;--green:#176b45;--green-bg:#eaf7f0;--blue:#215d8f;--amber:#8a5a0a}}
 *{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 Arial,"Microsoft YaHei",sans-serif;letter-spacing:0}}
-.topbar{{position:sticky;top:0;z-index:20;background:#202428;color:#fff;border-bottom:1px solid #000;padding:14px 22px}}
-.topbar-inner{{max-width:1680px;margin:auto;display:flex;align-items:center;gap:18px;flex-wrap:wrap}}
+.topbar{{position:sticky;top:0;z-index:20;background:#fff;color:var(--text);border-bottom:1px solid var(--line);padding:13px 20px;box-shadow:0 1px 3px #00000012}}
+.topbar-inner{{max-width:1100px;margin:auto;display:flex;align-items:center;gap:16px;flex-wrap:wrap}}
 h1{{font-size:18px;margin:0 12px 0 0;white-space:nowrap}} .controls{{display:flex;gap:10px;align-items:center;flex-wrap:wrap}}
-label{{font-size:12px;color:#c9ced3}} select,button{{font:inherit;border:1px solid #aeb5bc;border-radius:6px;background:#fff;color:#202428;padding:7px 10px}}
-button{{cursor:pointer;font-weight:700}} button:hover{{border-color:#69737c;background:#f3f5f6}} #export{{margin-left:auto}}
-.counter{{color:#e4e7e9;min-width:170px}} main{{max-width:1680px;margin:22px auto;padding:0 18px 80px;display:grid;gap:18px}}
-.audit-card{{background:var(--paper);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-shadow:0 1px 2px #0000000d}}
-.audit-card[data-deleted="true"]{{opacity:.48;border-color:#8d98a1}} .audit-card.filtered{{display:none}}
-.card-head{{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:center}}
+label{{font-size:12px;color:#5f6871}} select,button{{font:inherit;border:1px solid #aeb5bc;border-radius:6px;background:#fff;color:#202428;padding:7px 10px}}
+button{{cursor:pointer;font-weight:700}} button:hover{{border-color:#69737c;background:#f3f5f6}} #export{{margin-left:auto;background:#2563eb;border-color:#1d4ed8;color:#fff}}
+.counter{{color:#58616a;min-width:155px}} main{{max-width:1100px;margin:20px auto;padding:0 14px 80px}}
+.audit-card{{display:flex;background:var(--paper);border-radius:8px;overflow:hidden;box-shadow:0 2px 6px #0000001f;margin-bottom:18px}}
+.audit-card[data-deleted="true"]{{background:#f3f4f6}} .audit-card[data-deleted="true"] .visual-column,.audit-card[data-deleted="true"] .card-body>:not(footer){{filter:grayscale(1);opacity:.42}} .audit-card.filtered{{display:none}}
+.visual-column{{flex:0 0 480px;width:480px;background:#222}} .card-body{{position:relative;flex:1;min-width:0;padding:18px 20px 62px}}
+.card-head{{padding:0 0 10px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}
 .metadata,.tags{{display:flex;gap:7px;align-items:center;flex-wrap:wrap}} .metadata span{{color:#4e5861;border-right:1px solid var(--line);padding-right:7px}}
 .tag{{font-size:12px;color:var(--red);background:var(--red-bg);border:1px solid #efb9b4;border-radius:999px;padding:2px 8px}}
-.frames{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:1px;background:var(--line);border-bottom:1px solid var(--line)}}
-.frame{{margin:0;background:#181a1c;min-width:0;display:flex;flex-direction:column}} .frame img{{width:100%;height:auto;max-height:68vh;object-fit:contain;display:block;flex:1}}
-figcaption{{background:#fff;padding:7px 10px;display:flex;justify-content:space-between;gap:12px;color:var(--muted)}} figcaption strong{{color:var(--text)}}
-.missing{{min-height:220px;padding:24px;background:#f1f2f3;color:var(--red);display:grid;place-content:center;text-align:center;overflow-wrap:anywhere}}
-.question-block,.problem-block,.trace-block{{padding:16px 18px;border-bottom:1px solid var(--line)}} h2{{font-size:13px;text-transform:uppercase;color:#515a62;margin:0 0 10px}}
+.frames{{width:100%;display:block;background:#222}} .frame{{margin:0;background:#181a1c;min-width:0;display:flex;flex-direction:column}}
+.frame+.frame{{border-top:1px solid #3f454a}} .frame img{{width:480px;height:auto;display:block}}
+figcaption{{background:#1a1a1a;padding:3px 8px;display:flex;justify-content:space-between;gap:12px;color:#aeb5bc;font-size:11px}} figcaption strong{{color:#d9dde1}}
+.missing{{width:480px;min-height:200px;padding:20px;background:#222;color:#aaa;display:grid;place-content:center;text-align:center;overflow-wrap:anywhere}}
+.question-block,.problem-block,.trace-block{{padding:12px 0;border-top:1px solid var(--line)}} h2{{font-size:12px;text-transform:uppercase;color:#626b74;margin:0 0 8px}}
 .question-text{{font-size:16px;margin:0 0 12px;max-width:1200px}} .options{{list-style:none;padding:0;margin:0;display:grid;gap:5px;max-width:900px}}
 .option{{padding:7px 10px;border-left:3px solid #c6ccd1;background:#f7f8f9}} .option span{{display:inline-block;width:28px;font-weight:700}} .option.correct{{border-color:var(--green);background:var(--green-bg)}}
 .answer{{margin-top:10px;color:var(--green)}} .answer span{{margin-left:8px;color:#384047}} .issues{{display:grid;gap:8px}}
+.simple-panel{{padding:12px 0;border-top:1px solid var(--line)}} .simple-section+.simple-section{{margin-top:12px}}
+.simple-section-title{{font-size:12px;font-weight:700;color:#626b74;margin-bottom:6px;text-transform:uppercase}}
+.simple-list{{display:grid;gap:7px;grid-template-columns:repeat(auto-fit,minmax(125px,1fr))}}
+.simple-item{{padding:7px 9px;border-radius:6px;background:#f8fafc;border:1px solid #e5e7eb;color:#374151}}
+.simple-key{{font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase}} .simple-value{{margin-top:3px;color:#111;word-break:break-word}} .simple-empty{{color:#9ca3af}}
 .issue{{border-left:4px solid var(--red);background:var(--red-bg);padding:9px 12px;max-width:1200px}} .issue div{{display:flex;gap:10px;align-items:center}} .issue code{{color:var(--red)}} .issue p{{margin:4px 0 0}}
 .trace{{border-top:1px solid var(--line);padding:8px 0}} .trace summary{{cursor:pointer;font-weight:700}} .stage-status{{font-size:12px;color:var(--blue);margin-left:6px}}
 table{{border-collapse:collapse;width:100%;margin-top:9px}} th,td{{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}} th{{width:150px;background:#f6f7f8}}
 .verdict{{font-weight:700}} .verdict.pass{{color:var(--green)}} .verdict.fail,.verdict.uncertain{{color:var(--red)}} .verdict.not_applicable{{color:var(--muted)}} .diagnostic{{color:var(--red);overflow-wrap:anywhere}}
-footer{{padding:12px 16px;display:flex;justify-content:flex-end}} .delete-toggle{{color:#fff;background:var(--red);border-color:var(--red)}} .audit-card[data-deleted="true"] .delete-toggle{{background:var(--blue);border-color:var(--blue)}}
-@media(max-width:700px){{.topbar{{position:static;padding:12px}} #export{{margin-left:0}} main{{padding:0 8px}} .card-head{{align-items:flex-start;flex-direction:column}} figcaption{{flex-direction:column;gap:2px}}}}
+footer{{position:absolute;right:20px;bottom:16px;display:flex;justify-content:flex-end}} .delete-toggle{{color:#374151;background:#fff;border-color:#d1d5db;font-size:12px}} .audit-card[data-deleted="true"] .delete-toggle{{color:#1d4ed8;border-color:#2563eb}}
+@media(max-width:800px){{.topbar{{position:static;padding:12px}} #export{{margin-left:0}} main{{padding:0 8px}} .audit-card{{display:block}} .visual-column{{width:100%}} .frame img,.missing{{width:100%}} .card-head{{align-items:flex-start;flex-direction:column}} figcaption{{flex-direction:column;gap:2px}}}}
 </style>
 </head>
 <body>
@@ -421,7 +448,7 @@ def generate_viewer(
     scannet_roots: list[Path],
     scannetpp_roots: list[Path],
     scannetpp_sensor: str = "iphone",
-    max_image_width: int = 1200,
+    max_image_width: int = 480,
 ) -> dict[str, int]:
     _, questions = load_benchmark(benchmark_path)
     _, audit_results = _load_audit(audit_path)
@@ -450,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scannet_image_root", action="append", default=[])
     parser.add_argument("--scannetpp_image_root", action="append", default=[])
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone")
-    parser.add_argument("--max_image_width", type=int, default=1200)
+    parser.add_argument("--max_image_width", type=int, default=480)
     return parser
 
 

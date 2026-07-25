@@ -39,7 +39,7 @@ class MakeGptAuditViewerTests(unittest.TestCase):
         self.question = {
             "scene_id": "abc12345",
             "level": "L2",
-            "type": "object_move_agent",
+            "type": "object_rotate_object_centric",
             "image_name": "first.jpg",
             "auxiliary_image_names": ["bridge.jpg"],
             "reasoning_frame_2": "last.jpg",
@@ -47,6 +47,10 @@ class MakeGptAuditViewerTests(unittest.TestCase):
             "options": ["left", "right"],
             "answer": "B",
             "correct_value": "right",
+            "moved_obj_label": "table",
+            "query_obj_label": "lamp",
+            "obj_face_label": "chair",
+            "obj_ref_label": "desk",
         }
 
     def test_join_rejects_changed_benchmark(self) -> None:
@@ -83,6 +87,10 @@ class MakeGptAuditViewerTests(unittest.TestCase):
         self.assertIn("review_edited.html", rendered)
         self.assertIn('id="category"', rendered)
         self.assertIn('id="qtype"', rendered)
+        self.assertIn("Objects", rendered)
+        self.assertIn('<div class="simple-key">reference</div>', rendered)
+        self.assertIn('<div class="simple-value">desk</div>', rendered)
+        self.assertIn('<div class="simple-key">facing</div>', rendered)
 
     def test_generate_viewer_writes_self_contained_html(self) -> None:
         result = flagged_result(self.question)

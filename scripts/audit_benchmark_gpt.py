@@ -45,6 +45,7 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2400
 DEFAULT_MAX_IMAGE_EDGE = 2048
 DEFAULT_MAX_WORKERS = 4
 MAX_API_ATTEMPTS = 4
+DEFAULT_API_KEY_ENV_NAMES = ("OPENAI_API_KEY", "API_KEY")
 
 CHECK_REFERABILITY = "referability"
 CHECK_OCCLUSION = "occlusion_visibility"
@@ -90,6 +91,16 @@ _CLIENT_LOCAL = threading.local()
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def resolve_api_key(preferred_env: str | None = None) -> tuple[str, str] | None:
+    """Return the first configured API key and its environment variable name."""
+    env_names = (preferred_env,) if preferred_env else DEFAULT_API_KEY_ENV_NAMES
+    for env_name in env_names:
+        value = str(os.getenv(env_name, "")).strip()
+        if value:
+            return value, env_name
+    return None
 
 
 def canonical_json(value: Any) -> str:
@@ -893,6 +904,7 @@ def cache_key(
     max_image_edge: int,
     max_output_tokens: int,
     scannetpp_sensor: str,
+    base_url: str | None,
 ) -> str:
     return sha256_json(
         {
@@ -904,6 +916,7 @@ def cache_key(
             "max_image_edge": max_image_edge,
             "max_output_tokens": max_output_tokens,
             "scannetpp_sensor": scannetpp_sensor,
+            "base_url": base_url,
         }
     )
 
@@ -1009,6 +1022,7 @@ def run_audit(
             max_image_edge=max_image_edge,
             max_output_tokens=max_output_tokens,
             scannetpp_sensor=scannetpp_sensor,
+            base_url=base_url,
         )
         cached_item = cached.get(key)
         if cached_item and isinstance(cached_item.get("result"), dict):
@@ -1096,8 +1110,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene_metadata_root", type=Path, default=None, help="Scene metadata directory; defaults to <benchmark_dir>/scene_metadata")
     parser.add_argument("--primary_model", default=DEFAULT_PRIMARY_MODEL)
     parser.add_argument("--review_model", default=DEFAULT_REVIEW_MODEL)
-    parser.add_argument("--api_key_env", default="OPENAI_API_KEY")
-    parser.add_argument("--base_url", default=None)
+    parser.add_argument(
+        "--api_key_env",
+        default=None,
+        help="API-key environment variable; by default tries OPENAI_API_KEY then API_KEY",
+    )
+    parser.add_argument(
+        "--base_url",
+        default=None,
+        help="Optional OpenAI-compatible API base URL (OPENAI_BASE_URL is also supported by the SDK)",
+    )
     parser.add_argument("--max_workers", type=int, default=DEFAULT_MAX_WORKERS)
     parser.add_argument("--max_output_tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
     parser.add_argument("--max_image_edge", type=int, default=DEFAULT_MAX_IMAGE_EDGE)
@@ -1142,9 +1164,19 @@ def main() -> None:
         logger.warning("Scene metadata root is unavailable: %s", metadata_root)
         metadata_root = None
 
-    api_key = str(os.getenv(args.api_key_env, "")).strip()
-    if not api_key:
-        parser.error(f"Environment variable {args.api_key_env} is not set")
+    resolved_api_key = resolve_api_key(args.api_key_env)
+    if resolved_api_key is None:
+        if args.api_key_env:
+            parser.error(f"Environment variable {args.api_key_env} is not set")
+        parser.error(
+            "None of the API-key environment variables are set: "
+            + ", ".join(DEFAULT_API_KEY_ENV_NAMES)
+        )
+    api_key, api_key_env = resolved_api_key
+    logger.info("Using API key from environment variable %s", api_key_env)
+    base_url = str(args.base_url or os.getenv("OPENAI_BASE_URL") or "").strip() or None
+    if base_url:
+        logger.info("Using OpenAI-compatible API base URL %s", base_url)
 
     results = run_audit(
         questions,
@@ -1161,7 +1193,7 @@ def main() -> None:
         timeout=args.timeout,
         max_workers=args.max_workers,
         api_key=api_key,
-        base_url=args.base_url,
+        base_url=base_url,
         resume=args.resume,
     )
     full_report = compile_report(
