@@ -16,6 +16,7 @@ import base64
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from functools import partial
 import hashlib
 from io import BytesIO
 import json
@@ -44,6 +45,8 @@ DEFAULT_REVIEW_MODEL = "gpt-5.2"
 DEFAULT_MAX_OUTPUT_TOKENS = 2400
 DEFAULT_MAX_IMAGE_EDGE = 2048
 DEFAULT_MAX_WORKERS = 4
+DEFAULT_FAILED_API_RETRIES = 1
+DEFAULT_FAILED_API_RETRY_DELAY = 5.0
 MAX_API_ATTEMPTS = 4
 DEFAULT_API_KEY_ENV_NAMES = ("OPENAI_API_KEY", "API_KEY")
 
@@ -781,6 +784,79 @@ def _final_problem_checks(stage: dict[str, Any], expected_checks: list[str]) -> 
     return [name for name in expected_checks if (checks.get(name) or {}).get("verdict") != "pass"]
 
 
+def result_has_unresolved_api_failure(result: dict[str, Any]) -> bool:
+    """Return True when the authoritative model stage ended in an API error."""
+    if result.get("final_source") == "input_validation":
+        return False
+    final_stage = result.get("final_result")
+    return isinstance(final_stage, dict) and final_stage.get("status") == "error"
+
+
+def reusable_progress_result(result: dict[str, Any]) -> bool:
+    """Only reuse deterministic input errors or a valid authoritative model result."""
+    if result.get("final_source") == "input_validation":
+        return True
+    final_stage = result.get("final_result")
+    return isinstance(final_stage, dict) and final_stage.get("status") == "ok"
+
+
+def _api_failure_snapshot(result: dict[str, Any], attempt: int) -> dict[str, Any]:
+    def stage_summary(value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        return {
+            "model": value.get("model"),
+            "status": value.get("status"),
+            "error": value.get("error"),
+        }
+
+    return {
+        "attempt": attempt,
+        "completed_at": result.get("completed_at"),
+        "primary": stage_summary(result.get("primary_result")),
+        "review": stage_summary(result.get("review_result")),
+        "final": stage_summary(result.get("final_result")),
+    }
+
+
+def run_with_api_failure_retries(
+    audit_once: Callable[[], dict[str, Any]],
+    *,
+    source_index: int,
+    failed_api_retries: int,
+    failed_api_retry_delay: float,
+) -> dict[str, Any]:
+    """Retry a whole question when its authoritative API stage failed."""
+    retry_count = 0
+    failure_history: list[dict[str, Any]] = []
+    while True:
+        result = audit_once()
+        if not result_has_unresolved_api_failure(result):
+            break
+        failure_history.append(_api_failure_snapshot(result, retry_count + 1))
+        if retry_count >= failed_api_retries:
+            break
+        delay = failed_api_retry_delay * (2**retry_count)
+        retry_count += 1
+        logger.warning(
+            "Question %d ended with an API error; whole-question retry %d/%d in %.1fs",
+            source_index,
+            retry_count,
+            failed_api_retries,
+            delay,
+        )
+        if delay > 0:
+            time.sleep(delay)
+
+    if failure_history:
+        result = {
+            **result,
+            "api_retry_count": retry_count,
+            "api_failure_history": failure_history,
+        }
+    return result
+
+
 def audit_question(
     question: dict[str, Any],
     source_index: int,
@@ -962,6 +1038,12 @@ def result_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "flagged": status_counts.get("flagged", 0),
         "sent_to_review_model": primary_referred,
         "review_model_overturned_to_pass": review_passed,
+        "api_retried_questions": sum(
+            1 for item in results if int(item.get("api_retry_count") or 0) > 0
+        ),
+        "unresolved_api_failures": sum(
+            1 for item in results if result_has_unresolved_api_failure(item)
+        ),
         "problem_checks": dict(sorted(problem_counts.items())),
     }
 
@@ -1003,6 +1085,8 @@ def run_audit(
     api_key: str,
     base_url: str | None,
     resume: bool,
+    failed_api_retries: int,
+    failed_api_retry_delay: float,
     caller: Callable[..., tuple[dict[str, Any], str, dict[str, Any] | None, str | None]] = call_openai_responses,
 ) -> list[dict[str, Any]]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1012,6 +1096,7 @@ def run_audit(
     metadata = SceneMetadataResolver(metadata_root)
     results_by_index: dict[int, dict[str, Any]] = {}
     pending: list[tuple[int, dict[str, Any], str]] = []
+    rejected_cached_results = 0
 
     for source_index, question in enumerate(questions):
         key = cache_key(
@@ -1025,15 +1110,19 @@ def run_audit(
             base_url=base_url,
         )
         cached_item = cached.get(key)
-        if cached_item and isinstance(cached_item.get("result"), dict):
-            results_by_index[source_index] = cached_item["result"]
+        cached_result = cached_item.get("result") if isinstance(cached_item, dict) else None
+        if isinstance(cached_result, dict) and reusable_progress_result(cached_result):
+            results_by_index[source_index] = cached_result
         else:
+            if isinstance(cached_result, dict):
+                rejected_cached_results += 1
             pending.append((source_index, question, key))
 
     logger.info(
-        "Audit selection: total=%d cached=%d pending=%d",
+        "Audit selection: total=%d cached=%d retry_failed_cache=%d pending=%d",
         len(questions),
         len(results_by_index),
+        rejected_cached_results,
         len(pending),
     )
 
@@ -1041,21 +1130,27 @@ def run_audit(
         with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
             futures = {
                 executor.submit(
-                    audit_question,
-                    question,
-                    source_index,
-                    metadata=metadata,
-                    scannet_roots=scannet_roots,
-                    scannetpp_roots=scannetpp_roots,
-                    scannetpp_sensor=scannetpp_sensor,
-                    primary_model=primary_model,
-                    review_model=review_model,
-                    max_image_edge=max_image_edge,
-                    max_output_tokens=max_output_tokens,
-                    timeout=timeout,
-                    api_key=api_key,
-                    base_url=base_url,
-                    caller=caller,
+                    run_with_api_failure_retries,
+                    partial(
+                        audit_question,
+                        question,
+                        source_index,
+                        metadata=metadata,
+                        scannet_roots=scannet_roots,
+                        scannetpp_roots=scannetpp_roots,
+                        scannetpp_sensor=scannetpp_sensor,
+                        primary_model=primary_model,
+                        review_model=review_model,
+                        max_image_edge=max_image_edge,
+                        max_output_tokens=max_output_tokens,
+                        timeout=timeout,
+                        api_key=api_key,
+                        base_url=base_url,
+                        caller=caller,
+                    ),
+                    source_index=source_index,
+                    failed_api_retries=failed_api_retries,
+                    failed_api_retry_delay=failed_api_retry_delay,
                 ): (source_index, key)
                 for source_index, question, key in pending
             }
@@ -1124,6 +1219,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max_output_tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS)
     parser.add_argument("--max_image_edge", type=int, default=DEFAULT_MAX_IMAGE_EDGE)
     parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument(
+        "--failed_api_retries",
+        type=int,
+        default=DEFAULT_FAILED_API_RETRIES,
+        help="Whole-question retries after the authoritative API stage fails",
+    )
+    parser.add_argument(
+        "--failed_api_retry_delay",
+        type=float,
+        default=DEFAULT_FAILED_API_RETRY_DELAY,
+        help="Initial delay in seconds between whole-question API retries",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", type=int, default=None, help="Audit only the first N questions")
     parser.add_argument("--viewer_output", type=Path, default=None, help="Viewer path; defaults to <output_dir>/review.html")
@@ -1154,6 +1261,10 @@ def main() -> None:
         parser.error("At least one --scannet_image_root or --scannetpp_image_root is required")
     if args.max_workers < 1:
         parser.error("--max_workers must be at least 1")
+    if args.failed_api_retries < 0:
+        parser.error("--failed_api_retries must be non-negative")
+    if args.failed_api_retry_delay < 0:
+        parser.error("--failed_api_retry_delay must be non-negative")
 
     metadata_root = (
         args.scene_metadata_root.resolve()
@@ -1195,6 +1306,8 @@ def main() -> None:
         api_key=api_key,
         base_url=base_url,
         resume=args.resume,
+        failed_api_retries=args.failed_api_retries,
+        failed_api_retry_delay=args.failed_api_retry_delay,
     )
     full_report = compile_report(
         results,

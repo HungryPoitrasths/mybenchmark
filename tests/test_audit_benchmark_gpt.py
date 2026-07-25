@@ -12,10 +12,15 @@ from scripts.audit_benchmark_gpt import (
     applicable_checks,
     attachment_pairs,
     audit_question,
+    cache_key,
     call_openai_responses,
     ordered_image_names,
+    result_has_unresolved_api_failure,
+    reusable_progress_result,
     resolve_api_key,
     response_json_schema,
+    run_audit,
+    run_with_api_failure_retries,
 )
 
 
@@ -50,6 +55,141 @@ def model_payload(overrides: dict[str, str] | None = None) -> dict:
 
 
 class AuditBenchmarkGptTests(unittest.TestCase):
+    @staticmethod
+    def api_error_result() -> dict:
+        stage = {
+            "model": "gpt-5.2",
+            "status": "error",
+            "error": "401 Unauthorized",
+            "result": None,
+        }
+        return {
+            "source_index": 4,
+            "final_source": "review",
+            "final_status": "flagged",
+            "primary_result": {**stage, "model": "gpt-4.1-mini"},
+            "review_result": stage,
+            "final_result": stage,
+            "completed_at": "2026-07-25T00:00:00+00:00",
+        }
+
+    def test_whole_question_api_failure_is_retried_until_success(self) -> None:
+        successful = {
+            "source_index": 4,
+            "final_source": "primary",
+            "final_status": "passed",
+            "final_result": {"model": "gpt-4.1-mini", "status": "ok", "error": None},
+        }
+        results = iter([self.api_error_result(), successful])
+        calls = 0
+
+        def audit_once() -> dict:
+            nonlocal calls
+            calls += 1
+            return next(results)
+
+        result = run_with_api_failure_retries(
+            audit_once,
+            source_index=4,
+            failed_api_retries=2,
+            failed_api_retry_delay=0,
+        )
+        self.assertEqual(calls, 2)
+        self.assertEqual(result["final_status"], "passed")
+        self.assertEqual(result["api_retry_count"], 1)
+        self.assertEqual(len(result["api_failure_history"]), 1)
+        self.assertFalse(result_has_unresolved_api_failure(result))
+
+    def test_whole_question_api_failure_retry_is_bounded(self) -> None:
+        calls = 0
+
+        def audit_once() -> dict:
+            nonlocal calls
+            calls += 1
+            return self.api_error_result()
+
+        result = run_with_api_failure_retries(
+            audit_once,
+            source_index=4,
+            failed_api_retries=2,
+            failed_api_retry_delay=0,
+        )
+        self.assertEqual(calls, 3)
+        self.assertEqual(result["api_retry_count"], 2)
+        self.assertEqual(len(result["api_failure_history"]), 3)
+        self.assertTrue(result_has_unresolved_api_failure(result))
+
+    def test_resume_only_reuses_authoritative_or_input_validation_results(self) -> None:
+        self.assertFalse(reusable_progress_result(self.api_error_result()))
+        self.assertFalse(
+            reusable_progress_result(
+                {"final_source": "review", "final_result": {"status": "invalid"}}
+            )
+        )
+        self.assertTrue(
+            reusable_progress_result(
+                {"final_source": "review", "final_result": {"status": "ok"}}
+            )
+        )
+        self.assertTrue(
+            reusable_progress_result(
+                {"final_source": "input_validation", "final_result": {"status": "input_error"}}
+            )
+        )
+
+    def test_resume_requeues_cached_api_failure(self) -> None:
+        question = {
+            "scene_id": "scene0000_00",
+            "image_name": "missing.jpg",
+            "question": "Q",
+            "type": "direction_agent",
+        }
+        with tempfile.TemporaryDirectory(dir="tests") as tmp:
+            root = Path(tmp)
+            key = cache_key(
+                question,
+                0,
+                primary_model="gpt-4.1-mini",
+                review_model="gpt-5.2",
+                max_image_edge=32,
+                max_output_tokens=100,
+                scannetpp_sensor="iphone",
+                base_url="https://gateway.example/v1",
+            )
+            (root / "progress.jsonl").write_text(
+                json.dumps({"cache_key": key, "result": self.api_error_result()}) + "\n",
+                encoding="utf-8",
+            )
+
+            def caller(**kwargs):
+                raise AssertionError("missing input must not call the API")
+
+            results = run_audit(
+                [question],
+                benchmark_path=root / "benchmark.json",
+                output_dir=root,
+                metadata_root=None,
+                scannet_roots=[root / "images"],
+                scannetpp_roots=[],
+                scannetpp_sensor="iphone",
+                primary_model="gpt-4.1-mini",
+                review_model="gpt-5.2",
+                max_image_edge=32,
+                max_output_tokens=100,
+                timeout=1,
+                max_workers=1,
+                api_key="test",
+                base_url="https://gateway.example/v1",
+                resume=True,
+                failed_api_retries=0,
+                failed_api_retry_delay=0,
+                caller=caller,
+            )
+            progress_lines = (root / "progress.jsonl").read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(results[0]["final_source"], "input_validation")
+        self.assertEqual(len(progress_lines), 2)
+
     def test_api_key_falls_back_to_api_key_environment_variable(self) -> None:
         with mock.patch.dict("os.environ", {"API_KEY": "lab-secret"}, clear=True):
             self.assertEqual(resolve_api_key(), ("lab-secret", "API_KEY"))
