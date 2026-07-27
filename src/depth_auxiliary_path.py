@@ -51,6 +51,8 @@ ROUTE_DEGENERATE_XY_HARD_M = 1.00
 ROUTE_ANGLE_SOFT_DEG = 30.0
 ROUTE_EDGE_BASE_COST = 0.35
 ROUTE_SEARCH_METHOD = "dijkstra_depth_corridor"
+DEFAULT_MAX_CANDIDATE_POSES = 192
+ROUTE_CANDIDATE_PROGRESS_BINS = 12
 VISUAL_PRUNE_ORIENTATION_THRESHOLD_DEG = 80.0
 VISUAL_PRUNE_LOCAL_PERP_HARD_M = 0.80
 VISUAL_REDUNDANCY_METRIC_VERSION = 1
@@ -102,6 +104,48 @@ class VisualRedundancyEvidence:
     orb_inlier_ratio: float
     orb_min_grid_fraction: float
     reason: str
+
+
+@dataclass
+class _RouteGeometryCacheEntry:
+    ts: np.ndarray
+    points: np.ndarray
+    geometric_masks: dict[str, np.ndarray]
+    semantic_conflicts: dict[str, bool]
+
+
+class DepthRouteGeometryCache:
+    """Scene-local cache for route projections shared across main-frame pairs."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[object, ...], _RouteGeometryCacheEntry] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def get(
+        self,
+        key: tuple[object, ...],
+    ) -> _RouteGeometryCacheEntry | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            self.misses += 1
+            return None
+        self.hits += 1
+        return entry
+
+    def put(
+        self,
+        key: tuple[object, ...],
+        entry: _RouteGeometryCacheEntry,
+    ) -> None:
+        self._entries[key] = entry
+
+    def diagnostics(self) -> dict[str, int]:
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "entry_count": len(self._entries),
+        }
 
 
 class DepthVisualRedundancyEvaluator:
@@ -520,7 +564,9 @@ def find_depth_corridor_auxiliary_route(
     group_a_objects: Iterable[Mapping[str, Any]],
     group_b_objects: Iterable[Mapping[str, Any]],
     visual_redundancy_for: Callable[[str, str], VisualRedundancyEvidence] | None = None,
+    geometry_cache: DepthRouteGeometryCache | None = None,
     max_auxiliary_frames: int = MAX_AUXILIARY_FRAMES,
+    max_candidate_poses: int | None = DEFAULT_MAX_CANDIDATE_POSES,
     orientation_threshold_deg: float = ROUTE_ORIENTATION_THRESHOLD_DEG,
     min_overlap_frac: float = ROUTE_MIN_OVERLAP_FRAC,
     min_progress_frac: float = ROUTE_MIN_PROGRESS_FRAC,
@@ -531,6 +577,8 @@ def find_depth_corridor_auxiliary_route(
         return None
     if max_auxiliary_frames < 0:
         raise ValueError("max_auxiliary_frames must be non-negative")
+    if max_candidate_poses is not None and max_candidate_poses < 0:
+        raise ValueError("max_candidate_poses must be non-negative or None")
     group_a = tuple(group_a_objects)
     group_b = tuple(group_b_objects)
     if not group_a or not group_b:
@@ -538,13 +586,51 @@ def find_depth_corridor_auxiliary_route(
 
     center_a = np.asarray(center_a, dtype=np.float64)
     center_b = np.asarray(center_b, dtype=np.float64)
-    ts, points = sample_route_points(center_a, center_b)
+
+    def group_signature(group: tuple[Mapping[str, Any], ...]) -> tuple[object, ...]:
+        signature: list[object] = []
+        for obj in group:
+            signature.append(obj.get("id"))
+            signature.extend(
+                round(float(value), 6)
+                for value in np.asarray(obj["bbox_min"], dtype=np.float64)
+            )
+            signature.extend(
+                round(float(value), 6)
+                for value in np.asarray(obj["bbox_max"], dtype=np.float64)
+            )
+        return tuple(signature)
+
+    geometry_key = (
+        *(round(float(value), 6) for value in center_a),
+        *(round(float(value), 6) for value in center_b),
+        group_signature(group_a),
+        group_signature(group_b),
+    )
+    geometry_entry = geometry_cache.get(geometry_key) if geometry_cache is not None else None
+    if geometry_entry is None:
+        ts, points = sample_route_points(center_a, center_b)
+        geometric_masks = {
+            name: np.asarray(
+                route_visibility_mask(points, pose, intrinsics),
+                dtype=bool,
+            )
+            for name, pose in poses.items()
+        }
+        geometry_entry = _RouteGeometryCacheEntry(
+            ts=ts,
+            points=points,
+            geometric_masks=geometric_masks,
+            semantic_conflicts={},
+        )
+        if geometry_cache is not None:
+            geometry_cache.put(geometry_key, geometry_entry)
+    else:
+        ts = geometry_entry.ts
+        points = geometry_entry.points
+        geometric_masks = geometry_entry.geometric_masks
     sample_interval = 1.0 / max(len(ts) - 1, 1)
     min_progress = max(float(min_progress_frac), sample_interval)
-    geometric_masks = {
-        name: np.asarray(route_visibility_mask(points, pose, intrinsics), dtype=bool)
-        for name, pose in poses.items()
-    }
     depth_cache: dict[str, _FrameCoverage | None] = {}
     aggregate_a = _aggregate_bbox(group_a)
     aggregate_b = _aggregate_bbox(group_b)
@@ -602,21 +688,261 @@ def find_depth_corridor_auxiliary_route(
     frame_a_end = coverage_a.runs[0][1]
     frame_b_start = coverage_b.runs[-1][0]
     responsibility = max(0.0, frame_b_start - frame_a_end)
+    basis = _corridor_basis(
+        center_a, center_b, poses[frame_a_name], poses[frame_b_name]
+    )
+
+    def transition_overlap(frontier: float, next_start: float) -> float:
+        return max(0.0, frontier - next_start)
+
+    direct_overlap = transition_overlap(frame_a_end, frame_b_start)
+    direct_edge = None
+    if (
+        frame_b_start <= frame_a_end + 1e-9
+        and direct_overlap + 1e-9 >= min_overlap_frac
+    ):
+        direct_edge = _edge_metrics(
+            poses[frame_a_name],
+            poses[frame_b_name],
+            next_frontier=1.0,
+            depth_visible_fraction=coverage_b.visible_fraction,
+            basis=basis,
+            orientation_threshold_deg=orientation_threshold_deg,
+        )
+    if direct_edge is not None:
+        return DepthCorridorAuxiliaryRoute(
+            auxiliary_image_names=(),
+            cost=direct_edge.cost + 0.01 * direct_overlap,
+            edge_count=1,
+            route_sample_count=len(ts),
+            frame_a_coverage_end=frame_a_end,
+            frame_b_coverage_start=frame_b_start,
+            auxiliary_responsibility_fraction=responsibility,
+            transition_overlap_fraction=direct_overlap,
+            search_method=ROUTE_SEARCH_METHOD,
+            min_progress_fraction=min_progress,
+            min_depth_valid_fraction=min(
+                coverage_a.valid_fraction,
+                coverage_b.valid_fraction,
+            ),
+            min_depth_visible_fraction=min(
+                coverage_a.visible_fraction,
+                coverage_b.visible_fraction,
+            ),
+            max_local_perpendicular_m=direct_edge.local_perpendicular_m,
+            max_global_perpendicular_m=direct_edge.global_perpendicular_m,
+            max_height_change_m=direct_edge.height_change_m,
+            max_parallel_change_m=direct_edge.parallel_change_m,
+            max_forward_angle_deg=direct_edge.forward_angle_deg,
+            depth_sources=tuple(sorted({coverage_a.source, coverage_b.source})),
+            pre_prune_auxiliary_count=0,
+            pruned_auxiliary_frame_count=0,
+            visual_pruned_auxiliary_frame_count=0,
+            visual_duplicate_candidate_count=0,
+            visual_prune_relaxed_angle_edge_count=0,
+            visual_redundancy_metric_version=VISUAL_REDUNDANCY_METRIC_VERSION,
+            semantic_rejected_frame_count=0,
+        )
+    if max_auxiliary_frames == 0:
+        return None
 
     semantic_rejected = 0
-    candidate_coverages: dict[str, _FrameCoverage] = {}
+    geometric_candidate_coverages: dict[str, _FrameCoverage] = {}
     for image_name, geometric in geometric_masks.items():
         if image_name in {frame_a_name, frame_b_name} or not np.any(geometric):
             continue
-        geometric_runs = _coverage_runs(geometric, ts)
-        if not any(
-            run_end > frame_a_end and run_start <= frame_b_start
-            for run_start, run_end in geometric_runs
-        ):
+        useful_geometric_runs = tuple(
+            (run_start, run_end)
+            for run_start, run_end in _coverage_runs(geometric, ts)
+            if run_end > frame_a_end and run_start <= frame_b_start
+        )
+        if not useful_geometric_runs:
             continue
-        if _semantic_conflict(poses[image_name], intrinsics, group_a, group_b):
+        semantic_conflict = geometry_entry.semantic_conflicts.get(image_name)
+        if semantic_conflict is None:
+            semantic_conflict = _semantic_conflict(
+                poses[image_name],
+                intrinsics,
+                group_a,
+                group_b,
+            )
+            geometry_entry.semantic_conflicts[image_name] = semantic_conflict
+        if semantic_conflict:
             semantic_rejected += 1
             continue
+        geometric_candidate_coverages[image_name] = _FrameCoverage(
+            runs=useful_geometric_runs,
+            valid_fraction=1.0,
+            visible_fraction=1.0,
+            source="geometric_prefilter",
+        )
+
+    def search_best_complete(
+        search_coverages: Mapping[str, _FrameCoverage],
+    ) -> tuple[float, int, float, tuple[str, ...]] | None:
+        queue: list[tuple[float, int, float, int, str, float, tuple[str, ...]]] = [
+            (0.0, 0, 0.0, 0, frame_a_name, frame_a_end, ())
+        ]
+        best_states: dict[tuple[str, float, int], tuple[float, float]] = {
+            (frame_a_name, frame_a_end, 0): (0.0, 0.0)
+        }
+        serial = 0
+        best_complete: tuple[float, int, float, tuple[str, ...]] | None = None
+        while queue:
+            cost, count, overlap_sum, _serial, tail_name, frontier, path = (
+                heapq.heappop(queue)
+            )
+            if best_states.get((tail_name, frontier, count)) != (cost, overlap_sum):
+                continue
+            final_overlap = transition_overlap(frontier, frame_b_start)
+            final_edge = None
+            if (
+                frame_b_start <= frontier + 1e-9
+                and final_overlap + 1e-9 >= min_overlap_frac
+            ):
+                final_edge = _edge_metrics(
+                    poses[tail_name],
+                    poses[frame_b_name],
+                    next_frontier=1.0,
+                    depth_visible_fraction=coverage_b.visible_fraction,
+                    basis=basis,
+                    orientation_threshold_deg=orientation_threshold_deg,
+                )
+            if final_edge is not None:
+                complete = (
+                    cost + final_edge.cost,
+                    count,
+                    overlap_sum + final_overlap,
+                    path,
+                )
+                if best_complete is None or complete[:3] < best_complete[:3]:
+                    best_complete = complete
+            if count >= max_auxiliary_frames:
+                continue
+            for image_name in sorted(search_coverages):
+                if image_name in path:
+                    continue
+                coverage = search_coverages[image_name]
+                for run_start, run_end in coverage.runs:
+                    overlap = transition_overlap(frontier, run_start)
+                    if (
+                        run_start > frontier + 1e-9
+                        or run_end - frontier + 1e-9 < min_progress
+                        or overlap + 1e-9 < min_overlap_frac
+                    ):
+                        continue
+                    edge = _edge_metrics(
+                        poses[tail_name],
+                        poses[image_name],
+                        next_frontier=run_end,
+                        depth_visible_fraction=coverage.visible_fraction,
+                        basis=basis,
+                        orientation_threshold_deg=orientation_threshold_deg,
+                    )
+                    if edge is None:
+                        continue
+                    next_cost = cost + edge.cost
+                    next_overlap = overlap_sum + overlap
+                    next_count = count + 1
+                    key = (image_name, run_end, next_count)
+                    previous = best_states.get(key)
+                    if previous is not None and (next_cost, next_overlap) >= previous:
+                        continue
+                    best_states[key] = (next_cost, next_overlap)
+                    serial += 1
+                    heapq.heappush(
+                        queue,
+                        (
+                            next_cost,
+                            next_count,
+                            next_overlap,
+                            serial,
+                            image_name,
+                            run_end,
+                            path + (image_name,),
+                        ),
+                    )
+        return best_complete
+
+    def find_geometric_bridge_path() -> tuple[str, ...] | None:
+        states: dict[float, tuple[str, ...]] = {frame_a_end: ()}
+        for _count in range(max_auxiliary_frames + 1):
+            for frontier, path in states.items():
+                final_overlap = transition_overlap(frontier, frame_b_start)
+                if (
+                    frame_b_start <= frontier + 1e-9
+                    and final_overlap + 1e-9 >= min_overlap_frac
+                ):
+                    return path
+            if _count >= max_auxiliary_frames:
+                break
+            next_states: dict[float, tuple[str, ...]] = {}
+            for frontier, path in states.items():
+                for image_name, coverage in geometric_candidate_coverages.items():
+                    if image_name in path:
+                        continue
+                    for run_start, run_end in coverage.runs:
+                        overlap = transition_overlap(frontier, run_start)
+                        if (
+                            run_start > frontier + 1e-9
+                            or run_end - frontier + 1e-9 < min_progress
+                            or overlap + 1e-9 < min_overlap_frac
+                        ):
+                            continue
+                        previous_path = next_states.get(run_end)
+                        candidate_path = path + (image_name,)
+                        if previous_path is None or candidate_path < previous_path:
+                            next_states[run_end] = candidate_path
+            if not next_states:
+                return None
+            states = next_states
+        return None
+
+    geometric_bridge_path = find_geometric_bridge_path()
+    if geometric_bridge_path is None:
+        return None
+
+    candidate_names = set(geometric_candidate_coverages)
+    if max_candidate_poses not in (None, 0) and len(candidate_names) > int(
+        max_candidate_poses
+    ):
+        limit = int(max_candidate_poses)
+        selected_names = set(geometric_bridge_path)
+        progress_span = max(frame_b_start - frame_a_end, 1e-9)
+        buckets: list[list[tuple[float, float, str]]] = [
+            [] for _ in range(ROUTE_CANDIDATE_PROGRESS_BINS)
+        ]
+        for image_name, coverage in geometric_candidate_coverages.items():
+            best_run = max(coverage.runs, key=lambda run: (run[1], -run[0]))
+            progress = np.clip(
+                (best_run[1] - frame_a_end) / progress_span,
+                0.0,
+                1.0,
+            )
+            bucket_index = min(
+                int(progress * ROUTE_CANDIDATE_PROGRESS_BINS),
+                ROUTE_CANDIDATE_PROGRESS_BINS - 1,
+            )
+            buckets[bucket_index].append((-best_run[1], best_run[0], image_name))
+        for bucket in buckets:
+            bucket.sort()
+        while len(selected_names) < limit:
+            added = False
+            for bucket in buckets:
+                while bucket and bucket[0][2] in selected_names:
+                    bucket.pop(0)
+                if not bucket:
+                    continue
+                selected_names.add(bucket.pop(0)[2])
+                added = True
+                if len(selected_names) >= limit:
+                    break
+            if not added:
+                break
+        candidate_names = selected_names
+
+    candidate_coverages: dict[str, _FrameCoverage] = {}
+    for image_name in sorted(candidate_names):
         coverage = frame_coverage(image_name)
         if coverage is None or coverage.valid_fraction < DEPTH_MIN_VALID_FRACTION:
             continue
@@ -632,13 +958,6 @@ def find_depth_corridor_auxiliary_route(
                 visible_fraction=coverage.visible_fraction,
                 source=coverage.source,
             )
-
-    basis = _corridor_basis(
-        center_a, center_b, poses[frame_a_name], poses[frame_b_name]
-    )
-
-    def transition_overlap(frontier: float, next_start: float) -> float:
-        return max(0.0, frontier - next_start)
 
     def evaluate_fixed_path(
         names: tuple[str, ...],
@@ -738,89 +1057,7 @@ def find_depth_corridor_auxiliary_route(
                 best = result
         return best
 
-    queue: list[tuple[float, int, float, int, str, float, tuple[str, ...]]] = [
-        (0.0, 0, 0.0, 0, frame_a_name, frame_a_end, ())
-    ]
-    best_states: dict[tuple[str, float, int], tuple[float, float]] = {
-        (frame_a_name, frame_a_end, 0): (0.0, 0.0)
-    }
-    serial = 0
-    best_complete: tuple[float, int, float, tuple[str, ...]] | None = None
-    while queue:
-        cost, count, overlap_sum, _serial, tail_name, frontier, path = heapq.heappop(
-            queue
-        )
-        if best_states.get((tail_name, frontier, count)) != (cost, overlap_sum):
-            continue
-        final_overlap = transition_overlap(frontier, frame_b_start)
-        final_edge = None
-        if (
-            frame_b_start <= frontier + 1e-9
-            and final_overlap + 1e-9 >= min_overlap_frac
-        ):
-            final_edge = _edge_metrics(
-                poses[tail_name],
-                poses[frame_b_name],
-                next_frontier=1.0,
-                depth_visible_fraction=coverage_b.visible_fraction,
-                basis=basis,
-                orientation_threshold_deg=orientation_threshold_deg,
-            )
-        if final_edge is not None:
-            complete = (
-                cost + final_edge.cost,
-                count,
-                overlap_sum + final_overlap,
-                path,
-            )
-            if best_complete is None or complete[:3] < best_complete[:3]:
-                best_complete = complete
-        if count >= max_auxiliary_frames:
-            continue
-        for image_name in sorted(candidate_coverages):
-            if image_name in path:
-                continue
-            coverage = candidate_coverages[image_name]
-            for run_start, run_end in coverage.runs:
-                overlap = transition_overlap(frontier, run_start)
-                if (
-                    run_start > frontier + 1e-9
-                    or run_end - frontier + 1e-9 < min_progress
-                    or overlap + 1e-9 < min_overlap_frac
-                ):
-                    continue
-                edge = _edge_metrics(
-                    poses[tail_name],
-                    poses[image_name],
-                    next_frontier=run_end,
-                    depth_visible_fraction=coverage.visible_fraction,
-                    basis=basis,
-                    orientation_threshold_deg=orientation_threshold_deg,
-                )
-                if edge is None:
-                    continue
-                next_cost = cost + edge.cost
-                next_overlap = overlap_sum + overlap
-                next_count = count + 1
-                key = (image_name, run_end, next_count)
-                previous = best_states.get(key)
-                if previous is not None and (next_cost, next_overlap) >= previous:
-                    continue
-                best_states[key] = (next_cost, next_overlap)
-                serial += 1
-                heapq.heappush(
-                    queue,
-                    (
-                        next_cost,
-                        next_count,
-                        next_overlap,
-                        serial,
-                        image_name,
-                        run_end,
-                        path + (image_name,),
-                    ),
-                )
-
+    best_complete = search_best_complete(candidate_coverages)
     if best_complete is None:
         return None
     selected_names = best_complete[3]

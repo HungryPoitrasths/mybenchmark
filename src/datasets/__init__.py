@@ -7,6 +7,7 @@ from pathlib import Path
 from .base import SceneDataSource
 from .scannet import ScanNetDataSource
 from .scannetpp import ScanNetPPDataSource
+from .scannetpp_depth import DEFAULT_DEPTH_CACHE_SIZE
 
 
 def make_data_source(
@@ -15,6 +16,7 @@ def make_data_source(
     *,
     sensor: str = "iphone",
     frame_root: Path | None = None,
+    depth_cache_size: int = DEFAULT_DEPTH_CACHE_SIZE,
 ) -> SceneDataSource:
     """Create a :class:`SceneDataSource` for a scene.
 
@@ -31,7 +33,10 @@ def make_data_source(
         return ScanNetDataSource(scene_dir)
     if dataset == "scannetpp":
         return ScanNetPPDataSource(
-            scene_dir, sensor=sensor, frame_root=frame_root,
+            scene_dir,
+            sensor=sensor,
+            frame_root=frame_root,
+            depth_cache_size=depth_cache_size,
         )
     raise ValueError(
         f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'."

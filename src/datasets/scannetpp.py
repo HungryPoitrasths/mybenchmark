@@ -739,7 +739,7 @@ def _parse_colmap_images(path: Path) -> list[dict[str, Any]]:
 # ===========================================================================
 
 from .base import DepthFrame, SceneDataSource
-from .scannetpp_depth import ScanNetPPDepthReader
+from .scannetpp_depth import DEFAULT_DEPTH_CACHE_SIZE, ScanNetPPDepthReader
 
 
 class ScanNetPPDataSource(SceneDataSource):
@@ -757,6 +757,7 @@ class ScanNetPPDataSource(SceneDataSource):
         scene_dir: str | Path,
         sensor: str = "iphone",
         frame_root: Path | None = None,
+        depth_cache_size: int = DEFAULT_DEPTH_CACHE_SIZE,
     ) -> None:
         if sensor not in ("iphone", "dslr"):
             raise ValueError(
@@ -769,6 +770,9 @@ class ScanNetPPDataSource(SceneDataSource):
             Path(frame_root) if frame_root
             else Path("output") / "scannetpp_iphone_frames"
         )
+        if depth_cache_size <= 0:
+            raise ValueError("depth_cache_size must be positive")
+        self.depth_cache_size = int(depth_cache_size)
         self._depth_reader: ScanNetPPDepthReader | None = None
 
     # ------------------------------------------------------------------
@@ -835,8 +839,26 @@ class ScanNetPPDataSource(SceneDataSource):
             metadata_path = self.scene_dir / "iphone" / "pose_intrinsic_imu.json"
             if not depth_path.is_file() or not metadata_path.is_file():
                 return None
-            self._depth_reader = ScanNetPPDepthReader(depth_path, metadata_path)
+            self._depth_reader = ScanNetPPDepthReader(
+                depth_path,
+                metadata_path,
+                cache_size=self.depth_cache_size,
+            )
         return self._depth_reader.load(image_name)
+
+    def depth_cache_diagnostics(self) -> dict[str, int | str | None]:
+        if self._depth_reader is None:
+            return {
+                "cache_size_limit": self.depth_cache_size,
+                "cached_frame_count": 0,
+                "cache_hits": 0,
+                "cache_misses": 0,
+                "decode_count": 0,
+                "decoder_redetections": 0,
+                "unreadable_frame_count": 0,
+                "payload_encoding": None,
+            }
+        return self._depth_reader.diagnostics()
 
     def validate(self) -> dict[str, Any]:
         issues: list[str] = []

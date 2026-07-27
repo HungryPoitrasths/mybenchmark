@@ -704,10 +704,16 @@ class SceneMotionCache:
             list[tuple[np.ndarray, list[dict[str, Any]], set[int]]],
         ] = {}
         self._orbit_rotations: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        self._attachment_moved_maps: dict[
+            tuple[int, tuple[float, ...]],
+            dict[int, dict[str, Any]],
+        ] = {}
         self.move_hits = 0
         self.move_misses = 0
         self.rotation_hits = 0
         self.rotation_misses = 0
+        self.attachment_map_hits = 0
+        self.attachment_map_misses = 0
 
     def get_move_states(
         self,
@@ -751,14 +757,45 @@ class SceneMotionCache:
     ) -> None:
         self._orbit_rotations[(int(target_id), int(pivot_id))] = rotations
 
+    def get_attachment_moved_map(
+        self,
+        target_id: int,
+        delta: np.ndarray,
+    ) -> dict[int, dict[str, Any]] | None:
+        key = (
+            int(target_id),
+            tuple(float(value) for value in np.asarray(delta, dtype=np.float64)),
+        )
+        cached = self._attachment_moved_maps.get(key)
+        if cached is None:
+            self.attachment_map_misses += 1
+            return None
+        self.attachment_map_hits += 1
+        return cached
+
+    def put_attachment_moved_map(
+        self,
+        target_id: int,
+        delta: np.ndarray,
+        moved_map: dict[int, dict[str, Any]],
+    ) -> None:
+        key = (
+            int(target_id),
+            tuple(float(value) for value in np.asarray(delta, dtype=np.float64)),
+        )
+        self._attachment_moved_maps[key] = moved_map
+
     def diagnostics(self) -> dict[str, int]:
         return {
             "move_hits": self.move_hits,
             "move_misses": self.move_misses,
             "rotation_hits": self.rotation_hits,
             "rotation_misses": self.rotation_misses,
+            "attachment_map_hits": self.attachment_map_hits,
+            "attachment_map_misses": self.attachment_map_misses,
             "move_source_count": len(self._move_states),
             "rotation_pair_count": len(self._orbit_rotations),
+            "attachment_map_count": len(self._attachment_moved_maps),
         }
 
 
@@ -11005,13 +11042,21 @@ def generate_l3_attachment_move(
             lightweight=True,
             motion_cache=motion_cache,
         ):
-            moved_objects = apply_movement_selective(
-                movement_scene_objects,
-                attachment_graph,
-                root_id,
-                delta,
+            moved_map = (
+                motion_cache.get_attachment_moved_map(root_id, delta)
+                if motion_cache is not None
+                else None
             )
-            moved_map = {int(o["id"]): o for o in moved_objects}
+            if moved_map is None:
+                moved_objects = apply_movement_selective(
+                    movement_scene_objects,
+                    attachment_graph,
+                    root_id,
+                    delta,
+                )
+                moved_map = {int(o["id"]): o for o in moved_objects}
+                if motion_cache is not None:
+                    motion_cache.put_attachment_moved_map(root_id, delta, moved_map)
             valid_move_states.append(
                 (
                     np.asarray(delta, dtype=np.float64),

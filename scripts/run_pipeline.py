@@ -87,9 +87,12 @@ from src.referability_checks import (
 )
 from src.auxiliary_path import MAX_AUXILIARY_FRAMES, VisualPoseGraph
 from src.depth_auxiliary_path import (
+    DEFAULT_MAX_CANDIDATE_POSES,
+    DepthRouteGeometryCache,
     DepthVisualRedundancyEvaluator,
     find_depth_corridor_auxiliary_route,
 )
+from src.datasets.scannetpp_depth import DEFAULT_DEPTH_CACHE_SIZE
 from src.datasets.scannet import ScanNetDataSource
 from src.hybrid_auxiliary_path import HybridAuxiliaryRouter
 from src.legacy_auxiliary_path import (
@@ -131,11 +134,13 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
+MANUAL_ATTACHMENT_CACHE_SCHEMA = "two_hop_attachment_salvage_v1"
+MANUAL_ATTACHMENT_QUESTION_TYPES = ["L3_attachment_chain"]
 PIPELINE_SCENE_STATUS_VERSION = 8
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
-CROSS_FRAME_CHECKPOINT_VERSION = 2
+CROSS_FRAME_CHECKPOINT_VERSION = 3
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
 L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
@@ -723,6 +728,97 @@ def _retain_best_cross_frame_views(
     return kept
 
 
+def _cluster_attachment_reference_questions(
+    pair_questions: list[dict],
+    *,
+    objects_by_id: dict[int, dict],
+    radius_m: float,
+) -> tuple[list[dict], int, int]:
+    """Drop nearby attachment references with identical complete outcomes."""
+    if radius_m <= 0.0:
+        return pair_questions, 0, 0
+
+    questions_by_chain: dict[tuple[int, int], dict[int, list[dict]]] = (
+        defaultdict(lambda: defaultdict(list))
+    )
+    for question in pair_questions:
+        if question.get("type") != "attachment_move":
+            continue
+        try:
+            chain_key = (
+                int(question["root_id"]),
+                int(question["query_obj_id"]),
+            )
+            ref_id = int(question["obj_ref_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        questions_by_chain[chain_key][ref_id].append(question)
+
+    dropped_ref_ids_by_chain: dict[tuple[int, int], set[int]] = {}
+    for chain_key, questions_by_ref in questions_by_chain.items():
+        representatives: list[tuple[np.ndarray, tuple[object, ...]]] = []
+        dropped_ref_ids: set[int] = set()
+        for ref_id, ref_questions in questions_by_ref.items():
+            ref_obj = objects_by_id.get(ref_id)
+            if ref_obj is None:
+                continue
+            try:
+                center_xy = np.asarray(ref_obj["center"], dtype=np.float64)[:2]
+                signatures = tuple(sorted(
+                    (
+                        str(question.get("reference_frame", "")),
+                        str(question.get("old_correct_value", "")),
+                        str(question.get("new_correct_value", "")),
+                        tuple(
+                            round(float(value), 4)
+                            for value in question.get("delta", [])
+                        ),
+                    )
+                    for question in ref_questions
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if center_xy.shape != (2,) or not np.all(np.isfinite(center_xy)):
+                continue
+            duplicate = any(
+                signatures == representative_signatures
+                and float(np.linalg.norm(center_xy - representative_center))
+                <= radius_m
+                for representative_center, representative_signatures in representatives
+            )
+            if duplicate:
+                dropped_ref_ids.add(ref_id)
+                continue
+            representatives.append((center_xy, signatures))
+        if dropped_ref_ids:
+            dropped_ref_ids_by_chain[chain_key] = dropped_ref_ids
+
+    if not dropped_ref_ids_by_chain:
+        return pair_questions, 0, 0
+
+    clustered: list[dict] = []
+    dropped_question_count = 0
+    for question in pair_questions:
+        if question.get("type") != "attachment_move":
+            clustered.append(question)
+            continue
+        try:
+            chain_key = (
+                int(question["root_id"]),
+                int(question["query_obj_id"]),
+            )
+            ref_id = int(question["obj_ref_id"])
+        except (KeyError, TypeError, ValueError):
+            clustered.append(question)
+            continue
+        if ref_id in dropped_ref_ids_by_chain.get(chain_key, set()):
+            dropped_question_count += 1
+            continue
+        clustered.append(question)
+    dropped_ref_count = sum(map(len, dropped_ref_ids_by_chain.values()))
+    return clustered, dropped_ref_count, dropped_question_count
+
+
 def _is_object_move_occlusion_question(question: dict) -> bool:
     return str(question.get("type", "")).strip() == "object_move_occlusion"
 
@@ -1053,6 +1149,22 @@ def _manual_attachment_graph_for_scene(
                 graph[parent].append(child)
         graph = {parent: sorted(children) for parent, children in graph.items()}
     return graph or None
+
+
+def _is_manual_attachment_cache(cache: dict | None) -> bool:
+    return bool(
+        isinstance(cache, dict)
+        and str(cache.get("schema", "")).strip() == MANUAL_ATTACHMENT_CACHE_SCHEMA
+    )
+
+
+def _has_manual_attachment_overrides(cache: dict | None) -> bool:
+    if not isinstance(cache, dict):
+        return False
+    if _is_manual_attachment_cache(cache):
+        return True
+    scene_ids = cache.get("manual_attachment_scene_ids")
+    return isinstance(scene_ids, list) and bool(scene_ids)
 
 
 def _manual_attachment_role_records_for_frame(
@@ -2103,10 +2215,7 @@ def _load_single_referability_cache(
         return None
     with open(path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
-    is_two_hop_manual_cache = (
-        isinstance(raw_data, dict)
-        and str(raw_data.get("schema", "")).strip() == "two_hop_attachment_salvage_v1"
-    )
+    is_two_hop_manual_cache = _is_manual_attachment_cache(raw_data)
     if no_salvage or is_two_hop_manual_cache:
         review_html_paths: list[Path] = []
         review_html_mode = "none"
@@ -2577,9 +2686,9 @@ def _merge_manual_attachment_cache(
     referability_cache: dict[str, object],
     manual_cache: dict[str, object],
 ) -> dict[str, object]:
-    if str(manual_cache.get("schema", "")).strip() != "two_hop_attachment_salvage_v1":
+    if not _is_manual_attachment_cache(manual_cache):
         raise ValueError(
-            "Manual attachment cache must use schema two_hop_attachment_salvage_v1"
+            f"Manual attachment cache must use schema {MANUAL_ATTACHMENT_CACHE_SCHEMA}"
         )
     if str(manual_cache.get("version", "")).strip() != EXPECTED_REFERABILITY_CACHE_VERSION:
         raise ValueError(
@@ -6530,6 +6639,9 @@ def run_pipeline(
     occlusion_max_combinations_per_scene: int = 2000,
     max_move_sources: int | None = None,
     auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
+    auxiliary_max_pose_candidates: int = DEFAULT_MAX_CANDIDATE_POSES,
+    scannetpp_depth_cache_size: int = DEFAULT_DEPTH_CACHE_SIZE,
+    attachment_reference_cluster_radius_m: float = 0.5,
 ):
     """Execute the full PSR-Bench data generation pipeline."""
     _set_pipeline_random_seed()
@@ -6541,11 +6653,34 @@ def run_pipeline(
             f"Unknown auxiliary_route_method: {auxiliary_route_method!r}. "
             f"Expected one of {AUXILIARY_ROUTE_METHODS}."
         )
+    auxiliary_max_pose_candidates = int(auxiliary_max_pose_candidates)
+    if auxiliary_max_pose_candidates < 0:
+        raise ValueError("auxiliary_max_pose_candidates must be >= 0")
+    scannetpp_depth_cache_size = int(scannetpp_depth_cache_size)
+    if scannetpp_depth_cache_size <= 0:
+        raise ValueError("scannetpp_depth_cache_size must be > 0")
+    attachment_reference_cluster_radius_m = float(
+        attachment_reference_cluster_radius_m
+    )
+    if (
+        not np.isfinite(attachment_reference_cluster_radius_m)
+        or attachment_reference_cluster_radius_m < 0.0
+    ):
+        raise ValueError(
+            "attachment_reference_cluster_radius_m must be finite and >= 0"
+        )
 
     if referability_cache is None:
         raise ValueError(
-            "run_pipeline requires a referability_cache generated by scripts/run_vlm_referability.py"
+            "run_pipeline requires a referability_cache or manual attachment cache"
         )
+    if _has_manual_attachment_overrides(referability_cache):
+        if only_question_types != MANUAL_ATTACHMENT_QUESTION_TYPES:
+            logger.info(
+                "Manual attachment cache detected; generating only %s",
+                MANUAL_ATTACHMENT_QUESTION_TYPES[0],
+            )
+        only_question_types = list(MANUAL_ATTACHMENT_QUESTION_TYPES)
     if reset is not None and int(reset) <= 0:
         raise ValueError("reset must be >= 1")
     if reset is not None and not resume:
@@ -7034,7 +7169,8 @@ def run_pipeline(
         if dataset == "scannetpp":
             from src.datasets import make_data_source
             ds = make_data_source(dataset, scene_dir, sensor=scannetpp_sensor,
-                                  frame_root=scannetpp_frame_root)
+                                  frame_root=scannetpp_frame_root,
+                                  depth_cache_size=scannetpp_depth_cache_size)
 
         scene_frames = _get_referability_scene_frames(referability_cache, scene_id)
         frames = _frames_from_referability_cache(scene_frames)
@@ -7707,6 +7843,11 @@ def run_pipeline(
                 "frame_names": [context.image_name for context in flash_contexts],
                 "question_types": list(cross_frame_requested_types),
                 "auxiliary_route_method": auxiliary_route_method,
+                "auxiliary_max_pose_candidates": auxiliary_max_pose_candidates,
+                "scannetpp_depth_cache_size": scannetpp_depth_cache_size,
+                "attachment_reference_cluster_radius_m": (
+                    attachment_reference_cluster_radius_m
+                ),
                 "l1_candidate_budget": scene_type_cap,
                 "l2_l3_candidate_budget": l2_l3_candidate_budget,
                 "max_move_sources": max_move_sources,
@@ -7922,6 +8063,7 @@ def run_pipeline(
             hybrid_router: HybridAuxiliaryRouter | None = None
             depth_visual_router: HybridAuxiliaryRouter | None = None
             depth_visual_redundancy: DepthVisualRedundancyEvaluator | None = None
+            depth_route_geometry_cache = DepthRouteGeometryCache()
             depth_data_source = None
             hybrid_cache_path: Path | None = None
             hybrid_cache_hit = False
@@ -8144,7 +8286,13 @@ def run_pipeline(
                     group_a_objects=group_a_objects,
                     group_b_objects=group_b_objects,
                     visual_redundancy_for=depth_visual_redundancy,
+                    geometry_cache=depth_route_geometry_cache,
                     max_auxiliary_frames=MAX_AUXILIARY_FRAMES,
+                    max_candidate_poses=(
+                        None
+                        if auxiliary_max_pose_candidates == 0
+                        else auxiliary_max_pose_candidates
+                    ),
                 )
 
             def _hybrid_route_for_question(
@@ -8170,6 +8318,7 @@ def run_pipeline(
                     return None
 
             question_route_cache: dict[tuple[object, ...], object | None] = {}
+            question_route_stats: Counter[str] = Counter()
 
             def _question_route_cache_key(
                 question: dict,
@@ -8221,14 +8370,20 @@ def run_pipeline(
                             and route_cache_key in question_route_cache
                         )
                         if route_cache_hit:
+                            question_route_stats["cache_hits"] += 1
                             question_route = question_route_cache[route_cache_key]
                         else:
+                            route_started_at = time.perf_counter()
                             if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
                                 question_route = _depth_route_for_question(question, frame_1, frame_2)
                             elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
                                 question_route = _legacy_route_for_question(question, frame_1, frame_2)
                             else:
                                 question_route = _hybrid_route_for_question(question, frame_1, frame_2)
+                            question_route_stats["computed"] += 1
+                            question_route_stats["compute_seconds"] += (
+                                time.perf_counter() - route_started_at
+                            )
                             if route_cache_key is not None:
                                 question_route_cache[route_cache_key] = question_route
                         if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
@@ -8238,6 +8393,7 @@ def run_pipeline(
                         else:
                             rejection_reason = "no_hybrid_geometric_visual_path_within_auxiliary_limit"
                         if question_route is None:
+                            question_route_stats["rejected"] += 1
                             pair_stage_counts["question_auxiliary_path_rejected"] += 1
                             failures = funnel["pair_failures"]
                             if isinstance(failures, list) and len(failures) < 100:
@@ -8248,6 +8404,7 @@ def run_pipeline(
                                     "reason": rejection_reason,
                                 })
                             continue
+                        question_route_stats["accepted"] += 1
                         pair_stage_counts["question_path_accepted"] += 1
                     if question_route is None:
                         continue
@@ -8610,10 +8767,13 @@ def run_pipeline(
                         if _canonical_scene_question_type(question)
                         in active_canonical_types
                     ]
-                    for raw_question in raw_questions:
-                        layout_id = str(raw_question.get("_cross_frame_layout_hint", "")).strip() or None
-                        for frame_2 in destinations:
-                            route = routes_by_pair[(frame_1.image_name, frame_2.image_name)]
+                    for frame_2 in destinations:
+                        pair_annotated_questions: list[dict] = []
+                        route = routes_by_pair[(frame_1.image_name, frame_2.image_name)]
+                        for raw_question in raw_questions:
+                            layout_id = str(
+                                raw_question.get("_cross_frame_layout_hint", "")
+                            ).strip() or None
                             annotated = _annotate_cross_frame_questions(
                                 [dict(raw_question)],
                                 frame_1=frame_1,
@@ -8626,7 +8786,29 @@ def run_pipeline(
                                 rejection_details=funnel["pair_failures"],
                             )
                             if annotated:
-                                _append_pair_questions(annotated, frame_1, frame_2, route)
+                                pair_annotated_questions.extend(annotated)
+                        if pair_annotated_questions:
+                            (
+                                pair_annotated_questions,
+                                dropped_ref_count,
+                                dropped_question_count,
+                            ) = _cluster_attachment_reference_questions(
+                                pair_annotated_questions,
+                                objects_by_id=objects_by_id,
+                                radius_m=attachment_reference_cluster_radius_m,
+                            )
+                            pair_stage_counts[
+                                "attachment_reference_cluster_dropped_refs"
+                            ] += dropped_ref_count
+                            pair_stage_counts[
+                                "attachment_reference_cluster_dropped_questions"
+                            ] += dropped_question_count
+                            _append_pair_questions(
+                                pair_annotated_questions,
+                                frame_1,
+                                frame_2,
+                                route,
+                            )
 
                     deferred_frame_names = list(
                         cross_checkpoint_manifest.get("completed_deferred_frames", [])
@@ -8779,10 +8961,28 @@ def run_pipeline(
             funnel["final_cross_frame_question_count"] = len(retained_cross_questions)
             funnel["scene_motion_cache"] = scene_motion_cache.diagnostics()
             funnel["question_route_cache_entry_count"] = len(question_route_cache)
+            funnel["depth_route_geometry_cache"] = (
+                depth_route_geometry_cache.diagnostics()
+            )
+            funnel["question_route_stats"] = {
+                key: (
+                    round(float(value), 6)
+                    if key.endswith("_seconds")
+                    else int(value)
+                )
+                for key, value in sorted(question_route_stats.items())
+            }
+            if ds is not None and hasattr(ds, "depth_cache_diagnostics"):
+                funnel["depth_cache"] = ds.depth_cache_diagnostics()
             logger.info(
                 "Scene %s motion cache diagnostics: %s",
                 scene_id,
                 scene_motion_cache.diagnostics(),
+            )
+            logger.info(
+                "Scene %s auxiliary route diagnostics: %s",
+                scene_id,
+                funnel["question_route_stats"],
             )
             _write_json_file(cross_frame_funnel_dir / f"{scene_id}.json", funnel)
             scene_questions.extend(retained_cross_questions)
@@ -9263,6 +9463,30 @@ def main():
         ),
     )
     parser.add_argument(
+        "--auxiliary_max_pose_candidates",
+        type=int,
+        default=DEFAULT_MAX_CANDIDATE_POSES,
+        help=(
+            "Maximum geometrically ranked pose candidates per depth auxiliary "
+            "route; 0 keeps all candidates"
+        ),
+    )
+    parser.add_argument(
+        "--scannetpp_depth_cache_size",
+        type=int,
+        default=DEFAULT_DEPTH_CACHE_SIZE,
+        help="Maximum decoded ScanNet++ depth frames cached per active scene",
+    )
+    parser.add_argument(
+        "--attachment_reference_cluster_radius_m",
+        type=float,
+        default=0.5,
+        help=(
+            "Deduplicate nearby attachment_move references with identical "
+            "movement signatures within this XY radius; 0 disables"
+        ),
+    )
+    parser.add_argument(
         "--no_occlusion", action="store_true",
         help="Disable depth-map occlusion (faster but no occlusion questions)",
     )
@@ -9274,11 +9498,11 @@ def main():
         help="Backend for visibility/occlusion estimation",
     )
     parser.add_argument(
-        "--referability_cache", type=str, required=True,
+        "--referability_cache", type=str, default=None,
         help=(
-            "Referability batch cache JSON path, batch glob, or scene_status.json produced "
-            "by scripts/run_vlm_referability.py; passing scene_status.json automatically "
-            "loads every currently active batch"
+            "Optional referability batch cache JSON path, batch glob, or scene_status.json "
+            "produced by scripts/run_vlm_referability.py. May be omitted when "
+            "--manual_attachment_cache is supplied"
         ),
     )
     parser.add_argument(
@@ -9286,8 +9510,9 @@ def main():
         type=Path,
         default=None,
         help=(
-            "Optional two_hop_attachment_salvage_v1 JSON whose human-authored scenes, "
-            "frames, roles, labels, and attachment graph override the flash cache in memory"
+            "Human-authored two_hop_attachment_salvage_v1 JSON. It can be used alone; "
+            "manual mode automatically generates only L3_attachment_chain. When a "
+            "referability cache is also supplied, the human attachment data overrides it"
         ),
     )
     parser.add_argument(
@@ -9487,14 +9712,21 @@ def main():
     if args.label_map:
         load_scannet_label_map(args.label_map)
 
-    referability_cache = _load_referability_cache(
-        args.referability_cache,
-        repair_inconsistent_entries=args.repair_referability_cache,
-        persist_repaired_entries=args.repair_referability_cache,
-        no_salvage=args.no_salvage,
-    )
-    if referability_cache is None:
-        raise ValueError(f"Referability cache not found: {args.referability_cache}")
+    if args.referability_cache is None and args.manual_attachment_cache is None:
+        parser.error(
+            "one of --referability_cache or --manual_attachment_cache is required"
+        )
+
+    referability_cache = None
+    if args.referability_cache is not None:
+        referability_cache = _load_referability_cache(
+            args.referability_cache,
+            repair_inconsistent_entries=args.repair_referability_cache,
+            persist_repaired_entries=args.repair_referability_cache,
+            no_salvage=args.no_salvage,
+        )
+        if referability_cache is None:
+            raise ValueError(f"Referability cache not found: {args.referability_cache}")
     if args.manual_attachment_cache is not None:
         manual_attachment_cache = _load_single_referability_cache(
             args.manual_attachment_cache,
@@ -9505,9 +9737,17 @@ def main():
                 f"Manual attachment cache not found: {args.manual_attachment_cache}"
             )
         referability_cache = _merge_manual_attachment_cache(
-            referability_cache,
+            referability_cache
+            or {"version": EXPECTED_REFERABILITY_CACHE_VERSION, "frames": {}},
             manual_attachment_cache,
         )
+    elif _is_manual_attachment_cache(referability_cache):
+        referability_cache = _merge_manual_attachment_cache(
+            {"version": EXPECTED_REFERABILITY_CACHE_VERSION, "frames": {}},
+            referability_cache,
+        )
+    if _has_manual_attachment_overrides(referability_cache):
+        args.only_question_types = list(MANUAL_ATTACHMENT_QUESTION_TYPES)
 
     run_pipeline(
         data_root=Path(args.data_root),
@@ -9548,6 +9788,11 @@ def main():
         occlusion_max_combinations_per_scene=args.occlusion_max_combinations_per_scene,
         max_move_sources=(None if int(args.max_move_sources) == 0 else int(args.max_move_sources)),
         auxiliary_route_method=args.auxiliary_route_method,
+        auxiliary_max_pose_candidates=args.auxiliary_max_pose_candidates,
+        scannetpp_depth_cache_size=args.scannetpp_depth_cache_size,
+        attachment_reference_cluster_radius_m=(
+            args.attachment_reference_cluster_radius_m
+        ),
     )
 
 

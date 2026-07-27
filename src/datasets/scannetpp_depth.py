@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import json
+import logging
 from pathlib import Path
 import re
 import threading
@@ -21,6 +22,9 @@ DEPTH_PIXELS = DEPTH_HEIGHT * DEPTH_WIDTH
 RGB_HEIGHT = 1440
 RGB_WIDTH = 1920
 _FRAME_NAME_RE = re.compile(r"^frame_(\d{6})(?:\.[^.]+)?$")
+DEFAULT_DEPTH_CACHE_SIZE = 1280
+
+logger = logging.getLogger(__name__)
 
 
 class ScanNetPPDepthReader:
@@ -31,7 +35,7 @@ class ScanNetPPDepthReader:
         depth_path: str | Path,
         metadata_path: str | Path,
         *,
-        cache_size: int = 32,
+        cache_size: int = DEFAULT_DEPTH_CACHE_SIZE,
     ) -> None:
         if cache_size <= 0:
             raise ValueError("cache_size must be positive")
@@ -41,6 +45,12 @@ class ScanNetPPDepthReader:
         self._offsets: tuple[tuple[int, int], ...] | None = None
         self._intrinsics: dict[int, CameraIntrinsics] | None = None
         self._cache: OrderedDict[int, DepthFrame] = OrderedDict()
+        self._unreadable_frames: set[int] = set()
+        self._payload_encoding: str | None = None
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.decode_count = 0
+        self.decoder_redetections = 0
         self._lock = threading.RLock()
 
     @property
@@ -60,10 +70,14 @@ class ScanNetPPDepthReader:
             assert self._intrinsics is not None
             if frame_index >= len(self._offsets) or frame_index not in self._intrinsics:
                 return None
+            if frame_index in self._unreadable_frames:
+                return None
             cached = self._cache.pop(frame_index, None)
             if cached is not None:
+                self.cache_hits += 1
                 self._cache[frame_index] = cached
                 return cached
+            self.cache_misses += 1
             offset, payload_length = self._offsets[frame_index]
             with self.depth_path.open("rb") as stream:
                 stream.seek(offset)
@@ -73,7 +87,18 @@ class ScanNetPPDepthReader:
                     f"Truncated ScanNet++ depth payload for frame {frame_index}: "
                     f"expected {payload_length} bytes, got {len(payload)}"
                 )
-            image_m, source = self._decode_payload(payload)
+            try:
+                image_m, source = self._decode_payload(payload)
+            except ValueError as exc:
+                self._unreadable_frames.add(frame_index)
+                logger.warning(
+                    "Skipping unreadable ScanNet++ depth frame %d in %s: %s",
+                    frame_index,
+                    self.depth_path,
+                    exc,
+                )
+                return None
+            self.decode_count += 1
             frame = DepthFrame(
                 image_m=image_m,
                 intrinsics=self._intrinsics[frame_index],
@@ -87,6 +112,19 @@ class ScanNetPPDepthReader:
             while len(self._cache) > self.cache_size:
                 self._cache.popitem(last=False)
             return frame
+
+    def diagnostics(self) -> dict[str, int | str | None]:
+        with self._lock:
+            return {
+                "cache_size_limit": self.cache_size,
+                "cached_frame_count": len(self._cache),
+                "cache_hits": self.cache_hits,
+                "cache_misses": self.cache_misses,
+                "decode_count": self.decode_count,
+                "decoder_redetections": self.decoder_redetections,
+                "unreadable_frame_count": len(self._unreadable_frames),
+                "payload_encoding": self._payload_encoding,
+            }
 
     def _ensure_index(self) -> None:
         if self._offsets is not None:
@@ -151,36 +189,88 @@ class ScanNetPPDepthReader:
         self._intrinsics = intrinsics
 
     @staticmethod
-    def _decode_payload(payload: bytes) -> tuple[np.ndarray, str]:
-        try:
-            import lz4.block as lz4_block
-        except ImportError:
-            lz4_block = None
-        if lz4_block is not None:
+    def _decoded_image(raw: bytes, source: str) -> tuple[np.ndarray, str]:
+        uint16_size = DEPTH_PIXELS * np.dtype(np.uint16).itemsize
+        float32_size = DEPTH_PIXELS * np.dtype(np.float32).itemsize
+        if len(raw) == uint16_size:
+            image_m = (
+                np.frombuffer(raw, dtype="<u2")
+                .reshape(DEPTH_HEIGHT, DEPTH_WIDTH)
+                .astype(np.float32)
+                / 1000.0
+            )
+        elif len(raw) == float32_size:
+            image_m = np.frombuffer(raw, dtype="<f4").reshape(
+                DEPTH_HEIGHT, DEPTH_WIDTH
+            ).copy()
+            image_m[~np.isfinite(image_m) | (image_m < 0.0)] = 0.0
+        else:
+            raise ValueError(
+                f"unexpected decompressed size {len(raw)} bytes "
+                f"(expected {uint16_size} or {float32_size})"
+            )
+        return image_m, source
+
+    @classmethod
+    def _decode_payload_as(
+        cls,
+        payload: bytes,
+        encoding: str,
+    ) -> tuple[np.ndarray, str]:
+        if encoding == "lz4":
             try:
-                raw = lz4_block.decompress(
-                    payload,
-                    uncompressed_size=DEPTH_PIXELS * np.dtype(np.uint16).itemsize,
-                )
-                if len(raw) != DEPTH_PIXELS * np.dtype(np.uint16).itemsize:
-                    raise ValueError("unexpected LZ4 depth payload size")
-                image_m = (
-                    np.frombuffer(raw, dtype=np.uint16)
-                    .reshape(DEPTH_HEIGHT, DEPTH_WIDTH)
-                    .astype(np.float32)
-                    / 1000.0
-                )
-                return image_m, "scannetpp_depth_bin_lz4"
-            except (lz4_block.LZ4BlockError, RuntimeError, ValueError):
-                pass
-        try:
+                import lz4.block as lz4_block
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Cannot decode this ScanNet++ depth payload because the lz4 "
+                    "package is not installed; install it with `python -m pip install lz4`"
+                ) from exc
+            sizes = (
+                DEPTH_PIXELS * np.dtype(np.float32).itemsize,
+                DEPTH_PIXELS * np.dtype(np.uint16).itemsize,
+            )
+            last_error: Exception | None = None
+            for uncompressed_size in sizes:
+                try:
+                    raw = lz4_block.decompress(
+                        payload,
+                        uncompressed_size=uncompressed_size,
+                    )
+                    return cls._decoded_image(raw, "scannetpp_depth_bin_lz4")
+                except (lz4_block.LZ4BlockError, RuntimeError, ValueError) as exc:
+                    last_error = exc
+            raise ValueError("invalid LZ4 depth payload") from last_error
+        if encoding == "zlib":
+            raw = zlib.decompress(payload, wbits=zlib.MAX_WBITS | 32)
+            return cls._decoded_image(raw, "scannetpp_depth_bin_zlib")
+        if encoding == "deflate":
             raw = zlib.decompress(payload, wbits=-zlib.MAX_WBITS)
-        except zlib.error as exc:
-            raise ValueError("Unsupported ScanNet++ depth payload encoding") from exc
-        if len(raw) != DEPTH_PIXELS * np.dtype(np.float32).itemsize:
-            raise ValueError("Unexpected zlib ScanNet++ depth payload size")
-        image_m = np.frombuffer(raw, dtype=np.float32).reshape(
-            DEPTH_HEIGHT, DEPTH_WIDTH
-        ).copy()
-        image_m[~np.isfinite(image_m) | (image_m < 0.0)] = 0.0
-        return image_m, "scannetpp_depth_bin_zlib"
+            return cls._decoded_image(raw, "scannetpp_depth_bin_deflate")
+        raise ValueError(f"unknown ScanNet++ depth encoding: {encoding}")
+
+    def _decode_payload(self, payload: bytes) -> tuple[np.ndarray, str]:
+        if self._payload_encoding is not None:
+            try:
+                return self._decode_payload_as(payload, self._payload_encoding)
+            except (RuntimeError, ValueError, zlib.error):
+                self.decoder_redetections += 1
+                self._payload_encoding = None
+
+        lz4_error: RuntimeError | None = None
+        for encoding in ("lz4", "zlib", "deflate"):
+            try:
+                decoded = self._decode_payload_as(payload, encoding)
+            except RuntimeError as exc:
+                lz4_error = exc
+                continue
+            except (ValueError, zlib.error):
+                continue
+            self._payload_encoding = encoding
+            return decoded
+
+        if lz4_error is not None:
+            raise lz4_error
+        raise ValueError(
+            "unsupported or corrupt payload (not an LZ4 block, zlib stream, "
+            "or raw DEFLATE stream with a recognized depth image size)"
+        )
