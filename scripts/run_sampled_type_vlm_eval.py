@@ -1209,6 +1209,7 @@ def _load_oracle_scene_cache_entry(
     scannetpp_sensor: str,
     need_poses: bool,
     oracle_cache_dir: str | None = None,
+    scannetpp_root_option: str = "--scannetpp_geometry_root",
 ) -> Any:
     if (
         OracleSceneCacheEntry is None
@@ -1279,8 +1280,7 @@ def _load_oracle_scene_cache_entry(
         tried += f"; ... {len(errors) - 6} more"
     raise RuntimeError(
         f"could not load ScanNet++ raw geometry/poses for {scene_id}; "
-        f"--scannetpp_image_root is only the extracted frame root. "
-        f"Pass the raw ScanNet++ root with --scannetpp_geometry_root if it is elsewhere. "
+        f"Pass the raw ScanNet++ root with {scannetpp_root_option}. "
         f"Tried {tried}"
     )
 

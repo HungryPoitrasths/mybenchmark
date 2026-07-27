@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,7 +24,6 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,16 +55,6 @@ def normalize_question(question: dict[str, Any]) -> dict[str, Any]:
     )
     normalized["question_uid"] = _question_uid(normalized)
     return normalized
-
-
-def _object_center(obj: dict[str, Any]) -> np.ndarray | None:
-    try:
-        center = np.asarray(obj["center"], dtype=np.float64)
-    except (KeyError, TypeError, ValueError):
-        return None
-    if center.shape != (3,) or not np.all(np.isfinite(center)):
-        return None
-    return center
 
 
 def _object_footprint(obj: dict[str, Any]) -> tuple[np.ndarray, np.ndarray] | None:
@@ -103,27 +91,13 @@ def _mentioned_objects(question: dict[str, Any]) -> list[dict[str, Any]]:
     return mentions
 
 
-def _camera_forward_xy(pose: Any) -> np.ndarray | None:
-    try:
-        forward = np.asarray(pose.rotation, dtype=np.float64).T[:, 2]
-    except (AttributeError, TypeError, ValueError, IndexError):
-        return None
-    forward_xy = forward[:2]
-    norm = float(np.linalg.norm(forward_xy))
-    if not math.isfinite(norm) or norm <= 1e-9:
-        return None
-    return forward_xy / norm
-
-
 def render_bev_image(
     *,
     question: dict[str, Any],
     objects: dict[int, dict[str, Any]],
-    poses: dict[str, Any],
     output_path: Path,
 ) -> None:
     mentions = _mentioned_objects(question)
-    mentioned_by_id = {int(mention["obj_id"]): mention for mention in mentions}
     colors = plt.get_cmap("tab10")
 
     figure, axis = plt.subplots(
@@ -133,134 +107,50 @@ def render_bev_image(
     )
     extent_points: list[np.ndarray] = []
 
-    for obj_id, obj in sorted(objects.items()):
-        footprint = _object_footprint(obj)
-        center = _object_center(obj)
-        mention = mentioned_by_id.get(int(obj_id))
-        if mention is not None:
-            color = colors(len([key for key in mentioned_by_id if key < int(obj_id)]) % 10)
-            face_color = (*color[:3], 0.32)
-            edge_color = color
-            line_width = 2.5
-            zorder = 4
-        else:
-            face_color = (0.76, 0.78, 0.81, 0.18)
-            edge_color = (0.50, 0.53, 0.57, 0.55)
-            line_width = 0.8
-            zorder = 1
-
-        if footprint is not None:
-            bbox_min, bbox_max = footprint
-            width, height = bbox_max[:2] - bbox_min[:2]
-            axis.add_patch(
-                Rectangle(
-                    bbox_min[:2],
-                    float(width),
-                    float(height),
-                    facecolor=face_color,
-                    edgecolor=edge_color,
-                    linewidth=line_width,
-                    zorder=zorder,
-                )
-            )
-            extent_points.extend((bbox_min[:2], bbox_max[:2]))
-
-        if center is None:
+    for index, mention in enumerate(mentions):
+        obj = objects.get(int(mention["obj_id"]))
+        if obj is None:
             continue
-        axis.scatter(
-            [center[0]],
-            [center[1]],
-            s=55 if mention is not None else 8,
-            color=edge_color,
-            zorder=zorder + 1,
-        )
-        extent_points.append(center[:2])
-        if mention is not None:
-            label = str(mention.get("label") or obj.get("label") or "object")
-            role = str(mention.get("role") or "object")
-            axis.annotate(
-                f"{role}: {label} #{obj_id}\n"
-                f"(x,y,z)=({center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}) m",
-                xy=center[:2],
-                xytext=(7, 7),
-                textcoords="offset points",
-                fontsize=8.5,
-                fontweight="bold",
-                color=edge_color,
-                bbox={"boxstyle": "round,pad=0.25", "fc": "white", "ec": edge_color, "alpha": 0.88},
-                zorder=10,
+        footprint = _object_footprint(obj)
+        if footprint is None:
+            continue
+        bbox_min, bbox_max = footprint
+        width, height = bbox_max[:2] - bbox_min[:2]
+        color = colors(index % 10)
+        axis.add_patch(
+            Rectangle(
+                bbox_min[:2],
+                float(width),
+                float(height),
+                facecolor=(*color[:3], 0.32),
+                edgecolor=color,
+                linewidth=2.5,
+                zorder=4,
             )
-
-    frame_names = [str(question.get("image_name") or "")]
-    frame_names.extend(_collect_aux_image_names(question))
-    camera_points: list[np.ndarray] = []
-    for index, frame_name in enumerate(frame_names):
-        pose = poses.get(frame_name)
-        if pose is None:
-            raise ValueError(f"camera pose not found for frame {frame_name!r}")
-        position = np.asarray(pose.position, dtype=np.float64)
-        if position.shape != (3,) or not np.all(np.isfinite(position)):
-            raise ValueError(f"invalid camera position for frame {frame_name!r}")
-        camera_points.append(position[:2])
-        extent_points.append(position[:2])
-
-    if len(camera_points) > 1:
-        route = np.asarray(camera_points)
-        axis.plot(
-            route[:, 0],
-            route[:, 1],
-            linestyle="--",
-            linewidth=1.5,
-            color="#6b4f9b",
-            alpha=0.75,
-            zorder=5,
         )
-
-    for index, (frame_name, point) in enumerate(zip(frame_names, camera_points), 1):
-        pose = poses[frame_name]
-        forward = _camera_forward_xy(pose)
-        if forward is None:
-            raise ValueError(f"invalid camera forward direction for frame {frame_name!r}")
-        is_endpoint = index in {1, len(frame_names)}
-        color = "#1f4e79" if index == 1 else ("#8b1e3f" if index == len(frame_names) else "#6b4f9b")
-        axis.scatter(
-            [point[0]],
-            [point[1]],
-            marker="^",
-            s=150 if is_endpoint else 80,
-            color=color,
-            edgecolor="white",
-            linewidth=0.8,
-            zorder=12,
-        )
-        axis.arrow(
-            point[0],
-            point[1],
-            forward[0] * 0.65,
-            forward[1] * 0.65,
-            width=0.025,
-            head_width=0.16,
-            head_length=0.20,
-            length_includes_head=True,
-            color=color,
-            zorder=11,
-        )
-        label = "first main view" if index == 1 else (
-            "last main view" if index == len(frame_names) else f"bridge view {index - 1}"
-        )
+        extent_points.extend((bbox_min[:2], bbox_max[:2]))
+        center_xy = (bbox_min[:2] + bbox_max[:2]) / 2.0
+        label = str(mention.get("label") or obj.get("label") or "object")
         axis.annotate(
             label,
-            xy=point,
-            xytext=(6, -15),
+            xy=center_xy,
+            xytext=(0, 7),
             textcoords="offset points",
-            fontsize=8.5,
+            horizontalalignment="center",
+            fontsize=9,
+            fontweight="bold",
             color=color,
-            fontweight="bold" if is_endpoint else "normal",
-            zorder=13,
+            bbox={
+                "boxstyle": "round,pad=0.25",
+                "fc": "white",
+                "ec": color,
+                "alpha": 0.88,
+            },
+            zorder=10,
         )
 
     if not extent_points:
-        raise ValueError("scene contains no plottable objects or cameras")
+        raise ValueError("question contains no mentioned objects with plottable footprints")
     extent = np.asarray(extent_points, dtype=np.float64)
     minimum = np.min(extent, axis=0)
     maximum = np.max(extent, axis=0)
@@ -278,17 +168,6 @@ def render_bev_image(
         fontweight="bold",
     )
     axis.grid(True, linestyle=":", linewidth=0.7, alpha=0.5)
-    axis.legend(
-        handles=[
-            Line2D([0], [0], color="#7f858d", lw=6, alpha=0.45, label="scene object footprint"),
-            Line2D([0], [0], color="#1f4e79", marker="^", lw=1.5, label="first main view camera"),
-            Line2D([0], [0], color="#8b1e3f", marker="^", lw=1.5, label="last main view camera"),
-        ],
-        loc="best",
-        fontsize=8,
-        framealpha=0.9,
-    )
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_path, dpi=BEV_DPI, facecolor="white")
     plt.close(figure)
@@ -320,17 +199,15 @@ def generate_bev_images(args: argparse.Namespace) -> dict[str, Any]:
                     scannet_root=str(args.scannet_root),
                     scannetpp_roots=[str(root) for root in args.scannetpp_root],
                     scannetpp_sensor=args.scannetpp_sensor,
-                    need_poses=True,
+                    need_poses=False,
                     oracle_cache_dir=args.oracle_cache_dir,
+                    scannetpp_root_option="--scannetpp_root",
                 )
             scene = scene_cache[cache_key]
-            if scene.poses is None:
-                raise ValueError(f"camera poses unavailable for {scene_id}")
             image_name = f"{uid}.png"
             render_bev_image(
                 question=question,
                 objects=scene.objects,
-                poses=scene.poses,
                 output_path=output_dir / image_name,
             )
             image_sha256 = _sha256_file(output_dir / image_name)
