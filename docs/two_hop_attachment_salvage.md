@@ -32,11 +32,33 @@ typed labels are used as the attachment question wording, so they may be more
 specific than the scene's original labels. The three option labels (`child`,
 `grandchild`, and `contrast`) must be distinct.
 
+Every card also has two controls:
+
+- **Add** duplicates the same image and projected bboxes immediately after the
+  current card, with all four ID/label inputs empty. Use it to annotate another
+  two-hop chain in the same frame.
+- **Delete** removes that annotation card. If every card for a frame is deleted,
+  the frame is omitted from the exported JSON.
+
+Cards for the same frame are numbered automatically. Duplicate four-ID role
+sets are rejected, and one object ID must use the same typed label across all
+annotations for that frame.
+
 Click **Export JSON**. The downloaded file has referability cache version
 `20.0`, includes the selected frames and typed role labels, and supplies a
 manual attachment graph.
 `--output_json` controls the suggested download filename; the browser chooses
 the final download directory.
+
+When a frame has multiple cards, the entry contains all annotations in
+`manual_attachment_role_sets`; `manual_attachment_roles` mirrors the first set
+for compatibility with older pipeline versions. The current pipeline generates
+one forced L3 attachment-chain question for every valid role set, without
+discarding human annotations because of automatic question-count caps.
+
+While the Python tool builds the page it prints the total scene/frame count,
+scene loading progress, per-frame processing progress, projected bbox counts,
+and the final HTML output path.
 
 ## 2. Generate questions
 

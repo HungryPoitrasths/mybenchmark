@@ -27,7 +27,7 @@ from src.datasets.scannetpp import ScanNetPPDataSource
 from src.utils.coordinate_transform import project_to_image
 
 REFERABILITY_CACHE_VERSION = "20.0"
-TOOL_VERSION = "1.0"
+TOOL_VERSION = "1.1"
 ROLE_NAMES = ("moved", "child", "grandchild", "contrast")
 
 
@@ -185,10 +185,12 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
         cards.append(
             f'<article class="card" data-index="{index}" data-scene-id="{html.escape(frame["scene_id"])}" '
             f'data-image-name="{html.escape(frame["image_name"])}">'
-            f'<h2>{html.escape(frame["scene_id"])} / {html.escape(frame["image_name"])}</h2>'
+            f'<h2 data-base-title="{html.escape(frame["scene_id"])} / {html.escape(frame["image_name"])}">'
+            f'{html.escape(frame["scene_id"])} / {html.escape(frame["image_name"])}</h2>'
             f'<div class="visual"><img src="{frame["image_data_url"]}"><div class="boxes">{"".join(boxes)}</div></div>'
             f'<div class="roles">{role_fields}</div>'
-            '<button type="button" class="delete">Delete card</button>'
+            '<div class="actions"><button type="button" class="add">Add</button>'
+            '<button type="button" class="delete">Delete</button></div>'
             '</article>'
         )
     initial = json.dumps(
@@ -215,7 +217,7 @@ body{{font:14px system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;p
 .visual{{position:relative;max-width:1100px;width:max-content;max-width:100%}}.visual img{{display:block;max-width:100%;height:auto}}
 .boxes{{position:absolute;inset:0}}.box{{position:absolute;border:2px solid #ef4444;box-sizing:border-box;pointer-events:none}}.box span{{background:#ef4444;color:#fff;font-size:11px;padding:2px 4px;white-space:nowrap}}
 .roles{{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:10px}}.role{{display:grid;gap:8px;padding:10px;border:1px solid #d1d5db;border-radius:8px}}label{{display:grid;gap:5px;font-weight:600}}input{{padding:8px;border:1px solid #9ca3af;border-radius:6px;background:white}}
-button{{padding:9px 14px;border:0;border-radius:7px;background:#2563eb;color:white;cursor:pointer}}button.delete{{background:#b91c1c;width:max-content}}.deleted{{opacity:.35}}
+button{{padding:9px 14px;border:0;border-radius:7px;background:#2563eb;color:white;cursor:pointer}}.actions{{display:flex;gap:10px;width:max-content}}button.add{{background:#047857}}button.delete{{background:#b91c1c}}
 @media(max-width:720px){{.roles{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><h1>Two-hop Attachment Salvage</h1>
 <p>Read the projected bbox labels, then type one object ID and label for each role.</p>
@@ -223,8 +225,17 @@ button{{padding:9px 14px;border:0;border-radius:7px;background:#2563eb;color:whi
 <button id="export">Export JSON</button>
 <script>
 const initial = {initial};
+function updateCardTitles() {{
+  const groups=new Map(); document.querySelectorAll('.card').forEach(card=>{{
+    const key=card.dataset.sceneId+'/'+card.dataset.imageName;
+    if(!groups.has(key)) groups.set(key,[]); groups.get(key).push(card);
+  }});
+  groups.forEach(cards=>cards.forEach((card,index)=>{{
+    const heading=card.querySelector('h2'); heading.textContent=`${{heading.dataset.baseTitle}} — annotation ${{index+1}}/${{cards.length}}`;
+  }}));
+}}
 function collect() {{
-  const rows=[]; document.querySelectorAll('.card:not(.deleted)').forEach(card=>{{
+  const rows=[]; document.querySelectorAll('.card').forEach(card=>{{
     const roles={{}}; card.querySelectorAll('.role').forEach(row=>{{
       const role=row.dataset.role; const idText=row.querySelector(`[name="${{role}}_id"]`).value.trim();
       const label=row.querySelector(`[name="${{role}}_label"]`).value.trim();
@@ -233,7 +244,18 @@ function collect() {{
     rows.push({{scene_id:card.dataset.sceneId,image_name:card.dataset.imageName,roles}});
   }}); return rows;
 }}
-document.querySelectorAll('.card').forEach(card=>card.querySelector('.delete').addEventListener('click',()=>{{card.classList.toggle('deleted')}}));
+document.getElementById('cards').addEventListener('click',event=>{{
+  const button=event.target.closest('button'); if(!button) return;
+  const card=button.closest('.card'); if(!card) return;
+  if(button.classList.contains('add')) {{
+    const clone=card.cloneNode(true); clone.querySelectorAll('input').forEach(input=>input.value='');
+    card.insertAdjacentElement('afterend',clone);
+  }} else if(button.classList.contains('delete')) {{
+    card.remove();
+  }}
+  updateCardTitles();
+}});
+updateCardTitles();
 document.getElementById('export').addEventListener('click',()=>{{
   try {{
   const selected=collect(); const byKey=new Map(initial.map(f=>[f.scene_id+'/'+f.image_name,f]));
@@ -250,12 +272,28 @@ document.getElementById('export').addEventListener('click',()=>{{
     const optionLabels=['child','grandchild','contrast'].map(role=>item.roles[role].label.trim().toLowerCase());
     if(new Set(optionLabels).size!==3) throw new Error('Child, grandchild and contrast labels must be distinct');
     const sceneFrames=frames[item.scene_id] || (frames[item.scene_id]={{}});
-    sceneFrames[item.image_name]={{scene_id:item.scene_id,image_name:item.image_name,frame_usable:true,
+    const frameEntry=sceneFrames[item.image_name] || (sceneFrames[item.image_name]={{scene_id:item.scene_id,image_name:item.image_name,frame_usable:true,
       candidate_visible_object_ids:source.visible_object_ids,pipeline_visible_object_ids_used_for_generation:source.visible_object_ids,
-      visible_object_ids:source.visible_object_ids,referable_object_ids:ids,attachment_referable_object_ids:ids,
-      attachment_referable_pairs:[[roleIds.moved,roleIds.child],[roleIds.child,roleIds.grandchild]],attachment_referable_pair_count:2,
+      visible_object_ids:source.visible_object_ids,referable_object_ids:[],attachment_referable_object_ids:[],
+      attachment_referable_pairs:[],attachment_referable_pair_count:0,
       label_statuses:source.label_statuses,label_counts:source.label_counts,label_to_object_ids:source.label_to_object_ids,
-      manual_attachment_roles:item.roles}};
+      manual_attachment_role_sets:[]}});
+    const roleKey=ids.join(',');
+    if(frameEntry.manual_attachment_role_sets.some(roleSet=>['moved','child','grandchild','contrast'].map(role=>roleSet[role].id).join(',')===roleKey))
+      throw new Error(`Duplicate role set for ${{item.scene_id}}/${{item.image_name}}`);
+    const labelsById=new Map(); frameEntry.manual_attachment_role_sets.forEach(roleSet=>Object.values(roleSet).forEach(role=>labelsById.set(role.id,role.label.trim())));
+    Object.values(item.roles).forEach(role=>{{
+      const previous=labelsById.get(role.id);
+      if(previous && previous.toLowerCase()!==role.label.trim().toLowerCase())
+        throw new Error(`Object ${{role.id}} uses conflicting labels on ${{item.scene_id}}/${{item.image_name}}`);
+    }});
+    frameEntry.manual_attachment_role_sets.push(item.roles);
+    frameEntry.manual_attachment_roles=frameEntry.manual_attachment_role_sets[0];
+    frameEntry.referable_object_ids=Array.from(new Set([...frameEntry.referable_object_ids,...ids])).sort((a,b)=>a-b);
+    frameEntry.attachment_referable_object_ids=[...frameEntry.referable_object_ids];
+    const newPairs=[[roleIds.moved,roleIds.child],[roleIds.child,roleIds.grandchild]];
+    newPairs.forEach(pair=>{{if(!frameEntry.attachment_referable_pairs.some(existing=>existing[0]===pair[0]&&existing[1]===pair[1])) frameEntry.attachment_referable_pairs.push(pair);}});
+    frameEntry.attachment_referable_pair_count=frameEntry.attachment_referable_pairs.length;
     const sceneGraph=graph[item.scene_id] || (graph[item.scene_id]={{}});
     sceneGraph[String(roleIds.moved)]=Array.from(new Set([...(sceneGraph[String(roleIds.moved)]||[]),roleIds.child])).sort((a,b)=>a-b);
     sceneGraph[String(roleIds.child)]=Array.from(new Set([...(sceneGraph[String(roleIds.child)]||[]),roleIds.grandchild])).sort((a,b)=>a-b);
@@ -300,6 +338,8 @@ def build_cache(frames: list[dict[str, Any]], selections: list[dict[str, Any]]) 
     frame_lookup = {(f["scene_id"], f["image_name"]): f for f in frames}
     output_frames: dict[str, dict[str, Any]] = {}
     manual_graph: dict[str, dict[str, list[int]]] = {}
+    role_keys_by_frame: dict[tuple[str, str], set[tuple[int, ...]]] = {}
+    labels_by_frame_object: dict[tuple[str, str], dict[int, str]] = {}
     for selection in selections:
         key = (str(selection.get("scene_id", "")).strip(), str(selection.get("image_name", "")).strip())
         frame = frame_lookup.get(key)
@@ -308,28 +348,56 @@ def build_cache(frames: list[dict[str, Any]], selections: list[dict[str, Any]]) 
         object_map = {int(obj["id"]): obj for obj in frame["objects"]}
         roles = _normalize_roles(selection.get("roles"), object_map)
         moved, child, grandchild = (roles[name]["id"] for name in ("moved", "child", "grandchild"))
+        role_ids = tuple(int(roles[name]["id"]) for name in ROLE_NAMES)
+        role_keys = role_keys_by_frame.setdefault(key, set())
+        if role_ids in role_keys:
+            raise ValueError(f"Duplicate role set for {key[0]}/{key[1]}: {role_ids}")
+        role_keys.add(role_ids)
+        labels_by_object = labels_by_frame_object.setdefault(key, {})
+        for role in ROLE_NAMES:
+            obj_id = int(roles[role]["id"])
+            label = str(roles[role]["label"]).strip()
+            previous_label = labels_by_object.get(obj_id)
+            if previous_label is not None and previous_label.lower() != label.lower():
+                raise ValueError(
+                    f"Object id {obj_id} uses conflicting labels on {key[0]}/{key[1]}: "
+                    f"{previous_label!r} and {label!r}"
+                )
+            labels_by_object[obj_id] = label
         manual_graph.setdefault(key[0], {}).setdefault(str(moved), [])
         manual_graph[key[0]][str(moved)] = sorted(set(manual_graph[key[0]][str(moved)] + [child]))
         manual_graph[key[0]].setdefault(str(child), [])
         manual_graph[key[0]][str(child)] = sorted(set(manual_graph[key[0]][str(child)] + [grandchild]))
         visible_ids = list(frame["visible_object_ids"])
-        role_ids = [roles[name]["id"] for name in ROLE_NAMES]
-        output_frames.setdefault(key[0], {})[key[1]] = {
-            "scene_id": key[0],
-            "image_name": key[1],
-            "frame_usable": True,
-            "candidate_visible_object_ids": visible_ids,
-            "pipeline_visible_object_ids_used_for_generation": visible_ids,
-            "visible_object_ids": visible_ids,
-            "referable_object_ids": role_ids,
-            "attachment_referable_object_ids": role_ids,
-            "attachment_referable_pairs": [[moved, child], [child, grandchild]],
-            "attachment_referable_pair_count": 2,
-            "label_statuses": frame["label_statuses"],
-            "label_counts": frame["label_counts"],
-            "label_to_object_ids": frame["label_to_object_ids"],
-            "manual_attachment_roles": roles,
-        }
+        scene_frames = output_frames.setdefault(key[0], {})
+        entry = scene_frames.get(key[1])
+        if entry is None:
+            entry = {
+                "scene_id": key[0],
+                "image_name": key[1],
+                "frame_usable": True,
+                "candidate_visible_object_ids": visible_ids,
+                "pipeline_visible_object_ids_used_for_generation": visible_ids,
+                "visible_object_ids": visible_ids,
+                "referable_object_ids": [],
+                "attachment_referable_object_ids": [],
+                "attachment_referable_pairs": [],
+                "attachment_referable_pair_count": 0,
+                "label_statuses": frame["label_statuses"],
+                "label_counts": frame["label_counts"],
+                "label_to_object_ids": frame["label_to_object_ids"],
+                "manual_attachment_role_sets": [],
+            }
+            scene_frames[key[1]] = entry
+        entry["manual_attachment_role_sets"].append(roles)
+        entry["manual_attachment_roles"] = entry["manual_attachment_role_sets"][0]
+        merged_role_ids = sorted(set(entry["referable_object_ids"]) | set(role_ids))
+        entry["referable_object_ids"] = merged_role_ids
+        entry["attachment_referable_object_ids"] = list(merged_role_ids)
+        for pair in ([moved, child], [child, grandchild]):
+            if pair not in entry["attachment_referable_pairs"]:
+                entry["attachment_referable_pairs"].append(pair)
+        entry["attachment_referable_pair_count"] = len(entry["attachment_referable_pairs"])
     return {
         "version": REFERABILITY_CACHE_VERSION,
         "alias_config_version": ALIAS_CONFIG_VERSION,
@@ -340,6 +408,21 @@ def build_cache(frames: list[dict[str, Any]], selections: list[dict[str, Any]]) 
         "frames": output_frames,
         "manual_attachment_graph": manual_graph,
     }
+
+
+def _group_image_specs(specs: list[str]) -> list[tuple[str, list[str]]]:
+    grouped: dict[str, list[str]] = {}
+    seen: set[tuple[str, str]] = set()
+    for spec in specs:
+        scene_id, image_names = parse_image_spec(spec)
+        scene_images = grouped.setdefault(scene_id, [])
+        for image_name in image_names:
+            key = (scene_id, image_name)
+            if key in seen:
+                raise ValueError(f"Duplicate image selection: {scene_id}/{image_name}")
+            seen.add(key)
+            scene_images.append(image_name)
+    return list(grouped.items())
 
 
 def main() -> int:
@@ -362,40 +445,62 @@ def main() -> int:
     if not specs:
         parser.error("at least one --image or --images value is required")
 
+    grouped_specs = _group_image_specs(specs)
+    total_frames = sum(len(image_names) for _scene_id, image_names in grouped_specs)
+    print(
+        f"Preparing {len(grouped_specs)} scene(s) and {total_frames} frame(s)",
+        flush=True,
+    )
+
     frames: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for spec in specs:
-        scene_id, image_names = parse_image_spec(spec)
+    processed_frames = 0
+    for scene_index, (scene_id, image_names) in enumerate(grouped_specs, start=1):
+        print(
+            f"[scene {scene_index}/{len(grouped_specs)}] Loading {scene_id} "
+            f"({len(image_names)} frame(s))",
+            flush=True,
+        )
         scene_dir = args.scene_root / scene_id
         data_source = ScanNetPPDataSource(scene_dir, sensor="iphone", frame_root=args.frame_root)
         scene = data_source.load_scene()
         intrinsics = data_source.load_intrinsics()
         poses = data_source.load_poses()
         for image_name in image_names:
-            key = (scene_id, image_name)
-            if key in seen:
-                raise ValueError(f"Duplicate image selection: {scene_id}/{image_name}")
-            seen.add(key)
+            processed_frames += 1
+            print(
+                f"[frame {processed_frames}/{total_frames}] Processing "
+                f"{scene_id}/{image_name}",
+                flush=True,
+            )
             pose = poses.get(image_name)
             if pose is None:
                 raise ValueError(f"Pose not found for {scene_id}/{image_name}")
             image_path = data_source.image_path(image_name)
             if not image_path.exists():
                 raise ValueError(f"Image not found: {image_path}")
-            frames.append(
-                build_frame_record(
-                    scene_id=scene_id,
-                    image_name=image_name,
-                    image_path=image_path,
-                    scene=scene,
-                    pose=pose,
-                    intrinsics=intrinsics,
-                )
+            frame = build_frame_record(
+                scene_id=scene_id,
+                image_name=image_name,
+                image_path=image_path,
+                scene=scene,
+                pose=pose,
+                intrinsics=intrinsics,
             )
+            frames.append(frame)
+            print(
+                f"[frame {processed_frames}/{total_frames}] Projected "
+                f"{len(frame['objects'])} object bbox(es)",
+                flush=True,
+            )
+        print(
+            f"[scene {scene_index}/{len(grouped_specs)}] Completed {scene_id}",
+            flush=True,
+        )
+    print(f"Rendering HTML with {len(frames)} initial card(s)", flush=True)
     args.output_html.parent.mkdir(parents=True, exist_ok=True)
     args.output_html.write_text(render_review_html(frames, args.output_json.name), encoding="utf-8")
-    print(f"Wrote review HTML to {args.output_html}")
-    print("Open the HTML, select four roles per image, then click Export JSON.")
+    print(f"Wrote review HTML to {args.output_html}", flush=True)
+    print("Open the HTML, type four roles per card, then click Export JSON.", flush=True)
     return 0
 
 

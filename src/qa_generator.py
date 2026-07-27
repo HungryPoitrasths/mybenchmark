@@ -6510,6 +6510,39 @@ def _relation_map_by_pair(relations: list[dict[str, Any]]) -> dict[tuple[int, in
     }
 
 
+def _answer_pair_distance_details(
+    left_obj: dict[str, Any],
+    right_obj: dict[str, Any],
+    *,
+    distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    cache_key = tuple(sorted((int(left_obj["id"]), int(right_obj["id"]))))
+    details = distance_cache.get(cache_key) if distance_cache is not None else None
+    if details is None:
+        details = compute_distance_details(left_obj, right_obj)
+        if distance_cache is not None:
+            distance_cache[cache_key] = details
+    return details
+
+
+def _answer_pair_is_within_distance_limit(
+    left_obj: dict[str, Any],
+    right_obj: dict[str, Any],
+    *,
+    distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
+    max_distance_m: float,
+) -> bool:
+    try:
+        distance_m = float(_answer_pair_distance_details(
+            left_obj,
+            right_obj,
+            distance_cache=distance_cache,
+        )["distance_m"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return math.isfinite(distance_m) and 0.0 <= distance_m <= float(max_distance_m)
+
+
 def _first_valid_object_move_state(
     objects: list[dict],
     attachment_graph: dict[int, list[int]],
@@ -6519,17 +6552,18 @@ def _first_valid_object_move_state(
     collision_objects: list[dict] | None = None,
     motion_cache: SceneMotionCache | None = None,
 ) -> _SelectedObjectMoveState | None:
-    for delta, moved_objects, moved_ids in _iter_valid_object_move_states(
+    for delta, _physics_objects, moved_ids in _iter_valid_object_move_states(
         objects,
         attachment_graph,
         target_id,
         room_bounds=room_bounds,
         collision_objects=collision_objects,
+        lightweight=True,
         motion_cache=motion_cache,
     ):
         return _make_selected_object_move_state(
             delta,
-            moved_objects,
+            apply_movement_selective(objects, attachment_graph, target_id, delta),
             moved_ids,
         )
     return None
@@ -6571,12 +6605,13 @@ def _iter_additional_object_move_states(
         for delta in (excluded_deltas or [])
         if delta is not None
     }
-    for delta, moved_objects, moved_ids in _iter_valid_object_move_states(
+    for delta, _physics_objects, moved_ids in _iter_valid_object_move_states(
         objects,
         attachment_graph,
         target_id,
         room_bounds=room_bounds,
         collision_objects=collision_objects,
+        lightweight=True,
         motion_cache=motion_cache,
     ):
         delta_key = _delta_key(delta)
@@ -6585,7 +6620,7 @@ def _iter_additional_object_move_states(
         excluded.add(delta_key)
         yield _make_selected_object_move_state(
             delta,
-            moved_objects,
+            apply_movement_selective(objects, attachment_graph, target_id, delta),
             moved_ids,
         )
 
@@ -6622,6 +6657,7 @@ def _select_object_move_state(
         tuple[str | None, str, str, _L1OcclusionMetrics],
     ] | None = None,
     motion_cache: SceneMotionCache | None = None,
+    relation_pair_ids: set[tuple[int, int]] | None = None,
 ) -> _SelectedObjectMoveState | None:
     delta, changed = _find_object_move_delta_and_changes(
         objects,
@@ -6635,11 +6671,12 @@ def _select_object_move_state(
         ray_caster=ray_caster,
         instance_mesh_data=instance_mesh_data,
         precomputed_original_visibility=precomputed_original_visibility,
+        relation_pair_ids=relation_pair_ids,
     )
     if delta is not None:
         return _make_selected_object_move_state(
             delta,
-            apply_movement(objects, attachment_graph, target_id, delta),
+            apply_movement_selective(objects, attachment_graph, target_id, delta),
             get_moved_object_ids(target_id, attachment_graph),
             changed_relations=changed,
             used_changed_delta=True,
@@ -7533,6 +7570,7 @@ def _find_object_move_delta_and_changes(
         int,
         tuple[str | None, str, str, _L1OcclusionMetrics],
     ] | None = None,
+    relation_pair_ids: set[tuple[int, int]] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Return the first valid movement delta that yields relation or visibility changes."""
     delta, changed = find_meaningful_movement(
@@ -7542,6 +7580,7 @@ def _find_object_move_delta_and_changes(
         camera_pose,
         room_bounds=room_bounds,
         collision_objects=collision_objects,
+        relation_pair_ids=relation_pair_ids,
     )
     occlusion_enabled = (
         color_intrinsics is not None
@@ -8246,6 +8285,7 @@ def generate_l2_object_move(
     reuse_move_state_for_distance: bool = False,
     occlusion_search_budget: OcclusionDirectedSearchBudget | None = None,
     motion_cache: SceneMotionCache | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
     """Generate L2.1 object-movement questions for a scene."""
     if enabled_l2_object_move_types is None:
@@ -8334,10 +8374,38 @@ def generate_l2_object_move(
     obj_map.update({int(o["id"]): o for o in relation_scene_objects})
     if object_map is not None:
         obj_map.update({int(obj_id): obj for obj_id, obj in object_map.items()})
+    potential_query_objects = _merge_scene_objects_by_id(
+        list(attachment_query_pool),
+        [obj_map[obj_id] for obj_id in self_query_ids if obj_id in obj_map],
+    )
+    answer_pair_ids: set[tuple[int, int]] = set()
+    answer_pair_over_limit_count = 0
+    for query_obj in potential_query_objects:
+        query_obj_id = int(query_obj["id"])
+        for reference_id in allowed_reference_ids:
+            reference_obj = obj_map.get(int(reference_id))
+            if reference_obj is None or int(reference_id) == query_obj_id:
+                continue
+            pair_key = tuple(sorted((query_obj_id, int(reference_id))))
+            if _answer_pair_is_within_distance_limit(
+                query_obj,
+                reference_obj,
+                distance_cache=answer_pair_distance_cache,
+                max_distance_m=_CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M,
+            ):
+                answer_pair_ids.add(pair_key)
+            else:
+                answer_pair_over_limit_count += 1
     import time as _time_mod
     _t0 = _time_mod.time()
     base_relations = (
-        compute_all_relations(relation_scene_objects, camera_pose, None, None)
+        compute_all_relations(
+            relation_scene_objects,
+            camera_pose,
+            None,
+            None,
+            pair_id_pairs=answer_pair_ids,
+        )
         if enable_agent or enable_distance
         else []
     )
@@ -8392,6 +8460,11 @@ def generate_l2_object_move(
 
     logger.info("L2 object_move: precompute done, entering main loop (%d source objects, max_move_sources=%s)",
                 len(movement_scene_objects), max_move_sources)
+    logger.info(
+        "L2 object_move: answer-pair prefilter kept=%d rejected_over_4m=%d",
+        len(answer_pair_ids),
+        answer_pair_over_limit_count,
+    )
     # Sort: prioritize objects that have attachment chains (can generate
     # attachment-related questions), then by priority pair membership.
     _attachment_parent_ids = {
@@ -8450,6 +8523,37 @@ def generate_l2_object_move(
             query_objects = [move_source, *query_objects]
         if not query_objects:
             continue
+        eligible_reference_ids_by_query: dict[int, set[int]] = {}
+        for candidate_query in query_objects:
+            candidate_query_id = int(candidate_query["id"])
+            eligible_reference_ids_by_query[candidate_query_id] = {
+                int(reference_id)
+                for reference_id in allowed_reference_ids
+                if int(reference_id) in obj_map
+                and int(reference_id) != candidate_query_id
+                and tuple(sorted((candidate_query_id, int(reference_id)))) in answer_pair_ids
+                and not _has_duplicate_labels_for_distinct_objects(
+                    move_source,
+                    candidate_query,
+                    obj_map[int(reference_id)],
+                )
+            }
+        query_objects = [
+            candidate_query
+            for candidate_query in query_objects
+            if eligible_reference_ids_by_query.get(int(candidate_query["id"]))
+        ]
+        if not query_objects:
+            logger.info(
+                "L2 object_move: source_obj skipped before movement (id=%d, reason=no_answer_pair_within_4m)",
+                move_source_id,
+            )
+            continue
+        source_relation_pair_ids = {
+            tuple(sorted((int(candidate_query["id"]), int(reference_id))))
+            for candidate_query in query_objects
+            for reference_id in eligible_reference_ids_by_query[int(candidate_query["id"])]
+        }
         if pair_budget_remaining is not None:
             enabled_move_type_names = [
                 move_type
@@ -8493,6 +8597,7 @@ def generate_l2_object_move(
                     collision_objects=collision_objects,
                     allow_unchanged_attachment=has_attachment_chain,
                     motion_cache=motion_cache,
+                    relation_pair_ids=source_relation_pair_ids,
                 )
         if has_attachment_chain:
             _move_src_entry = {
@@ -8559,7 +8664,9 @@ def generate_l2_object_move(
                 candidate_query_id = int(candidate_query["id"])
                 reference_candidates = [
                     obj_map[int(ref_id)]
-                    for ref_id in sorted(allowed_reference_ids)
+                    for ref_id in sorted(
+                        eligible_reference_ids_by_query.get(candidate_query_id, set())
+                    )
                     if int(ref_id) in obj_map
                     and int(ref_id) not in moved_ids
                     and int(ref_id) != candidate_query_id
@@ -8602,7 +8709,11 @@ def generate_l2_object_move(
                     for obj in relation_scene_objects
                 ]
                 relation_map = _relation_map_by_pair(
-                    compute_direction_relations(moved_relation_objects, camera_pose)
+                    compute_direction_relations(
+                        moved_relation_objects,
+                        camera_pose,
+                        pair_id_pairs=source_relation_pair_ids,
+                    )
                 )
                 state_relation_cache[delta_key] = relation_map
             return relation_map
@@ -8696,6 +8807,11 @@ def generate_l2_object_move(
                 if relation_obj_c_id is None:
                     continue
                 if int(relation_obj_c_id) not in allowed_reference_ids:
+                    continue
+                if int(relation_obj_c_id) not in eligible_reference_ids_by_query.get(
+                    query_obj_id,
+                    set(),
+                ):
                     continue
                 _pair_moves_apart, pair_moves_together = _classify_pair_movement(
                     relation_obj_b_id, int(relation_obj_c_id), moved_ids,
@@ -9047,7 +9163,10 @@ def generate_l2_object_move(
                         templates=templates,
                         obj_map=obj_map,
                         referable_object_ids=referable_object_ids,
-                        reference_object_ids=allowed_reference_ids,
+                        reference_object_ids=eligible_reference_ids_by_query.get(
+                            query_obj_id,
+                            set(),
+                        ),
                         room_bounds=room_bounds,
                         collision_objects=collision_objects,
                         allow_unchanged_fallback=is_priority_query,
@@ -9579,6 +9698,7 @@ def generate_l2_object_rotate_object_centric(
     pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
     max_move_sources: int | None = None,
     motion_cache: SceneMotionCache | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
     """L2 object-rotation questions answered in a query-centric object-centric frame."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -10394,6 +10514,7 @@ def generate_l3_attachment_chain(
     ordinary_reference_objects: list[dict] | None = None,
     role_override: dict[str, int] | None = None,
     role_label_override_by_id: dict[int, str] | None = None,
+    role_overrides: list[dict[str, Any]] | None = None,
 ) -> list[dict]:
     """Generate L3.1 support-chain membership questions (two-hop: A→B→C).
 
@@ -10411,9 +10532,52 @@ def generate_l3_attachment_chain(
     Both {B} and {C} are correct; selecting only one is the typical 1-hop
     failure, and selecting {D} is the distractor failure.
 
-    ``role_override`` pins the four object IDs for a human-authored salvage
-    frame and bypasses automatic nearest-neighbour distractor selection.
+    ``role_override`` pins one four-object human-authored annotation.
+    ``role_overrides`` emits one question for every supplied annotation and
+    bypasses automatic nearest-neighbour distractor selection.
     """
+    if role_overrides is not None:
+        forced_questions: list[dict] = []
+        for role_set_index, raw_roles in enumerate(role_overrides):
+            if not isinstance(raw_roles, dict):
+                continue
+            normalized_roles: dict[str, int] = {}
+            role_labels = dict(role_label_override_by_id or {})
+            valid = True
+            for role in ("moved", "child", "grandchild", "contrast"):
+                value = raw_roles.get(role)
+                if isinstance(value, dict):
+                    raw_id = value.get("id")
+                    label = str(value.get("label", "")).strip()
+                else:
+                    raw_id = value
+                    label = ""
+                try:
+                    obj_id = int(raw_id)
+                except (TypeError, ValueError):
+                    valid = False
+                    break
+                normalized_roles[role] = obj_id
+                if label:
+                    role_labels[obj_id] = label
+            if not valid:
+                continue
+            generated = generate_l3_attachment_chain(
+                objects,
+                attachment_graph,
+                attached_by,
+                camera_pose,
+                templates,
+                ordinary_reference_objects=ordinary_reference_objects,
+                role_override=normalized_roles,
+                role_label_override_by_id=role_labels,
+            )
+            for question in generated:
+                question["manual_attachment_override"] = True
+                question["manual_attachment_role_set_index"] = role_set_index
+            forced_questions.extend(generated)
+        return forced_questions
+
     questions: list[dict] = []
     obj_map = {o["id"]: o for o in objects}
     ordinary_pool = (
@@ -10679,15 +10843,71 @@ def generate_l3_attachment_move(
             break
         source_count += 1
 
+        eligible_answer_pairs: set[tuple[int, int]] = set()
+        for candidate_parent_id in parent_ids:
+            candidate_parent_id = int(candidate_parent_id)
+            candidate_parent = obj_map.get(candidate_parent_id)
+            if candidate_parent is None:
+                continue
+            for candidate_grandchild_id in (
+                question_attachment_graph.get(candidate_parent_id) or []
+            ):
+                candidate_grandchild_id = int(candidate_grandchild_id)
+                candidate_grandchild = obj_map.get(candidate_grandchild_id)
+                if candidate_grandchild is None:
+                    continue
+                for candidate_query in (candidate_parent, candidate_grandchild):
+                    candidate_query_id = int(candidate_query["id"])
+                    if candidate_query_id not in attachment_candidate_ids:
+                        continue
+                    for candidate_ref in reference_pool:
+                        candidate_ref_id = int(candidate_ref["id"])
+                        if candidate_ref_id in {
+                            root_id,
+                            candidate_parent_id,
+                            candidate_grandchild_id,
+                        }:
+                            continue
+                        if _has_duplicate_labels_for_distinct_objects(
+                            root_obj,
+                            candidate_parent,
+                            candidate_grandchild,
+                            candidate_query,
+                            candidate_ref,
+                        ):
+                            continue
+                        if _answer_pair_is_within_distance_limit(
+                            candidate_query,
+                            candidate_ref,
+                            distance_cache=answer_pair_distance_cache,
+                            max_distance_m=_CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M,
+                        ):
+                            eligible_answer_pairs.add(
+                                tuple(sorted((candidate_query_id, candidate_ref_id)))
+                            )
+        if not eligible_answer_pairs:
+            logger.info(
+                "L3 attachment_move: root skipped before movement (id=%d, reason=no_answer_pair_within_4m)",
+                root_id,
+            )
+            continue
+
         valid_move_states: list[tuple[np.ndarray, dict[int, dict[str, Any]], set[int]]] = []
-        for delta, moved_objects, moved_ids in _iter_valid_object_move_states(
+        for delta, _physics_objects, moved_ids in _iter_valid_object_move_states(
             movement_scene_objects,
             attachment_graph,
             root_id,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
+            lightweight=True,
             motion_cache=motion_cache,
         ):
+            moved_objects = apply_movement_selective(
+                movement_scene_objects,
+                attachment_graph,
+                root_id,
+                delta,
+            )
             moved_map = {int(o["id"]): o for o in moved_objects}
             valid_move_states.append(
                 (
@@ -10748,6 +10968,8 @@ def generate_l3_attachment_move(
                             query_obj,
                             ref,
                         ):
+                            continue
+                        if tuple(sorted((query_obj_id, ref_id))) not in eligible_answer_pairs:
                             continue
 
                         ref_center = np.array(ref["center"], dtype=float)
@@ -12948,6 +13170,7 @@ def generate_all_questions(
     attachment_object_surface_text_by_id: dict[int, str] | dict[str, str] | None = None,
     attachment_priority_pairs: list[dict[str, Any]] | list[list[int]] | list[tuple[int, int]] | None = None,
     attachment_chain_role_override: dict[str, int] | None = None,
+    attachment_chain_role_overrides: list[dict[str, Any]] | None = None,
     occlusion_eligible_object_ids: list[int] | None = None,
     mention_in_frame_ratio_by_obj_id: dict[int, float] | None = None,
     label_statuses: dict[str, Any] | None = None,
@@ -12991,6 +13214,8 @@ def generate_all_questions(
     child objects should be preferred in L2 object-move child query selection.
     attachment_chain_role_override: optional human-selected moved, child,
     grandchild, and contrast IDs for one L3 attachment-chain question.
+    attachment_chain_role_overrides: optional list of human-selected role sets;
+    when provided, one pinned L3 attachment-chain question is emitted per set.
     occlusion_eligible_object_ids: compatibility field retained for trace/debug
     output. Downstream mention filtering now only requires mentions to be in
     the visible object pool.
@@ -14129,6 +14354,7 @@ def generate_all_questions(
                     ordinary_reference_objects=objects_uniq,
                     role_override=attachment_chain_role_override,
                     role_label_override_by_id=attachment_object_surface_text_by_id,
+                    role_overrides=attachment_chain_role_overrides,
                 ),
             ),
         )

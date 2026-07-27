@@ -965,6 +965,11 @@ def _call_generate_all_questions_compat(**kwargs):
                     _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
                 compat_kwargs.pop("attachment_object_surface_text_by_id", None)
                 continue
+            if "attachment_chain_role_overrides" in message:
+                if "attachment_chain_role_overrides" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("attachment_chain_role_overrides", None)
+                continue
             if "attachment_chain_role_override" in message:
                 if "attachment_chain_role_override" not in compat_kwargs:
                     raise
@@ -1047,26 +1052,57 @@ def _manual_attachment_graph_for_scene(
     return graph or None
 
 
+def _manual_attachment_role_records_for_frame(
+    referability_entry: dict[str, object] | None,
+) -> list[dict[str, dict[str, object]]]:
+    if not isinstance(referability_entry, dict):
+        return []
+    raw_role_sets = referability_entry.get("manual_attachment_role_sets")
+    if isinstance(raw_role_sets, list) and raw_role_sets:
+        candidates = raw_role_sets
+    else:
+        candidates = [referability_entry.get("manual_attachment_roles")]
+    normalized: list[dict[str, dict[str, object]]] = []
+    for raw_roles in candidates:
+        if not isinstance(raw_roles, dict):
+            continue
+        roles: dict[str, dict[str, object]] = {}
+        ids: list[int] = []
+        valid = True
+        for role in ("moved", "child", "grandchild", "contrast"):
+            value = raw_roles.get(role)
+            if isinstance(value, dict):
+                raw_id = value.get("id")
+                label = str(value.get("label", "")).strip()
+            else:
+                raw_id = value
+                label = ""
+            try:
+                obj_id = int(raw_id)
+            except (TypeError, ValueError):
+                valid = False
+                break
+            ids.append(obj_id)
+            roles[role] = {"id": obj_id, "label": label}
+        if valid and len(set(ids)) == len(ids):
+            normalized.append(roles)
+    return normalized
+
+
+def _manual_attachment_role_sets_for_frame(
+    referability_entry: dict[str, object] | None,
+) -> list[dict[str, int]]:
+    return [
+        {role: int(value["id"]) for role, value in role_set.items()}
+        for role_set in _manual_attachment_role_records_for_frame(referability_entry)
+    ]
+
+
 def _manual_attachment_roles_for_frame(
     referability_entry: dict[str, object] | None,
 ) -> dict[str, int] | None:
-    if not isinstance(referability_entry, dict):
-        return None
-    raw_roles = referability_entry.get("manual_attachment_roles")
-    if not isinstance(raw_roles, dict):
-        return None
-    roles: dict[str, int] = {}
-    for role in ("moved", "child", "grandchild", "contrast"):
-        value = raw_roles.get(role)
-        if isinstance(value, dict):
-            value = value.get("id")
-        try:
-            roles[role] = int(value)
-        except (TypeError, ValueError):
-            return None
-    if len(set(roles.values())) != len(roles):
-        return None
-    return roles
+    role_sets = _manual_attachment_role_sets_for_frame(referability_entry)
+    return role_sets[0] if role_sets else None
 
 
 def _manual_attachment_surface_text_by_object_id(
@@ -1074,21 +1110,13 @@ def _manual_attachment_surface_text_by_object_id(
 ) -> dict[int, str]:
     if not isinstance(referability_entry, dict):
         return {}
-    raw_roles = referability_entry.get("manual_attachment_roles")
-    if not isinstance(raw_roles, dict):
-        return {}
     surface_text_by_id: dict[int, str] = {}
-    for role in ("moved", "child", "grandchild", "contrast"):
-        value = raw_roles.get(role)
-        if not isinstance(value, dict):
-            continue
-        try:
-            obj_id = int(value.get("id"))
-        except (TypeError, ValueError):
-            continue
-        label = str(value.get("label", "")).strip()
-        if label:
-            surface_text_by_id[obj_id] = label
+    for role_set in _manual_attachment_role_records_for_frame(referability_entry):
+        for value in role_set.values():
+            obj_id = int(value["id"])
+            label = str(value.get("label", "")).strip()
+            if label:
+                surface_text_by_id[obj_id] = label
     return surface_text_by_id
 
 
@@ -2442,61 +2470,86 @@ def _load_referability_cache(
     return merged
 
 
-def _normalize_manual_attachment_role_records(
+def _normalize_manual_attachment_role_sets(
     entry: dict[str, object],
     *,
     scene_id: str,
     image_name: str,
-) -> dict[str, dict[str, object]]:
-    raw_roles = entry.get("manual_attachment_roles")
-    if not isinstance(raw_roles, dict):
+) -> list[dict[str, dict[str, object]]]:
+    raw_role_sets = entry.get("manual_attachment_role_sets")
+    if isinstance(raw_role_sets, list) and raw_role_sets:
+        candidates = raw_role_sets
+    else:
+        candidates = [entry.get("manual_attachment_roles")]
+    if not candidates or not all(isinstance(candidate, dict) for candidate in candidates):
         raise ValueError(
-            f"Manual attachment frame {scene_id}/{image_name} is missing manual_attachment_roles"
+            f"Manual attachment frame {scene_id}/{image_name} is missing manual attachment roles"
         )
     projected_ids = set(_normalize_object_ids(entry.get("candidate_visible_object_ids")))
-    roles: dict[str, dict[str, object]] = {}
-    role_ids: list[int] = []
-    for role in ("moved", "child", "grandchild", "contrast"):
-        raw_value = raw_roles.get(role)
-        if not isinstance(raw_value, dict):
+    normalized_sets: list[dict[str, dict[str, object]]] = []
+    role_keys: set[tuple[int, ...]] = set()
+    labels_by_object: dict[int, str] = {}
+    for set_index, raw_roles in enumerate(candidates, start=1):
+        roles: dict[str, dict[str, object]] = {}
+        role_ids: list[int] = []
+        for role in ("moved", "child", "grandchild", "contrast"):
+            raw_value = raw_roles.get(role)
+            if not isinstance(raw_value, dict):
+                raise ValueError(
+                    f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
+                    f"role {role!r} must contain id and label"
+                )
+            try:
+                obj_id = int(raw_value.get("id"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
+                    f"role {role!r} has an invalid object id"
+                ) from exc
+            label = str(raw_value.get("label", "")).strip()
+            if not label:
+                raise ValueError(
+                    f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
+                    f"role {role!r} has an empty label"
+                )
+            if obj_id not in projected_ids:
+                raise ValueError(
+                    f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
+                    f"role {role!r} uses object id {obj_id}, which is not one of the "
+                    "projected frame objects"
+                )
+            previous_label = labels_by_object.get(obj_id)
+            if previous_label is not None and previous_label.lower() != label.lower():
+                raise ValueError(
+                    f"Manual attachment frame {scene_id}/{image_name} object id {obj_id} "
+                    f"uses conflicting labels {previous_label!r} and {label!r}"
+                )
+            labels_by_object[obj_id] = label
+            role_ids.append(obj_id)
+            roles[role] = {"id": obj_id, "label": label}
+        if len(set(role_ids)) != len(role_ids):
             raise ValueError(
-                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
-                "must contain id and label"
+                f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
+                "must use four distinct object ids"
             )
-        try:
-            obj_id = int(raw_value.get("id"))
-        except (TypeError, ValueError) as exc:
+        role_key = tuple(role_ids)
+        if role_key in role_keys:
             raise ValueError(
-                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
-                "has an invalid object id"
-            ) from exc
-        label = str(raw_value.get("label", "")).strip()
-        if not label:
-            raise ValueError(
-                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
-                "has an empty label"
+                f"Manual attachment frame {scene_id}/{image_name} contains duplicate "
+                f"role set {role_key}"
             )
-        if obj_id not in projected_ids:
+        role_keys.add(role_key)
+        option_labels = {
+            str(roles[role]["label"]).strip().lower()
+            for role in ("child", "grandchild", "contrast")
+        }
+        if len(option_labels) != 3:
             raise ValueError(
-                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
-                f"uses object id {obj_id}, which is not one of the projected frame objects"
+                f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
+                "child, grandchild, and contrast labels must be distinct"
             )
-        role_ids.append(obj_id)
-        roles[role] = {"id": obj_id, "label": label}
-    if len(set(role_ids)) != len(role_ids):
-        raise ValueError(
-            f"Manual attachment frame {scene_id}/{image_name} must use four distinct object ids"
-        )
-    option_labels = {
-        str(roles[role]["label"]).strip().lower()
-        for role in ("child", "grandchild", "contrast")
-    }
-    if len(option_labels) != 3:
-        raise ValueError(
-            f"Manual attachment frame {scene_id}/{image_name} child, grandchild, "
-            "and contrast labels must be distinct"
-        )
-    return roles
+        normalized_sets.append(roles)
+    return normalized_sets
 
 
 def _nested_scene_frames_for_update(
@@ -2558,30 +2611,38 @@ def _merge_manual_attachment_cache(
             image_name = str(raw_image_name).strip()
             if not image_name or not isinstance(raw_entry, dict):
                 raise ValueError(f"Manual attachment scene {scene_id} contains an invalid frame")
-            roles = _normalize_manual_attachment_role_records(
+            role_sets = _normalize_manual_attachment_role_sets(
                 raw_entry,
                 scene_id=scene_id,
                 image_name=image_name,
             )
-            moved_id = int(roles["moved"]["id"])
-            child_id = int(roles["child"]["id"])
-            grandchild_id = int(roles["grandchild"]["id"])
-            contrast_id = int(roles["contrast"]["id"])
-            role_ids = [moved_id, child_id, grandchild_id, contrast_id]
-            attachment_pairs = [[moved_id, child_id], [child_id, grandchild_id]]
-
-            for parent_id, attached_id in attachment_pairs:
-                previous_parent = child_parent.get(attached_id)
-                if previous_parent is not None and previous_parent != parent_id:
-                    raise ValueError(
-                        f"Manual attachment scene {scene_id} assigns child {attached_id} "
-                        f"to conflicting parents {previous_parent} and {parent_id}"
-                    )
-                child_parent[attached_id] = parent_id
-                children = scene_graph.setdefault(str(parent_id), [])
-                if attached_id not in children:
-                    children.append(attached_id)
-                    children.sort()
+            role_ids: set[int] = set()
+            attachment_pairs: list[list[int]] = []
+            for roles in role_sets:
+                moved_id = int(roles["moved"]["id"])
+                child_id = int(roles["child"]["id"])
+                grandchild_id = int(roles["grandchild"]["id"])
+                contrast_id = int(roles["contrast"]["id"])
+                role_ids.update((moved_id, child_id, grandchild_id, contrast_id))
+                for parent_id, attached_id in (
+                    (moved_id, child_id),
+                    (child_id, grandchild_id),
+                ):
+                    pair = [parent_id, attached_id]
+                    if pair not in attachment_pairs:
+                        attachment_pairs.append(pair)
+                    previous_parent = child_parent.get(attached_id)
+                    if previous_parent is not None and previous_parent != parent_id:
+                        raise ValueError(
+                            f"Manual attachment scene {scene_id} assigns child {attached_id} "
+                            f"to conflicting parents {previous_parent} and {parent_id}"
+                        )
+                    child_parent[attached_id] = parent_id
+                    children = scene_graph.setdefault(str(parent_id), [])
+                    if attached_id not in children:
+                        children.append(attached_id)
+                        children.sort()
+            sorted_role_ids = sorted(role_ids)
 
             existing_entry = target_scene_frames.get(image_name)
             if isinstance(existing_entry, dict):
@@ -2589,7 +2650,7 @@ def _merge_manual_attachment_cache(
                 merged_frame_count += 1
             else:
                 merged_entry = dict(raw_entry)
-                merged_entry["referable_object_ids"] = list(role_ids)
+                merged_entry["referable_object_ids"] = list(sorted_role_ids)
                 added_frame_count += 1
 
             for field_name in (
@@ -2600,7 +2661,7 @@ def _merge_manual_attachment_cache(
             ):
                 existing_ids = _normalize_object_ids(merged_entry.get(field_name))
                 if field_name == "candidate_visible_object_ids" or existing_ids:
-                    merged_entry[field_name] = sorted(set(existing_ids) | set(role_ids))
+                    merged_entry[field_name] = sorted(set(existing_ids) | role_ids)
 
             merged_entry.update(
                 {
@@ -2608,7 +2669,7 @@ def _merge_manual_attachment_cache(
                     "image_name": image_name,
                     "frame_usable": True,
                     "final_selection_rank": -1,
-                    "attachment_referable_object_ids": list(role_ids),
+                    "attachment_referable_object_ids": list(sorted_role_ids),
                     "attachment_referable_pairs": attachment_pairs,
                     "attachment_referable_pair_count": len(attachment_pairs),
                     "attachment_selector_signal": {
@@ -2616,7 +2677,7 @@ def _merge_manual_attachment_cache(
                         "viewpoint_exempt": True,
                     },
                     "attachment_final_referability": {
-                        "object_ids": sorted(role_ids),
+                        "object_ids": list(sorted_role_ids),
                         "pairs": attachment_pairs,
                         "pair_count": len(attachment_pairs),
                     },
@@ -2625,7 +2686,8 @@ def _merge_manual_attachment_cache(
                         "selection_rank": -1,
                     },
                     "manual_attachment_override": True,
-                    "manual_attachment_roles": roles,
+                    "manual_attachment_role_sets": role_sets,
+                    "manual_attachment_roles": role_sets[0],
                 }
             )
             target_scene_frames[image_name] = merged_entry
@@ -6020,6 +6082,9 @@ def _apply_incremental_question_caps(
     frame_pair_counter: Counter[tuple[str, ...]] = Counter()
 
     for question in questions:
+        if bool(question.get("manual_attachment_override", False)):
+            kept.append(question)
+            continue
         canonical_type = _canonical_scene_question_type(question)
         if not canonical_type:
             kept.append(question)
@@ -6166,6 +6231,9 @@ def _take_questions_within_candidate_budgets(
 ) -> list[dict]:
     kept: list[dict] = []
     for question in questions:
+        if bool(question.get("manual_attachment_override", False)):
+            kept.append(question)
+            continue
         canonical_type = _canonical_scene_question_type(question)
         budget = _candidate_budget_for_type(
             canonical_type,
@@ -7169,9 +7237,17 @@ def run_pipeline(
                     scene_id,
                 )
                 break
+            pending_image_name = str(frame.get("image_name", "")).strip()
+            pending_referability_entry = scene_frames.get(pending_image_name)
+            pending_manual_role_sets = _manual_attachment_role_records_for_frame(
+                pending_referability_entry
+            )
             # Stop scanning frames once every requested type has exhausted its
             # generation budget. Final retained questions have no type-total cap.
-            if scene_type_cap > 0 or l2_l3_candidate_budget > 0:
+            if (
+                not pending_manual_role_sets
+                and (scene_type_cap > 0 or l2_l3_candidate_budget > 0)
+            ):
                 if _all_candidate_type_budgets_exhausted(
                     scene_candidate_type_counts,
                     canonical_types=single_frame_scene_question_types,
@@ -7440,6 +7516,8 @@ def run_pipeline(
                                 l2_l3_candidate_budget=l2_l3_candidate_budget,
                                 allowed_types=single_frame_scene_question_types,
                             )
+                            if pending_manual_role_sets and question_type_budgets is not None:
+                                question_type_budgets.pop("attachment_chain", None)
 
                         def _pair_budget_remaining(
                             canonical_type: str, id_a: int, id_b: int,
@@ -7483,6 +7561,10 @@ def run_pipeline(
                             attachment_referable_pairs=frame_attachment_pairs,
                             attachment_chain_role_override=_manual_attachment_roles_for_frame(
                                 referability_entry
+                            ),
+                            attachment_chain_role_overrides=(
+                                _manual_attachment_role_records_for_frame(referability_entry)
+                                or None
                             ),
                             attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
                             attachment_priority_pairs=attachment_priority_pairs,
@@ -8953,6 +9035,10 @@ def run_pipeline(
                 attachment_referable_object_ids=attachment_referable_ids,
                 attachment_chain_role_override=_manual_attachment_roles_for_frame(
                     referability_entry
+                ),
+                attachment_chain_role_overrides=(
+                    _manual_attachment_role_records_for_frame(referability_entry)
+                    or None
                 ),
                 attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
                 attachment_priority_pairs=attachment_priority_pairs,
