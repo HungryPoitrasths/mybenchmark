@@ -174,10 +174,9 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
             text = html.escape(f'{obj["label"]} #{obj["id"]}')
             object_label = html.escape(str(obj["label"]), quote=True)
             boxes.append(
-                f'<div class="box" draggable="true" data-object-id="{int(obj["id"])}" '
-                f'data-object-label="{object_label}" title="Drag {text} into a role" '
-                f'style="left:{left:.5f}%;top:{top:.5f}%;width:{width:.5f}%;height:{height:.5f}%">'
-                f'<span>{text}</span></div>'
+                f'<div class="box" style="left:{left:.5f}%;top:{top:.5f}%;width:{width:.5f}%;height:{height:.5f}%">'
+                f'<span class="object-label" draggable="true" data-object-id="{int(obj["id"])}" '
+                f'data-object-label="{object_label}" title="Drag {text} into a role">{text}</span></div>'
             )
         role_fields = "".join(
             f'<div class="role" data-role="{role}"><strong>{role}</strong>'
@@ -191,7 +190,7 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
             f'data-image-name="{html.escape(frame["image_name"])}">'
             f'<h2 data-base-title="{html.escape(frame["scene_id"])} / {html.escape(frame["image_name"])}">'
             f'{html.escape(frame["scene_id"])} / {html.escape(frame["image_name"])}</h2>'
-            f'<div class="visual"><img src="{frame["image_data_url"]}"><div class="boxes">{"".join(boxes)}</div></div>'
+            f'<div class="visual"><img src="{frame["image_data_url"]}" draggable="false"><div class="boxes">{"".join(boxes)}</div></div>'
             f'<div class="roles">{role_fields}</div>'
             '<div class="actions"><button type="button" class="add">Add</button>'
             '<button type="button" class="delete">Delete</button></div>'
@@ -219,7 +218,7 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
 body{{font:14px system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;padding:24px}}h1{{margin-top:0}}
 .card{{background:white;border:1px solid #d1d5db;border-radius:12px;padding:16px;margin:0 auto 24px;display:grid;gap:14px;max-width:1100px;box-sizing:border-box}}
 .visual{{position:relative;width:100%}}.visual img{{display:block;width:100%;height:auto}}
-.boxes{{position:absolute;inset:0}}.box{{position:absolute;border:2px solid #ef4444;box-sizing:border-box;cursor:grab;pointer-events:auto}}.box:active{{cursor:grabbing}}.box span{{background:#ef4444;color:#fff;font-size:11px;padding:2px 4px;white-space:nowrap;pointer-events:none}}
+.boxes{{position:absolute;inset:0;pointer-events:none}}.box{{position:absolute;border:2px solid #ef4444;box-sizing:border-box;pointer-events:none}}.object-label{{display:inline-block;background:#ef4444;color:#fff;font-size:11px;padding:2px 4px;white-space:nowrap;pointer-events:auto;cursor:grab;user-select:none}}.object-label:active{{cursor:grabbing}}
 .roles{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:stretch}}.role{{display:grid;grid-template-rows:auto 1fr 1fr;gap:8px;padding:10px;border:1px solid #d1d5db;border-radius:8px;min-width:0;transition:border-color .15s,background .15s,box-shadow .15s}}.role.dragover{{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 2px #bfdbfe}}label{{display:grid;align-content:start;gap:5px;font-weight:600;min-width:0}}input{{width:100%;min-width:0;padding:8px;border:1px solid #9ca3af;border-radius:6px;background:white;box-sizing:border-box}}
 button{{padding:9px 14px;border:0;border-radius:7px;background:#2563eb;color:white;cursor:pointer}}.actions{{display:flex;gap:10px;width:max-content}}button.add{{background:#047857}}button.delete{{background:#b91c1c}}
 @media(max-width:720px){{body{{padding:12px}}.roles{{grid-template-columns:1fr 1fr}}}}
@@ -275,8 +274,8 @@ document.getElementById('cards').addEventListener('click',event=>{{
   updateCardTitles();
 }});
 document.getElementById('cards').addEventListener('dragstart',event=>{{
-  const box=event.target.closest('.box'); if(!box) return;
-  const object={{id:Number(box.dataset.objectId),label:box.dataset.objectLabel}};
+  const objectLabel=event.target.closest('.object-label'); if(!objectLabel) return;
+  const object={{id:Number(objectLabel.dataset.objectId),label:objectLabel.dataset.objectLabel}};
   event.dataTransfer.effectAllowed='copy';
   event.dataTransfer.setData('application/json',JSON.stringify(object));
   event.dataTransfer.setData('text/plain',`${{object.id}}\\t${{object.label}}`);
