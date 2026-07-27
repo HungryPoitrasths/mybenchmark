@@ -23,6 +23,14 @@ Example:
         --vlm_model qwen3.5-flash \
         --output_json output/type_sample_eval/results.json \
         --output_html output/type_sample_eval/viewer.html
+
+BEV example:
+    python scripts/run_sampled_type_vlm_eval.py \
+        --benchmark_file output/multi_image_questions.json \
+        --bev \
+        --bev_dir output/multi_image_questions_bev \
+        --output_json output/type_sample_eval/bev_results.json \
+        --output_html output/type_sample_eval/bev_viewer.html
 """
 
 from __future__ import annotations
@@ -151,6 +159,266 @@ QTYPE_DISPLAY = {
 class ImageResolution:
     path: Path | None
     checked_paths: tuple[str, ...]
+    role: str | None = None
+
+
+ROLLOUT_SCHEMA_VERSION = "predictive-spatial-rollout-v1"
+ROLLOUT_MODES = ("picture", "video")
+ROLLOUT_MEDIA_ROLES = {
+    "source_view",
+    "source_to_destination_bridge",
+    "destination_environment",
+    "predicted_future_view",
+    "destination_to_query_bridge",
+    "query_reference_view",
+    "motion_reference_view",
+    "predicted_video_frame",
+}
+ROLLOUT_ROLE_LABELS = {
+    "source_view": "operation-before source view",
+    "source_to_destination_bridge": "source-to-destination bridge view",
+    "destination_environment": "operation-before destination environment",
+    "predicted_future_view": "predicted future destination view after the operation",
+    "destination_to_query_bridge": "destination-to-query bridge view",
+    "query_reference_view": "static query-object reference view",
+    "motion_reference_view": "operation-before motion reference view",
+    "predicted_video_frame": "predicted video rollout frame",
+}
+BEV_SCHEMA_VERSION = "predictive-spatial-bev-v1"
+BEV_MEDIA_ROLE = "bev_initial_layout"
+BEV_MEDIA_LABEL = "operation-before bird's-eye layout in world coordinates"
+ROLLOUT_FORBIDDEN_KEYS = {
+    "answer",
+    "correct_answer",
+    "correct_option",
+    "correct_options",
+    "correct_value",
+    "correct_values",
+    "future_3d_coordinate",
+    "future_3d_coordinates",
+    "future_3d_position",
+    "future_3d_positions",
+    "future_bbox",
+    "future_bboxes",
+    "future_box",
+    "future_boxes",
+    "future_projection",
+    "future_projection_box",
+    "gt_answer",
+    "gt_future_position",
+    "projected_future_bbox",
+    "projected_future_box",
+    "prompt",
+    "request_payload",
+    "response_payload",
+}
+
+
+@dataclass(frozen=True)
+class RolloutManifest:
+    path: Path
+    entries: dict[str, dict[str, Any]]
+    entry_order: tuple[str, ...]
+    sha256: str
+
+
+@dataclass(frozen=True)
+class BevManifest:
+    path: Path
+    entries: dict[str, dict[str, Any]]
+    sha256: str
+    image_size_px: int
+
+
+def _find_forbidden_rollout_key(value: Any, location: str = "$") -> str | None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).strip().lower()
+            child_location = f"{location}.{key}"
+            geometry_leak = (
+                normalized.startswith(("future_", "gt_future_"))
+                and any(
+                    token in normalized
+                    for token in (
+                        "coordinate",
+                        "position",
+                        "center",
+                        "bbox",
+                        "box",
+                        "projection",
+                    )
+                )
+            )
+            visibility_leak = normalized in {
+                "future_visibility",
+                "future_visibility_ratio",
+                "simulated_visibility",
+                "simulated_visibility_ratio",
+            }
+            if normalized in ROLLOUT_FORBIDDEN_KEYS or geometry_leak or visibility_leak:
+                return child_location
+            found = _find_forbidden_rollout_key(child, child_location)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found = _find_forbidden_rollout_key(child, f"{location}[{index}]")
+            if found:
+                return found
+    return None
+
+
+def load_rollout_manifest(path: Path) -> RolloutManifest:
+    raw_bytes = path.read_bytes()
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid rollout manifest JSON: {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Rollout manifest root must be a JSON object")
+    if payload.get("schema_version") != ROLLOUT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Rollout manifest schema_version must be {ROLLOUT_SCHEMA_VERSION!r}"
+        )
+    forbidden = _find_forbidden_rollout_key(payload)
+    if forbidden:
+        raise ValueError(
+            f"Rollout manifest contains forbidden GT/answer field at {forbidden}; "
+            "put geometry and answer-bearing data in the separate audit manifest"
+        )
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError("Rollout manifest entries must be a JSON array")
+
+    entries: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for index, raw_entry in enumerate(raw_entries):
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"Rollout manifest entries[{index}] must be an object")
+        uid = str(raw_entry.get("question_uid") or "").strip()
+        if not uid:
+            raise ValueError(f"Rollout manifest entries[{index}] has no question_uid")
+        if re.search(r'[\{\"]\s*(?:answer|correct_value)[\"\s:]', uid, re.IGNORECASE):
+            raise ValueError(
+                f"Rollout manifest entries[{index}].question_uid embeds answer-bearing JSON; "
+                "use the evaluator's opaque SHA-1 question_uid instead"
+            )
+        if uid in entries:
+            raise ValueError(f"Duplicate rollout manifest question_uid: {uid}")
+        for mode in ROLLOUT_MODES:
+            branch = raw_entry.get(mode)
+            if branch is None:
+                continue
+            if not isinstance(branch, dict):
+                raise ValueError(f"entries[{index}].{mode} must be an object")
+            if not isinstance(branch.get("eligible"), bool):
+                raise ValueError(f"entries[{index}].{mode}.eligible must be boolean")
+            rejection_reasons = branch.get("rejection_reasons", [])
+            if not isinstance(rejection_reasons, list) or not all(
+                isinstance(reason, str) for reason in rejection_reasons
+            ):
+                raise ValueError(
+                    f"entries[{index}].{mode}.rejection_reasons must be a string array"
+                )
+            media = branch.get("media", [])
+            if not isinstance(media, list):
+                raise ValueError(f"entries[{index}].{mode}.media must be an array")
+            for media_index, item in enumerate(media):
+                prefix = f"entries[{index}].{mode}.media[{media_index}]"
+                if not isinstance(item, dict):
+                    raise ValueError(f"{prefix} must be an object")
+                if not str(item.get("path") or "").strip():
+                    raise ValueError(f"{prefix}.path is required")
+                role = str(item.get("role") or "").strip()
+                if role not in ROLLOUT_MEDIA_ROLES:
+                    raise ValueError(
+                        f"{prefix}.role must be one of {sorted(ROLLOUT_MEDIA_ROLES)}"
+                    )
+                kind = str(item.get("kind") or "").strip()
+                if kind not in {"context", "prediction"}:
+                    raise ValueError(f"{prefix}.kind must be 'context' or 'prediction'")
+                if role in {"predicted_future_view", "predicted_video_frame"} and kind != "prediction":
+                    raise ValueError(f"{prefix} uses a prediction role but kind is not 'prediction'")
+                if role not in {"predicted_future_view", "predicted_video_frame"} and kind != "context":
+                    raise ValueError(f"{prefix} uses a context role but kind is not 'context'")
+        entries[uid] = raw_entry
+        order.append(uid)
+
+    return RolloutManifest(
+        path=path.resolve(),
+        entries=entries,
+        entry_order=tuple(order),
+        sha256=hashlib.sha256(raw_bytes).hexdigest(),
+    )
+
+
+def load_bev_manifest(bev_dir: Path) -> BevManifest:
+    manifest_path = bev_dir / "bev_manifest.json"
+    try:
+        raw_bytes = manifest_path.read_bytes()
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"BEV manifest not found: {manifest_path}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid BEV manifest JSON: {manifest_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("BEV manifest root must be a JSON object")
+    if payload.get("schema_version") != BEV_SCHEMA_VERSION:
+        raise ValueError(f"BEV manifest schema_version must be {BEV_SCHEMA_VERSION!r}")
+    if int(payload.get("failure_count") or 0) != 0 or payload.get("failures"):
+        raise ValueError("BEV manifest reports generation failures")
+    raw_entries = payload.get("entries")
+    if not isinstance(raw_entries, list):
+        raise ValueError("BEV manifest entries must be a JSON array")
+    try:
+        image_size_px = int(payload.get("image_size_px"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("BEV manifest image_size_px must be a positive integer") from exc
+    if image_size_px <= 0:
+        raise ValueError("BEV manifest image_size_px must be a positive integer")
+    if int(payload.get("generated_count", len(raw_entries))) != len(raw_entries):
+        raise ValueError("BEV manifest generated_count does not match entries")
+
+    entries: dict[str, dict[str, Any]] = {}
+    seen_image_paths: set[Path] = set()
+    root = bev_dir.resolve()
+    for index, raw_entry in enumerate(raw_entries):
+        if not isinstance(raw_entry, dict):
+            raise ValueError(f"BEV manifest entries[{index}] must be an object")
+        uid = str(raw_entry.get("question_uid") or "").strip()
+        if not uid:
+            raise ValueError(f"BEV manifest entries[{index}] has no question_uid")
+        if uid in entries:
+            raise ValueError(f"Duplicate BEV manifest question_uid: {uid}")
+        raw_image_path = str(raw_entry.get("image_path") or "").strip()
+        if not raw_image_path:
+            raise ValueError(f"BEV manifest entries[{index}].image_path is required")
+        image_path = Path(raw_image_path)
+        image_sha256 = str(raw_entry.get("image_sha256") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", image_sha256):
+            raise ValueError(
+                f"BEV manifest entries[{index}].image_sha256 must be a SHA-256 hex digest"
+            )
+        if image_path.is_absolute():
+            raise ValueError(f"BEV manifest entries[{index}].image_path must be relative")
+        resolved = (root / image_path).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(
+                f"BEV manifest entries[{index}].image_path escapes --bev_dir"
+            ) from exc
+        if resolved in seen_image_paths:
+            raise ValueError(f"Duplicate BEV manifest image_path: {raw_image_path}")
+        seen_image_paths.add(resolved)
+        entries[uid] = {**raw_entry, "_resolved_image_path": str(resolved)}
+
+    return BevManifest(
+        path=manifest_path.resolve(),
+        entries=entries,
+        sha256=hashlib.sha256(raw_bytes).hexdigest(),
+        image_size_px=image_size_px,
+    )
 
 
 def _json_key(payload: Any) -> str:
@@ -215,6 +483,8 @@ def _load_questions_from_roots(roots: list[Path]) -> tuple[list[dict[str, Any]],
                 item["_dataset"] = dataset
                 item["_source_root"] = str(root)
                 item["_source_benchmark"] = str(benchmark_path)
+                if item.get("question_uid") is not None:
+                    item["_source_question_uid"] = str(item["question_uid"])
                 uid = _question_uid(item)
                 item["question_uid"] = uid
                 dedupe_key = _question_dedupe_key(item)
@@ -246,6 +516,8 @@ def load_questions_from_subset(subset_path: Path) -> tuple[list[dict[str, Any]],
         item["_dataset"] = dataset
         item["_source_root"] = str(subset_path.parent)
         item["_source_benchmark"] = str(subset_path)
+        if item.get("question_uid") is not None:
+            item["_source_question_uid"] = str(item["question_uid"])
         uid = _question_uid(item)
         item["question_uid"] = uid
         dedupe_key = _question_dedupe_key(item)
@@ -303,6 +575,8 @@ def load_fixed_questions(benchmark_path: Path) -> tuple[list[dict[str, Any]], di
         item["_dataset"] = str(item.get("_dataset") or item.get("dataset") or "unknown")
         item["_source_root"] = str(benchmark_path.parent)
         item["_source_benchmark"] = str(benchmark_path)
+        if item.get("question_uid") is not None:
+            item["_source_question_uid"] = str(item["question_uid"])
         uid = _question_uid(item)
         item["question_uid"] = uid
         dedupe_key = _question_dedupe_key(item)
@@ -585,6 +859,288 @@ def resolve_question_images(
             )
         )
     return resolutions
+
+
+def is_multi_image_question(question: dict[str, Any]) -> bool:
+    return bool(_collect_aux_image_names(question))
+
+
+def filter_multi_image_questions(
+    questions: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [question for question in questions if is_multi_image_question(question)]
+
+
+def preflight_bev_questions(
+    questions: list[dict[str, Any]],
+    manifest: BevManifest,
+) -> None:
+    if Image is None:
+        raise RuntimeError("Pillow is required to validate BEV images")
+    problems: list[str] = []
+    for question in questions:
+        uid = str(question["question_uid"])
+        entry = manifest.entries.get(uid)
+        if entry is None:
+            problems.append(f"{uid}: missing manifest entry")
+            continue
+        expected_scene = str(entry.get("scene_id") or "")
+        actual_scene = str(question.get("scene_id") or "")
+        if expected_scene and expected_scene != actual_scene:
+            problems.append(
+                f"{uid}: scene mismatch manifest={expected_scene!r} benchmark={actual_scene!r}"
+            )
+            continue
+        expected_type = str(entry.get("question_type") or "")
+        actual_type = str(question.get("type") or "")
+        if expected_type and expected_type != actual_type:
+            problems.append(
+                f"{uid}: type mismatch manifest={expected_type!r} benchmark={actual_type!r}"
+            )
+            continue
+        image_path = Path(str(entry["_resolved_image_path"]))
+        if not image_path.is_file():
+            problems.append(f"{uid}: image not found: {image_path}")
+            continue
+        actual_sha256 = _sha256_file(image_path)
+        expected_sha256 = str(entry.get("image_sha256") or "").lower()
+        if actual_sha256 != expected_sha256:
+            problems.append(
+                f"{uid}: image hash mismatch expected={expected_sha256} actual={actual_sha256}"
+            )
+            continue
+        try:
+            with Image.open(image_path) as image:
+                image.verify()
+            with Image.open(image_path) as image:
+                if image.format != "PNG":
+                    raise ValueError(f"expected PNG, got {image.format}")
+                expected_size = (manifest.image_size_px, manifest.image_size_px)
+                if image.size != expected_size:
+                    raise ValueError(
+                        f"expected {expected_size[0]}x{expected_size[1]}, got "
+                        f"{image.size[0]}x{image.size[1]}"
+                    )
+        except Exception as exc:
+            problems.append(f"{uid}: unreadable image {image_path}: {exc}")
+            continue
+        question["_bev_image_path"] = str(image_path)
+        question["_bev_manifest_sha256"] = manifest.sha256
+    if problems:
+        preview = "\n".join(f"  - {problem}" for problem in problems[:20])
+        remainder = len(problems) - min(len(problems), 20)
+        suffix = f"\n  - ... and {remainder} more" if remainder else ""
+        raise ValueError(f"BEV preflight failed for {len(problems)} question(s):\n{preview}{suffix}")
+
+
+def resolve_bev_image(question: dict[str, Any]) -> ImageResolution:
+    path_text = str(question.get("_bev_image_path") or "").strip()
+    if not path_text:
+        return ImageResolution(None, (), BEV_MEDIA_ROLE)
+    path = Path(path_text)
+    return ImageResolution(path if path.is_file() else None, (str(path),), BEV_MEDIA_ROLE)
+
+
+def rollout_condition(*, picture: bool, video: bool, context_only: bool) -> str:
+    if picture:
+        return "picture_context_only" if context_only else "picture_rollout"
+    if video:
+        return "video_context_only" if context_only else "video_rollout"
+    return "baseline"
+
+
+def select_manifest_questions(
+    questions: list[dict[str, Any]],
+    manifest: RolloutManifest,
+    *,
+    mode: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    by_uid: dict[str, dict[str, Any]] = {}
+    for question in questions:
+        by_uid[str(question["question_uid"])] = question
+        source_uid = str(question.get("_source_question_uid") or "").strip()
+        if source_uid:
+            previous = by_uid.get(source_uid)
+            if previous is not None and previous is not question:
+                raise ValueError(f"Benchmark has duplicate source question_uid: {source_uid}")
+            by_uid[source_uid] = question
+
+    selected: list[dict[str, Any]] = []
+    seen_questions: set[str] = set()
+    rejected = 0
+    missing_branches = 0
+    for manifest_uid in manifest.entry_order:
+        entry = manifest.entries[manifest_uid]
+        branch = entry.get(mode)
+        if branch is None:
+            missing_branches += 1
+            continue
+        if not branch["eligible"]:
+            rejected += 1
+            continue
+        question = by_uid.get(manifest_uid)
+        if question is None:
+            raise ValueError(
+                f"Eligible rollout question_uid is absent from the benchmark: {manifest_uid}"
+            )
+        canonical_uid = str(question["question_uid"])
+        if canonical_uid in seen_questions:
+            raise ValueError(
+                f"Multiple rollout entries resolve to benchmark question_uid: {canonical_uid}"
+            )
+        expected_type = str(entry.get("question_type") or "").strip()
+        if expected_type and expected_type != str(question.get("type") or ""):
+            raise ValueError(
+                f"Rollout question type mismatch for {manifest_uid}: "
+                f"manifest={expected_type!r}, benchmark={question.get('type')!r}"
+            )
+        expected_scene = str(entry.get("scene_id") or "").strip()
+        if expected_scene and expected_scene != str(question.get("scene_id") or ""):
+            raise ValueError(
+                f"Rollout scene mismatch for {manifest_uid}: "
+                f"manifest={expected_scene!r}, benchmark={question.get('scene_id')!r}"
+            )
+        question["_rollout_manifest_uid"] = manifest_uid
+        selected.append(question)
+        seen_questions.add(canonical_uid)
+
+    stats: dict[str, Any] = {}
+    counts = Counter(str(question.get("type") or "unknown") for question in selected)
+    for qtype, count in sorted(counts.items(), key=lambda item: _qtype_sort_key(item[0])):
+        stats[qtype] = {
+            "available": count,
+            "sampled": count,
+            "selection": f"eligible_{mode}_manifest_entries",
+        }
+    stats["_rollout_coverage"] = {
+        "manifest_entries": len(manifest.entry_order),
+        "eligible_selected": len(selected),
+        "ineligible": rejected,
+        "missing_modality_branch": missing_branches,
+    }
+    return selected, stats
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def resolve_rollout_images(
+    question: dict[str, Any],
+    manifest: RolloutManifest,
+    *,
+    mode: str,
+    context_only: bool,
+) -> tuple[list[ImageResolution], str | None]:
+    manifest_uid = str(question.get("_rollout_manifest_uid") or question["question_uid"])
+    entry = manifest.entries.get(manifest_uid)
+    if entry is None:
+        return [ImageResolution(None, (), None)], "rollout_manifest_missing"
+    branch = entry.get(mode)
+    if not isinstance(branch, dict):
+        return [ImageResolution(None, (), None)], f"rollout_{mode}_missing"
+    if not branch.get("eligible"):
+        return [ImageResolution(None, (), None)], f"rollout_{mode}_ineligible"
+
+    all_media = list(branch.get("media") or [])
+    context_media = [item for item in all_media if item.get("kind") == "context"]
+    prediction_media = [item for item in all_media if item.get("kind") == "prediction"]
+    if mode == "picture":
+        role_rank = {
+            "source_view": 0,
+            "motion_reference_view": 0,
+            "source_to_destination_bridge": 1,
+            "destination_environment": 2,
+            "predicted_future_view": 3,
+            "destination_to_query_bridge": 4,
+            "query_reference_view": 5,
+        }
+        ranks = [role_rank.get(str(item.get("role")), -1) for item in all_media]
+        if -1 in ranks or ranks != sorted(ranks):
+            return [ImageResolution(None, (), None)], "rollout_picture_order_invalid"
+        context_roles = {str(item.get("role")) for item in context_media}
+        has_single_frame_canvas = "motion_reference_view" in context_roles
+        has_destination_canvas = (
+            "source_view" in context_roles and "destination_environment" in context_roles
+        )
+        if not has_single_frame_canvas and not has_destination_canvas:
+            return [ImageResolution(None, (), None)], "rollout_picture_context_invalid"
+        if not context_only and (
+            len(prediction_media) != 1
+            or prediction_media[0].get("role") != "predicted_future_view"
+        ):
+            return [ImageResolution(None, (), None)], "rollout_picture_prediction_invalid"
+    else:
+        video_role_rank = {
+            "motion_reference_view": 0,
+            "predicted_video_frame": 1,
+            "destination_to_query_bridge": 2,
+            "query_reference_view": 3,
+        }
+        video_ranks = [
+            video_role_rank.get(str(item.get("role")), -1) for item in all_media
+        ]
+        if (
+            -1 in video_ranks
+            or video_ranks != sorted(video_ranks)
+            or not all_media
+            or all_media[0].get("role") != "motion_reference_view"
+            or sum(
+                item.get("role") == "motion_reference_view" for item in context_media
+            )
+            != 1
+        ):
+            return [ImageResolution(None, (), None)], "rollout_video_context_invalid"
+        if not context_only:
+            frame_indices = [item.get("frame_index") for item in prediction_media]
+            if (
+                len(prediction_media) != 8
+                or any(item.get("role") != "predicted_video_frame" for item in prediction_media)
+                or frame_indices != list(range(8))
+            ):
+                return [ImageResolution(None, (), None)], "rollout_video_frames_invalid"
+
+    selected_media = context_media if context_only else all_media
+    if not selected_media:
+        return [ImageResolution(None, (), None)], f"rollout_{mode}_media_missing"
+
+    resolutions: list[ImageResolution] = []
+    for item in selected_media:
+        raw_path = Path(str(item["path"]))
+        path = raw_path if raw_path.is_absolute() else manifest.path.parent / raw_path
+        checked = (str(path),)
+        if not path.is_file():
+            resolutions.append(ImageResolution(None, checked, str(item["role"])))
+            continue
+        expected_sha = str(item.get("sha256") or "").strip().lower()
+        if expected_sha and (
+            not re.fullmatch(r"[0-9a-f]{64}", expected_sha)
+            or _sha256_file(path) != expected_sha
+        ):
+            return [ImageResolution(None, checked, str(item["role"]))], "rollout_media_hash_mismatch"
+        role = str(item["role"])
+        if role == "predicted_video_frame":
+            role = f"{role}:{int(item['frame_index']) + 1}/8"
+        resolutions.append(ImageResolution(path, checked, role))
+    if any(resolution.path is None for resolution in resolutions):
+        return resolutions, "rollout_media_not_found"
+    return resolutions, None
+
+
+def rollout_role_label(role: str | None) -> str | None:
+    if not role:
+        return None
+    base_role, _, suffix = role.partition(":")
+    if base_role == BEV_MEDIA_ROLE:
+        return BEV_MEDIA_LABEL
+    label = ROLLOUT_ROLE_LABELS.get(base_role)
+    if not label:
+        return None
+    return f"{label} {suffix}" if suffix else label
 
 
 def _resolve_scannet_geometry_root(image_roots: list[str]) -> str:
@@ -922,16 +1478,27 @@ def call_model(
     temperature: float,
     api_image_max_px: int,
     blind: bool = False,
+    image_roles: list[str | None] | None = None,
 ) -> str:
     omit_temperature = _should_omit_temperature(model)
     encoded: list[tuple[str, str]] = []
     if not blind:
         encoded = [_encode_image(path, api_image_max_px) for path in image_paths]
+    if image_roles is not None and len(image_roles) != len(image_paths):
+        raise ValueError("image_roles must have the same length as image_paths")
+    roles = list(image_roles or [None] * len(image_paths))
+    has_roles = any(roles)
     if api_provider == "openai_responses":
-        user_content: list[Any] = [
-            {"type": "input_image", "image_url": f"data:{mime};base64,{b64}"}
-            for b64, mime in encoded
-        ] + [{"type": "input_text", "text": prompt}]
+        user_content: list[Any] = []
+        for index, ((b64, mime), role) in enumerate(zip(encoded, roles), 1):
+            if role:
+                user_content.append(
+                    {"type": "input_text", "text": f"Image {index} role: {role}."}
+                )
+            user_content.append(
+                {"type": "input_image", "image_url": f"data:{mime};base64,{b64}"}
+            )
+        user_content.append({"type": "input_text", "text": prompt})
         response_kwargs: dict[str, Any] = {
             "model": model,
             "input": [
@@ -964,10 +1531,15 @@ def call_model(
         )
 
     if api_provider == "anthropic":
-        anthropic_user_content: list[Any] = [
-            {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
-            for b64, mime in encoded
-        ]
+        anthropic_user_content: list[Any] = []
+        for index, ((b64, mime), role) in enumerate(zip(encoded, roles), 1):
+            if role:
+                anthropic_user_content.append(
+                    {"type": "text", "text": f"Image {index} role: {role}."}
+                )
+            anthropic_user_content.append(
+                {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}
+            )
         anthropic_user_content.append({"type": "text", "text": prompt})
         message_kwargs: dict[str, Any] = {
             "model": model,
@@ -989,16 +1561,30 @@ def call_model(
             model=model,
         )
 
+    if has_roles:
+        chat_user_content: list[dict[str, Any]] = []
+        for index, ((b64, mime), role) in enumerate(zip(encoded, roles), 1):
+            if role:
+                chat_user_content.append(
+                    {"type": "text", "text": f"Image {index} role: {role}."}
+                )
+            chat_user_content.append(
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+            )
+        chat_user_content.append({"type": "text", "text": prompt})
+    else:
+        chat_user_content = [{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+            for b64, mime in encoded
+        ]
+
     chat_kwargs: dict[str, Any] = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": [{"type": "text", "text": prompt}] + [
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-                    for b64, mime in encoded
-                ],
+                "content": chat_user_content,
             },
         ],
     }
@@ -1068,6 +1654,7 @@ def result_from_question(
 ) -> dict[str, Any]:
     primary_resolution = image_resolutions[0]
     aux_resolutions = image_resolutions[1:]
+    has_rollout_media = any(resolution.role for resolution in image_resolutions)
     letters = allowed_letters(question)
     multi_select = is_multi_select_question(question)
     gt_answers = normalize_answer_letters(
@@ -1090,13 +1677,25 @@ def result_from_question(
         "scene_id": question.get("scene_id"),
         "image_name": question.get("image_name"),
         "image_path": str(primary_resolution.path) if primary_resolution.path else None,
-        "aux_image_names": _collect_aux_image_names(question),
+        "aux_image_names": (
+            [resolution.path.name if resolution.path else None for resolution in aux_resolutions]
+            if has_rollout_media
+            else _collect_aux_image_names(question)
+        ),
         "aux_image_paths": [str(r.path) if r.path else None for r in aux_resolutions],
         "checked_image_paths": [
             p for r in image_resolutions for p in r.checked_paths
         ],
+        "media_roles": [r.role for r in image_resolutions],
+        "evaluation_condition": question.get("_evaluation_condition", "baseline"),
         "level": question.get("level"),
         "type": question.get("type"),
+        "relation_unchanged": question.get("relation_unchanged"),
+        "cross_frame": bool(_collect_aux_image_names(question)),
+        "has_attachment_chain": question.get("has_attachment_chain"),
+        "attachment_pair_id": question.get("attachment_pair_id"),
+        "attachment_parent_id": question.get("attachment_parent_id"),
+        "attachment_child_id": question.get("attachment_child_id"),
         "question": question.get("question"),
         "options": question.get("options"),
         "gt_answer": gt_answer,
@@ -1109,6 +1708,14 @@ def result_from_question(
     if question.get("_oracle_info"):
         row["oracle_info"] = question.get("_oracle_info")
         row["oracle_mode"] = question.get("_oracle_mode")
+    if question.get("_rollout_manifest_sha256"):
+        row["rollout_manifest_sha256"] = question["_rollout_manifest_sha256"]
+        row["rollout_manifest_uid"] = question.get("_rollout_manifest_uid")
+        row["rollout_generation"] = question.get("_rollout_generation")
+        row["rollout_quality_audit"] = question.get("_rollout_quality_audit")
+    if question.get("_bev_image_path"):
+        row["bev_image_path"] = question["_bev_image_path"]
+        row["bev_manifest_sha256"] = question.get("_bev_manifest_sha256")
     if multi_select:
         row["multi_select"] = True
         row["gt_answers"] = gt_answers
@@ -1219,10 +1826,15 @@ def _image_html(row: dict[str, Any], html_image_max_px: int) -> str:
     if not aux_paths:
         return primary_html
 
+    media_roles = list(row.get("media_roles") or [])
     total = len(aux_paths)
-    blocks = [f'<div class="img-label">original</div>{primary_html}']
+    primary_label = rollout_role_label(media_roles[0] if media_roles else None) or "original"
+    blocks = [f'<div class="img-label">{html.escape(primary_label)}</div>{primary_html}']
     for i, aux_path_text in enumerate(aux_paths, start=1):
-        label = "auxiliary" if total == 1 else f"auxiliary {i}/{total}"
+        role = media_roles[i] if i < len(media_roles) else None
+        label = rollout_role_label(role) or (
+            "auxiliary" if total == 1 else f"auxiliary {i}/{total}"
+        )
         aux_html = _single_image_html(
             aux_path_text, html_image_max_px, missing_hint=f"{label} not found"
         )
@@ -1707,8 +2319,8 @@ def run_api_question(
     raw_response: str | None = None
     error: str | None = None
     prompt = build_prompt(question, direct=getattr(args, "direct", False), oracle=getattr(args, "oracle", False))
-    aux_names = _collect_aux_image_names(question)
-    frame_note = f" (+{len(aux_names)} more frame(s))" if aux_names else ""
+    auxiliary_count = max(0, len(resolutions) - 1)
+    frame_note = f" (+{auxiliary_count} more frame(s))" if auxiliary_count else ""
     print(
         f"[{idx}/{total}] {question.get('type')} "
         f"{question.get('scene_id')}/{question.get('image_name')}{frame_note} -> API",
@@ -1726,6 +2338,7 @@ def run_api_question(
                 temperature=args.temperature,
                 api_image_max_px=args.api_image_max_px,
                 blind=getattr(args, "blind", False),
+                image_roles=[rollout_role_label(r.role) for r in resolutions],
             )
             print(f"[{idx}/{total}] done", flush=True)
             break
@@ -1755,20 +2368,69 @@ def run_api_question(
 
 
 def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    bev_enabled = bool(getattr(args, "bev", False))
     if args.benchmark_file:
         benchmark_path = Path(args.benchmark_file)
         selected, metadata, sampling_stats = load_fixed_questions(benchmark_path)
         all_questions = selected
+        if bev_enabled:
+            selected = filter_multi_image_questions(selected)
     else:
         roots = [Path(root) for root in args.root]
         subset_path = Path(args.subset) if args.subset else None
         all_questions, metadata = load_questions(roots, subset_path)
+        sampling_pool = (
+            filter_multi_image_questions(all_questions) if bev_enabled else all_questions
+        )
         selected, sampling_stats = sample_questions(
-            all_questions,
+            sampling_pool,
             per_type=args.per_type,
             scene_cap=args.scene_cap,
             seed=args.seed,
         )
+
+    picture = bool(getattr(args, "picture", False))
+    video = bool(getattr(args, "video", False))
+    context_only = bool(getattr(args, "context_only", False))
+    condition = (
+        "bev"
+        if bev_enabled
+        else rollout_condition(
+            picture=picture,
+            video=video,
+            context_only=context_only,
+        )
+    )
+    manifest: RolloutManifest | None = None
+    bev_manifest: BevManifest | None = None
+    rollout_mode: str | None = "picture" if picture else ("video" if video else None)
+    if rollout_mode:
+        manifest = load_rollout_manifest(Path(args.rollout_manifest))
+        selected, sampling_stats = select_manifest_questions(
+            all_questions,
+            manifest,
+            mode=rollout_mode,
+        )
+    if bev_enabled:
+        if not selected:
+            raise ValueError("--bev found no multi-image questions to evaluate")
+        bev_manifest = load_bev_manifest(Path(args.bev_dir))
+        preflight_bev_questions(selected, bev_manifest)
+        sampling_stats["_bev_coverage"] = {
+            "input_questions": len(all_questions),
+            "eligible_multi_image_questions": len(
+                filter_multi_image_questions(all_questions)
+            ),
+            "selected": len(selected),
+        }
+    for question in selected:
+        question["_evaluation_condition"] = condition
+        if manifest is not None:
+            question["_rollout_manifest_sha256"] = manifest.sha256
+            manifest_uid = str(question["_rollout_manifest_uid"])
+            branch = manifest.entries[manifest_uid][str(rollout_mode)]
+            question["_rollout_generation"] = branch.get("generation")
+            question["_rollout_quality_audit"] = branch.get("quality_audit")
 
     oracle_stats: dict[str, int] | None = None
     if getattr(args, "oracle", False):
@@ -1807,6 +2469,15 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "oracle_mode": oracle_mode,
             "oracle_scannet_root": scannet_root,
             "oracle_scannetpp_roots": list(scannetpp_roots),
+            "evaluation_condition": condition,
+            "rollout_mode": rollout_mode,
+            "context_only": context_only,
+            "rollout_manifest": str(manifest.path) if manifest else None,
+            "rollout_manifest_sha256": manifest.sha256 if manifest else None,
+            "bev": bev_enabled,
+            "bev_dir": str(Path(args.bev_dir).resolve()) if bev_enabled else None,
+            "bev_manifest": str(bev_manifest.path) if bev_manifest else None,
+            "bev_manifest_sha256": bev_manifest.sha256 if bev_manifest else None,
         }
     )
     if oracle_stats is not None:
@@ -1845,11 +2516,22 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
         uid = str(question["question_uid"])
         qtype = str(question.get("type") or "")
         cached = existing.get(uid)
+        cached_condition = str(cached.get("evaluation_condition", "baseline")) if cached else None
+        cache_matches_condition = cached_condition == condition
+        if manifest is not None and cached is not None:
+            cache_matches_condition = cache_matches_condition and (
+                cached.get("rollout_manifest_sha256") == manifest.sha256
+            )
+        if bev_manifest is not None and cached is not None:
+            cache_matches_condition = cache_matches_condition and (
+                cached.get("bev_manifest_sha256") == bev_manifest.sha256
+            )
         # Non-targeted types always use cache (ignore --force).
         # Targeted types (or all types when --only_type is absent) respect --force.
         is_targeted = only_types is None or qtype in only_types
         if (
             cached
+            and cache_matches_condition
             and (not args.force or not is_targeted)
             and cached.get("raw_response") is not None
             and cached.get("prediction") is not None
@@ -1857,8 +2539,16 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             results_by_uid[uid] = cached
             continue
 
+        resolution_error: str | None = None
         if getattr(args, "blind", False):
             resolutions = [ImageResolution(None, ())]
+        elif manifest is not None and rollout_mode is not None:
+            resolutions, resolution_error = resolve_rollout_images(
+                question,
+                manifest,
+                mode=rollout_mode,
+                context_only=context_only,
+            )
         else:
             resolutions = resolve_question_images(
                 question,
@@ -1866,13 +2556,17 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
                 scannetpp_roots=[Path(p) for p in args.scannetpp_image_root],
                 scannetpp_sensor=args.scannetpp_sensor,
             )
+            if bev_enabled:
+                resolutions.append(resolve_bev_image(question))
 
         raw_response: str | None = None
         error: str | None = None
         # Fail closed: a two-frame-split question's text promises a photo series
         # ("the last photo shows Y") -- if any required frame (primary or aux) is
         # missing, don't silently send fewer frames than promised.
-        if not getattr(args, "blind", False) and any(r.path is None for r in resolutions):
+        if resolution_error:
+            error = resolution_error
+        elif not getattr(args, "blind", False) and any(r.path is None for r in resolutions):
             error = "image_not_found"
         elif args.skip_api:
             error = "api_skipped"
@@ -1995,6 +2689,37 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--blind", action="store_true", help="Text-only baseline: omit image from all API requests")
     parser.add_argument("--direct", action="store_true", help="Direct-answer baseline: ask for a single letter with no reasoning")
     parser.add_argument("--oracle", action="store_true", help="Generate/prepend ground-truth 3D oracle information to each prompt")
+    parser.add_argument(
+        "--bev",
+        action="store_true",
+        help="Evaluate only multi-image questions and append an initial-state BEV image",
+    )
+    parser.add_argument(
+        "--bev_dir",
+        default=None,
+        help="Directory produced by scripts/generate_bev_images.py (requires --bev)",
+    )
+    rollout_group = parser.add_mutually_exclusive_group()
+    rollout_group.add_argument(
+        "--picture",
+        action="store_true",
+        help="Use the ordered picture-rollout media from --rollout_manifest",
+    )
+    rollout_group.add_argument(
+        "--video",
+        action="store_true",
+        help="Use the motion context and eight video-rollout frames from --rollout_manifest",
+    )
+    parser.add_argument(
+        "--context_only",
+        action="store_true",
+        help="Omit prediction media while retaining the selected rollout branch's real context",
+    )
+    parser.add_argument(
+        "--rollout_manifest",
+        default=None,
+        help="Public, answer-free predictive-spatial-rollout-v1 evaluation manifest",
+    )
     parser.add_argument("--oracle_mode", choices=("world", "task_frame"), default="task_frame", help="Oracle coordinate mode used when --oracle is set")
     parser.add_argument("--oracle_cache_dir", default=None, help="Directory for pre-computed oracle scene cache (pickle files). Pre-compute with scripts/precompute_oracle_cache.py.")
     parser.add_argument("--scannetpp_geometry_root", default=None, help="Optional ScanNet++ geometry root; defaults to auto-detecting data/scannetpp, ++data, then --scannetpp_image_root")
@@ -2029,6 +2754,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--checkpoint_every must be positive")
     if args.vlm_workers <= 0:
         parser.error("--vlm_workers must be positive")
+    rollout_enabled = bool(args.picture or args.video)
+    if args.bev and not args.bev_dir:
+        parser.error("--bev requires --bev_dir")
+    if args.bev_dir and not args.bev:
+        parser.error("--bev_dir requires --bev")
+    if args.bev and (args.oracle or rollout_enabled or args.context_only or args.blind):
+        parser.error(
+            "--bev cannot be combined with --oracle, --picture, --video, "
+            "--context_only, or --blind"
+        )
+    if args.bev_dir and not Path(args.bev_dir).is_dir():
+        parser.error(f"--bev_dir not found: {args.bev_dir}")
+    if args.context_only and not rollout_enabled:
+        parser.error("--context_only requires --picture or --video")
+    if rollout_enabled and not args.rollout_manifest:
+        parser.error("--picture/--video requires --rollout_manifest")
+    if args.rollout_manifest and not rollout_enabled:
+        parser.error("--rollout_manifest requires --picture or --video")
+    if rollout_enabled and args.blind:
+        parser.error("--blind cannot be combined with --picture or --video")
+    if rollout_enabled and args.oracle:
+        parser.error("--oracle cannot be combined with --picture or --video")
+    if args.rollout_manifest and not Path(args.rollout_manifest).is_file():
+        parser.error(f"--rollout_manifest not found: {args.rollout_manifest}")
     if args.benchmark_file:
         benchmark_path = Path(args.benchmark_file)
         if not benchmark_path.exists():
