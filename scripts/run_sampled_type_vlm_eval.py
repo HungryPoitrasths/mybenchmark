@@ -184,9 +184,11 @@ ROLLOUT_ROLE_LABELS = {
     "motion_reference_view": "operation-before motion reference view",
     "predicted_video_frame": "predicted video rollout frame",
 }
-BEV_SCHEMA_VERSION = "predictive-spatial-bev-v1"
+BEV_SCHEMA_VERSION = "predictive-spatial-bev-v2"
+BEV_DIRECTION_MODES = ("none", "task", "task_ticks")
+BEV_FRAME_KINDS = ("agent", "object_centric", "allocentric")
 BEV_MEDIA_ROLE = "bev_initial_layout"
-BEV_MEDIA_LABEL = "operation-before bird's-eye layout in world coordinates"
+BEV_MEDIA_LABEL = "operation-before bird's-eye layout"
 ROLLOUT_FORBIDDEN_KEYS = {
     "answer",
     "correct_answer",
@@ -228,6 +230,7 @@ class BevManifest:
     entries: dict[str, dict[str, Any]]
     sha256: str
     image_size_px: int
+    direction_mode: str
 
 
 def _find_forbidden_rollout_key(value: Any, location: str = "$") -> str | None:
@@ -365,6 +368,11 @@ def load_bev_manifest(bev_dir: Path) -> BevManifest:
         raise ValueError("BEV manifest root must be a JSON object")
     if payload.get("schema_version") != BEV_SCHEMA_VERSION:
         raise ValueError(f"BEV manifest schema_version must be {BEV_SCHEMA_VERSION!r}")
+    direction_mode = str(payload.get("direction_mode") or "").strip()
+    if direction_mode not in BEV_DIRECTION_MODES:
+        raise ValueError(
+            f"BEV manifest direction_mode must be one of {list(BEV_DIRECTION_MODES)}"
+        )
     if int(payload.get("failure_count") or 0) != 0 or payload.get("failures"):
         raise ValueError("BEV manifest reports generation failures")
     raw_entries = payload.get("entries")
@@ -390,6 +398,12 @@ def load_bev_manifest(bev_dir: Path) -> BevManifest:
             raise ValueError(f"BEV manifest entries[{index}] has no question_uid")
         if uid in entries:
             raise ValueError(f"Duplicate BEV manifest question_uid: {uid}")
+        task_frame_kind = str(raw_entry.get("task_frame_kind") or "").strip()
+        if task_frame_kind not in BEV_FRAME_KINDS:
+            raise ValueError(
+                f"BEV manifest entries[{index}].task_frame_kind must be one of "
+                f"{list(BEV_FRAME_KINDS)}"
+            )
         raw_image_path = str(raw_entry.get("image_path") or "").strip()
         if not raw_image_path:
             raise ValueError(f"BEV manifest entries[{index}].image_path is required")
@@ -418,6 +432,7 @@ def load_bev_manifest(bev_dir: Path) -> BevManifest:
         entries=entries,
         sha256=hashlib.sha256(raw_bytes).hexdigest(),
         image_size_px=image_size_px,
+        direction_mode=direction_mode,
     )
 
 
@@ -926,6 +941,8 @@ def preflight_bev_questions(
             continue
         question["_bev_image_path"] = str(image_path)
         question["_bev_manifest_sha256"] = manifest.sha256
+        question["_bev_direction_mode"] = manifest.direction_mode
+        question["_bev_task_frame_kind"] = str(entry["task_frame_kind"])
     if problems:
         preview = "\n".join(f"  - {problem}" for problem in problems[:20])
         remainder = len(problems) - min(len(problems), 20)
@@ -1716,6 +1733,8 @@ def result_from_question(
     if question.get("_bev_image_path"):
         row["bev_image_path"] = question["_bev_image_path"]
         row["bev_manifest_sha256"] = question.get("_bev_manifest_sha256")
+        row["bev_direction_mode"] = question.get("_bev_direction_mode")
+        row["bev_task_frame_kind"] = question.get("_bev_task_frame_kind")
     if multi_select:
         row["multi_select"] = True
         row["gt_answers"] = gt_answers
@@ -2392,14 +2411,10 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     picture = bool(getattr(args, "picture", False))
     video = bool(getattr(args, "video", False))
     context_only = bool(getattr(args, "context_only", False))
-    condition = (
-        "bev"
-        if bev_enabled
-        else rollout_condition(
-            picture=picture,
-            video=video,
-            context_only=context_only,
-        )
+    condition = rollout_condition(
+        picture=picture,
+        video=video,
+        context_only=context_only,
     )
     manifest: RolloutManifest | None = None
     bev_manifest: BevManifest | None = None
@@ -2416,6 +2431,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             raise ValueError("--bev found no multi-image questions to evaluate")
         bev_manifest = load_bev_manifest(Path(args.bev_dir))
         preflight_bev_questions(selected, bev_manifest)
+        condition = f"bev_{bev_manifest.direction_mode}"
         sampling_stats["_bev_coverage"] = {
             "input_questions": len(all_questions),
             "eligible_multi_image_questions": len(
@@ -2478,6 +2494,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "bev_dir": str(Path(args.bev_dir).resolve()) if bev_enabled else None,
             "bev_manifest": str(bev_manifest.path) if bev_manifest else None,
             "bev_manifest_sha256": bev_manifest.sha256 if bev_manifest else None,
+            "bev_direction_mode": bev_manifest.direction_mode if bev_manifest else None,
         }
     )
     if oracle_stats is not None:
