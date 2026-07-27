@@ -67,6 +67,7 @@ from src.qa_generator import (
     generate_all_questions,
     generate_cross_frame_questions,
     ReasoningFrameContext,
+    SceneMotionCache,
     OcclusionDirectedSearchBudget,
     L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
     L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
@@ -130,9 +131,11 @@ logging.basicConfig(
 logger = logging.getLogger("pipeline")
 DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
-PIPELINE_SCENE_STATUS_VERSION = 7
+PIPELINE_SCENE_STATUS_VERSION = 8
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
+CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
+CROSS_FRAME_CHECKPOINT_VERSION = 1
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
 L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
@@ -741,10 +744,10 @@ def _has_strict_object_move_occlusion_frame_roles(question: dict) -> bool:
     try:
         frame_1_ids = [int(value) for value in groups.get("frame_1", [])]
         frame_2_ids = [int(value) for value in groups.get("frame_2", [])]
-        expected_frame_1 = [
+        expected_frame_1 = list(dict.fromkeys([
             int(question["moved_obj_id"]),
             int(question["query_obj_id"]),
-        ]
+        ]))
         expected_frame_2 = [int(question["obj_ref_id"])]
     except (KeyError, TypeError, ValueError):
         return False
@@ -835,6 +838,96 @@ def _balance_scene_object_move_occlusion_negatives(
     }
 
 
+def _object_move_occlusion_balance_key(
+    question: dict,
+) -> tuple[float, float, str, str, str, int, int, int]:
+    blocking = max(
+        float(question.get("new_query_blocking_ratio", 0.0) or 0.0),
+        float(question.get("new_ref_blocking_ratio", 0.0) or 0.0),
+    )
+    score = question.get("directed_search_score")
+    predicted_coverage = (
+        float(score.get("predicted_coverage", 0.0) or 0.0)
+        if isinstance(score, dict) else 0.0
+    )
+    return (
+        -blocking,
+        -predicted_coverage,
+        str(question.get("scene_id", "")),
+        str(question.get("image_name", "")),
+        str(question.get("reasoning_frame_2", "")),
+        int(question.get("moved_obj_id", -1)),
+        int(question.get("query_obj_id", -1)),
+        int(question.get("obj_ref_id", -1)),
+    )
+
+
+def _balance_global_object_move_occlusion_three_way(
+    questions: list[dict],
+) -> tuple[list[dict], dict[str, int | bool]]:
+    valid_questions = [
+        question for question in questions
+        if _has_strict_object_move_occlusion_frame_roles(question)
+    ]
+    occlusion_questions = [
+        question for question in valid_questions
+        if _is_object_move_occlusion_question(question)
+    ]
+    nonself_positive = [
+        question for question in occlusion_questions
+        if _is_positive_object_move_occlusion(question)
+        and int(question.get("moved_obj_id", -1))
+        != int(question.get("query_obj_id", -1))
+    ]
+    self_positive = [
+        question for question in occlusion_questions
+        if _is_positive_object_move_occlusion(question)
+        and int(question.get("moved_obj_id", -1))
+        == int(question.get("query_obj_id", -1))
+    ]
+    neither = [
+        question for question in occlusion_questions
+        if str(question.get("new_pairwise_occlusion_relation", "")).strip()
+        == L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER
+    ]
+    target_per_class = min(
+        len(nonself_positive),
+        len(self_positive),
+        len(neither),
+    )
+    balance_applied = target_per_class > 0
+    if balance_applied:
+        kept_occlusion_ids = {
+            id(question)
+            for group in (nonself_positive, self_positive, neither)
+            for question in sorted(group, key=_object_move_occlusion_balance_key)[
+                :target_per_class
+            ]
+        }
+        balanced = [
+            question for question in valid_questions
+            if not _is_object_move_occlusion_question(question)
+            or id(question) in kept_occlusion_ids
+        ]
+    else:
+        balanced = valid_questions
+    return balanced, {
+        "balance_applied": balance_applied,
+        "target_per_class": target_per_class,
+        "nonself_positive_input_count": len(nonself_positive),
+        "self_positive_input_count": len(self_positive),
+        "neither_input_count": len(neither),
+        "nonself_positive_kept_count": (
+            target_per_class if balance_applied else len(nonself_positive)
+        ),
+        "self_positive_kept_count": (
+            target_per_class if balance_applied else len(self_positive)
+        ),
+        "neither_kept_count": target_per_class if balance_applied else len(neither),
+        "invalid_frame_role_dropped_count": len(questions) - len(valid_questions),
+    }
+
+
 def _question_dinox_mask_bounds(mask: object) -> list[int] | None:
     if not isinstance(mask, np.ndarray):
         return None
@@ -872,6 +965,11 @@ def _call_generate_all_questions_compat(**kwargs):
                     _GENERATE_ALL_QUESTIONS_ATTACHMENT_SURFACE_COMPAT_WARNING_EMITTED = True
                 compat_kwargs.pop("attachment_object_surface_text_by_id", None)
                 continue
+            if "attachment_chain_role_override" in message:
+                if "attachment_chain_role_override" not in compat_kwargs:
+                    raise
+                compat_kwargs.pop("attachment_chain_role_override", None)
+                continue
             if "attachment_priority_pairs" in message:
                 if "attachment_priority_pairs" not in compat_kwargs:
                     raise
@@ -898,6 +996,114 @@ def _call_generate_all_questions_compat(**kwargs):
                 compat_kwargs.pop("max_move_sources", None)
                 continue
             raise
+
+
+def _manual_attachment_graph_for_scene(
+    referability_cache: dict | None,
+    scene_id: str,
+) -> dict[int, list[int]] | None:
+    """Return a human salvage graph when the cache supplies one."""
+    if not isinstance(referability_cache, dict):
+        return None
+    raw_graphs = referability_cache.get("manual_attachment_graph")
+    if not isinstance(raw_graphs, dict):
+        return None
+    raw_graph = raw_graphs.get(scene_id)
+    if isinstance(raw_graph, dict) and "edges" in raw_graph:
+        raw_graph = raw_graph.get("edges")
+    graph: dict[int, list[int]] = {}
+    if isinstance(raw_graph, dict):
+        for parent_id, child_ids in raw_graph.items():
+            try:
+                parent = int(parent_id)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(child_ids, list):
+                continue
+            children: list[int] = []
+            for child_id in child_ids:
+                try:
+                    child = int(child_id)
+                except (TypeError, ValueError):
+                    continue
+                if child != parent and child not in children:
+                    children.append(child)
+            if children:
+                graph[parent] = sorted(children)
+    elif isinstance(raw_graph, list):
+        for edge in raw_graph:
+            if not isinstance(edge, (list, tuple)) or len(edge) < 2:
+                continue
+            try:
+                parent, child = int(edge[0]), int(edge[1])
+            except (TypeError, ValueError):
+                continue
+            if parent == child:
+                continue
+            graph.setdefault(parent, [])
+            if child not in graph[parent]:
+                graph[parent].append(child)
+        graph = {parent: sorted(children) for parent, children in graph.items()}
+    return graph or None
+
+
+def _manual_attachment_roles_for_frame(
+    referability_entry: dict[str, object] | None,
+) -> dict[str, int] | None:
+    if not isinstance(referability_entry, dict):
+        return None
+    raw_roles = referability_entry.get("manual_attachment_roles")
+    if not isinstance(raw_roles, dict):
+        return None
+    roles: dict[str, int] = {}
+    for role in ("moved", "child", "grandchild", "contrast"):
+        value = raw_roles.get(role)
+        if isinstance(value, dict):
+            value = value.get("id")
+        try:
+            roles[role] = int(value)
+        except (TypeError, ValueError):
+            return None
+    if len(set(roles.values())) != len(roles):
+        return None
+    return roles
+
+
+def _manual_attachment_surface_text_by_object_id(
+    referability_entry: dict[str, object] | None,
+) -> dict[int, str]:
+    if not isinstance(referability_entry, dict):
+        return {}
+    raw_roles = referability_entry.get("manual_attachment_roles")
+    if not isinstance(raw_roles, dict):
+        return {}
+    surface_text_by_id: dict[int, str] = {}
+    for role in ("moved", "child", "grandchild", "contrast"):
+        value = raw_roles.get(role)
+        if not isinstance(value, dict):
+            continue
+        try:
+            obj_id = int(value.get("id"))
+        except (TypeError, ValueError):
+            continue
+        label = str(value.get("label", "")).strip()
+        if label:
+            surface_text_by_id[obj_id] = label
+    return surface_text_by_id
+
+
+def _attachment_surface_text_by_object_id(
+    referability_entry: dict[str, object] | None,
+) -> dict[int, str]:
+    if not isinstance(referability_entry, dict):
+        return {}
+    surface_text_by_id = _attachment_human_review_surface_text_by_object_id(
+        referability_entry.get("attachment_human_review_cards")
+    )
+    surface_text_by_id.update(
+        _manual_attachment_surface_text_by_object_id(referability_entry)
+    )
+    return dict(sorted(surface_text_by_id.items()))
 
 
 def _serialize_question_dinox_detection(detection: dict[str, object]) -> dict[str, object]:
@@ -1727,7 +1933,11 @@ def _iter_referability_cache_frame_entries(
 
 def _find_inconsistent_referability_entry(cache: dict | None) -> str | None:
     for _scene_frames, scene_id, image_name, entry in _iter_referability_cache_frame_entries(cache):
-        if isinstance(entry, dict) and not _frame_entry_has_consistent_final_fields(entry):
+        if (
+            isinstance(entry, dict)
+            and not _manual_attachment_roles_for_frame(entry)
+            and not _frame_entry_has_consistent_final_fields(entry)
+        ):
             return f"{scene_id}/{image_name}"
     return None
 
@@ -1862,7 +2072,11 @@ def _load_single_referability_cache(
         return None
     with open(path, "r", encoding="utf-8") as f:
         raw_data = json.load(f)
-    if no_salvage:
+    is_two_hop_manual_cache = (
+        isinstance(raw_data, dict)
+        and str(raw_data.get("schema", "")).strip() == "two_hop_attachment_salvage_v1"
+    )
+    if no_salvage or is_two_hop_manual_cache:
         review_html_paths: list[Path] = []
         review_html_mode = "none"
     else:
@@ -1921,7 +2135,13 @@ def _load_single_referability_cache(
         logger.info(
             "Loaded referability cache from %s without human salvage backfill (%s)",
             path,
-            "disabled via --no_salvage" if no_salvage else "no review HTML found",
+            (
+                "manual two-hop cache"
+                if is_two_hop_manual_cache
+                else "disabled via --no_salvage"
+                if no_salvage
+                else "no review HTML found"
+            ),
         )
     else:
         logger.info(
@@ -2222,6 +2442,209 @@ def _load_referability_cache(
     return merged
 
 
+def _normalize_manual_attachment_role_records(
+    entry: dict[str, object],
+    *,
+    scene_id: str,
+    image_name: str,
+) -> dict[str, dict[str, object]]:
+    raw_roles = entry.get("manual_attachment_roles")
+    if not isinstance(raw_roles, dict):
+        raise ValueError(
+            f"Manual attachment frame {scene_id}/{image_name} is missing manual_attachment_roles"
+        )
+    projected_ids = set(_normalize_object_ids(entry.get("candidate_visible_object_ids")))
+    roles: dict[str, dict[str, object]] = {}
+    role_ids: list[int] = []
+    for role in ("moved", "child", "grandchild", "contrast"):
+        raw_value = raw_roles.get(role)
+        if not isinstance(raw_value, dict):
+            raise ValueError(
+                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
+                "must contain id and label"
+            )
+        try:
+            obj_id = int(raw_value.get("id"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
+                "has an invalid object id"
+            ) from exc
+        label = str(raw_value.get("label", "")).strip()
+        if not label:
+            raise ValueError(
+                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
+                "has an empty label"
+            )
+        if obj_id not in projected_ids:
+            raise ValueError(
+                f"Manual attachment frame {scene_id}/{image_name} role {role!r} "
+                f"uses object id {obj_id}, which is not one of the projected frame objects"
+            )
+        role_ids.append(obj_id)
+        roles[role] = {"id": obj_id, "label": label}
+    if len(set(role_ids)) != len(role_ids):
+        raise ValueError(
+            f"Manual attachment frame {scene_id}/{image_name} must use four distinct object ids"
+        )
+    option_labels = {
+        str(roles[role]["label"]).strip().lower()
+        for role in ("child", "grandchild", "contrast")
+    }
+    if len(option_labels) != 3:
+        raise ValueError(
+            f"Manual attachment frame {scene_id}/{image_name} child, grandchild, "
+            "and contrast labels must be distinct"
+        )
+    return roles
+
+
+def _nested_scene_frames_for_update(
+    frames: dict[str, object],
+    scene_id: str,
+) -> dict[str, dict[str, object]]:
+    existing = frames.get(scene_id)
+    if isinstance(existing, dict) and "frame_usable" not in existing:
+        return existing
+    scene_frames: dict[str, dict[str, object]] = {}
+    prefix = f"{scene_id}/"
+    for key in list(frames):
+        value = frames.get(key)
+        if isinstance(key, str) and key.startswith(prefix) and isinstance(value, dict):
+            scene_frames[key[len(prefix):]] = value
+            del frames[key]
+    frames[scene_id] = scene_frames
+    return scene_frames
+
+
+def _merge_manual_attachment_cache(
+    referability_cache: dict[str, object],
+    manual_cache: dict[str, object],
+) -> dict[str, object]:
+    if str(manual_cache.get("schema", "")).strip() != "two_hop_attachment_salvage_v1":
+        raise ValueError(
+            "Manual attachment cache must use schema two_hop_attachment_salvage_v1"
+        )
+    if str(manual_cache.get("version", "")).strip() != EXPECTED_REFERABILITY_CACHE_VERSION:
+        raise ValueError(
+            "Manual attachment cache version mismatch: expected "
+            f"{EXPECTED_REFERABILITY_CACHE_VERSION}"
+        )
+    raw_manual_frames = manual_cache.get("frames")
+    if not isinstance(raw_manual_frames, dict) or not raw_manual_frames:
+        raise ValueError("Manual attachment cache contains no frames")
+
+    merged = json.loads(json.dumps(referability_cache, ensure_ascii=False))
+    merged_frames = merged.setdefault("frames", {})
+    if not isinstance(merged_frames, dict):
+        raise ValueError("Referability cache frames field must be an object")
+
+    manual_graph: dict[str, dict[str, list[int]]] = {}
+    child_parent_by_scene: dict[str, dict[int, int]] = {}
+    manual_scene_ids: list[str] = []
+    merged_frame_count = 0
+    added_frame_count = 0
+
+    for raw_scene_id, raw_scene_frames in raw_manual_frames.items():
+        scene_id = str(raw_scene_id).strip()
+        if not scene_id or not isinstance(raw_scene_frames, dict):
+            raise ValueError("Manual attachment cache contains an invalid scene entry")
+        manual_scene_ids.append(scene_id)
+        target_scene_frames = _nested_scene_frames_for_update(merged_frames, scene_id)
+        scene_graph = manual_graph.setdefault(scene_id, {})
+        child_parent = child_parent_by_scene.setdefault(scene_id, {})
+
+        for raw_image_name, raw_entry in raw_scene_frames.items():
+            image_name = str(raw_image_name).strip()
+            if not image_name or not isinstance(raw_entry, dict):
+                raise ValueError(f"Manual attachment scene {scene_id} contains an invalid frame")
+            roles = _normalize_manual_attachment_role_records(
+                raw_entry,
+                scene_id=scene_id,
+                image_name=image_name,
+            )
+            moved_id = int(roles["moved"]["id"])
+            child_id = int(roles["child"]["id"])
+            grandchild_id = int(roles["grandchild"]["id"])
+            contrast_id = int(roles["contrast"]["id"])
+            role_ids = [moved_id, child_id, grandchild_id, contrast_id]
+            attachment_pairs = [[moved_id, child_id], [child_id, grandchild_id]]
+
+            for parent_id, attached_id in attachment_pairs:
+                previous_parent = child_parent.get(attached_id)
+                if previous_parent is not None and previous_parent != parent_id:
+                    raise ValueError(
+                        f"Manual attachment scene {scene_id} assigns child {attached_id} "
+                        f"to conflicting parents {previous_parent} and {parent_id}"
+                    )
+                child_parent[attached_id] = parent_id
+                children = scene_graph.setdefault(str(parent_id), [])
+                if attached_id not in children:
+                    children.append(attached_id)
+                    children.sort()
+
+            existing_entry = target_scene_frames.get(image_name)
+            if isinstance(existing_entry, dict):
+                merged_entry = dict(existing_entry)
+                merged_frame_count += 1
+            else:
+                merged_entry = dict(raw_entry)
+                merged_entry["referable_object_ids"] = list(role_ids)
+                added_frame_count += 1
+
+            for field_name in (
+                "candidate_visible_object_ids",
+                "selector_visible_object_ids",
+                "pipeline_visible_object_ids_used_for_generation",
+                "visible_object_ids",
+            ):
+                existing_ids = _normalize_object_ids(merged_entry.get(field_name))
+                if field_name == "candidate_visible_object_ids" or existing_ids:
+                    merged_entry[field_name] = sorted(set(existing_ids) | set(role_ids))
+
+            merged_entry.update(
+                {
+                    "scene_id": scene_id,
+                    "image_name": image_name,
+                    "frame_usable": True,
+                    "final_selection_rank": -1,
+                    "attachment_referable_object_ids": list(role_ids),
+                    "attachment_referable_pairs": attachment_pairs,
+                    "attachment_referable_pair_count": len(attachment_pairs),
+                    "attachment_selector_signal": {
+                        "well_cropped_pair_count": len(attachment_pairs),
+                        "viewpoint_exempt": True,
+                    },
+                    "attachment_final_referability": {
+                        "object_ids": sorted(role_ids),
+                        "pairs": attachment_pairs,
+                        "pair_count": len(attachment_pairs),
+                    },
+                    "attachment_final_frame_selection": {
+                        "selected_for_final_cache": True,
+                        "selection_rank": -1,
+                    },
+                    "manual_attachment_override": True,
+                    "manual_attachment_roles": roles,
+                }
+            )
+            target_scene_frames[image_name] = merged_entry
+
+    existing_graphs = merged.get("manual_attachment_graph")
+    if not isinstance(existing_graphs, dict):
+        existing_graphs = {}
+    existing_graphs.update(manual_graph)
+    merged["manual_attachment_graph"] = existing_graphs
+    merged["manual_attachment_scene_ids"] = sorted(set(manual_scene_ids))
+    logger.info(
+        "Applied manual attachment cache: scenes=%d overlapping_frames=%d added_frames=%d",
+        len(set(manual_scene_ids)),
+        merged_frame_count,
+        added_frame_count,
+    )
+    return merged
+
+
 def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) -> dict | None:
     if not cache:
         return None
@@ -2231,7 +2654,7 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
         entry = scene_frames.get(image_name)
         if not isinstance(entry, dict):
             return entry
-        if not _frame_entry_has_consistent_final_fields(entry):
+        if not _manual_attachment_roles_for_frame(entry) and not _frame_entry_has_consistent_final_fields(entry):
             raise ValueError(
                 f"Referability cache entry for {scene_id}/{image_name} is inconsistent with cache version "
                 f"{EXPECTED_REFERABILITY_CACHE_VERSION}. Regenerate the referability cache instead of repairing it at read time."
@@ -2240,7 +2663,7 @@ def _get_referability_entry(cache: dict | None, scene_id: str, image_name: str) 
     entry = frames.get(f"{scene_id}/{image_name}")
     if not isinstance(entry, dict):
         return entry
-    if not _frame_entry_has_consistent_final_fields(entry):
+    if not _manual_attachment_roles_for_frame(entry) and not _frame_entry_has_consistent_final_fields(entry):
         raise ValueError(
             f"Referability cache entry for {scene_id}/{image_name} is inconsistent with cache version "
             f"{EXPECTED_REFERABILITY_CACHE_VERSION}. Regenerate the referability cache instead of repairing it at read time."
@@ -2905,9 +3328,17 @@ def _question_presence_prompt(
 
 
 def _should_run_question_presence_review(question: dict[str, object]) -> bool:
-    return (
+    if (
         str(question.get("level", "")).strip().upper() == "L1"
         and str(question.get("type", "")).strip() == "occlusion"
+    ):
+        return True
+    return (
+        str(question.get("level", "")).strip().upper() == "L2"
+        and str(question.get("type", "")).strip() == "object_move_occlusion"
+        and _coerce_object_id(question.get("moved_obj_id")) is not None
+        and _coerce_object_id(question.get("moved_obj_id"))
+        == _coerce_object_id(question.get("query_obj_id"))
     )
 
 
@@ -3802,6 +4233,17 @@ def _get_referability_scene_ids(cache: dict | None) -> set[str]:
         elif isinstance(key, str) and "/" in key:
             scene_ids.add(key.split("/", 1)[0])
     return scene_ids
+
+
+def _prioritize_manual_attachment_scene_dirs(
+    scene_dirs: list[Path],
+    referability_cache: dict[str, object],
+) -> list[Path]:
+    manual_scene_ids = {
+        str(scene_id)
+        for scene_id in (referability_cache.get("manual_attachment_scene_ids") or [])
+    }
+    return sorted(scene_dirs, key=lambda path: path.name not in manual_scene_ids)
 
 
 def _normalize_label_list(value: object) -> list[str]:
@@ -4751,6 +5193,96 @@ def _write_json_file(path: Path, payload: object) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
+def _write_json_file_atomic(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _cross_frame_scene_cache_dir(output_dir: Path, scene_id: str) -> Path:
+    return output_dir / CROSS_FRAME_SCENE_CACHE_DIRNAME / str(scene_id)
+
+
+def _counter_checkpoint_payload(counter: Counter) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for key, count in counter.items():
+        rows.append({
+            "key": list(key) if isinstance(key, tuple) else key,
+            "tuple_key": isinstance(key, tuple),
+            "count": int(count),
+        })
+    return rows
+
+
+def _counter_from_checkpoint(payload: object) -> Counter:
+    if not isinstance(payload, list):
+        raise ValueError("checkpoint counter payload must be a list")
+    result: Counter = Counter()
+    for row in payload:
+        if not isinstance(row, dict):
+            raise ValueError("checkpoint counter rows must be objects")
+        if "key" not in row or "count" not in row:
+            raise ValueError("checkpoint counter rows require key and count")
+        key = row.get("key")
+        if bool(row.get("tuple_key")):
+            if not isinstance(key, list):
+                raise ValueError("checkpoint tuple counter keys must be lists")
+            key = tuple(key)
+        try:
+            hash(key)
+            count = int(row["count"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid checkpoint counter row") from exc
+        result[key] = count
+    return result
+
+
+def _nested_tuple(value: object) -> object:
+    if isinstance(value, list):
+        return tuple(_nested_tuple(item) for item in value)
+    return value
+
+
+def _rng_checkpoint_payload() -> dict[str, object]:
+    numpy_state = np.random.get_state()
+    return {
+        "python": random.getstate(),
+        "numpy": {
+            "bit_generator": numpy_state[0],
+            "keys": numpy_state[1].tolist(),
+            "position": int(numpy_state[2]),
+            "has_gauss": int(numpy_state[3]),
+            "cached_gaussian": float(numpy_state[4]),
+        },
+    }
+
+
+def _restore_rng_checkpoint(payload: object) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError("checkpoint RNG payload must be an object")
+    random.setstate(_nested_tuple(payload["python"]))
+    numpy_payload = payload["numpy"]
+    if not isinstance(numpy_payload, dict):
+        raise ValueError("checkpoint NumPy RNG payload must be an object")
+    np.random.set_state((
+        str(numpy_payload["bit_generator"]),
+        np.asarray(numpy_payload["keys"], dtype=np.uint32),
+        int(numpy_payload["position"]),
+        int(numpy_payload["has_gauss"]),
+        float(numpy_payload["cached_gaussian"]),
+    ))
+
+
 def _set_pipeline_random_seed(seed: int = PIPELINE_RANDOM_SEED) -> None:
     random.seed(int(seed))
     np.random.seed(int(seed))
@@ -4798,7 +5330,12 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
     route_method = loaded.get("auxiliary_route_method")
     if isinstance(route_method, str) and route_method in AUXILIARY_ROUTE_METHODS:
         result["auxiliary_route_method"] = route_method
-    for field_name in ("l1_candidate_budget", "l2_l3_candidate_budget"):
+    for field_name in (
+        "l1_candidate_budget",
+        "l2_l3_candidate_budget",
+        "occlusion_max_references_per_query",
+        "occlusion_max_combinations_per_scene",
+    ):
         if field_name not in loaded:
             continue
         try:
@@ -4931,11 +5468,13 @@ def _reset_pipeline_completed_scenes(
 def _clear_pipeline_resume_state(output_dir: Path) -> None:
     scene_status_path = _pipeline_scene_status_path(output_dir)
     raw_questions_dir = _raw_scene_questions_cache_dir(output_dir)
+    cross_frame_cache_dir = output_dir / CROSS_FRAME_SCENE_CACHE_DIRNAME
     try:
         scene_status_path.unlink()
     except FileNotFoundError:
         pass
     shutil.rmtree(raw_questions_dir, ignore_errors=True)
+    shutil.rmtree(cross_frame_cache_dir, ignore_errors=True)
 
 
 def _delete_raw_scene_cache_files(raw_questions_dir: Path, scene_ids: list[str]) -> None:
@@ -4944,6 +5483,14 @@ def _delete_raw_scene_cache_files(raw_questions_dir: Path, scene_ids: list[str])
             (raw_questions_dir / f"{scene_id}.json").unlink()
         except FileNotFoundError:
             pass
+
+
+def _delete_cross_frame_scene_cache_dirs(output_dir: Path, scene_ids: list[str]) -> None:
+    for scene_id in scene_ids:
+        shutil.rmtree(
+            _cross_frame_scene_cache_dir(output_dir, scene_id),
+            ignore_errors=True,
+        )
 
 
 def _reconcile_pipeline_completed_scenes(
@@ -5736,9 +6283,7 @@ def _load_cached_scene_questions(
                     if not isinstance(entry, dict):
                         continue
                     attachment_surface_text_by_scene_image[(str(scene_id), str(image_name))] = (
-                        _attachment_human_review_surface_text_by_object_id(
-                            entry.get("attachment_human_review_cards")
-                        )
+                        _attachment_surface_text_by_object_id(entry)
                     )
     for scene_id in scene_ids:
         raw_question_path = raw_questions_dir / f"{scene_id}.json"
@@ -5910,6 +6455,8 @@ def run_pipeline(
     frame_type_object_cap: int = 1,
     max_questions_per_scene_type: int | None = None,
     max_occlusion_objects: int | str | None = MAX_OCCLUSION_OBJECTS_AUTO,
+    occlusion_max_references_per_query: int = 64,
+    occlusion_max_combinations_per_scene: int = 2000,
     max_move_sources: int | None = None,
     auxiliary_route_method: str = AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
 ):
@@ -5950,6 +6497,12 @@ def run_pipeline(
         max_occlusion_objects = int(max_occlusion_objects)
         if max_occlusion_objects < 0:
             raise ValueError("max_occlusion_objects must be >= 0 or None")
+    occlusion_max_references_per_query = int(occlusion_max_references_per_query)
+    occlusion_max_combinations_per_scene = int(occlusion_max_combinations_per_scene)
+    if occlusion_max_references_per_query < 0:
+        raise ValueError("occlusion_max_references_per_query must be >= 0")
+    if occlusion_max_combinations_per_scene < 0:
+        raise ValueError("occlusion_max_combinations_per_scene must be >= 0")
     if dataset not in ("scannet", "scannetpp"):
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
     if scene_type_cap > 0 or l2_l3_candidate_budget > 0:
@@ -6025,6 +6578,10 @@ def run_pipeline(
             )
     cached_scene_ids = _get_referability_scene_ids(referability_cache)
     scene_dirs = [p for p in discovered_scene_dirs if p.name in cached_scene_ids]
+    scene_dirs = _prioritize_manual_attachment_scene_dirs(
+        scene_dirs,
+        referability_cache,
+    )
     scene_limit = max(0, int(max_scenes))
     frame_limit = max(0, int(max_frames))
     discovered_cached_scene_count = len(scene_dirs)
@@ -6049,6 +6606,7 @@ def run_pipeline(
                 count=int(reset),
             )
             _delete_raw_scene_cache_files(raw_questions_dir, removed_scene_ids)
+            _delete_cross_frame_scene_cache_dirs(output_dir, removed_scene_ids)
             _write_json_file(scene_status_path, scene_status_doc)
             logger.info(
                 "Reset cleared %d completed scene(s) from %s",
@@ -6058,20 +6616,40 @@ def run_pipeline(
         completed_route_records = _pipeline_completed_scene_records(scene_status_doc)
         recorded_l1_budget = scene_status_doc.get("l1_candidate_budget")
         recorded_l2_l3_budget = scene_status_doc.get("l2_l3_candidate_budget")
+        recorded_occlusion_reference_budget = scene_status_doc.get(
+            "occlusion_max_references_per_query"
+        )
+        recorded_occlusion_combination_budget = scene_status_doc.get(
+            "occlusion_max_combinations_per_scene"
+        )
         if completed_route_records and (
             recorded_l1_budget != scene_type_cap
             or recorded_l2_l3_budget != l2_l3_candidate_budget
+            or recorded_occlusion_reference_budget
+            != occlusion_max_references_per_query
+            or recorded_occlusion_combination_budget
+            != occlusion_max_combinations_per_scene
         ):
             raise RuntimeError(
-                "Cannot resume with candidate budgets "
-                f"L1={scene_type_cap}, L2/L3={l2_l3_candidate_budget}: "
+                "Cannot resume with candidate/search budgets "
+                f"L1={scene_type_cap}, L2/L3={l2_l3_candidate_budget}, "
+                f"occlusion references={occlusion_max_references_per_query}, "
+                f"occlusion combinations={occlusion_max_combinations_per_scene}: "
                 f"{len(completed_route_records)} completed scene(s) were generated "
-                f"with L1={recorded_l1_budget!r}, L2/L3={recorded_l2_l3_budget!r}. "
+                f"with L1={recorded_l1_budget!r}, L2/L3={recorded_l2_l3_budget!r}, "
+                f"occlusion references={recorded_occlusion_reference_budget!r}, "
+                f"occlusion combinations={recorded_occlusion_combination_budget!r}. "
                 "Use a new --output_dir, or reset all completed scenes before "
                 "changing candidate budgets."
             )
         scene_status_doc["l1_candidate_budget"] = scene_type_cap
         scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
+        scene_status_doc["occlusion_max_references_per_query"] = (
+            occlusion_max_references_per_query
+        )
+        scene_status_doc["occlusion_max_combinations_per_scene"] = (
+            occlusion_max_combinations_per_scene
+        )
         recorded_route_method = scene_status_doc.get("auxiliary_route_method")
         if cross_frame_requested_types and completed_route_records:
             if recorded_route_method is None:
@@ -6096,14 +6674,22 @@ def run_pipeline(
                 len(corrupted_scene_ids),
                 ", ".join(corrupted_scene_ids),
             )
+            _delete_cross_frame_scene_cache_dirs(output_dir, corrupted_scene_ids)
         if scene_status_changed:
             _write_json_file(scene_status_path, scene_status_doc)
+        _delete_cross_frame_scene_cache_dirs(output_dir, completed_scene_ids)
     else:
         _clear_pipeline_resume_state(output_dir)
         scene_status_doc = _build_empty_pipeline_scene_status_doc()
         scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
         scene_status_doc["l1_candidate_budget"] = scene_type_cap
         scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
+        scene_status_doc["occlusion_max_references_per_query"] = (
+            occlusion_max_references_per_query
+        )
+        scene_status_doc["occlusion_max_combinations_per_scene"] = (
+            occlusion_max_combinations_per_scene
+        )
         raw_questions_dir.mkdir(parents=True, exist_ok=True)
         completed_scene_ids = []
 
@@ -6297,6 +6883,47 @@ def run_pipeline(
         attached_by = get_scene_attached_by(scene, scene_id=scene_id)
         support_chain_graph = get_scene_support_chain_graph(scene, scene_id=scene_id)
         support_chain_by = get_scene_support_chain_by(scene, scene_id=scene_id)
+        manual_attachment_graph = _manual_attachment_graph_for_scene(
+            referability_cache,
+            scene_id,
+        )
+        if manual_attachment_graph is not None:
+            attachment_graph = manual_attachment_graph
+            support_chain_graph = manual_attachment_graph
+            attached_by = {
+                int(child_id): int(parent_id)
+                for parent_id, child_ids in manual_attachment_graph.items()
+                for child_id in child_ids
+            }
+            support_chain_by = dict(attached_by)
+            scene["attachment_graph"] = {
+                str(parent_id): list(child_ids)
+                for parent_id, child_ids in manual_attachment_graph.items()
+            }
+            scene["support_chain_graph"] = dict(scene["attachment_graph"])
+            scene["attached_by"] = {
+                str(child_id): parent_id
+                for child_id, parent_id in attached_by.items()
+            }
+            scene["support_chain_by"] = dict(scene["attached_by"])
+            manual_object_map = {
+                int(obj["id"]): obj
+                for obj in scene.get("objects", [])
+                if isinstance(obj, dict) and obj.get("id") is not None
+            }
+            scene["attachment_edges"] = [
+                {
+                    "parent_id": int(parent_id),
+                    "parent_label": str(manual_object_map.get(int(parent_id), {}).get("label", "")),
+                    "child_id": int(child_id),
+                    "child_label": str(manual_object_map.get(int(child_id), {}).get("label", "")),
+                    "type": "human_salvage",
+                    "confidence": 1.0,
+                    "source": "two_hop_attachment_salvage",
+                }
+                for parent_id, child_ids in manual_attachment_graph.items()
+                for child_id in child_ids
+            ]
         scene_attachment_rows = _build_scene_attachment_rows(scene)
         objects_by_id = {int(obj["id"]): obj for obj in scene["objects"]}
 
@@ -6674,9 +7301,7 @@ def run_pipeline(
                             "attachment_referable_object_ids"
                         )
                         attachment_object_surface_text_by_id = (
-                            _attachment_human_review_surface_text_by_object_id(
-                                referability_entry.get("attachment_human_review_cards")
-                            )
+                            _attachment_surface_text_by_object_id(referability_entry)
                         )
                         attachment_priority_pairs = _attachment_human_review_priority_pairs(
                             referability_entry.get("attachment_human_review_cards")
@@ -6856,6 +7481,9 @@ def run_pipeline(
                             referable_object_ids=referable_ids,
                             attachment_referable_object_ids=attachment_referable_ids,
                             attachment_referable_pairs=frame_attachment_pairs,
+                            attachment_chain_role_override=_manual_attachment_roles_for_frame(
+                                referability_entry
+                            ),
                             attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
                             attachment_priority_pairs=attachment_priority_pairs,
                             occlusion_eligible_object_ids=occlusion_eligible_ids,
@@ -6965,6 +7593,7 @@ def run_pipeline(
                 )
 
         if cross_frame_requested_types:
+            scene_motion_cache = SceneMotionCache()
             flash_contexts = _build_reasoning_frame_contexts(
                 frames=frames,
                 scene_frames=scene_frames,
@@ -6972,6 +7601,215 @@ def run_pipeline(
                 scene_objects=scene["objects"],
                 color_intrinsics=color_intrinsics,
             )
+            cross_checkpoint_dir = _cross_frame_scene_cache_dir(output_dir, scene_id)
+            cross_checkpoint_manifest_path = cross_checkpoint_dir / "manifest.json"
+            cross_checkpoint_pre_path = cross_checkpoint_dir / "pre_cross.json"
+            cross_checkpoint_signature = {
+                "version": CROSS_FRAME_CHECKPOINT_VERSION,
+                "scene_id": scene_id,
+                "frame_names": [context.image_name for context in flash_contexts],
+                "question_types": list(cross_frame_requested_types),
+                "auxiliary_route_method": auxiliary_route_method,
+                "l1_candidate_budget": scene_type_cap,
+                "l2_l3_candidate_budget": l2_l3_candidate_budget,
+                "max_move_sources": max_move_sources,
+                "occlusion_max_references_per_query": occlusion_max_references_per_query,
+                "occlusion_max_combinations_per_scene": occlusion_max_combinations_per_scene,
+            }
+            cross_checkpoint_manifest: dict[str, object] | None = None
+            restored_cross_candidates: list[dict[str, object]] = []
+            restored_cross_candidate_type_counts: Counter = Counter()
+            restored_pair_stage_counts: Counter = Counter()
+            restored_generated_counts: Counter = Counter()
+            restored_distance_annotation_stats: Counter = Counter()
+            restored_occlusion_combinations_attempted = 0
+            restored_occlusion_raycast_states = 0
+            restored_rng_state: object = None
+            if resume and cross_checkpoint_manifest_path.is_file():
+                try:
+                    loaded_manifest = json.loads(
+                        cross_checkpoint_manifest_path.read_text(encoding="utf-8")
+                    )
+                    if (
+                        not isinstance(loaded_manifest, dict)
+                        or loaded_manifest.get("signature") != cross_checkpoint_signature
+                    ):
+                        raise ValueError("checkpoint signature mismatch")
+                    pre_cross_payload = json.loads(
+                        cross_checkpoint_pre_path.read_text(encoding="utf-8")
+                    )
+                    if not isinstance(pre_cross_payload, dict):
+                        raise ValueError("pre-cross checkpoint must be an object")
+                    restored_scene_questions = pre_cross_payload.get("scene_questions", [])
+                    restored_frame_debug_entries = pre_cross_payload.get(
+                        "scene_frame_debug_entries",
+                        [],
+                    )
+                    if not isinstance(restored_scene_questions, list):
+                        raise ValueError("pre-cross scene_questions must be a list")
+                    if not isinstance(restored_frame_debug_entries, list):
+                        raise ValueError("pre-cross scene_frame_debug_entries must be a list")
+                    completed_names = loaded_manifest.get("completed_deferred_frames", [])
+                    if not isinstance(completed_names, list) or not all(
+                        isinstance(value, str) for value in completed_names
+                    ):
+                        raise ValueError("completed_deferred_frames must be a string list")
+                    completed_name_set = set(completed_names)
+                    expected_completed_names = [
+                        context.image_name
+                        for context in flash_contexts
+                        if context.image_name in completed_name_set
+                    ]
+                    if (
+                        len(completed_name_set) != len(completed_names)
+                        or completed_names != expected_completed_names
+                    ):
+                        raise ValueError(
+                            "completed deferred frames are duplicated, unknown, or out of order"
+                        )
+                    occlusion_completed = loaded_manifest.get("occlusion_completed", False)
+                    if not isinstance(occlusion_completed, bool):
+                        raise ValueError("occlusion_completed must be boolean")
+                    if completed_names and not occlusion_completed:
+                        raise ValueError(
+                            "deferred frames cannot be complete before occlusion phase"
+                        )
+                    restored_candidate_questions: list[dict[str, object]] = []
+                    if occlusion_completed:
+                        occlusion_checkpoint_path = cross_checkpoint_dir / "occlusion.json"
+                        occlusion_payload = json.loads(
+                            occlusion_checkpoint_path.read_text(encoding="utf-8")
+                        )
+                        if not isinstance(occlusion_payload, dict):
+                            raise ValueError("occlusion checkpoint must be an object")
+                        occlusion_questions = occlusion_payload.get("questions", [])
+                        if not isinstance(occlusion_questions, list):
+                            raise ValueError("occlusion checkpoint questions must be a list")
+                        restored_candidate_questions.extend(occlusion_questions)
+                        for deferred_index, deferred_name in enumerate(
+                            completed_names,
+                            start=1,
+                        ):
+                            shard_path = (
+                                cross_checkpoint_dir
+                                / "deferred"
+                                / f"{deferred_index:04d}_{deferred_name}.json"
+                            )
+                            shard_payload = json.loads(
+                                shard_path.read_text(encoding="utf-8")
+                            )
+                            if not isinstance(shard_payload, dict):
+                                raise ValueError(
+                                    f"deferred checkpoint must be an object: {shard_path}"
+                                )
+                            if shard_payload.get("frame_1") != deferred_name:
+                                raise ValueError(
+                                    f"deferred checkpoint frame mismatch: {shard_path}"
+                                )
+                            shard_questions = shard_payload.get("questions", [])
+                            if not isinstance(shard_questions, list):
+                                raise ValueError(
+                                    f"deferred checkpoint questions must be a list: {shard_path}"
+                                )
+                            restored_candidate_questions.extend(shard_questions)
+                        validated_cross_candidate_type_counts = _counter_from_checkpoint(
+                            loaded_manifest.get("cross_candidate_type_counts")
+                        )
+                        validated_pair_stage_counts = _counter_from_checkpoint(
+                            loaded_manifest.get("pair_stage_counts")
+                        )
+                        validated_generated_counts = _counter_from_checkpoint(
+                            loaded_manifest.get("generated_counts")
+                        )
+                        validated_distance_annotation_stats = _counter_from_checkpoint(
+                            loaded_manifest.get("distance_annotation_stats")
+                        )
+                        validated_occlusion_combinations_attempted = int(
+                            loaded_manifest.get("occlusion_combinations_attempted", 0)
+                        )
+                        validated_occlusion_raycast_states = int(
+                            loaded_manifest.get("occlusion_raycast_states", 0)
+                        )
+                        validated_rng_state = loaded_manifest.get("rng_state")
+                        current_rng_state = _rng_checkpoint_payload()
+                        try:
+                            _restore_rng_checkpoint(validated_rng_state)
+                        finally:
+                            _restore_rng_checkpoint(current_rng_state)
+                    else:
+                        validated_cross_candidate_type_counts = Counter()
+                        validated_pair_stage_counts = Counter()
+                        validated_generated_counts = Counter()
+                        validated_distance_annotation_stats = Counter()
+                        validated_occlusion_combinations_attempted = 0
+                        validated_occlusion_raycast_states = 0
+                        validated_rng_state = None
+                    restored_scene_question_type_counts = _counter_from_checkpoint(
+                        pre_cross_payload.get("scene_question_type_counts")
+                    )
+                    restored_scene_candidate_type_counts = _counter_from_checkpoint(
+                        pre_cross_payload.get("scene_candidate_type_counts")
+                    )
+                    restored_scene_pair_counts = _counter_from_checkpoint(
+                        pre_cross_payload.get("scene_pair_counts")
+                    )
+                    scene_questions = list(restored_scene_questions)
+                    scene_frame_debug_entries = list(restored_frame_debug_entries)
+                    scene_question_type_counts = restored_scene_question_type_counts
+                    scene_candidate_type_counts = restored_scene_candidate_type_counts
+                    scene_pair_counts = restored_scene_pair_counts
+                    restored_cross_candidates = restored_candidate_questions
+                    restored_cross_candidate_type_counts = (
+                        validated_cross_candidate_type_counts
+                    )
+                    restored_pair_stage_counts = validated_pair_stage_counts
+                    restored_generated_counts = validated_generated_counts
+                    restored_distance_annotation_stats = (
+                        validated_distance_annotation_stats
+                    )
+                    restored_occlusion_combinations_attempted = (
+                        validated_occlusion_combinations_attempted
+                    )
+                    restored_occlusion_raycast_states = validated_occlusion_raycast_states
+                    restored_rng_state = validated_rng_state
+                    cross_checkpoint_manifest = loaded_manifest
+                    logger.info(
+                        "Restored cross-frame checkpoint for scene %s (%d deferred frame(s))",
+                        scene_id,
+                        len(loaded_manifest.get("completed_deferred_frames", [])),
+                    )
+                except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                    logger.warning(
+                        "Ignoring invalid cross-frame checkpoint for scene %s: %s",
+                        scene_id,
+                        exc,
+                    )
+                    shutil.rmtree(cross_checkpoint_dir, ignore_errors=True)
+            if cross_checkpoint_manifest is None:
+                shutil.rmtree(cross_checkpoint_dir, ignore_errors=True)
+                cross_checkpoint_manifest = {
+                    "signature": cross_checkpoint_signature,
+                    "occlusion_completed": False,
+                    "completed_deferred_frames": [],
+                }
+                _write_json_file_atomic(
+                    cross_checkpoint_pre_path,
+                    {
+                        "scene_questions": scene_questions,
+                        "scene_frame_debug_entries": scene_frame_debug_entries,
+                        "scene_question_type_counts": _counter_checkpoint_payload(
+                            scene_question_type_counts
+                        ),
+                        "scene_candidate_type_counts": _counter_checkpoint_payload(
+                            scene_candidate_type_counts
+                        ),
+                        "scene_pair_counts": _counter_checkpoint_payload(scene_pair_counts),
+                    },
+                )
+                _write_json_file_atomic(
+                    cross_checkpoint_manifest_path,
+                    cross_checkpoint_manifest,
+                )
             funnel: dict[str, object] = {
                 "scene_id": scene_id,
                 "raw_pose_frame_count": len(poses),
@@ -7087,7 +7925,9 @@ def run_pipeline(
                         "note": "routes_are_computed_per_question_after_object_role_binding",
                     }
             cross_candidates: list[dict] = []
-            occlusion_search_budget = OcclusionDirectedSearchBudget()
+            occlusion_search_budget = OcclusionDirectedSearchBudget(
+                max_combinations=occlusion_max_combinations_per_scene,
+            )
             cross_candidate_type_counts = scene_candidate_type_counts
 
             def _cross_type_budget_available(canonical_type: str) -> bool:
@@ -7232,6 +8072,25 @@ def run_pipeline(
                 except (TypeError, ValueError):
                     return None
 
+            question_route_cache: dict[tuple[object, ...], object | None] = {}
+
+            def _question_route_cache_key(
+                question: dict,
+                frame_1: ReasoningFrameContext,
+                frame_2: ReasoningFrameContext,
+            ) -> tuple[object, ...] | None:
+                groups = _question_object_groups(question)
+                if groups is None:
+                    return None
+                group_a_objects, group_b_objects = groups
+                return (
+                    auxiliary_route_method,
+                    frame_1.image_name,
+                    frame_2.image_name,
+                    tuple(int(obj["id"]) for obj in group_a_objects),
+                    tuple(int(obj["id"]) for obj in group_b_objects),
+                )
+
             def _append_pair_questions(
                 pair_questions: list[dict],
                 frame_1: ReasoningFrameContext,
@@ -7241,9 +8100,7 @@ def run_pipeline(
                 surface_text_by_id: dict[int, str] = {}
                 for context in (frame_1, frame_2):
                     surface_text_by_id.update(
-                        _attachment_human_review_surface_text_by_object_id(
-                            (context.cache_entry or {}).get("attachment_human_review_cards")
-                        )
+                        _attachment_surface_text_by_object_id(context.cache_entry)
                     )
                 frame_1_rank = int((frame_1.cache_entry or {}).get("final_selection_rank", 1_000_000))
                 frame_2_rank = int((frame_2.cache_entry or {}).get("final_selection_rank", 1_000_000))
@@ -7257,14 +8114,31 @@ def run_pipeline(
                         AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC,
                         AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL,
                     }:
+                        route_cache_key = _question_route_cache_key(
+                            question,
+                            frame_1,
+                            frame_2,
+                        )
+                        route_cache_hit = (
+                            route_cache_key is not None
+                            and route_cache_key in question_route_cache
+                        )
+                        if route_cache_hit:
+                            question_route = question_route_cache[route_cache_key]
+                        else:
+                            if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+                                question_route = _depth_route_for_question(question, frame_1, frame_2)
+                            elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
+                                question_route = _legacy_route_for_question(question, frame_1, frame_2)
+                            else:
+                                question_route = _hybrid_route_for_question(question, frame_1, frame_2)
+                            if route_cache_key is not None:
+                                question_route_cache[route_cache_key] = question_route
                         if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
-                            question_route = _depth_route_for_question(question, frame_1, frame_2)
                             rejection_reason = "no_depth_corridor_path_within_auxiliary_limit"
                         elif auxiliary_route_method == AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC:
-                            question_route = _legacy_route_for_question(question, frame_1, frame_2)
                             rejection_reason = "no_legacy_geometric_path_within_auxiliary_limit"
                         else:
-                            question_route = _hybrid_route_for_question(question, frame_1, frame_2)
                             rejection_reason = "no_hybrid_geometric_visual_path_within_auxiliary_limit"
                         if question_route is None:
                             pair_stage_counts["question_auxiliary_path_rejected"] += 1
@@ -7435,9 +8309,58 @@ def run_pipeline(
                     cross_candidates.append(question)
                     cross_candidate_type_counts[canonical_type] += 1
 
+            completed_deferred_frames = {
+                str(value)
+                for value in cross_checkpoint_manifest.get(
+                    "completed_deferred_frames",
+                    [],
+                )
+            }
+            if bool(cross_checkpoint_manifest.get("occlusion_completed")):
+                cross_candidates.extend(restored_cross_candidates)
+                cross_candidate_type_counts.clear()
+                cross_candidate_type_counts.update(restored_cross_candidate_type_counts)
+                pair_stage_counts.clear()
+                pair_stage_counts.update(restored_pair_stage_counts)
+                generated_counts.clear()
+                generated_counts.update(restored_generated_counts)
+                distance_annotation_stats.clear()
+                distance_annotation_stats.update(restored_distance_annotation_stats)
+                occlusion_search_budget.combinations_attempted = (
+                    restored_occlusion_combinations_attempted
+                )
+                occlusion_search_budget.raycast_states = restored_occlusion_raycast_states
+                _restore_rng_checkpoint(restored_rng_state)
+
+            def _save_cross_checkpoint_manifest() -> None:
+                cross_checkpoint_manifest["cross_candidate_type_counts"] = (
+                    _counter_checkpoint_payload(cross_candidate_type_counts)
+                )
+                cross_checkpoint_manifest["pair_stage_counts"] = (
+                    _counter_checkpoint_payload(pair_stage_counts)
+                )
+                cross_checkpoint_manifest["generated_counts"] = (
+                    _counter_checkpoint_payload(generated_counts)
+                )
+                cross_checkpoint_manifest["distance_annotation_stats"] = (
+                    _counter_checkpoint_payload(distance_annotation_stats)
+                )
+                cross_checkpoint_manifest["occlusion_combinations_attempted"] = int(
+                    occlusion_search_budget.combinations_attempted
+                )
+                cross_checkpoint_manifest["occlusion_raycast_states"] = int(
+                    occlusion_search_budget.raycast_states
+                )
+                cross_checkpoint_manifest["rng_state"] = _rng_checkpoint_payload()
+                _write_json_file_atomic(
+                    cross_checkpoint_manifest_path,
+                    cross_checkpoint_manifest,
+                )
+
             occlusion_cross_type = "L2_object_move_occlusion"
             if (
                 occlusion_cross_type in cross_frame_requested_types
+                and not bool(cross_checkpoint_manifest.get("occlusion_completed"))
                 and _cross_type_budget_available(
                     _PUBLIC_TO_CANONICAL_QUESTION_TYPES[occlusion_cross_type]
                 )
@@ -7463,10 +8386,12 @@ def run_pipeline(
                         occlusion_backend=occlusion_backend,
                         only_question_types=[occlusion_cross_type],
                         max_occlusion_objects=max_occlusion_objects,
+                        occlusion_max_references_per_query=occlusion_max_references_per_query,
                         max_move_sources=max_move_sources,
                         attachment_edges=scene.get("attachment_edges", []),
                         preserve_distance_metadata=True,
                         occlusion_search_budget=occlusion_search_budget,
+                        motion_cache=scene_motion_cache,
                     )
                     pair_questions = _filter_vertical_object_rotate_questions(
                         pair_questions,
@@ -7475,6 +8400,14 @@ def run_pipeline(
                     )
                     _append_pair_questions(pair_questions, frame_1, frame_2, route)
 
+            if not bool(cross_checkpoint_manifest.get("occlusion_completed")):
+                _write_json_file_atomic(
+                    cross_checkpoint_dir / "occlusion.json",
+                    {"questions": cross_candidates},
+                )
+                cross_checkpoint_manifest["occlusion_completed"] = True
+                _save_cross_checkpoint_manifest()
+
             deferred_cross_types = [
                 public_type
                 for public_type in cross_frame_requested_types
@@ -7482,6 +8415,8 @@ def run_pipeline(
             ]
             if deferred_cross_types:
                 for frame_1 in flash_contexts:
+                    if frame_1.image_name in completed_deferred_frames:
+                        continue
                     active_cross_types = [
                         public_type
                         for public_type in deferred_cross_types
@@ -7535,6 +8470,7 @@ def run_pipeline(
                     ))
                     if not deferred_regular_ids:
                         continue
+                    frame_candidate_start = len(cross_candidates)
                     deferred_frame_2 = ReasoningFrameContext(
                         image_name="__deferred_frame_2__",
                         camera_pose=destinations[0].camera_pose,
@@ -7558,6 +8494,7 @@ def run_pipeline(
                         max_occlusion_objects=max_occlusion_objects,
                         max_move_sources=max_move_sources,
                         attachment_edges=scene.get("attachment_edges", []),
+                        motion_cache=scene_motion_cache,
                     )
                     raw_questions = _filter_vertical_object_rotate_questions(
                         raw_questions,
@@ -7592,6 +8529,33 @@ def run_pipeline(
                             if annotated:
                                 _append_pair_questions(annotated, frame_1, frame_2, route)
 
+                    deferred_frame_names = list(
+                        cross_checkpoint_manifest.get("completed_deferred_frames", [])
+                    )
+                    deferred_frame_names.append(frame_1.image_name)
+                    shard_index = len(deferred_frame_names)
+                    _write_json_file_atomic(
+                        cross_checkpoint_dir
+                        / "deferred"
+                        / f"{shard_index:04d}_{frame_1.image_name}.json",
+                        {
+                            "frame_1": frame_1.image_name,
+                            "questions": cross_candidates[frame_candidate_start:],
+                        },
+                    )
+                    cross_checkpoint_manifest["completed_deferred_frames"] = (
+                        deferred_frame_names
+                    )
+                    completed_deferred_frames.add(frame_1.image_name)
+                    _save_cross_checkpoint_manifest()
+                    logger.info(
+                        "Cross-frame checkpoint saved: scene=%s frame_1=%s completed=%d/%d",
+                        scene_id,
+                        frame_1.image_name,
+                        len(deferred_frame_names),
+                        len(flash_contexts),
+                    )
+
             prioritized_cross_questions, distance_priority_diagnostics = (
                 _prioritize_cross_frame_questions_by_distance(cross_candidates)
             )
@@ -7621,11 +8585,39 @@ def run_pipeline(
                 type_counts=scene_question_type_counts,
                 pair_counts=scene_pair_counts,
             )
-            retained_cross_questions, occlusion_balance_diagnostics = (
-                _balance_scene_object_move_occlusion_negatives(
-                    retained_cross_questions
-                )
+            valid_retained_cross_questions = [
+                question for question in retained_cross_questions
+                if _has_strict_object_move_occlusion_frame_roles(question)
+            ]
+            invalid_frame_role_count = (
+                len(retained_cross_questions) - len(valid_retained_cross_questions)
             )
+            retained_cross_questions = valid_retained_cross_questions
+            scene_occlusion_questions = [
+                question for question in retained_cross_questions
+                if _is_object_move_occlusion_question(question)
+            ]
+            occlusion_balance_diagnostics = {
+                "balance_scope": "global_output",
+                "nonself_positive_candidate_count": sum(
+                    1 for question in scene_occlusion_questions
+                    if _is_positive_object_move_occlusion(question)
+                    and int(question.get("moved_obj_id", -1))
+                    != int(question.get("query_obj_id", -1))
+                ),
+                "self_positive_candidate_count": sum(
+                    1 for question in scene_occlusion_questions
+                    if _is_positive_object_move_occlusion(question)
+                    and int(question.get("moved_obj_id", -1))
+                    == int(question.get("query_obj_id", -1))
+                ),
+                "neither_candidate_count": sum(
+                    1 for question in scene_occlusion_questions
+                    if str(question.get("new_pairwise_occlusion_relation", "")).strip()
+                    == L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER
+                ),
+                "invalid_frame_role_dropped_count": invalid_frame_role_count,
+            }
             funnel["object_move_occlusion_balance"] = {
                 **occlusion_balance_diagnostics,
                 "directed_combinations_attempted": int(
@@ -7634,6 +8626,9 @@ def run_pipeline(
                 "raycast_states": int(occlusion_search_budget.raycast_states),
                 "max_directed_combinations": int(
                     occlusion_search_budget.max_combinations
+                ),
+                "max_references_per_query": int(
+                    occlusion_max_references_per_query
                 ),
             }
             for question in retained_cross_questions:
@@ -7683,6 +8678,13 @@ def run_pipeline(
             funnel["question_type_generated_counts"] = dict(sorted(generated_counts.items()))
             funnel["question_type_kept_counts"] = dict(sorted(kept_counts.items()))
             funnel["final_cross_frame_question_count"] = len(retained_cross_questions)
+            funnel["scene_motion_cache"] = scene_motion_cache.diagnostics()
+            funnel["question_route_cache_entry_count"] = len(question_route_cache)
+            logger.info(
+                "Scene %s motion cache diagnostics: %s",
+                scene_id,
+                scene_motion_cache.diagnostics(),
+            )
             _write_json_file(cross_frame_funnel_dir / f"{scene_id}.json", funnel)
             scene_questions.extend(retained_cross_questions)
 
@@ -7703,6 +8705,11 @@ def run_pipeline(
             frame_count=len(frames),
             pipeline_outcome="processed",
         )
+        if cross_frame_requested_types:
+            shutil.rmtree(
+                _cross_frame_scene_cache_dir(output_dir, scene_id),
+                ignore_errors=True,
+            )
 
         # Explicitly release heavy scene resources and force GC to reclaim
         # trimesh/Embree C-extension objects that have cyclic references.
@@ -7888,9 +8895,7 @@ def run_pipeline(
                     "attachment_referable_object_ids"
                 )
                 attachment_object_surface_text_by_id = (
-                    _attachment_human_review_surface_text_by_object_id(
-                        referability_entry.get("attachment_human_review_cards")
-                    )
+                    _attachment_surface_text_by_object_id(referability_entry)
                 )
                 attachment_priority_pairs = _attachment_human_review_priority_pairs(
                     referability_entry.get("attachment_human_review_cards")
@@ -7946,6 +8951,9 @@ def run_pipeline(
                 visible_object_ids=visible_ids,
                 referable_object_ids=referable_ids,
                 attachment_referable_object_ids=attachment_referable_ids,
+                attachment_chain_role_override=_manual_attachment_roles_for_frame(
+                    referability_entry
+                ),
                 attachment_object_surface_text_by_id=attachment_object_surface_text_by_id,
                 attachment_priority_pairs=attachment_priority_pairs,
                 occlusion_eligible_object_ids=occlusion_eligible_ids,
@@ -8171,6 +9179,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--manual_attachment_cache",
+        type=Path,
+        default=None,
+        help=(
+            "Optional two_hop_attachment_salvage_v1 JSON whose human-authored scenes, "
+            "frames, roles, labels, and attachment graph override the flash cache in memory"
+        ),
+    )
+    parser.add_argument(
         "--label_map", type=str, default=None,
         help="Path to scannetv2-labels.combined.tsv for raw_category→nyu40class normalization",
     )
@@ -8323,6 +9340,18 @@ def main():
         ),
     )
     parser.add_argument(
+        "--occlusion_max_references_per_query",
+        type=int,
+        default=64,
+        help="Maximum projectively ranked reference objects searched per object-move occlusion query.",
+    )
+    parser.add_argument(
+        "--occlusion_max_combinations_per_scene",
+        type=int,
+        default=2000,
+        help="Scene-wide cap on expensive directed object-move occlusion query/reference combinations.",
+    )
+    parser.add_argument(
         "--max_move_sources",
         type=int,
         default=0,
@@ -8343,6 +9372,10 @@ def main():
         parser.error("--frame_type_object_cap must be >= 0")
     if args.max_occlusion_objects is not None and int(args.max_occlusion_objects) < 0:
         parser.error("--max_occlusion_objects must be >= 0")
+    if int(args.occlusion_max_references_per_query) < 0:
+        parser.error("--occlusion_max_references_per_query must be >= 0")
+    if int(args.occlusion_max_combinations_per_scene) < 0:
+        parser.error("--occlusion_max_combinations_per_scene must be >= 0")
     if args.skip_question_vlm_check:
         args.question_presence_review = False
 
@@ -8357,6 +9390,21 @@ def main():
         persist_repaired_entries=args.repair_referability_cache,
         no_salvage=args.no_salvage,
     )
+    if referability_cache is None:
+        raise ValueError(f"Referability cache not found: {args.referability_cache}")
+    if args.manual_attachment_cache is not None:
+        manual_attachment_cache = _load_single_referability_cache(
+            args.manual_attachment_cache,
+            no_salvage=True,
+        )
+        if manual_attachment_cache is None:
+            raise ValueError(
+                f"Manual attachment cache not found: {args.manual_attachment_cache}"
+            )
+        referability_cache = _merge_manual_attachment_cache(
+            referability_cache,
+            manual_attachment_cache,
+        )
 
     run_pipeline(
         data_root=Path(args.data_root),
@@ -8393,6 +9441,8 @@ def main():
             if args.max_occlusion_objects is None
             else (None if int(args.max_occlusion_objects) == 0 else int(args.max_occlusion_objects))
         ),
+        occlusion_max_references_per_query=args.occlusion_max_references_per_query,
+        occlusion_max_combinations_per_scene=args.occlusion_max_combinations_per_scene,
         max_move_sources=(None if int(args.max_move_sources) == 0 else int(args.max_move_sources)),
         auxiliary_route_method=args.auxiliary_route_method,
     )
