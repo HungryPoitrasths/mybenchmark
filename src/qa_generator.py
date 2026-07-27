@@ -9783,6 +9783,32 @@ def generate_l2_object_rotate_object_centric(
             ]
             if not query_objects:
                 continue
+        eligible_reference_ids_by_query = {
+            int(candidate_query["id"]): {
+                int(candidate_ref["id"])
+                for candidate_ref in reference_pool
+                if int(candidate_ref["id"]) != int(candidate_query["id"])
+                and not _has_duplicate_labels_for_distinct_objects(
+                    candidate_query,
+                    candidate_ref,
+                    move_source,
+                )
+                and _answer_pair_is_within_distance_limit(
+                    candidate_query,
+                    candidate_ref,
+                    distance_cache=answer_pair_distance_cache,
+                    max_distance_m=_CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M,
+                )
+            }
+            for candidate_query in query_objects
+        }
+        query_objects = [
+            candidate_query
+            for candidate_query in query_objects
+            if eligible_reference_ids_by_query[int(candidate_query["id"])]
+        ]
+        if not query_objects:
+            continue
 
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
@@ -9843,6 +9869,8 @@ def generate_l2_object_rotate_object_centric(
 
                 for ref in reference_pool:
                     if ref["id"] == query_obj_id or ref["id"] == face["id"]:
+                        continue
+                    if int(ref["id"]) not in eligible_reference_ids_by_query[query_obj_id]:
                         continue
                     if _has_duplicate_labels_for_distinct_objects(
                         query_obj,
@@ -9987,6 +10015,7 @@ def generate_l2_object_move_object_centric(
     pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
     max_move_sources: int | None = None,
     motion_cache: SceneMotionCache | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in a query-centric object frame.
 
@@ -10079,16 +10108,52 @@ def generate_l2_object_move_object_centric(
                 # its pair cap -- skip the expensive collision-search state
                 # search below entirely.
                 continue
+        eligible_reference_ids_by_query = {
+            int(candidate_query["id"]): {
+                int(candidate_ref["id"])
+                for candidate_ref in reference_pool
+                if int(candidate_ref["id"]) not in {
+                    move_source_id,
+                    int(candidate_query["id"]),
+                }
+                and not _has_duplicate_labels_for_distinct_objects(
+                    candidate_query,
+                    candidate_ref,
+                    move_source,
+                )
+                and _answer_pair_is_within_distance_limit(
+                    candidate_query,
+                    candidate_ref,
+                    distance_cache=answer_pair_distance_cache,
+                    max_distance_m=_CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M,
+                )
+            }
+            for candidate_query in query_objects
+        }
+        query_objects = [
+            candidate_query
+            for candidate_query in query_objects
+            if eligible_reference_ids_by_query[int(candidate_query["id"])]
+        ]
+        if not query_objects:
+            continue
 
         valid_move_states: list[tuple[np.ndarray, dict[int, dict[str, Any]]]] = []
-        for delta, moved_objects, _moved_ids in _iter_valid_object_move_states(
+        for delta, _physics_objects, _moved_ids in _iter_valid_object_move_states(
             movement_scene_objects,
             attachment_graph,
             move_source_id,
             room_bounds=room_bounds,
             collision_objects=collision_objects,
+            lightweight=True,
             motion_cache=motion_cache,
         ):
+            moved_objects = apply_movement_selective(
+                movement_scene_objects,
+                attachment_graph,
+                move_source_id,
+                delta,
+            )
             moved_map = {int(o["id"]): o for o in moved_objects}
             valid_move_states.append((np.asarray(delta, dtype=np.float64), moved_map))
         if not valid_move_states:
@@ -10121,6 +10186,8 @@ def generate_l2_object_move_object_centric(
             for ref in reference_pool:
                 ref_id = int(ref["id"])
                 if ref_id in {move_source_id, query_obj_id}:
+                    continue
+                if ref_id not in eligible_reference_ids_by_query[query_obj_id]:
                     continue
                 if _has_duplicate_labels_for_distinct_objects(
                     query_obj,
@@ -10272,6 +10339,7 @@ def generate_l2_object_move_allocentric(
     pair_budget_remaining: Callable[[str, int, int], bool] | None = None,
     max_move_sources: int | None = None,
     motion_cache: SceneMotionCache | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
     """L2 object-move questions answered in allocentric (cardinal) frame."""
     questions_by_object: dict[int, list[dict]] = {}
@@ -10359,6 +10427,37 @@ def generate_l2_object_move_allocentric(
                 # its pair cap -- skip the expensive collision-search state
                 # selection below entirely.
                 continue
+        eligible_reference_ids_by_query = {
+            int(candidate_query["id"]): {
+                int(candidate_ref["id"])
+                for candidate_ref in reference_pool
+                if int(candidate_ref["id"]) != int(candidate_query["id"])
+                and not _has_duplicate_labels_for_distinct_objects(
+                    candidate_query,
+                    candidate_ref,
+                    move_source,
+                )
+                and _answer_pair_is_within_distance_limit(
+                    candidate_query,
+                    candidate_ref,
+                    distance_cache=answer_pair_distance_cache,
+                    max_distance_m=_CROSS_FRAME_MAX_ANSWER_PAIR_DISTANCE_M,
+                )
+            }
+            for candidate_query in query_objects
+        }
+        query_objects = [
+            candidate_query
+            for candidate_query in query_objects
+            if eligible_reference_ids_by_query[int(candidate_query["id"])]
+        ]
+        if not query_objects:
+            continue
+        source_relation_pair_ids = {
+            tuple(sorted((int(candidate_query["id"]), int(reference_id))))
+            for candidate_query in query_objects
+            for reference_id in eligible_reference_ids_by_query[int(candidate_query["id"])]
+        }
 
         selected_state = _select_object_move_state(
             movement_scene_objects,
@@ -10369,6 +10468,7 @@ def generate_l2_object_move_allocentric(
             collision_objects=collision_objects,
             allow_unchanged_attachment=attachment_remapped,
             motion_cache=motion_cache,
+            relation_pair_ids=source_relation_pair_ids,
         )
         if selected_state is None:
             continue
@@ -10403,6 +10503,8 @@ def generate_l2_object_move_allocentric(
 
             for ref in reference_pool:
                 if ref["id"] == query_obj_id:
+                    continue
+                if int(ref["id"]) not in eligible_reference_ids_by_query[query_obj_id]:
                     continue
                 if _has_duplicate_labels_for_distinct_objects(query_obj, ref, move_source):
                     continue
@@ -10771,6 +10873,7 @@ def generate_l3_attachment_move(
     trace_detail: str = "light",
     max_move_sources: int | None = None,
     motion_cache: SceneMotionCache | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
     """Generate L3 attachment-move direction questions across three frames."""
     _ = attached_by
@@ -11757,16 +11860,16 @@ def _prioritize_cross_frame_questions_by_distance(
         ]
         within_limit_count += len(within_limit)
         over_limit_count += len(over_limit)
-        kept_for_type = list(candidates)
+        kept_for_type = list(within_limit)
         kept_for_type.sort(key=_cross_frame_distance_priority_key)
         selected.extend(kept_for_type)
         by_type[question_type] = {
             "input_question_count": len(candidates),
             "within_limit_question_count": len(within_limit),
             "over_limit_question_count": len(over_limit),
-            "over_limit_retained_question_count": len(over_limit),
+            "over_limit_retained_question_count": 0,
             "kept_question_count": len(kept_for_type),
-            "over_limit_dropped_question_count": 0,
+            "over_limit_dropped_question_count": len(over_limit),
             "fallback_pair": None,
         }
 
@@ -11777,10 +11880,10 @@ def _prioritize_cross_frame_questions_by_distance(
         "invalid_distance_question_count": invalid_distance_count,
         "within_limit_question_count": within_limit_count,
         "over_limit_question_count": over_limit_count,
-        "over_limit_retained_question_count": over_limit_count,
+        "over_limit_retained_question_count": 0,
         "fallback_type_count": 0,
         "fallback_question_count": 0,
-        "over_limit_dropped_question_count": 0,
+        "over_limit_dropped_question_count": over_limit_count,
         "kept_question_count": len(selected),
         "by_type": by_type,
     }
@@ -11969,6 +12072,7 @@ def generate_cross_frame_questions(
     preserve_distance_metadata: bool = False,
     occlusion_search_budget: OcclusionDirectedSearchBudget | None = None,
     motion_cache: SceneMotionCache | None = None,
+    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Generate spatial questions after both flash main frames are fixed.
 
@@ -11987,7 +12091,8 @@ def generate_cross_frame_questions(
 
     enrich_objects_with_distance_geometry(objects, instance_mesh_data)
     objects_by_id = {int(obj["id"]): obj for obj in objects}
-    answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] = {}
+    if answer_pair_distance_cache is None:
+        answer_pair_distance_cache = {}
     movement_objects = [
         obj for obj in objects
         if str(obj.get("label", "")).strip().lower() not in EXCLUDED_LABELS
@@ -12111,6 +12216,7 @@ def generate_cross_frame_questions(
             reuse_move_state_for_distance=True,
             occlusion_search_budget=occlusion_search_budget,
             motion_cache=motion_cache,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
@@ -12125,6 +12231,7 @@ def generate_cross_frame_questions(
         attachment_query_objects=frame_1_attachment, move_source_object_ids=source_ids,
         reference_objects=frame_2_regular, candidate_attachment_graph=attachment_graph,
         max_move_sources=max_move_sources, motion_cache=motion_cache,
+        answer_pair_distance_cache=answer_pair_distance_cache,
     )
     if "L2_object_move_object_centric" in requested:
         batch = generate_l2_object_move_object_centric(**common_move_kwargs)
@@ -12153,6 +12260,7 @@ def generate_cross_frame_questions(
                 move_source_object_ids=source_ids, reference_objects=ref_pool,
                 face_objects=face_pool, candidate_attachment_graph=attachment_graph,
                 max_move_sources=max_move_sources, motion_cache=motion_cache,
+                answer_pair_distance_cache=answer_pair_distance_cache,
             )
             questions.extend(_annotate_cross_frame_questions(
                 batch, frame_1=frame_1, frame_2=frame_2,
@@ -12169,6 +12277,7 @@ def generate_cross_frame_questions(
             attachment_query_objects=frame_1_attachment, root_object_ids=source_ids,
             reference_objects=frame_2_regular, candidate_attachment_graph=attachment_graph,
             max_move_sources=max_move_sources, motion_cache=motion_cache,
+            answer_pair_distance_cache=answer_pair_distance_cache,
         )
         questions.extend(_annotate_cross_frame_questions(
             batch, frame_1=frame_1, frame_2=frame_2, objects_by_id=objects_by_id,
@@ -13729,10 +13838,19 @@ def generate_all_questions(
     all_questions: list[dict] = []
 
     # Ordinary L1 relations ignore depth in normal generation.
-    relations = _run_question_step(
-        "compute_all_relations",
-        lambda: compute_all_relations(objects_uniq, camera_pose, None, None),
-    )
+    if (
+        _generator_allowed("generate_l1_direction")
+        or _generator_allowed("generate_l1_distance")
+    ):
+        relations = _run_question_step(
+            "compute_all_relations",
+            lambda: compute_all_relations(objects_uniq, camera_pose, None, None),
+        )
+    else:
+        relations = []
+        logger.info(
+            "QA generation step skipped (no requested relation-table consumer): compute_all_relations",
+        )
     _emit_generator_context(
         trace_recorder,
         "generate_l1_direction",

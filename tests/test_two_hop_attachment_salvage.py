@@ -174,6 +174,11 @@ def test_review_html_contains_four_role_editors_and_cache_export() -> None:
     for role in ("moved", "child", "grandchild", "contrast"):
         assert f'name="{role}_id"' in text
         assert f'name="{role}_label"' in text
+    assert 'type="text" inputmode="numeric" pattern="[0-9]+"' in text
+    assert "grid-template-columns:repeat(4,minmax(0,1fr))" in text
+    assert ".visual{position:relative;width:100%}" in text
+    assert ".visual img{display:block;width:100%;height:auto}" in text
+    assert "id:idText === '' ? null : Number(idText)" in text
     assert "<select" not in text
     assert 'class="add">Add</button>' in text
     assert 'class="delete">Delete</button>' in text

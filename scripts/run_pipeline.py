@@ -135,7 +135,7 @@ PIPELINE_SCENE_STATUS_VERSION = 8
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
-CROSS_FRAME_CHECKPOINT_VERSION = 1
+CROSS_FRAME_CHECKPOINT_VERSION = 2
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
 L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
@@ -199,11 +199,14 @@ def _scene_resource_requirements(
     cross_frame_requested_types: list[str],
     occlusion_backend: str,
 ) -> tuple[bool, bool]:
-    cross_only_mode = bool(cross_frame_requested_types) and not single_frame_requested_types
+    single_frame_mesh_types = {"L1_occlusion", "L2_object_remove"}
+    single_frame_needs_mesh = bool(
+        set(single_frame_requested_types) & single_frame_mesh_types
+    )
     needs_mesh_resources = (
         occlusion_backend in ("depth", "mesh_ray")
         and (
-            not cross_only_mode
+            single_frame_needs_mesh
             or "L2_object_move_occlusion" in cross_frame_requested_types
         )
     )
@@ -6593,6 +6596,7 @@ def run_pipeline(
     cross_frame_requested_types = sorted(
         requested_public_types & CROSS_FRAME_PUBLIC_QUESTION_TYPES
     )
+    attachment_chain_fast_path = single_frame_requested_types == ["L3_attachment_chain"]
     single_frame_scene_question_types = {
         _PUBLIC_TO_CANONICAL_QUESTION_TYPES[public_type]
         for public_type in single_frame_requested_types
@@ -7424,17 +7428,28 @@ def run_pipeline(
 
                 with _timed_frame_phase(frame_ctx, "referable_occlusion_veto"):
                     if referability_entry is not None:
-                        referable_occlusion_veto = _filter_referable_object_ids_with_occlusion_veto(
-                            scene_id=scene_id,
-                            image_name=image_name,
-                            referable_object_ids=raw_referable_ids,
-                            objects_by_id=objects_by_id,
-                            projected_area_by_obj_id=projected_area_by_obj_id,
-                            camera_pose=camera_pose,
-                            color_intrinsics=color_intrinsics,
-                            ray_caster=ray_caster,
-                            instance_mesh_data=instance_mesh_data,
-                        )
+                        if attachment_chain_fast_path:
+                            referable_occlusion_veto = {
+                                "raw_object_ids": list(raw_referable_ids),
+                                "filtered_object_ids": list(raw_referable_ids),
+                                "low_visible_object_ids": [],
+                                "not_visible_object_ids": [],
+                                "skipped_object_ids": list(raw_referable_ids),
+                                "audit_by_object_id": {},
+                                "mode": "trusted_referability_cache_for_attachment_chain",
+                            }
+                        else:
+                            referable_occlusion_veto = _filter_referable_object_ids_with_occlusion_veto(
+                                scene_id=scene_id,
+                                image_name=image_name,
+                                referable_object_ids=raw_referable_ids,
+                                objects_by_id=objects_by_id,
+                                projected_area_by_obj_id=projected_area_by_obj_id,
+                                camera_pose=camera_pose,
+                                color_intrinsics=color_intrinsics,
+                                ray_caster=ray_caster,
+                                instance_mesh_data=instance_mesh_data,
+                            )
                         referable_ids = list(referable_occlusion_veto["filtered_object_ids"])
 
                 if (
@@ -8474,6 +8489,7 @@ def run_pipeline(
                         preserve_distance_metadata=True,
                         occlusion_search_budget=occlusion_search_budget,
                         motion_cache=scene_motion_cache,
+                        answer_pair_distance_cache=answer_pair_distance_cache,
                     )
                     pair_questions = _filter_vertical_object_rotate_questions(
                         pair_questions,
@@ -8577,6 +8593,7 @@ def run_pipeline(
                         max_move_sources=max_move_sources,
                         attachment_edges=scene.get("attachment_edges", []),
                         motion_cache=scene_motion_cache,
+                        answer_pair_distance_cache=answer_pair_distance_cache,
                     )
                     raw_questions = _filter_vertical_object_rotate_questions(
                         raw_questions,

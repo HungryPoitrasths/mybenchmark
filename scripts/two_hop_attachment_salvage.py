@@ -178,7 +178,8 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
             )
         role_fields = "".join(
             f'<div class="role" data-role="{role}"><strong>{role}</strong>'
-            f'<label>object ID<input name="{role}_id" type="number" step="1" inputmode="numeric"></label>'
+            f'<label>object ID<input name="{role}_id" type="text" inputmode="numeric" pattern="[0-9]+" '
+            f'autocomplete="off" placeholder="Type object ID"></label>'
             f'<label>label<input name="{role}_label" type="text" autocomplete="off"></label></div>'
             for role in ROLE_NAMES
         )
@@ -213,12 +214,12 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
 <title>Two-hop Attachment Salvage</title>
 <style>
 body{{font:14px system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;padding:24px}}h1{{margin-top:0}}
-.card{{background:white;border:1px solid #d1d5db;border-radius:12px;padding:16px;margin:0 0 24px;display:grid;gap:14px}}
-.visual{{position:relative;max-width:1100px;width:max-content;max-width:100%}}.visual img{{display:block;max-width:100%;height:auto}}
+.card{{background:white;border:1px solid #d1d5db;border-radius:12px;padding:16px;margin:0 auto 24px;display:grid;gap:14px;max-width:1100px;box-sizing:border-box}}
+.visual{{position:relative;width:100%}}.visual img{{display:block;width:100%;height:auto}}
 .boxes{{position:absolute;inset:0}}.box{{position:absolute;border:2px solid #ef4444;box-sizing:border-box;pointer-events:none}}.box span{{background:#ef4444;color:#fff;font-size:11px;padding:2px 4px;white-space:nowrap}}
-.roles{{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:10px}}.role{{display:grid;gap:8px;padding:10px;border:1px solid #d1d5db;border-radius:8px}}label{{display:grid;gap:5px;font-weight:600}}input{{padding:8px;border:1px solid #9ca3af;border-radius:6px;background:white}}
+.roles{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:stretch}}.role{{display:grid;grid-template-rows:auto 1fr 1fr;gap:8px;padding:10px;border:1px solid #d1d5db;border-radius:8px;min-width:0}}label{{display:grid;align-content:start;gap:5px;font-weight:600;min-width:0}}input{{width:100%;min-width:0;padding:8px;border:1px solid #9ca3af;border-radius:6px;background:white;box-sizing:border-box}}
 button{{padding:9px 14px;border:0;border-radius:7px;background:#2563eb;color:white;cursor:pointer}}.actions{{display:flex;gap:10px;width:max-content}}button.add{{background:#047857}}button.delete{{background:#b91c1c}}
-@media(max-width:720px){{.roles{{grid-template-columns:1fr 1fr}}}}
+@media(max-width:720px){{body{{padding:12px}}.roles{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><h1>Two-hop Attachment Salvage</h1>
 <p>Read the projected bbox labels, then type one object ID and label for each role.</p>
 <div id="cards">{"".join(cards)}</div>
@@ -239,7 +240,7 @@ function collect() {{
     const roles={{}}; card.querySelectorAll('.role').forEach(row=>{{
       const role=row.dataset.role; const idText=row.querySelector(`[name="${{role}}_id"]`).value.trim();
       const label=row.querySelector(`[name="${{role}}_label"]`).value.trim();
-      roles[role]={{id:Number(idText),label}};
+      roles[role]={{id:idText === '' ? null : Number(idText),label}};
     }});
     rows.push({{scene_id:card.dataset.sceneId,image_name:card.dataset.imageName,roles}});
   }}); return rows;
