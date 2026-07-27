@@ -1104,6 +1104,7 @@ def compute_direction_relations(
     camera_pose: CameraPose,
     *,
     pair_object_ids: set[int] | None = None,
+    pair_id_pairs: set[tuple[int, int]] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute direction-only relations, optionally limited to affected pairs."""
     relations: list[dict[str, Any]] = []
@@ -1112,11 +1113,25 @@ def compute_direction_relations(
         if pair_object_ids is not None
         else None
     )
+    relevant_pairs = (
+        {
+            tuple(sorted((int(left_id), int(right_id))))
+            for left_id, right_id in pair_id_pairs
+            if int(left_id) != int(right_id)
+        }
+        if pair_id_pairs is not None
+        else None
+    )
 
     for i, obj_a in enumerate(objects):
         obj_a_id = int(obj_a["id"])
         for obj_b in objects[i + 1:]:
             obj_b_id = int(obj_b["id"])
+            if (
+                relevant_pairs is not None
+                and tuple(sorted((obj_a_id, obj_b_id))) not in relevant_pairs
+            ):
+                continue
             if (
                 relevant_ids is not None
                 and obj_a_id not in relevant_ids
@@ -1147,6 +1162,8 @@ def compute_all_relations(
     camera_pose: CameraPose,
     depth_image: np.ndarray | None = None,
     depth_intrinsics=None,
+    *,
+    pair_id_pairs: set[tuple[int, int]] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute pairwise spatial relations for all object pairs."""
     occ_cache = compute_occlusion_per_object(
@@ -1154,10 +1171,22 @@ def compute_all_relations(
     )
 
     relations: list[dict[str, Any]] = []
+    relevant_pairs = (
+        {
+            tuple(sorted((int(left_id), int(right_id))))
+            for left_id, right_id in pair_id_pairs
+            if int(left_id) != int(right_id)
+        }
+        if pair_id_pairs is not None
+        else None
+    )
 
     for i, a in enumerate(objects):
         for j, b in enumerate(objects):
             if i >= j:
+                continue
+            pair_key = tuple(sorted((int(a["id"]), int(b["id"]))))
+            if relevant_pairs is not None and pair_key not in relevant_pairs:
                 continue
             dir_label, ambiguity = compute_pairwise_direction(a, b, camera_pose)
             if dir_label in VERTICAL_DIRECTIONS:

@@ -401,6 +401,7 @@ def find_meaningful_movement(
     camera_pose: CameraPose,
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
+    relation_pair_ids: set[tuple[int, int]] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Search for a movement vector with a meaningful horizontal direction change.
 
@@ -414,6 +415,7 @@ def find_meaningful_movement(
         objects,
         camera_pose,
         pair_object_ids=moved_ids,
+        pair_id_pairs=relation_pair_ids,
     )
     first_45_degree_change: tuple[np.ndarray, list[dict]] | None = None
 
@@ -432,6 +434,7 @@ def find_meaningful_movement(
             new_objects,
             camera_pose,
             pair_object_ids=moved_ids,
+            pair_id_pairs=relation_pair_ids,
         )
         changed = find_changed_relations(original_relations, new_relations)
         if changed:
