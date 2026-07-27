@@ -27,7 +27,7 @@ from src.datasets.scannetpp import ScanNetPPDataSource
 from src.utils.coordinate_transform import project_to_image
 
 REFERABILITY_CACHE_VERSION = "20.0"
-TOOL_VERSION = "1.1"
+TOOL_VERSION = "1.2"
 ROLE_NAMES = ("moved", "child", "grandchild", "contrast")
 
 
@@ -172,8 +172,11 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
             width = 100 * (x2 - x1) / frame["image_width"]
             height = 100 * (y2 - y1) / frame["image_height"]
             text = html.escape(f'{obj["label"]} #{obj["id"]}')
+            object_label = html.escape(str(obj["label"]), quote=True)
             boxes.append(
-                f'<div class="box" style="left:{left:.5f}%;top:{top:.5f}%;width:{width:.5f}%;height:{height:.5f}%">'
+                f'<div class="box" draggable="true" data-object-id="{int(obj["id"])}" '
+                f'data-object-label="{object_label}" title="Drag {text} into a role" '
+                f'style="left:{left:.5f}%;top:{top:.5f}%;width:{width:.5f}%;height:{height:.5f}%">'
                 f'<span>{text}</span></div>'
             )
         role_fields = "".join(
@@ -216,16 +219,31 @@ def render_review_html(frames: list[dict[str, Any]], output_json_name: str) -> s
 body{{font:14px system-ui,sans-serif;background:#f3f4f6;color:#111827;margin:0;padding:24px}}h1{{margin-top:0}}
 .card{{background:white;border:1px solid #d1d5db;border-radius:12px;padding:16px;margin:0 auto 24px;display:grid;gap:14px;max-width:1100px;box-sizing:border-box}}
 .visual{{position:relative;width:100%}}.visual img{{display:block;width:100%;height:auto}}
-.boxes{{position:absolute;inset:0}}.box{{position:absolute;border:2px solid #ef4444;box-sizing:border-box;pointer-events:none}}.box span{{background:#ef4444;color:#fff;font-size:11px;padding:2px 4px;white-space:nowrap}}
-.roles{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:stretch}}.role{{display:grid;grid-template-rows:auto 1fr 1fr;gap:8px;padding:10px;border:1px solid #d1d5db;border-radius:8px;min-width:0}}label{{display:grid;align-content:start;gap:5px;font-weight:600;min-width:0}}input{{width:100%;min-width:0;padding:8px;border:1px solid #9ca3af;border-radius:6px;background:white;box-sizing:border-box}}
+.boxes{{position:absolute;inset:0}}.box{{position:absolute;border:2px solid #ef4444;box-sizing:border-box;cursor:grab;pointer-events:auto}}.box:active{{cursor:grabbing}}.box span{{background:#ef4444;color:#fff;font-size:11px;padding:2px 4px;white-space:nowrap;pointer-events:none}}
+.roles{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:stretch}}.role{{display:grid;grid-template-rows:auto 1fr 1fr;gap:8px;padding:10px;border:1px solid #d1d5db;border-radius:8px;min-width:0;transition:border-color .15s,background .15s,box-shadow .15s}}.role.dragover{{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 2px #bfdbfe}}label{{display:grid;align-content:start;gap:5px;font-weight:600;min-width:0}}input{{width:100%;min-width:0;padding:8px;border:1px solid #9ca3af;border-radius:6px;background:white;box-sizing:border-box}}
 button{{padding:9px 14px;border:0;border-radius:7px;background:#2563eb;color:white;cursor:pointer}}.actions{{display:flex;gap:10px;width:max-content}}button.add{{background:#047857}}button.delete{{background:#b91c1c}}
 @media(max-width:720px){{body{{padding:12px}}.roles{{grid-template-columns:1fr 1fr}}}}
 </style></head><body><h1>Two-hop Attachment Salvage</h1>
-<p>Read the projected bbox labels, then type one object ID and label for each role.</p>
+<p>Type an object ID and label manually, or drag a red bbox into a role. Entering a known ID also fills its projected label.</p>
 <div id="cards">{"".join(cards)}</div>
 <button id="export">Export JSON</button>
 <script>
 const initial = {initial};
+const frameByKey=new Map(initial.map(frame=>[frame.scene_id+'/'+frame.image_name,frame]));
+function frameForCard(card) {{ return frameByKey.get(card.dataset.sceneId+'/'+card.dataset.imageName); }}
+function fillRole(roleRow,object) {{
+  if(!roleRow || !object || !Number.isInteger(Number(object.id))) return;
+  const role=roleRow.dataset.role; const idInput=roleRow.querySelector(`[name="${{role}}_id"]`);
+  const labelInput=roleRow.querySelector(`[name="${{role}}_label"]`);
+  idInput.value=String(Number(object.id)); labelInput.value=String(object.label||'').trim();
+  labelInput.dataset.autofilledFor=idInput.value;
+}}
+function draggedObject(event) {{
+  const jsonText=event.dataTransfer.getData('application/json');
+  if(jsonText) {{ try {{ return JSON.parse(jsonText); }} catch(_error) {{}} }}
+  const plain=event.dataTransfer.getData('text/plain').trim();
+  const match=plain.match(/^#?(\\d+)\\s*[\\t,:|\\-]\\s*(.+)$/); return match ? {{id:Number(match[1]),label:match[2]}} : null;
+}}
 function updateCardTitles() {{
   const groups=new Map(); document.querySelectorAll('.card').forEach(card=>{{
     const key=card.dataset.sceneId+'/'+card.dataset.imageName;
@@ -249,12 +267,41 @@ document.getElementById('cards').addEventListener('click',event=>{{
   const button=event.target.closest('button'); if(!button) return;
   const card=button.closest('.card'); if(!card) return;
   if(button.classList.contains('add')) {{
-    const clone=card.cloneNode(true); clone.querySelectorAll('input').forEach(input=>input.value='');
+    const clone=card.cloneNode(true); clone.querySelectorAll('input').forEach(input=>{{input.value='';delete input.dataset.autofilledFor;}});
     card.insertAdjacentElement('afterend',clone);
   }} else if(button.classList.contains('delete')) {{
     card.remove();
   }}
   updateCardTitles();
+}});
+document.getElementById('cards').addEventListener('dragstart',event=>{{
+  const box=event.target.closest('.box'); if(!box) return;
+  const object={{id:Number(box.dataset.objectId),label:box.dataset.objectLabel}};
+  event.dataTransfer.effectAllowed='copy';
+  event.dataTransfer.setData('application/json',JSON.stringify(object));
+  event.dataTransfer.setData('text/plain',`${{object.id}}\\t${{object.label}}`);
+}});
+document.getElementById('cards').addEventListener('dragover',event=>{{
+  const roleRow=event.target.closest('.role'); if(!roleRow) return;
+  event.preventDefault(); event.dataTransfer.dropEffect='copy'; roleRow.classList.add('dragover');
+}});
+document.getElementById('cards').addEventListener('dragleave',event=>{{
+  const roleRow=event.target.closest('.role');
+  if(roleRow && !roleRow.contains(event.relatedTarget)) roleRow.classList.remove('dragover');
+}});
+document.getElementById('cards').addEventListener('drop',event=>{{
+  const roleRow=event.target.closest('.role'); if(!roleRow) return;
+  event.preventDefault(); roleRow.classList.remove('dragover'); fillRole(roleRow,draggedObject(event));
+}});
+document.getElementById('cards').addEventListener('input',event=>{{
+  const input=event.target.closest('input'); if(!input) return;
+  if(input.name.endsWith('_label')) {{ delete input.dataset.autofilledFor; return; }}
+  if(!input.name.endsWith('_id')) return;
+  const roleRow=input.closest('.role'); const card=input.closest('.card'); const frame=frameForCard(card);
+  const role=roleRow.dataset.role; const labelInput=roleRow.querySelector(`[name="${{role}}_label"]`);
+  const object=frame && frame.objects.find(candidate=>Number(candidate.id)===Number(input.value));
+  if(object && (!labelInput.value.trim() || labelInput.dataset.autofilledFor)) fillRole(roleRow,object);
+  else if(!object && labelInput.dataset.autofilledFor) {{ labelInput.value=''; delete labelInput.dataset.autofilledFor; }}
 }});
 updateCardTitles();
 document.getElementById('export').addEventListener('click',()=>{{
