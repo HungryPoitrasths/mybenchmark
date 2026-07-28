@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
 import json
 import math
 from pathlib import Path
 import re
 import shutil
 import sys
+import time
 from typing import Any
 
 import numpy as np
@@ -54,6 +56,8 @@ from src.virtual_ops import apply_movement, apply_orbit_rotation  # noqa: E402
 
 SELECTION_SCHEMA_VERSION = "predictive-spatial-selection-v1"
 SELECTION_AUDIT_SCHEMA_VERSION = "predictive-spatial-selection-audit-v1"
+SELECTION_CHECKPOINT_SCHEMA_VERSION = "predictive-spatial-selection-checkpoint-v1"
+SELECTION_ALGORITHM_VERSION = "strict-single-frame-v2"
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,12 @@ class SceneContext:
     poses: dict[str, Any]
     ray_caster: Any
     instance_mesh_data: Any
+    image_quality_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    static_visibility_cache: dict[
+        tuple[str, int], tuple[bool, float, str, dict[str, Any]]
+    ] = field(default_factory=dict)
+    depth_frame_cache: dict[str, Any | None] = field(default_factory=dict)
+    cache_stats: Counter[str] = field(default_factory=Counter)
 
 
 @dataclass
@@ -99,6 +109,84 @@ class FrameCandidate:
     context_paths: list[Path]
 
 
+@dataclass
+class CandidateRecord:
+    question: dict[str, Any]
+    source_index: int
+    dataset: str
+    scene_id: str
+    image_name: str
+    score_key: tuple[Any, ...]
+    metrics: dict[str, Any]
+
+
+@dataclass
+class SelectionProgress:
+    total: int
+    processed: int = 0
+    eligible: int = 0
+    rejected: int = 0
+    started_at: float = field(default_factory=time.monotonic)
+    last_report_at: float = field(default_factory=time.monotonic)
+    run_start_processed: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.run_start_processed = self.processed
+
+    def report_resume(self, restored: int, checkpoint_path: Path) -> None:
+        if restored <= 0:
+            return
+        print(
+            f"[selection] resumed {restored}/{self.total} completed questions "
+            f"from {checkpoint_path}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def report_scene(
+        self,
+        *,
+        scene_index: int,
+        scene_count: int,
+        dataset: str,
+        scene_id: str,
+        pending_questions: int,
+    ) -> None:
+        print(
+            f"[selection] scene {scene_index}/{scene_count} {dataset}:{scene_id} "
+            f"pending={pending_questions}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def advance(self, *, was_eligible: bool) -> None:
+        self.processed += 1
+        if was_eligible:
+            self.eligible += 1
+        else:
+            self.rejected += 1
+        now = time.monotonic()
+        if (
+            self.processed == self.total
+            or self.processed % 10 == 0
+            or now - self.last_report_at >= 10.0
+        ):
+            elapsed = max(now - self.started_at, 0.0)
+            run_processed = self.processed - self.run_start_processed
+            rate = run_processed / elapsed if elapsed > 0.0 else 0.0
+            remaining = self.total - self.processed
+            eta = remaining / rate if rate > 0.0 else 0.0
+            percent = 100.0 * self.processed / max(self.total, 1)
+            print(
+                f"[selection] {self.processed}/{self.total} ({percent:.1f}%) "
+                f"eligible={self.eligible} rejected={self.rejected} "
+                f"elapsed={_format_duration(elapsed)} eta={_format_duration(eta)}",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.last_report_at = now
+
+
 def _candidate_is_better(candidate: FrameCandidate, best: FrameCandidate | None) -> bool:
     if best is None or candidate.score_key > best.score_key:
         return True
@@ -116,6 +204,118 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds_part = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes:d}m{seconds_part:02d}s"
+    return f"{seconds_part:d}s"
+
+
+def _resolved_path_text(path: Path | None) -> str | None:
+    return str(path.resolve()) if path is not None else None
+
+
+def _checkpoint_configuration(
+    *,
+    benchmark_path: Path,
+    scannet_root: Path | None,
+    scannetpp_root: Path | None,
+    scannetpp_frame_root: Path | None,
+    scannetpp_sensor: str,
+    frame_stride_scannet: int,
+    frame_stride_scannetpp: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": SELECTION_CHECKPOINT_SCHEMA_VERSION,
+        "algorithm_version": SELECTION_ALGORITHM_VERSION,
+        "benchmark_sha256": _sha256_file(benchmark_path),
+        "scannet_root": _resolved_path_text(scannet_root),
+        "scannetpp_root": _resolved_path_text(scannetpp_root),
+        "scannetpp_frame_root": _resolved_path_text(scannetpp_frame_root),
+        "scannetpp_sensor": scannetpp_sensor,
+        "frame_stride_scannet": frame_stride_scannet,
+        "frame_stride_scannetpp": frame_stride_scannetpp,
+    }
+
+
+def _checkpoint_path(output_dir: Path, configuration: dict[str, Any]) -> Path:
+    encoded = json.dumps(
+        configuration,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    fingerprint = hashlib.sha256(encoded).hexdigest()[:16]
+    return output_dir / "private_jobs" / f"selection_checkpoint_{fingerprint}.jsonl"
+
+
+def _load_or_create_checkpoint(
+    path: Path,
+    configuration: dict[str, Any],
+) -> dict[int, dict[str, Any]]:
+    expected_header = {"kind": "header", "configuration": configuration}
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(expected_header, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+        return {}
+
+    results: dict[int, dict[str, Any]] = {}
+    needs_rewrite = False
+    with path.open("r", encoding="utf-8") as stream:
+        header_line = stream.readline()
+        try:
+            header = json.loads(header_line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid selection checkpoint header: {path}") from exc
+        if header != expected_header:
+            raise ValueError(f"selection checkpoint configuration mismatch: {path}")
+        for line_number, line in enumerate(stream, start=2):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                source_index = int(record["source_index"])
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                needs_rewrite = True
+                print(
+                    f"[selection] ignoring incomplete checkpoint record at "
+                    f"{path}:{line_number}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            if record.get("kind") == "question_result":
+                if source_index in results:
+                    needs_rewrite = True
+                results[source_index] = record
+    if needs_rewrite:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(expected_header, ensure_ascii=False, sort_keys=True) + "\n")
+            for source_index in sorted(results):
+                stream.write(
+                    json.dumps(results[source_index], ensure_ascii=False, sort_keys=True)
+                    + "\n"
+                )
+        temporary.replace(path)
+    return results
+
+
+def _append_checkpoint_result(path: Path, record: dict[str, Any]) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        stream.flush()
 
 
 def _infer_dataset(question: dict[str, Any]) -> str:
@@ -308,6 +508,72 @@ def _static_visibility(
     )
 
 
+def _context_cache(context: Any, name: str) -> dict[Any, Any]:
+    cache = getattr(context, name, None)
+    if cache is None:
+        cache = {}
+        setattr(context, name, cache)
+    return cache
+
+
+def _context_cache_stats(context: Any) -> Counter[str]:
+    stats = getattr(context, "cache_stats", None)
+    if stats is None:
+        stats = Counter()
+        setattr(context, "cache_stats", stats)
+    return stats
+
+
+def _cached_image_quality_metrics(
+    *,
+    context: SceneContext,
+    image_name: str,
+    image_path: Path,
+) -> dict[str, Any]:
+    cache = _context_cache(context, "image_quality_cache")
+    stats = _context_cache_stats(context)
+    if image_name in cache:
+        stats["image_quality_hits"] += 1
+        return cache[image_name]
+    stats["image_quality_misses"] += 1
+    metrics = _read_image_quality_metrics(image_path)
+    cache[image_name] = metrics
+    return metrics
+
+
+def _cached_static_visibility(
+    obj: dict[str, Any],
+    *,
+    image_name: str,
+    pose: Any,
+    context: SceneContext,
+) -> tuple[bool, float, str, dict[str, Any]]:
+    obj_id = int(obj["id"])
+    key = (image_name, obj_id)
+    cache = _context_cache(context, "static_visibility_cache")
+    stats = _context_cache_stats(context)
+    cached = cache.get(key)
+    if cached is not None:
+        stats["static_visibility_hits"] += 1
+        return cached
+
+    stats["static_visibility_misses"] += 1
+    depth_cache = _context_cache(context, "depth_frame_cache")
+    if image_name not in depth_cache:
+        depth_cache[image_name] = context.data_source.load_depth_frame(image_name)
+        stats["depth_frame_misses"] += 1
+    else:
+        stats["depth_frame_hits"] += 1
+    result = _static_visibility(
+        obj,
+        pose=pose,
+        context=context,
+        depth_frame=depth_cache[image_name],
+    )
+    cache[key] = result
+    return result
+
+
 def _future_visibility(
     obj_id: int,
     *,
@@ -386,7 +652,11 @@ def _evaluate_frame(
     image_path = context.data_source.image_path(image_name).resolve()
     if not image_path.is_file():
         return None, "image_missing"
-    quality = _read_image_quality_metrics(image_path)
+    quality = _cached_image_quality_metrics(
+        context=context,
+        image_name=image_name,
+        image_path=image_path,
+    )
     if not bool(quality.get("readable")):
         return None, "image_unreadable"
     laplacian = float(quality["laplacian_variance"])
@@ -394,7 +664,6 @@ def _evaluate_frame(
     if not _passes_absolute_image_quality_gate(laplacian, tenengrad):
         return None, "image_quality_below_threshold"
 
-    depth_frame = context.data_source.load_depth_frame(image_name)
     source_metrics: dict[str, Any] = {}
     future_metrics: dict[str, Any] = {}
     source_ratios: list[float] = []
@@ -409,11 +678,11 @@ def _evaluate_frame(
         projection_ok, projection = _projection_gate(obj, pose, context)
         if not projection_ok:
             return None, "source_projection_gate_failed"
-        visible, ratio, backend, visibility = _static_visibility(
+        visible, ratio, backend, visibility = _cached_static_visibility(
             obj,
+            image_name=image_name,
             pose=pose,
             context=context,
-            depth_frame=depth_frame,
         )
         if not visible:
             return None, "source_not_fully_visible"
@@ -592,6 +861,132 @@ def _question_required_instance_ids(question: dict[str, Any]) -> set[int]:
     return required
 
 
+def _candidate_record(
+    candidate: FrameCandidate,
+    *,
+    dataset: str,
+    scene_id: str,
+) -> CandidateRecord:
+    return CandidateRecord(
+        question=candidate.question,
+        source_index=candidate.source_index,
+        dataset=dataset,
+        scene_id=scene_id,
+        image_name=candidate.image_name,
+        score_key=candidate.score_key,
+        metrics=candidate.metrics,
+    )
+
+
+def _eligible_checkpoint_record(candidate: CandidateRecord) -> dict[str, Any]:
+    return {
+        "kind": "question_result",
+        "source_index": candidate.source_index,
+        "question_uid": str(candidate.question.get("question_uid") or ""),
+        "question_type": str(candidate.question.get("type") or ""),
+        "dataset": candidate.dataset,
+        "scene_id": candidate.scene_id,
+        "status": "eligible",
+        "candidate": {
+            "image_name": candidate.image_name,
+            "score_key": list(candidate.score_key),
+            "metrics": candidate.metrics,
+        },
+    }
+
+
+def _rejected_checkpoint_record(
+    rejection: dict[str, Any],
+    *,
+    dataset: str,
+) -> dict[str, Any]:
+    return {
+        "kind": "question_result",
+        "source_index": int(rejection["source_index"]),
+        "question_uid": str(rejection.get("question_uid") or ""),
+        "question_type": str(rejection.get("question_type") or ""),
+        "dataset": dataset,
+        "scene_id": str(rejection.get("scene_id") or ""),
+        "status": "rejected",
+        "rejection": rejection,
+    }
+
+
+def _checkpoint_record_matches_question(
+    record: dict[str, Any],
+    *,
+    source_index: int,
+    question: dict[str, Any],
+) -> bool:
+    return bool(
+        int(record.get("source_index", -1)) == source_index
+        and str(record.get("question_uid") or "")
+        == str(question.get("question_uid") or "")
+        and str(record.get("question_type") or "") == str(question.get("type") or "")
+        and str(record.get("scene_id") or "") == str(question.get("scene_id") or "").strip()
+    )
+
+
+def _candidate_record_from_checkpoint(
+    record: dict[str, Any],
+    question: dict[str, Any],
+) -> CandidateRecord:
+    raw_candidate = record.get("candidate")
+    if not isinstance(raw_candidate, dict):
+        raise ValueError("eligible checkpoint record is missing candidate data")
+    score_key = raw_candidate.get("score_key")
+    metrics = raw_candidate.get("metrics")
+    if not isinstance(score_key, list) or not isinstance(metrics, dict):
+        raise ValueError("eligible checkpoint candidate data is malformed")
+    return CandidateRecord(
+        question=question,
+        source_index=int(record["source_index"]),
+        dataset=str(record["dataset"]),
+        scene_id=str(record["scene_id"]),
+        image_name=str(raw_candidate["image_name"]),
+        score_key=tuple(score_key),
+        metrics=metrics,
+    )
+
+
+def _rehydrate_candidate(
+    candidate: CandidateRecord,
+    context: SceneContext,
+) -> FrameCandidate:
+    motion = _apply_question_motion(
+        candidate.question,
+        context.objects,
+        context.attachment_graph,
+    )
+    for obj_id in set((*motion.source_required_ids, *motion.moved_ids)):
+        if obj_id not in context.objects_by_id:
+            raise ValueError(f"object {obj_id} is absent from scene")
+    if (
+        bool(candidate.question.get("has_attachment_chain"))
+        and len(motion.moved_ids) <= 1
+    ):
+        raise ValueError("question requires an attachment chain but none was found")
+    if candidate.image_name not in context.poses:
+        raise ValueError(
+            f"selected frame {candidate.image_name!r} is absent from {candidate.scene_id}"
+        )
+    image_path = context.data_source.image_path(candidate.image_name).resolve()
+    if not image_path.is_file():
+        raise FileNotFoundError(image_path)
+    return FrameCandidate(
+        question=candidate.question,
+        source_index=candidate.source_index,
+        context=context,
+        motion=motion,
+        image_name=candidate.image_name,
+        image_path=image_path,
+        pose=context.poses[candidate.image_name],
+        score_key=candidate.score_key,
+        metrics=candidate.metrics,
+        context_paths=_resolve_context_paths(candidate.question, context),
+    )
+
+
 def _materialize_candidate(candidate: FrameCandidate, output_dir: Path) -> dict[str, Any]:
     uid = str(candidate.question["question_uid"])
     condition_suffix = candidate.image_path.suffix.lower() or ".jpg"
@@ -653,6 +1048,41 @@ def _materialize_candidate(candidate: FrameCandidate, output_dir: Path) -> dict[
     return entry
 
 
+def _materialize_candidate_records(
+    candidates: list[CandidateRecord],
+    *,
+    output_dir: Path,
+    scannet_root: Path | None,
+    scannetpp_root: Path | None,
+    scannetpp_frame_root: Path | None,
+    scannetpp_sensor: str,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[CandidateRecord]] = defaultdict(list)
+    for candidate in candidates:
+        grouped[(candidate.dataset, candidate.scene_id)].append(candidate)
+
+    materialized: dict[int, dict[str, Any]] = {}
+    for (dataset, scene_id), scene_candidates in grouped.items():
+        required_ids: set[int] = set()
+        for candidate in scene_candidates:
+            required_ids.update(_question_required_instance_ids(candidate.question))
+        context = _load_scene_context(
+            dataset=dataset,
+            scene_id=scene_id,
+            scannet_root=scannet_root,
+            scannetpp_root=scannetpp_root,
+            scannetpp_frame_root=scannetpp_frame_root,
+            scannetpp_sensor=scannetpp_sensor,
+            required_instance_ids=required_ids,
+        )
+        for candidate in scene_candidates:
+            materialized[candidate.source_index] = _materialize_candidate(
+                _rehydrate_candidate(candidate, context),
+                output_dir,
+            )
+    return [materialized[candidate.source_index] for candidate in candidates]
+
+
 def generate_selection_spec(
     *,
     benchmark_path: Path,
@@ -671,34 +1101,113 @@ def generate_selection_spec(
         for index, question in enumerate(questions)
         if str(question.get("type") or "") in L2_ROLLOUT_TYPES
     ]
+    checkpoint_configuration = _checkpoint_configuration(
+        benchmark_path=benchmark_path,
+        scannet_root=scannet_root,
+        scannetpp_root=scannetpp_root,
+        scannetpp_frame_root=scannetpp_frame_root,
+        scannetpp_sensor=scannetpp_sensor,
+        frame_stride_scannet=frame_stride_scannet,
+        frame_stride_scannetpp=frame_stride_scannetpp,
+    )
+    checkpoint_path = _checkpoint_path(output_dir, checkpoint_configuration)
+    checkpoint_results = _load_or_create_checkpoint(
+        checkpoint_path,
+        checkpoint_configuration,
+    )
     grouped: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = defaultdict(list)
     for source_index, question in indexed_questions:
         dataset = _infer_dataset(question)
         scene_id = str(question.get("scene_id") or "").strip()
         grouped[(dataset, scene_id)].append((source_index, question))
 
-    eligible: dict[str, list[FrameCandidate]] = defaultdict(list)
+    eligible: dict[str, list[CandidateRecord]] = defaultdict(list)
     rejected: list[dict[str, Any]] = []
     scene_errors: dict[str, str] = {}
-    for (dataset, scene_id), raw_scene_questions in sorted(grouped.items()):
+    processed_indices: set[int] = set()
+    for source_index, question in indexed_questions:
+        checkpoint_record = checkpoint_results.get(source_index)
+        if checkpoint_record is None or not _checkpoint_record_matches_question(
+            checkpoint_record,
+            source_index=source_index,
+            question=question,
+        ):
+            continue
+        try:
+            if checkpoint_record.get("status") == "eligible":
+                candidate = _candidate_record_from_checkpoint(checkpoint_record, question)
+                eligible[str(question["type"])].append(candidate)
+            elif checkpoint_record.get("status") == "rejected":
+                rejection = checkpoint_record.get("rejection")
+                if not isinstance(rejection, dict):
+                    raise ValueError("rejected checkpoint record is missing rejection data")
+                rejected.append(rejection)
+                if rejection.get("reason") == "scene_resources_unavailable":
+                    scene_errors[
+                        f"{checkpoint_record.get('dataset')}:{checkpoint_record.get('scene_id')}"
+                    ] = str(rejection.get("detail") or "")
+            else:
+                raise ValueError("checkpoint record has an unknown status")
+        except (KeyError, TypeError, ValueError) as exc:
+            print(
+                f"[selection] ignoring invalid checkpoint result for source index "
+                f"{source_index}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        processed_indices.add(source_index)
+
+    progress = SelectionProgress(
+        total=len(indexed_questions),
+        processed=len(processed_indices),
+        eligible=sum(len(items) for items in eligible.values()),
+        rejected=len(rejected),
+    )
+    progress.report_resume(len(processed_indices), checkpoint_path)
+    cache_stats: Counter[str] = Counter()
+    scene_groups = sorted(grouped.items())
+    for scene_index, ((dataset, scene_id), raw_scene_questions) in enumerate(
+        scene_groups,
+        start=1,
+    ):
+        pending_scene_questions = [
+            (source_index, question)
+            for source_index, question in raw_scene_questions
+            if source_index not in processed_indices
+        ]
+        if not pending_scene_questions:
+            continue
+        progress.report_scene(
+            scene_index=scene_index,
+            scene_count=len(scene_groups),
+            dataset=dataset,
+            scene_id=scene_id,
+            pending_questions=len(pending_scene_questions),
+        )
         required_ids: set[int] = set()
         scene_questions: list[tuple[int, dict[str, Any]]] = []
-        for source_index, question in raw_scene_questions:
+        for source_index, question in pending_scene_questions:
             try:
                 if not scene_id:
                     raise ValueError("scene_id must be non-empty")
                 required_ids.update(_question_required_instance_ids(question))
             except ValueError as exc:
-                rejected.append(
-                    {
-                        "question_uid": question.get("question_uid"),
-                        "source_index": source_index,
-                        "question_type": question.get("type"),
-                        "scene_id": scene_id,
-                        "reason": "malformed_question",
-                        "detail": str(exc),
-                    }
+                rejection = {
+                    "question_uid": question.get("question_uid"),
+                    "source_index": source_index,
+                    "question_type": question.get("type"),
+                    "scene_id": scene_id,
+                    "reason": "malformed_question",
+                    "detail": str(exc),
+                }
+                rejected.append(rejection)
+                _append_checkpoint_result(
+                    checkpoint_path,
+                    _rejected_checkpoint_record(rejection, dataset=dataset),
                 )
+                processed_indices.add(source_index)
+                progress.advance(was_eligible=False)
                 continue
             scene_questions.append((source_index, question))
         if not scene_questions:
@@ -717,16 +1226,21 @@ def generate_selection_spec(
             scene_key = f"{dataset}:{scene_id}"
             scene_errors[scene_key] = str(exc)
             for source_index, question in scene_questions:
-                rejected.append(
-                    {
-                        "question_uid": question.get("question_uid"),
-                        "source_index": source_index,
-                        "question_type": question.get("type"),
-                        "scene_id": scene_id,
-                        "reason": "scene_resources_unavailable",
-                        "detail": str(exc),
-                    }
+                rejection = {
+                    "question_uid": question.get("question_uid"),
+                    "source_index": source_index,
+                    "question_type": question.get("type"),
+                    "scene_id": scene_id,
+                    "reason": "scene_resources_unavailable",
+                    "detail": str(exc),
+                }
+                rejected.append(rejection)
+                _append_checkpoint_result(
+                    checkpoint_path,
+                    _rejected_checkpoint_record(rejection, dataset=dataset),
                 )
+                processed_indices.add(source_index)
+                progress.advance(was_eligible=False)
             continue
 
         frame_stride = (
@@ -740,21 +1254,43 @@ def generate_selection_spec(
                 frame_stride=frame_stride,
             )
             if best is None:
-                rejected.append(
-                    {
-                        "question_uid": question.get("question_uid"),
-                        "source_index": source_index,
-                        "question_type": question.get("type"),
-                        "scene_id": scene_id,
-                        "reason": "no_strict_single_frame",
-                        "detail": detail,
-                        "candidate_reasons": reason_counts,
-                    }
+                rejection = {
+                    "question_uid": question.get("question_uid"),
+                    "source_index": source_index,
+                    "question_type": question.get("type"),
+                    "scene_id": scene_id,
+                    "reason": "no_strict_single_frame",
+                    "detail": detail,
+                    "candidate_reasons": reason_counts,
+                }
+                rejected.append(rejection)
+                _append_checkpoint_result(
+                    checkpoint_path,
+                    _rejected_checkpoint_record(rejection, dataset=dataset),
                 )
+                processed_indices.add(source_index)
+                progress.advance(was_eligible=False)
                 continue
-            eligible[str(question["type"])].append(best)
+            candidate = _candidate_record(best, dataset=dataset, scene_id=scene_id)
+            eligible[str(question["type"])].append(candidate)
+            _append_checkpoint_result(
+                checkpoint_path,
+                _eligible_checkpoint_record(candidate),
+            )
+            processed_indices.add(source_index)
+            progress.advance(was_eligible=True)
+        cache_stats.update(context.cache_stats)
+        print(
+            f"[selection] scene {dataset}:{scene_id} cache "
+            f"quality={context.cache_stats['image_quality_hits']}/"
+            f"{context.cache_stats['image_quality_misses']} hits/misses "
+            f"static={context.cache_stats['static_visibility_hits']}/"
+            f"{context.cache_stats['static_visibility_misses']} hits/misses",
+            file=sys.stderr,
+            flush=True,
+        )
 
-    selected: list[FrameCandidate] = []
+    selected: list[CandidateRecord] = []
     counts: dict[str, dict[str, int]] = {}
     for qtype in L2_ROLLOUT_TYPES:
         candidates = eligible.get(qtype, [])
@@ -780,7 +1316,14 @@ def generate_selection_spec(
             )
 
     selected.sort(key=lambda item: L2_ROLLOUT_TYPES.index(str(item.question["type"])))
-    entries = [_materialize_candidate(candidate, output_dir) for candidate in selected]
+    entries = _materialize_candidate_records(
+        selected,
+        output_dir=output_dir,
+        scannet_root=scannet_root,
+        scannetpp_root=scannetpp_root,
+        scannetpp_frame_root=scannetpp_frame_root,
+        scannetpp_sensor=scannetpp_sensor,
+    )
     private_dir = output_dir / "private_jobs"
     spec_path = private_dir / "selection_spec.json"
     audit_path = private_dir / "selection_audit.json"
@@ -791,6 +1334,7 @@ def generate_selection_spec(
             "benchmark_sha256": _sha256_file(benchmark_path),
             "max_per_type": expected_per_type,
             "selection_mode": "strict_single_frame",
+            "selection_algorithm_version": SELECTION_ALGORITHM_VERSION,
         },
         "entries": entries,
     }
@@ -808,7 +1352,10 @@ def generate_selection_spec(
             "future_visibility": "counterfactual_mesh_ray",
             "require_full_bbox": True,
             "require_default_edge_margin": True,
+            "checkpoint_path": str(checkpoint_path.resolve()),
+            "checkpoint_granularity": "question",
         },
+        "cache_stats_current_run": dict(sorted(cache_stats.items())),
         "counts_by_type": counts,
         "selected": [
             {

@@ -75,6 +75,17 @@ Only roots used by the benchmark are required. ScanNet++ defaults to the iPhone
 sensor; use `--scannetpp_sensor dslr` for DSLR frames. Frame traversal can be
 controlled with `--frame_stride_scannet` and `--frame_stride_scannetpp`.
 
+Selection reports scene and question progress, elapsed time, ETA, and per-scene
+cache hit counts on stderr. Image-quality results are cached once per scene and
+frame, while source-object visibility is cached once per scene, frame, and
+object. Completed question results are appended to a fingerprinted
+`private_jobs/selection_checkpoint_*.jsonl` file. Re-running the same command
+automatically resumes from that checkpoint and only re-evaluates the question
+that was active when the previous process stopped. The fingerprint includes the
+benchmark content hash, dataset roots, sensor, frame strides, and selection
+algorithm version, so changing any of those settings starts a separate
+checkpoint.
+
 The command writes `private_jobs/selection_spec.json` and the geometry-rich
 `private_jobs/selection_audit.json`, then creates private GPT, Qwen, and Cosmos
 jobs plus separate public manifests. It selects at most 50 questions for every

@@ -1,4 +1,5 @@
 import json
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
@@ -142,6 +143,67 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             self.assertIsNone(selected)
             self.assertEqual(reason, "source_projection_gate_failed")
 
+    def test_frame_evaluation_reuses_scene_quality_and_static_visibility_caches(self) -> None:
+        with TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "frame.jpg"
+            Image.new("RGB", (32, 24), color=(10, 20, 30)).save(image_path)
+            obj = self._object(1, [0.0, 0.0, 1.0], "table")
+            depth_loads = []
+            context = SimpleNamespace(
+                poses={"frame.jpg": object()},
+                data_source=SimpleNamespace(
+                    image_path=lambda _name: image_path,
+                    load_depth_frame=lambda name: depth_loads.append(name),
+                ),
+                objects_by_id={1: obj},
+            )
+            motion = QuestionMotion(
+                moved_ids=(1,), source_required_ids=(1,),
+                moved_objects=[obj], moved_objects_by_id={1: obj},
+            )
+            projection = {
+                "projected_area_ratio": 0.5,
+                "edge_margin_ratio": 0.25,
+            }
+            with patch.object(
+                selection_generator,
+                "_read_image_quality_metrics",
+                return_value={
+                    "readable": True,
+                    "laplacian_variance": 100.0,
+                    "tenengrad": 100.0,
+                },
+            ) as read_quality, patch.object(
+                selection_generator, "_passes_absolute_image_quality_gate", return_value=True
+            ), patch.object(
+                selection_generator, "_projection_gate", return_value=(True, projection)
+            ), patch.object(
+                selection_generator,
+                "_static_visibility",
+                return_value=(True, 1.0, "depth", {"visible_ratio": 1.0}),
+            ) as static_visibility, patch.object(
+                selection_generator,
+                "_future_visibility",
+                return_value=(True, 1.0, {"visible_ratio": 1.0}),
+            ):
+                for source_index in (0, 1):
+                    candidate, reason = _evaluate_frame(
+                        question={"image_name": "frame.jpg"},
+                        source_index=source_index,
+                        context=context,
+                        motion=motion,
+                        image_name="frame.jpg",
+                        context_paths=[],
+                    )
+                    self.assertIsNotNone(candidate)
+                    self.assertEqual(reason, "selected_candidate")
+
+            self.assertEqual(read_quality.call_count, 1)
+            self.assertEqual(static_visibility.call_count, 1)
+            self.assertEqual(depth_loads, ["frame.jpg"])
+            self.assertEqual(context.cache_stats["image_quality_hits"], 1)
+            self.assertEqual(context.cache_stats["static_visibility_hits"], 1)
+
     def test_static_visibility_uses_registered_depth_before_mesh_fallback(self) -> None:
         obj = self._object(1, [0.0, 0.0, 1.0], "table")
         context = SimpleNamespace(
@@ -222,6 +284,57 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             )
             self.assertTrue(all(Path(item["path"]).is_file() for item in entry["answer_context_media"]))
 
+    def test_candidate_records_rehydrate_only_selected_scene_for_materialization(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "frame.jpg"
+            Image.new("RGB", (16, 12), color=(10, 20, 30)).save(image_path)
+            moved = self._object(1, [0.0, 0.0, 0.5], "table")
+            query = self._object(2, [1.0, 0.0, 0.5], "chair")
+            question = {
+                "question_uid": "uid-1",
+                "type": "object_move_agent",
+                "scene_id": "scene0000_00",
+                "image_name": "frame.jpg",
+                "moved_obj_id": 1,
+                "query_obj_id": 2,
+                "delta": [0.5, 0.0, 0.0],
+                "has_attachment_chain": False,
+            }
+            context = SimpleNamespace(
+                objects=[moved, query],
+                objects_by_id={1: moved, 2: query},
+                attachment_graph={},
+                poses={"frame.jpg": SimpleNamespace(rotation=np.eye(3))},
+                data_source=SimpleNamespace(image_path=lambda _name: image_path),
+            )
+            candidate = selection_generator.CandidateRecord(
+                question=question,
+                source_index=0,
+                dataset="scannet",
+                scene_id="scene0000_00",
+                image_name="frame.jpg",
+                score_key=(1.0,),
+                metrics={},
+            )
+            with patch.object(
+                selection_generator,
+                "_load_scene_context",
+                return_value=context,
+            ) as load_context:
+                entries = selection_generator._materialize_candidate_records(
+                    [candidate],
+                    output_dir=root / "rollout",
+                    scannet_root=None,
+                    scannetpp_root=None,
+                    scannetpp_frame_root=None,
+                    scannetpp_sensor="iphone",
+                )
+
+            load_context.assert_called_once()
+            self.assertEqual(entries[0]["question_uid"], "uid-1")
+            self.assertTrue(Path(entries[0]["motion_frame_path"]).is_file())
+
     def test_selection_shortage_writes_spec_and_audit_without_failing(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -244,6 +357,123 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             audit = json.loads(audit_path.read_text(encoding="utf-8"))
             self.assertTrue(all(item["selected"] == 0 for item in audit["counts_by_type"].values()))
             self.assertTrue(all(item["shortfall"] == 1 for item in audit["counts_by_type"].values()))
+
+    def test_selection_checkpoint_resumes_after_interrupted_question(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            benchmark = root / "benchmark.json"
+            benchmark.write_text('{"questions": []}', encoding="utf-8")
+            questions = [
+                {
+                    "question_uid": f"uid-{index}",
+                    "type": "object_move_agent",
+                    "scene_id": "scene0000_00",
+                    "_dataset": "scannet",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 2,
+                }
+                for index in range(2)
+            ]
+            fake_context = SimpleNamespace(cache_stats=selection_generator.Counter())
+
+            def make_candidate(source_index, question):
+                return FrameCandidate(
+                    question=question,
+                    source_index=source_index,
+                    context=fake_context,
+                    motion=None,
+                    image_name=f"frame-{source_index}.jpg",
+                    image_path=root / f"frame-{source_index}.jpg",
+                    pose=None,
+                    score_key=(1.0 - source_index * 0.1,),
+                    metrics={"score": [1.0 - source_index * 0.1]},
+                    context_paths=[],
+                )
+
+            first_run_calls = []
+
+            def interrupt_second_question(**kwargs):
+                source_index = kwargs["source_index"]
+                first_run_calls.append(source_index)
+                if source_index == 1:
+                    raise KeyboardInterrupt
+                return make_candidate(source_index, kwargs["question"]), {}, None
+
+            common_patches = (
+                patch.object(
+                    selection_generator,
+                    "load_fixed_questions",
+                    return_value=(questions, {}, {}),
+                ),
+                patch.object(selection_generator, "_load_scene_context", return_value=fake_context),
+                patch.object(
+                    selection_generator,
+                    "_materialize_candidate_records",
+                    return_value=[{"question_uid": "uid-0"}, {"question_uid": "uid-1"}],
+                ),
+            )
+            with common_patches[0], common_patches[1], common_patches[2], patch.object(
+                selection_generator,
+                "_best_frame_for_question",
+                side_effect=interrupt_second_question,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    generate_selection_spec(
+                        benchmark_path=benchmark,
+                        output_dir=root / "rollout",
+                        scannet_root=None,
+                        scannetpp_root=None,
+                        scannetpp_frame_root=None,
+                        expected_per_type=2,
+                    )
+            self.assertEqual(first_run_calls, [0, 1])
+            checkpoint_path = next(
+                (root / "rollout" / "private_jobs").glob("selection_checkpoint_*.jsonl")
+            )
+            with checkpoint_path.open("a", encoding="utf-8") as stream:
+                stream.write('{"kind":')
+
+            second_run_calls = []
+
+            def finish_pending_question(**kwargs):
+                source_index = kwargs["source_index"]
+                second_run_calls.append(source_index)
+                return make_candidate(source_index, kwargs["question"]), {}, None
+
+            stderr = StringIO()
+            with patch.object(
+                selection_generator,
+                "load_fixed_questions",
+                return_value=(questions, {}, {}),
+            ), patch.object(
+                selection_generator, "_load_scene_context", return_value=fake_context
+            ), patch.object(
+                selection_generator,
+                "_materialize_candidate_records",
+                return_value=[{"question_uid": "uid-0"}, {"question_uid": "uid-1"}],
+            ), patch.object(
+                selection_generator,
+                "_best_frame_for_question",
+                side_effect=finish_pending_question,
+            ), patch("sys.stderr", stderr):
+                paths = generate_selection_spec(
+                    benchmark_path=benchmark,
+                    output_dir=root / "rollout",
+                    scannet_root=None,
+                    scannetpp_root=None,
+                    scannetpp_frame_root=None,
+                    expected_per_type=2,
+                )
+
+            self.assertEqual(second_run_calls, [1])
+            self.assertIn("resumed 1/2 completed questions", stderr.getvalue())
+            self.assertTrue(paths.spec.is_file())
+            self.assertEqual(
+                len(list((root / "rollout" / "private_jobs").glob("selection_checkpoint_*.jsonl"))),
+                1,
+            )
+            for line in checkpoint_path.read_text(encoding="utf-8").splitlines():
+                json.loads(line)
 
     def test_prepare_cli_is_automatic_and_invokes_selection_first(self) -> None:
         with TemporaryDirectory() as tmp:
