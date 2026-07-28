@@ -1442,13 +1442,19 @@ def _print_image_stats(
 
 
 def _build_options_html(question: dict) -> str:
-    answer = str(question.get("answer", ""))
+    answer = question.get("answer", "")
+    if isinstance(answer, (list, tuple, set)):
+        correct_letters = {str(value).strip() for value in answer}
+    else:
+        correct_letters = {
+            value.strip() for value in str(answer).split(",") if value.strip()
+        }
     options = question.get("options", [])
     opt_html = ""
     if isinstance(options, list):
         for i, opt in enumerate(options):
             letter = chr(65 + i)
-            cls = "opt correct" if letter == answer else "opt"
+            cls = "opt correct" if letter in correct_letters else "opt"
             opt_html += (
                 f'<div class="{cls}">{letter}.&nbsp; {html.escape(str(opt))}</div>\n    '
             )

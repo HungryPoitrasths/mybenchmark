@@ -6,6 +6,7 @@ from unittest import mock
 
 from scripts.make_viewer import (
     _collect_aux_image_names,
+    _build_options_html,
     build_simple_viewer_html,
     build_viewer_html,
     build_task_summary_v2,
@@ -70,6 +71,19 @@ def assert_simple_field(test_case: unittest.TestCase, html_text: str, key: str, 
 
 
 class MakeViewerTests(unittest.TestCase):
+    def test_options_html_highlights_each_multiselect_answer(self) -> None:
+        html_text = _build_options_html(
+            {
+                "options": ["the sofa", "the pillow", "the plant", "none of the above"],
+                "answer": ["A", "C"],
+            }
+        )
+
+        self.assertIn('class="opt correct">A.&nbsp; the sofa', html_text)
+        self.assertIn('class="opt">B.&nbsp; the pillow', html_text)
+        self.assertIn('class="opt correct">C.&nbsp; the plant', html_text)
+        self.assertIn('class="opt">D.&nbsp; none of the above', html_text)
+
     def test_attachment_only_keeps_attachment_chain_and_attached_object_moves(self) -> None:
         questions = [
             {"type": "attachment_chain"},
