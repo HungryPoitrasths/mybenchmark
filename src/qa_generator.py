@@ -423,9 +423,9 @@ ALLOCENTRIC_DIRECTION_NOTE = (
     "rule."
 )
 ATTACHMENT_CHAIN_MULTI_SELECT_NOTE = (
-    "This is a multiple-select question; choose all options that apply."
+    "One or more options may be correct. Select all that apply."
 )
-ATTACHMENT_CHAIN_NONE_OF_THE_ABOVE = "None of the above"
+ATTACHMENT_CHAIN_NONE_OF_THE_ABOVE = "none of the above"
 YES_NO = ["Yes", "No"]
 DISTANCE_MOVE_SEARCH_STEP_M = 0.5
 DISTANCE_MOVE_SEARCH_MAX_M = 3.0
@@ -10856,7 +10856,7 @@ def generate_l3_attachment_chain(
                     chr(65 + options.index(value)) for value in correct_values
                 )
                 # Fixed final distractor: both the parent and grandchild always
-                # move, so "None of the above" is never correct. Pinned to the
+                # move, so "none of the above" is never correct. Pinned to the
                 # last slot (option D) and excluded from the shuffle so its
                 # position is stable.
                 options.append(ATTACHMENT_CHAIN_NONE_OF_THE_ABOVE)
