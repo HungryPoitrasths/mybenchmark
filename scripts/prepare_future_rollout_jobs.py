@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Prepare leakage-safe GPT/Qwen image and Cosmos Image2World rollout jobs.
+"""Automatically select frames and prepare leakage-safe future-rollout jobs.
 
-The private selection spec supplies frame-selection/audit data. This script
-uses the camera rotation only to convert the benchmark's world-space movement
-delta into camera-relative action components. It never copies the question,
-options, answer, GT future coordinates, pose, or projection data into a model
-request or public evaluation manifest.
+This script derives a private selection spec from dataset geometry, then uses
+the selected camera rotation only to convert the benchmark's world-space
+movement delta into camera-relative action components for GPT/Qwen image edits
+and Cosmos Image2World. It never copies the question, options, answer, GT
+future coordinates, pose, or projection data into a model request or public
+evaluation manifest.
 """
 
 from __future__ import annotations
@@ -30,7 +31,12 @@ from scripts.run_sampled_type_vlm_eval import (  # noqa: E402
     _sha256_file,
     load_fixed_questions,
 )
+from scripts.generate_rollout_selection_spec import generate_selection_spec  # noqa: E402
 from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
+from src.frame_selector import (  # noqa: E402
+    FRAME_STRIDE_SCANNET,
+    FRAME_STRIDE_SCANNETPP,
+)
 
 
 PICTURE_PROMPT_VERSION = "agent-motion-picture-v1"
@@ -594,15 +600,15 @@ def prepare_jobs(
         )
 
     if expected_picture_per_type > 0:
-        bad_counts = {
+        excess_counts = {
             qtype: picture_counts[qtype]
             for qtype in L2_ROLLOUT_TYPES
-            if picture_counts[qtype] != expected_picture_per_type
+            if picture_counts[qtype] > expected_picture_per_type
         }
-        if bad_counts:
+        if excess_counts:
             raise ValueError(
-                f"picture sample must contain exactly {expected_picture_per_type} per type; "
-                f"mismatches={bad_counts}"
+                f"picture sample exceeds the {expected_picture_per_type} per-type cap; "
+                f"excess={excess_counts}"
             )
 
     job_metadata = {
@@ -662,29 +668,56 @@ def prepare_jobs(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark_file", required=True, type=Path)
-    parser.add_argument("--selection_spec", required=True, type=Path)
     parser.add_argument("--output_dir", required=True, type=Path)
+    parser.add_argument("--scannet_root", type=Path, default=None)
+    parser.add_argument("--scannetpp_root", type=Path, default=None)
+    parser.add_argument("--scannetpp_frame_root", type=Path, default=None)
+    parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone")
+    parser.add_argument("--frame_stride_scannet", type=int, default=FRAME_STRIDE_SCANNET)
+    parser.add_argument("--frame_stride_scannetpp", type=int, default=FRAME_STRIDE_SCANNETPP)
     parser.add_argument("--seed", type=int, default=20260725)
-    parser.add_argument("--expected_picture_per_type", type=int, default=50)
+    parser.add_argument(
+        "--expected_picture_per_type",
+        type=int,
+        default=50,
+        help="maximum number of automatically selected questions per supported type",
+    )
     args = parser.parse_args(argv)
     if not args.benchmark_file.is_file():
         parser.error(f"--benchmark_file not found: {args.benchmark_file}")
-    if not args.selection_spec.is_file():
-        parser.error(f"--selection_spec not found: {args.selection_spec}")
-    if args.expected_picture_per_type < 0:
-        parser.error("--expected_picture_per_type must be non-negative")
+    if args.expected_picture_per_type <= 0:
+        parser.error("--expected_picture_per_type must be positive")
+    if args.frame_stride_scannet <= 0 or args.frame_stride_scannetpp <= 0:
+        parser.error("frame strides must be positive")
+    for field in ("scannet_root", "scannetpp_root", "scannetpp_frame_root"):
+        path = getattr(args, field)
+        if path is not None and not path.is_dir():
+            parser.error(f"--{field} is not a directory: {path}")
     return args
 
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    selection_paths = generate_selection_spec(
+        benchmark_path=args.benchmark_file,
+        output_dir=args.output_dir,
+        scannet_root=args.scannet_root,
+        scannetpp_root=args.scannetpp_root,
+        scannetpp_frame_root=args.scannetpp_frame_root,
+        scannetpp_sensor=args.scannetpp_sensor,
+        expected_per_type=args.expected_picture_per_type,
+        frame_stride_scannet=args.frame_stride_scannet,
+        frame_stride_scannetpp=args.frame_stride_scannetpp,
+    )
     outputs = prepare_jobs(
         benchmark_path=args.benchmark_file,
-        selection_spec_path=args.selection_spec,
+        selection_spec_path=selection_paths.spec,
         output_dir=args.output_dir,
         seed=args.seed,
         expected_picture_per_type=args.expected_picture_per_type,
     )
+    print(f"{'selection_spec':20s}: {selection_paths.spec}")
+    print(f"{'selection_audit':20s}: {selection_paths.audit}")
     for name, path in outputs.items():
         print(f"{name:20s}: {path}")
 

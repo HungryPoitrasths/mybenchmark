@@ -116,19 +116,12 @@ def validate_manifest(
                 if len(digest) != 64:
                     errors.append(f"{uid}: media[{media_index}] requires a SHA-256 in strict mode")
 
-    if mode == "picture":
-        for qtype in L2_ROLLOUT_TYPES:
-            if counts[qtype] != expected_per_type:
-                errors.append(
-                    f"{qtype}: expected exactly {expected_per_type} eligible picture entries, "
-                    f"found {counts[qtype]}"
-                )
-    else:
-        for qtype in L2_ROLLOUT_TYPES:
-            if counts[qtype] > expected_per_type:
-                errors.append(
-                    f"{qtype}: video eligible count {counts[qtype]} exceeds cap {expected_per_type}"
-                )
+    for qtype in L2_ROLLOUT_TYPES:
+        if counts[qtype] > expected_per_type:
+            errors.append(
+                f"{qtype}: {mode} eligible count {counts[qtype]} exceeds cap "
+                f"{expected_per_type}"
+            )
 
     return {
         "manifest": str(manifest.path),

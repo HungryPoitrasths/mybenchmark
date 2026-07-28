@@ -9,10 +9,11 @@ The rollout experiment is split into two isolated stages:
 The original benchmark question is used only by the answering VLM in stage 2.
 It is never copied into a generation job.
 
-## Private selection spec
+## Automatic frame selection
 
-`scripts/prepare_future_rollout_jobs.py` consumes the benchmark and a private
-selection spec. A typical entry is:
+`scripts/prepare_future_rollout_jobs.py` automatically creates the private
+selection spec before it prepares generation jobs. Users do not provide or
+edit a selection spec. A generated entry looks like:
 
 ```json
 {
@@ -36,27 +37,52 @@ selection spec. A typical entry is:
 }
 ```
 
-`source_index` may be replaced by the evaluator's opaque `question_uid`.
-Attachment questions must explicitly list the full transitive attachment chain
-in `moving_group`, with the moved parent first. The camera rotation remains in
-the private selection input and is used only to convert the world-space motion
-delta to camera-relative movement. It is absent from all model requests and
-public manifests.
+For every supported L2 question, the selector traverses the scene's registered
+camera frames. A frame is eligible only when the moved root, every transitive
+attachment, and the query object are fully inside the source image, pass the
+projection and edge-margin gates, and are visible. Source visibility uses
+registered depth when available and falls back to mesh rays when depth has no
+valid samples. The selector applies the benchmark movement or orbit in 3D and
+uses counterfactual mesh rays to require the complete moved group to remain
+fully in-frame and visible at its future location from the same camera.
+
+The highest-scoring eligible frame is copied to
+`media/conditions/<question_uid>/motion.<ext>`. Original and auxiliary
+benchmark views are copied to `media/context/<question_uid>/` for answer-time
+context. Cosmos, GPT Image, and Qwen each receive the same single motion image;
+the extra context views are never generation inputs.
+
+The generated `moving_group` contains the full transitive attachment chain,
+with the moved parent first. The selected camera rotation remains in the
+private selection input and is used only to convert the benchmark's world-space
+motion delta to camera-relative movement. It is absent from all model requests
+and public manifests.
 
 The preparation command fixes the paired GPT/Qwen sample and prompt:
 
 ```powershell
 python scripts/prepare_future_rollout_jobs.py `
   --benchmark_file output/benchmark_subset.json `
-  --selection_spec rollout/private_selection.json `
+  --scannet_root D:/datasets/scannet/scans `
+  --scannetpp_root D:/datasets/scannetpp/data `
+  --scannetpp_frame_root output/scannetpp_iphone_frames `
   --output_dir rollout/run_20260725 `
   --seed 20260725 `
   --expected_picture_per_type 50
 ```
 
-It creates private GPT, Qwen, and Cosmos jobs plus separate public manifests.
-The GPT and Qwen job lists use the same question order, input-image hashes,
-prompt text, and output dimensions.
+Only roots used by the benchmark are required. ScanNet++ defaults to the iPhone
+sensor; use `--scannetpp_sensor dslr` for DSLR frames. Frame traversal can be
+controlled with `--frame_stride_scannet` and `--frame_stride_scannetpp`.
+
+The command writes `private_jobs/selection_spec.json` and the geometry-rich
+`private_jobs/selection_audit.json`, then creates private GPT, Qwen, and Cosmos
+jobs plus separate public manifests. It selects at most 50 questions for every
+supported L2 type by default. If a type has fewer strict single-frame matches,
+all available matches are emitted normally and the audit records its
+`shortfall`. There is no weaker or manual fallback. The GPT and Qwen job lists
+use the same question order, input-image hashes, prompt text, and output
+dimensions.
 
 ## Generation prompts
 
