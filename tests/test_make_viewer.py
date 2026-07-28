@@ -44,6 +44,15 @@ def write_questions_json(root: Path, questions: list[dict]) -> Path:
     return questions_path
 
 
+def write_questions_json_with_bom(root: Path, questions: list[dict]) -> Path:
+    questions_path = root / "questions_bom.json"
+    questions_path.write_text(
+        json.dumps({"questions": questions}, ensure_ascii=False),
+        encoding="utf-8-sig",
+    )
+    return questions_path
+
+
 def run_make_viewer_cli(argv: list[str]) -> None:
     with mock.patch.object(sys, "argv", argv), mock.patch("scripts.make_viewer.Image", object()):
         main()
@@ -631,6 +640,42 @@ class MakeViewerTests(unittest.TestCase):
         )
 
         self.assertEqual(output_path.read_text(encoding="utf-8"), expected_html)
+
+    def test_main_accepts_utf8_bom_questions_file(self) -> None:
+        questions = [
+            {
+                "type": "direction_agent",
+                "scene_id": "scene0000_00",
+                "image_name": "000.jpg",
+                "question": "Where is the lamp relative to the desk?",
+                "options": ["left", "right", "front"],
+                "answer": "A",
+                "correct_value": "left",
+            }
+        ]
+
+        root = workspace_case_dir("make_viewer_main_bom")
+        questions_path = write_questions_json_with_bom(root, questions)
+        image_root = root / "images"
+        image_root.mkdir(exist_ok=True)
+        output_path = root / "viewer.html"
+
+        run_make_viewer_cli(
+            [
+                "make_viewer.py",
+                "--questions",
+                str(questions_path),
+                "--image_root",
+                str(image_root),
+                "--output",
+                str(output_path),
+            ]
+        )
+
+        self.assertIn(
+            "Where is the lamp relative to the desk?",
+            output_path.read_text(encoding="utf-8"),
+        )
 
     def test_main_with_simple_output_writes_both_html_files(self) -> None:
         questions = [

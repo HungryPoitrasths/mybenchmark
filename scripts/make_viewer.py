@@ -1839,7 +1839,7 @@ def main():
             "Dataset is inferred per-question from the _dataset / dataset field."
         )
 
-    with open(args.questions, encoding="utf-8") as f:
+    with open(args.questions, encoding="utf-8-sig") as f:
         data = json.load(f)
     questions = data["questions"] if isinstance(data, dict) and "questions" in data else data
 
