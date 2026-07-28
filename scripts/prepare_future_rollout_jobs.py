@@ -31,7 +31,12 @@ from scripts.run_sampled_type_vlm_eval import (  # noqa: E402
     _sha256_file,
     load_fixed_questions,
 )
-from scripts.generate_rollout_selection_spec import generate_selection_spec  # noqa: E402
+from scripts.generate_rollout_selection_spec import (  # noqa: E402
+    DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
+    DEFAULT_MESH_RAY_SHORTLIST_SIZE,
+    DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    generate_selection_spec,
+)
 from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
 from src.frame_selector import (  # noqa: E402
     FRAME_STRIDE_SCANNET,
@@ -675,6 +680,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone")
     parser.add_argument("--frame_stride_scannet", type=int, default=FRAME_STRIDE_SCANNET)
     parser.add_argument("--frame_stride_scannetpp", type=int, default=FRAME_STRIDE_SCANNETPP)
+    parser.add_argument(
+        "--mesh_ray_shortlist_size",
+        type=int,
+        default=DEFAULT_MESH_RAY_SHORTLIST_SIZE,
+    )
+    parser.add_argument(
+        "--mesh_ray_surface_samples",
+        type=int,
+        default=DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    )
+    parser.add_argument(
+        "--mesh_ray_local_resamples",
+        type=int,
+        default=DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
+    )
     parser.add_argument("--seed", type=int, default=20260725)
     parser.add_argument(
         "--expected_picture_per_type",
@@ -689,6 +709,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--expected_picture_per_type must be positive")
     if args.frame_stride_scannet <= 0 or args.frame_stride_scannetpp <= 0:
         parser.error("frame strides must be positive")
+    if args.mesh_ray_shortlist_size <= 0:
+        parser.error("--mesh_ray_shortlist_size must be positive")
+    if args.mesh_ray_surface_samples <= 0:
+        parser.error("--mesh_ray_surface_samples must be positive")
+    if args.mesh_ray_local_resamples < 0:
+        parser.error("--mesh_ray_local_resamples must be non-negative")
     for field in ("scannet_root", "scannetpp_root", "scannetpp_frame_root"):
         path = getattr(args, field)
         if path is not None and not path.is_dir():
@@ -708,6 +734,9 @@ def main(argv: list[str] | None = None) -> None:
         expected_per_type=args.expected_picture_per_type,
         frame_stride_scannet=args.frame_stride_scannet,
         frame_stride_scannetpp=args.frame_stride_scannetpp,
+        mesh_ray_shortlist_size=args.mesh_ray_shortlist_size,
+        mesh_ray_surface_samples=args.mesh_ray_surface_samples,
+        mesh_ray_local_resamples=args.mesh_ray_local_resamples,
     )
     outputs = prepare_jobs(
         benchmark_path=args.benchmark_file,

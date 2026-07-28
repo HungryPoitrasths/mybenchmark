@@ -86,6 +86,17 @@ benchmark content hash, dataset roots, sensor, frame strides, and selection
 algorithm version, so changing any of those settings starts a separate
 checkpoint.
 
+Future-frame visibility uses a two-stage selector. All sampled frames first pass
+an image-quality and strict bbox-projection prefilter without mesh rays. At most
+32 frames per question then receive counterfactual mesh-ray verification using
+64 deterministic surface samples and 4 local boundary resamples; bbox probe
+rays are disabled because rollout ranking does not consume their metrics. A
+passing original question frame is always retained in the shortlist. Tune the
+balanced defaults with `--mesh_ray_shortlist_size`,
+`--mesh_ray_surface_samples`, and `--mesh_ray_local_resamples`. These reduced
+budgets apply only to rollout selection; benchmark generation keeps its full
+mesh-ray defaults.
+
 The command writes `private_jobs/selection_spec.json` and the geometry-rich
 `private_jobs/selection_audit.json`, then creates private GPT, Qwen, and Cosmos
 jobs plus separate public manifests. It selects at most 50 questions for every

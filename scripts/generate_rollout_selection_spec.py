@@ -57,7 +57,11 @@ from src.virtual_ops import apply_movement, apply_orbit_rotation  # noqa: E402
 SELECTION_SCHEMA_VERSION = "predictive-spatial-selection-v1"
 SELECTION_AUDIT_SCHEMA_VERSION = "predictive-spatial-selection-audit-v1"
 SELECTION_CHECKPOINT_SCHEMA_VERSION = "predictive-spatial-selection-checkpoint-v1"
-SELECTION_ALGORITHM_VERSION = "strict-single-frame-v2"
+SELECTION_ALGORITHM_VERSION = "strict-single-frame-v3-two-stage-mesh-ray"
+DEFAULT_MESH_RAY_SHORTLIST_SIZE = 32
+DEFAULT_MESH_RAY_SURFACE_SAMPLES = 64
+DEFAULT_MESH_RAY_BBOX_SAMPLES = 0
+DEFAULT_MESH_RAY_LOCAL_RESAMPLES = 4
 
 
 @dataclass(frozen=True)
@@ -81,7 +85,7 @@ class SceneContext:
     instance_mesh_data: Any
     image_quality_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     static_visibility_cache: dict[
-        tuple[str, int], tuple[bool, float, str, dict[str, Any]]
+        tuple[Any, ...], tuple[bool, float, str, dict[str, Any]]
     ] = field(default_factory=dict)
     depth_frame_cache: dict[str, Any | None] = field(default_factory=dict)
     cache_stats: Counter[str] = field(default_factory=Counter)
@@ -107,6 +111,23 @@ class FrameCandidate:
     score_key: tuple[Any, ...]
     metrics: dict[str, Any]
     context_paths: list[Path]
+
+
+@dataclass
+class FramePrefilterCandidate:
+    question: dict[str, Any]
+    source_index: int
+    context: SceneContext
+    motion: QuestionMotion
+    image_name: str
+    image_path: Path
+    pose: Any
+    prefilter_score_key: tuple[Any, ...]
+    source_projections: dict[int, dict[str, float]]
+    future_projections: dict[int, dict[str, float]]
+    image_quality: dict[str, float]
+    context_paths: list[Path]
+    prefilter_rank: int = 0
 
 
 @dataclass
@@ -230,6 +251,9 @@ def _checkpoint_configuration(
     scannetpp_sensor: str,
     frame_stride_scannet: int,
     frame_stride_scannetpp: int,
+    mesh_ray_shortlist_size: int,
+    mesh_ray_surface_samples: int,
+    mesh_ray_local_resamples: int,
 ) -> dict[str, Any]:
     return {
         "schema_version": SELECTION_CHECKPOINT_SCHEMA_VERSION,
@@ -241,6 +265,10 @@ def _checkpoint_configuration(
         "scannetpp_sensor": scannetpp_sensor,
         "frame_stride_scannet": frame_stride_scannet,
         "frame_stride_scannetpp": frame_stride_scannetpp,
+        "mesh_ray_shortlist_size": mesh_ray_shortlist_size,
+        "mesh_ray_surface_samples": mesh_ray_surface_samples,
+        "mesh_ray_bbox_samples": DEFAULT_MESH_RAY_BBOX_SAMPLES,
+        "mesh_ray_local_resamples": mesh_ray_local_resamples,
     }
 
 
@@ -465,6 +493,9 @@ def _static_visibility(
     pose: Any,
     context: SceneContext,
     depth_frame: Any | None,
+    mesh_ray_surface_samples: int = DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    mesh_ray_bbox_samples: int = DEFAULT_MESH_RAY_BBOX_SAMPLES,
+    mesh_ray_local_resamples: int = DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
 ) -> tuple[bool, float, str, dict[str, Any]]:
     if depth_frame is not None:
         depth_metrics = compute_depth_occlusion_metrics(
@@ -490,6 +521,9 @@ def _static_visibility(
         color_intrinsics=context.intrinsics,
         ray_caster=context.ray_caster,
         instance_mesh_data=context.instance_mesh_data,
+        max_surface_samples=mesh_ray_surface_samples,
+        bbox_probe_ray_count=mesh_ray_bbox_samples,
+        local_resample_count=mesh_ray_local_resamples,
     )
     ratio = _metrics_visible_ratio(mesh_metrics)
     valid = int(getattr(mesh_metrics, "valid_in_frame_count", 0) or 0)
@@ -547,9 +581,18 @@ def _cached_static_visibility(
     image_name: str,
     pose: Any,
     context: SceneContext,
+    mesh_ray_surface_samples: int = DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    mesh_ray_bbox_samples: int = DEFAULT_MESH_RAY_BBOX_SAMPLES,
+    mesh_ray_local_resamples: int = DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
 ) -> tuple[bool, float, str, dict[str, Any]]:
     obj_id = int(obj["id"])
-    key = (image_name, obj_id)
+    key = (
+        image_name,
+        obj_id,
+        mesh_ray_surface_samples,
+        mesh_ray_bbox_samples,
+        mesh_ray_local_resamples,
+    )
     cache = _context_cache(context, "static_visibility_cache")
     stats = _context_cache_stats(context)
     cached = cache.get(key)
@@ -569,6 +612,9 @@ def _cached_static_visibility(
         pose=pose,
         context=context,
         depth_frame=depth_cache[image_name],
+        mesh_ray_surface_samples=mesh_ray_surface_samples,
+        mesh_ray_bbox_samples=mesh_ray_bbox_samples,
+        mesh_ray_local_resamples=mesh_ray_local_resamples,
     )
     cache[key] = result
     return result
@@ -580,6 +626,9 @@ def _future_visibility(
     pose: Any,
     context: SceneContext,
     motion: QuestionMotion,
+    mesh_ray_surface_samples: int = DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    mesh_ray_bbox_samples: int = DEFAULT_MESH_RAY_BBOX_SAMPLES,
+    mesh_ray_local_resamples: int = DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
 ) -> tuple[bool, float, dict[str, Any]]:
     metrics = _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
         target_obj_id=obj_id,
@@ -590,6 +639,9 @@ def _future_visibility(
         color_intrinsics=context.intrinsics,
         ray_caster=context.ray_caster,
         instance_mesh_data=context.instance_mesh_data,
+        max_surface_samples=mesh_ray_surface_samples,
+        bbox_probe_ray_count=mesh_ray_bbox_samples,
+        local_resample_count=mesh_ray_local_resamples,
     )
     ratio = _metrics_visible_ratio(metrics)
     valid = int(getattr(metrics, "valid_in_frame_count", 0) or 0)
@@ -639,7 +691,7 @@ def _projection_gate(
     }
 
 
-def _evaluate_frame(
+def _prefilter_frame(
     *,
     question: dict[str, Any],
     source_index: int,
@@ -647,7 +699,7 @@ def _evaluate_frame(
     motion: QuestionMotion,
     image_name: str,
     context_paths: list[Path],
-) -> tuple[FrameCandidate | None, str]:
+) -> tuple[FramePrefilterCandidate | None, str]:
     pose = context.poses[image_name]
     image_path = context.data_source.image_path(image_name).resolve()
     if not image_path.is_file():
@@ -664,10 +716,8 @@ def _evaluate_frame(
     if not _passes_absolute_image_quality_gate(laplacian, tenengrad):
         return None, "image_quality_below_threshold"
 
-    source_metrics: dict[str, Any] = {}
-    future_metrics: dict[str, Any] = {}
-    source_ratios: list[float] = []
-    future_ratios: list[float] = []
+    source_projections: dict[int, dict[str, float]] = {}
+    future_projections: dict[int, dict[str, float]] = {}
     area_ratios: list[float] = []
     margin_ratios: list[float] = []
 
@@ -678,14 +728,109 @@ def _evaluate_frame(
         projection_ok, projection = _projection_gate(obj, pose, context)
         if not projection_ok:
             return None, "source_projection_gate_failed"
+        area_ratios.append(projection["projected_area_ratio"])
+        margin_ratios.append(projection["edge_margin_ratio"])
+        source_projections[obj_id] = projection
+
+    for obj_id in motion.moved_ids:
+        moved_obj = motion.moved_objects_by_id.get(obj_id)
+        if moved_obj is None:
+            return None, "future_object_missing"
+        projection_ok, projection = _projection_gate(moved_obj, pose, context)
+        if not projection_ok:
+            return None, "future_projection_gate_failed"
+        area_ratios.append(projection["projected_area_ratio"])
+        margin_ratios.append(projection["edge_margin_ratio"])
+        future_projections[obj_id] = projection
+
+    original_bonus = int(image_name == str(question.get("image_name") or ""))
+    prefilter_score_key: tuple[Any, ...] = (
+        min(area_ratios),
+        min(margin_ratios),
+        laplacian,
+        tenengrad,
+        original_bonus,
+    )
+    return (
+        FramePrefilterCandidate(
+            question=question,
+            source_index=source_index,
+            context=context,
+            motion=motion,
+            image_name=image_name,
+            image_path=image_path,
+            pose=pose,
+            prefilter_score_key=prefilter_score_key,
+            source_projections=source_projections,
+            future_projections=future_projections,
+            image_quality={
+                "laplacian_variance": laplacian,
+                "tenengrad": tenengrad,
+            },
+            context_paths=context_paths,
+        ),
+        "prefilter_candidate",
+    )
+
+
+def _shortlist_prefilter_candidates(
+    candidates: list[FramePrefilterCandidate],
+    *,
+    original_image_name: str,
+    limit: int,
+) -> list[FramePrefilterCandidate]:
+    if limit <= 0 or not candidates:
+        return []
+    ordered = sorted(candidates, key=lambda item: _natural_frame_key(item.image_name))
+    ordered.sort(key=lambda item: item.prefilter_score_key, reverse=True)
+    for rank, candidate in enumerate(ordered, start=1):
+        candidate.prefilter_rank = rank
+    shortlisted = ordered[:limit]
+    original = next(
+        (item for item in ordered if item.image_name == original_image_name),
+        None,
+    )
+    if original is not None and all(
+        item.image_name != original.image_name for item in shortlisted
+    ):
+        if len(shortlisted) >= limit:
+            shortlisted[-1] = original
+        else:
+            shortlisted.append(original)
+    return shortlisted
+
+
+def _evaluate_prefiltered_frame(
+    candidate: FramePrefilterCandidate,
+    *,
+    prefilter_rank: int,
+    prefilter_candidate_count: int,
+    mesh_ray_shortlist_size: int,
+    mesh_ray_surface_samples: int,
+    mesh_ray_bbox_samples: int,
+    mesh_ray_local_resamples: int,
+) -> tuple[FrameCandidate | None, str]:
+    source_metrics: dict[str, Any] = {}
+    future_metrics: dict[str, Any] = {}
+    source_ratios: list[float] = []
+    future_ratios: list[float] = []
+    area_ratios: list[float] = []
+    margin_ratios: list[float] = []
+
+    for obj_id in candidate.motion.source_required_ids:
+        obj = candidate.context.objects_by_id[obj_id]
         visible, ratio, backend, visibility = _cached_static_visibility(
             obj,
-            image_name=image_name,
-            pose=pose,
-            context=context,
+            image_name=candidate.image_name,
+            pose=candidate.pose,
+            context=candidate.context,
+            mesh_ray_surface_samples=mesh_ray_surface_samples,
+            mesh_ray_bbox_samples=mesh_ray_bbox_samples,
+            mesh_ray_local_resamples=mesh_ray_local_resamples,
         )
         if not visible:
             return None, "source_not_fully_visible"
+        projection = candidate.source_projections[obj_id]
         source_ratios.append(ratio)
         area_ratios.append(projection["projected_area_ratio"])
         margin_ratios.append(projection["edge_margin_ratio"])
@@ -696,21 +841,19 @@ def _evaluate_frame(
             "visibility": visibility,
         }
 
-    for obj_id in motion.moved_ids:
-        moved_obj = motion.moved_objects_by_id.get(obj_id)
-        if moved_obj is None:
-            return None, "future_object_missing"
-        projection_ok, projection = _projection_gate(moved_obj, pose, context)
-        if not projection_ok:
-            return None, "future_projection_gate_failed"
+    for obj_id in candidate.motion.moved_ids:
         visible, ratio, visibility = _future_visibility(
             obj_id,
-            pose=pose,
-            context=context,
-            motion=motion,
+            pose=candidate.pose,
+            context=candidate.context,
+            motion=candidate.motion,
+            mesh_ray_surface_samples=mesh_ray_surface_samples,
+            mesh_ray_bbox_samples=mesh_ray_bbox_samples,
+            mesh_ray_local_resamples=mesh_ray_local_resamples,
         )
         if not visible:
             return None, "future_not_fully_visible"
+        projection = candidate.future_projections[obj_id]
         future_ratios.append(ratio)
         area_ratios.append(projection["projected_area_ratio"])
         margin_ratios.append(projection["edge_margin_ratio"])
@@ -721,38 +864,81 @@ def _evaluate_frame(
             "visibility": visibility,
         }
 
-    original_bonus = int(image_name == str(question.get("image_name") or ""))
+    original_bonus = int(
+        candidate.image_name == str(candidate.question.get("image_name") or "")
+    )
     score_key: tuple[Any, ...] = (
         min([*source_ratios, *future_ratios]),
         min(area_ratios),
         min(margin_ratios),
-        laplacian,
-        tenengrad,
+        candidate.image_quality["laplacian_variance"],
+        candidate.image_quality["tenengrad"],
         original_bonus,
     )
     metrics = {
         "source": source_metrics,
         "future": future_metrics,
-        "image_quality": {
-            "laplacian_variance": laplacian,
-            "tenengrad": tenengrad,
+        "image_quality": candidate.image_quality,
+        "prefilter": {
+            "rank": prefilter_rank,
+            "candidate_count": prefilter_candidate_count,
+            "shortlist_limit": mesh_ray_shortlist_size,
+            "score": list(candidate.prefilter_score_key),
+        },
+        "mesh_ray_budget": {
+            "surface_samples": mesh_ray_surface_samples,
+            "bbox_samples": mesh_ray_bbox_samples,
+            "local_resamples": mesh_ray_local_resamples,
         },
         "score": list(score_key),
     }
     return (
         FrameCandidate(
-            question=question,
-            source_index=source_index,
-            context=context,
-            motion=motion,
-            image_name=image_name,
-            image_path=image_path,
-            pose=pose,
+            question=candidate.question,
+            source_index=candidate.source_index,
+            context=candidate.context,
+            motion=candidate.motion,
+            image_name=candidate.image_name,
+            image_path=candidate.image_path,
+            pose=candidate.pose,
             score_key=score_key,
             metrics=metrics,
-            context_paths=context_paths,
+            context_paths=candidate.context_paths,
         ),
         "selected_candidate",
+    )
+
+
+def _evaluate_frame(
+    *,
+    question: dict[str, Any],
+    source_index: int,
+    context: SceneContext,
+    motion: QuestionMotion,
+    image_name: str,
+    context_paths: list[Path],
+    mesh_ray_surface_samples: int = DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    mesh_ray_bbox_samples: int = DEFAULT_MESH_RAY_BBOX_SAMPLES,
+    mesh_ray_local_resamples: int = DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
+) -> tuple[FrameCandidate | None, str]:
+    prefiltered, reason = _prefilter_frame(
+        question=question,
+        source_index=source_index,
+        context=context,
+        motion=motion,
+        image_name=image_name,
+        context_paths=context_paths,
+    )
+    if prefiltered is None:
+        return None, reason
+    return _evaluate_prefiltered_frame(
+        prefiltered,
+        prefilter_rank=1,
+        prefilter_candidate_count=1,
+        mesh_ray_shortlist_size=1,
+        mesh_ray_surface_samples=mesh_ray_surface_samples,
+        mesh_ray_bbox_samples=mesh_ray_bbox_samples,
+        mesh_ray_local_resamples=mesh_ray_local_resamples,
     )
 
 
@@ -762,6 +948,10 @@ def _best_frame_for_question(
     source_index: int,
     context: SceneContext,
     frame_stride: int,
+    mesh_ray_shortlist_size: int = DEFAULT_MESH_RAY_SHORTLIST_SIZE,
+    mesh_ray_surface_samples: int = DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    mesh_ray_bbox_samples: int = DEFAULT_MESH_RAY_BBOX_SAMPLES,
+    mesh_ray_local_resamples: int = DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
 ) -> tuple[FrameCandidate | None, dict[str, int], str | None]:
     try:
         motion = _apply_question_motion(question, context.objects, context.attachment_graph)
@@ -774,16 +964,37 @@ def _best_frame_for_question(
     except Exception as exc:
         return None, {}, str(exc)
 
-    best: FrameCandidate | None = None
     reasons: Counter[str] = Counter()
+    prefiltered_candidates: list[FramePrefilterCandidate] = []
     for image_name in _candidate_frame_names(question, context, frame_stride):
-        candidate, reason = _evaluate_frame(
+        candidate, reason = _prefilter_frame(
             question=question,
             source_index=source_index,
             context=context,
             motion=motion,
             image_name=image_name,
             context_paths=context_paths,
+        )
+        reasons[reason] += 1
+        if candidate is not None:
+            prefiltered_candidates.append(candidate)
+
+    shortlisted = _shortlist_prefilter_candidates(
+        prefiltered_candidates,
+        original_image_name=str(question.get("image_name") or "").strip(),
+        limit=mesh_ray_shortlist_size,
+    )
+    reasons["mesh_ray_shortlisted"] += len(shortlisted)
+    best: FrameCandidate | None = None
+    for prefiltered in shortlisted:
+        candidate, reason = _evaluate_prefiltered_frame(
+            prefiltered,
+            prefilter_rank=prefiltered.prefilter_rank,
+            prefilter_candidate_count=len(prefiltered_candidates),
+            mesh_ray_shortlist_size=mesh_ray_shortlist_size,
+            mesh_ray_surface_samples=mesh_ray_surface_samples,
+            mesh_ray_bbox_samples=mesh_ray_bbox_samples,
+            mesh_ray_local_resamples=mesh_ray_local_resamples,
         )
         reasons[reason] += 1
         if candidate is None:
@@ -1094,7 +1305,16 @@ def generate_selection_spec(
     expected_per_type: int = 50,
     frame_stride_scannet: int = FRAME_STRIDE_SCANNET,
     frame_stride_scannetpp: int = FRAME_STRIDE_SCANNETPP,
+    mesh_ray_shortlist_size: int = DEFAULT_MESH_RAY_SHORTLIST_SIZE,
+    mesh_ray_surface_samples: int = DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    mesh_ray_local_resamples: int = DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
 ) -> SelectionPaths:
+    if mesh_ray_shortlist_size <= 0:
+        raise ValueError("mesh_ray_shortlist_size must be positive")
+    if mesh_ray_surface_samples <= 0:
+        raise ValueError("mesh_ray_surface_samples must be positive")
+    if mesh_ray_local_resamples < 0:
+        raise ValueError("mesh_ray_local_resamples must be non-negative")
     questions, _, _ = load_fixed_questions(benchmark_path)
     indexed_questions = [
         (index, question)
@@ -1109,6 +1329,9 @@ def generate_selection_spec(
         scannetpp_sensor=scannetpp_sensor,
         frame_stride_scannet=frame_stride_scannet,
         frame_stride_scannetpp=frame_stride_scannetpp,
+        mesh_ray_shortlist_size=mesh_ray_shortlist_size,
+        mesh_ray_surface_samples=mesh_ray_surface_samples,
+        mesh_ray_local_resamples=mesh_ray_local_resamples,
     )
     checkpoint_path = _checkpoint_path(output_dir, checkpoint_configuration)
     checkpoint_results = _load_or_create_checkpoint(
@@ -1252,6 +1475,10 @@ def generate_selection_spec(
                 source_index=source_index,
                 context=context,
                 frame_stride=frame_stride,
+                mesh_ray_shortlist_size=mesh_ray_shortlist_size,
+                mesh_ray_surface_samples=mesh_ray_surface_samples,
+                mesh_ray_bbox_samples=DEFAULT_MESH_RAY_BBOX_SAMPLES,
+                mesh_ray_local_resamples=mesh_ray_local_resamples,
             )
             if best is None:
                 rejection = {
@@ -1347,6 +1574,11 @@ def generate_selection_spec(
             "max_per_type": expected_per_type,
             "frame_stride_scannet": frame_stride_scannet,
             "frame_stride_scannetpp": frame_stride_scannetpp,
+            "selection_pipeline": "geometry_prefilter_then_mesh_ray",
+            "mesh_ray_shortlist_size": mesh_ray_shortlist_size,
+            "mesh_ray_surface_samples": mesh_ray_surface_samples,
+            "mesh_ray_bbox_samples": DEFAULT_MESH_RAY_BBOX_SAMPLES,
+            "mesh_ray_local_resamples": mesh_ray_local_resamples,
             "fully_visible_ratio_min_exclusive": FULLY_VISIBLE_RATIO_MIN,
             "source_visibility": "registered_depth_then_mesh_ray",
             "future_visibility": "counterfactual_mesh_ray",
@@ -1393,6 +1625,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--frame_stride_scannet", type=int, default=FRAME_STRIDE_SCANNET)
     parser.add_argument("--frame_stride_scannetpp", type=int, default=FRAME_STRIDE_SCANNETPP)
+    parser.add_argument(
+        "--mesh_ray_shortlist_size",
+        type=int,
+        default=DEFAULT_MESH_RAY_SHORTLIST_SIZE,
+    )
+    parser.add_argument(
+        "--mesh_ray_surface_samples",
+        type=int,
+        default=DEFAULT_MESH_RAY_SURFACE_SAMPLES,
+    )
+    parser.add_argument(
+        "--mesh_ray_local_resamples",
+        type=int,
+        default=DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
+    )
     args = parser.parse_args(argv)
     if not args.benchmark_file.is_file():
         parser.error(f"--benchmark_file not found: {args.benchmark_file}")
@@ -1400,6 +1647,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--expected_per_type must be positive")
     if args.frame_stride_scannet <= 0 or args.frame_stride_scannetpp <= 0:
         parser.error("frame strides must be positive")
+    if args.mesh_ray_shortlist_size <= 0:
+        parser.error("--mesh_ray_shortlist_size must be positive")
+    if args.mesh_ray_surface_samples <= 0:
+        parser.error("--mesh_ray_surface_samples must be positive")
+    if args.mesh_ray_local_resamples < 0:
+        parser.error("--mesh_ray_local_resamples must be non-negative")
     for field in ("scannet_root", "scannetpp_root", "scannetpp_frame_root"):
         path = getattr(args, field)
         if path is not None and not path.is_dir():
@@ -1419,6 +1672,9 @@ def main(argv: list[str] | None = None) -> None:
         expected_per_type=args.expected_per_type,
         frame_stride_scannet=args.frame_stride_scannet,
         frame_stride_scannetpp=args.frame_stride_scannetpp,
+        mesh_ray_shortlist_size=args.mesh_ray_shortlist_size,
+        mesh_ray_surface_samples=args.mesh_ray_surface_samples,
+        mesh_ray_local_resamples=args.mesh_ray_local_resamples,
     )
     print(f"selection_spec : {paths.spec}")
     print(f"selection_audit: {paths.audit}")

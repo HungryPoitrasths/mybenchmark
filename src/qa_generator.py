@@ -4426,6 +4426,9 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
     modified_scene: _ModifiedSceneContext | None = None,
+    max_surface_samples: int | None = None,
+    bbox_probe_ray_count: int = L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+    local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
 ) -> _L1OcclusionMetrics:
     backend = "mesh_ray"
     if (
@@ -4525,11 +4528,25 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
         )
 
     camera_pos = np.asarray(camera_pose.position, dtype=np.float64)
+    visibility_points = in_frame_points
+    visibility_triangle_ids = in_frame_triangle_ids
+    visibility_barycentrics = in_frame_barycentrics
+    if max_surface_samples is not None:
+        (
+            visibility_points,
+            visibility_triangle_ids,
+            visibility_barycentrics,
+        ) = _surface_probe_subset(
+            in_frame_points,
+            max_surface_samples,
+            sample_triangle_ids=in_frame_triangle_ids,
+            sample_barycentrics=in_frame_barycentrics,
+        )
     bbox_probe_points = _camera_facing_bbox_probe_points(
         bbox_min=np.asarray(obj["bbox_min"], dtype=np.float64),
         bbox_max=np.asarray(obj["bbox_max"], dtype=np.float64),
         camera_pos=camera_pos,
-        n_samples=L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+        n_samples=bbox_probe_ray_count,
     )
     probe_sample_count = int(len(bbox_probe_points))
     probe_visible_count = 0
@@ -4545,13 +4562,14 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_static_target(
     visible_count, valid_count = _mesh_visibility_stats_compat(
         modified_scene.ray_caster,
         camera_pos=camera_pos,
-        target_points=in_frame_points,
+        target_points=visibility_points,
         target_tri_ids=target_tri_ids,
         ignored_tri_ids=set(modified_scene.ignored_tri_ids),
-        sample_triangle_ids=in_frame_triangle_ids,
-        sample_barycentrics=in_frame_barycentrics,
+        sample_triangle_ids=visibility_triangle_ids,
+        sample_barycentrics=visibility_barycentrics,
         vertices=np.asarray(instance_mesh_data.vertices, dtype=np.float64),
         faces=np.asarray(instance_mesh_data.faces, dtype=np.int64),
+        local_resample_count=local_resample_count,
     )
     occlusion_ratio = 1.0
     if valid_count > 0:
@@ -4585,6 +4603,9 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
     color_intrinsics: CameraIntrinsics | None,
     ray_caster,
     instance_mesh_data: InstanceMeshData | None,
+    max_surface_samples: int | None = None,
+    bbox_probe_ray_count: int = L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+    local_resample_count: int = _LOCAL_BOUNDARY_RESAMPLE_COUNT,
 ) -> _L1OcclusionMetrics:
     backend = "mesh_ray"
     if (
@@ -4729,13 +4750,28 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
         if blocker_caster is not None:
             blocker_casters[int(moved_id)] = blocker_caster
 
+    visibility_points = in_frame_points
+    visibility_triangle_ids = in_frame_triangle_ids
+    visibility_barycentrics = in_frame_barycentrics
+    if max_surface_samples is not None:
+        (
+            visibility_points,
+            visibility_triangle_ids,
+            visibility_barycentrics,
+        ) = _surface_probe_subset(
+            in_frame_points,
+            max_surface_samples,
+            sample_triangle_ids=in_frame_triangle_ids,
+            sample_barycentrics=in_frame_barycentrics,
+        )
+
     bbox_min = np.asarray(moved_target["bbox_min"], dtype=np.float64)
     bbox_max = np.asarray(moved_target["bbox_max"], dtype=np.float64)
     bbox_probe_points = _camera_facing_bbox_probe_points(
         bbox_min=bbox_min,
         bbox_max=bbox_max,
         camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
-        n_samples=L1_NOT_VISIBLE_PROBE_RAY_COUNT,
+        n_samples=bbox_probe_ray_count,
     )
     probe_sample_count = int(len(bbox_probe_points))
     probe_visible_count = 0
@@ -4780,17 +4816,18 @@ def _compute_mesh_ray_l1_occlusion_metrics_for_moved_target(
 
     visible_count, valid_count = _compute_counterfactual_target_visibility_stats(
         modified_scene=moved_scene_context,
-        target_surface_points=in_frame_points,
+        target_surface_points=visibility_points,
         target_triangle_ids=target_tri_ids,
         camera_pos=np.asarray(camera_pose.position, dtype=np.float64),
         instance_mesh_data=instance_mesh_data,
         target_obj_id=target_obj_id,
         target_delta=target_delta,
         moved_blocker_deltas=moved_blocker_deltas,
-        sample_triangle_ids=in_frame_triangle_ids,
-        sample_barycentrics=in_frame_barycentrics,
+        sample_triangle_ids=visibility_triangle_ids,
+        sample_barycentrics=visibility_barycentrics,
         vertices=np.asarray(instance_mesh_data.vertices, dtype=np.float64),
         faces=np.asarray(instance_mesh_data.faces, dtype=np.int64),
+        local_resample_count=local_resample_count,
     )
     occlusion_ratio = 1.0
     if valid_count > 0:
