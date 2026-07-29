@@ -14,7 +14,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.cot.pipeline import build_dataset
-from src.cot.sampling import select_monitor_validation, select_pilot_train
+from src.cot.sampling import (
+    select_monitor_validation,
+    select_pilot_train,
+    select_pilot_train_8k,
+)
 
 
 def load_questions(path: Path) -> list[dict[str, Any]]:
@@ -58,11 +62,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fail-on-reject", action="store_true")
     parser.add_argument(
         "--preset",
-        choices=("all", "pilot-train-10k", "monitor-val-320"),
+        choices=("all", "pilot-train-8k", "pilot-train-10k", "monitor-val-320"),
         default="all",
         help=(
             "Select a deterministic training or monitoring subset after CoT validation. "
-            "The 10k preset uses L1/L2/L3=4669/661/4670; the validation preset "
+            "The 8k preset uses L1/L2/L3=3669/661/3670; the 10k preset uses "
+            "4669/661/4670; the validation preset "
             "uses 20 records for each of the 16 supported types."
         ),
     )
@@ -83,15 +88,21 @@ def main() -> int:
         require_images=not args.allow_missing_images,
     )
 
-    if args.preset == "pilot-train-10k" and args.split != "train":
-        raise ValueError("pilot-train-10k requires --split train")
+    if args.preset in {"pilot-train-8k", "pilot-train-10k"} and args.split != "train":
+        raise ValueError(f"{args.preset} requires --split train")
     if args.preset == "monitor-val-320" and args.split != "val":
         raise ValueError("monitor-val-320 requires --split val")
 
     sidecar = result["sidecar"]
     sft = result["sft"]
     selection_report: dict[str, Any] | None = None
-    if args.preset == "pilot-train-10k":
+    if args.preset == "pilot-train-8k":
+        selection = select_pilot_train_8k(sidecar, seed=args.seed)
+        selected_indices = selection.indices
+        selection_report = selection.report
+        sidecar = [sidecar[index] for index in selected_indices]
+        sft = [sft[index] for index in selected_indices]
+    elif args.preset == "pilot-train-10k":
         selection = select_pilot_train(sidecar, seed=args.seed)
         selected_indices = selection.indices
         selection_report = selection.report

@@ -81,9 +81,21 @@ Send only each request's text messages to the template model. Do not add images.
 
 Pass a separately reviewed file to the builder with `--template-path`. Template selection is fixed by `SHA256(seed + question_uid + signature_id) mod template_count`; the default seed is 42.
 
-## 10k SFT pilot datasets
+## 8k and 10k SFT pilot datasets
 
 The pilot selector operates only on records accepted by the fact, answer, response, and image validators. It deduplicates `question_uid` values before sampling.
+
+Build the initial 8k training manifest with L1/L2/L3 counts of 3669/661/3670.
+It includes every available validated L2 record without duplication:
+
+```powershell
+python scripts/build_cot_sft.py output_train/benchmark.json `
+  --output-prefix output_train/cot/pilot_train_8k `
+  --split train `
+  --preset pilot-train-8k `
+  --scannet-image-root D:\datasets\scannet\scans `
+  --scannetpp-image-root D:\datasets\scannetpp\data
+```
 
 Build the fixed 10k training manifest with L1/L2/L3 counts of 4669/661/4670.
 The pilot includes every available validated L2 record without duplication and splits the
@@ -113,32 +125,44 @@ python scripts/build_cot_sft.py output_val/benchmark_balanced.json `
 
 The validation command writes `monitor_val_320.ms_swift_eval.jsonl`, not a training export. The preset fails if any of the 16 types has fewer than 20 accepted records.
 
-## Two-A800 pilot training
+## Two-GPU pilot training
 
 Install a recent MS-SWIFT release that supports Qwen3-VL before launching. Preview the exact command without starting training:
 
 ```powershell
 python scripts/run_cot_sft_pilot.py `
-  --train-dataset output_train/cot/pilot_train_10k.ms_swift.jsonl `
-  --train-sidecar output_train/cot/pilot_train_10k.sidecar.jsonl `
+  --train-dataset output_train/cot/pilot_train_8k.ms_swift.jsonl `
+  --train-sidecar output_train/cot/pilot_train_8k.sidecar.jsonl `
   --monitor-dataset output_val/cot/monitor_val_320.ms_swift_eval.jsonl `
   --monitor-sidecar output_val/cot/monitor_val_320.sidecar.jsonl `
-  --output-dir output_train/sft/qwen3_vl_4b_cot_10k `
+  --output-dir output_train/sft/qwen3_vl_4b_cot_8k `
   --devices 0,1 `
+  --max-length 4096 `
   --dry-run
 ```
 
-Remove `--dry-run` to train. The launcher uses BF16 LoRA on the language model, leaves the vision encoder frozen, trains the aligner, and uses global batch 32. Its MS-SWIFT callback saves and computes teacher-forced validation loss at the first optimizer step after every 1000-sample milestone. For the fixed 10k, two-epoch run, the schedule is `32, 63, 94, ..., 313, 345, ..., 626`; each checkpoint is at most 31 samples beyond its milestone.
+Remove `--dry-run` to train. The launcher uses the explicit `adamw_torch` AdamW optimizer, BF16 LoRA on the language model, leaves the vision encoder frozen, trains the aligner, and uses global batch 32. Its callback logs training loss every 100 sample exposures, saves a checkpoint every 500 exposures, and computes teacher-forced validation loss every 2000 exposures. Each evaluation prints `eval_loss` to the terminal and writes all evaluation metrics to the corresponding `checkpoint-*/eval_metrics.json`. For the initial 8k, two-epoch run, this produces 160 training-loss records, 32 checkpoints, and 8 validation points. Each reported sample count is at most 31 samples beyond its target milestone.
 
-After training, the launcher maps the saved checkpoints to `samples_seen_01000` through `samples_seen_20000`, runs deterministic generation on the same 320 questions for every milestone, and writes:
+After training, the launcher maps the eight evaluation checkpoints to `samples_seen_02000` through `samples_seen_16000`, runs deterministic generation on the same monitoring questions for those checkpoints, and writes:
 
 - `checkpoint_index.json`: global-step to sample-exposure mapping;
+- `training_metrics/samples_target_*.json`: training loss every 100 sample exposures;
+- `checkpoint-*/eval_metrics.json`: teacher-forced validation loss and evaluation metrics;
 - `monitor/*.predictions.jsonl`: raw MS-SWIFT generations;
 - `monitor/*.report.json`: strict/macro/level metrics;
 - `monitor/*.report.details.json`: per-question parsing details;
 - `monitor/learning_curve.json`: the base model and checkpoint learning curve.
 
-To rerun only checkpoint generation/evaluation after an interrupted monitoring pass, use `--skip-train`. Use `--skip-base-eval` when the base report already exists.
+To resume interrupted training from the newest complete checkpoint, rerun the same command with:
+
+```powershell
+  --resume-from-checkpoint latest `
+  --skip-completed-evals
+```
+
+The launcher ignores incomplete checkpoint directories when resolving `latest` and refuses to start a fresh training run in an output directory that already contains checkpoints. An explicit checkpoint path may be passed instead of `latest`. Trainer state restores the model adapter, optimizer, scheduler, epoch, global step, and data position. During post-training monitoring, `--skip-completed-evals` reuses existing reports and evaluates existing prediction files before launching any missing inference jobs.
+
+To rerun only checkpoint generation/evaluation after an interrupted monitoring pass, use `--skip-train --skip-completed-evals`. Use `--skip-base-eval` when the base report is intentionally excluded.
 
 The default `max_length` is 8192. Before the full run, inspect image counts and processed token lengths, then lower this value or the processor's visual-token budget if the heaviest samples do not pass a 100-step smoke test.
 
@@ -149,8 +173,8 @@ MS-SWIFT prediction files can also be evaluated independently:
 ```powershell
 python scripts/evaluate_cot_predictions.py `
   --sidecar output_val/cot/monitor_val_320.sidecar.jsonl `
-  --predictions output_train/sft/qwen3_vl_4b_cot_10k/monitor/samples_seen_10000.predictions.jsonl `
-  --output output_train/sft/qwen3_vl_4b_cot_10k/monitor/samples_seen_10000.report.json
+  --predictions output_train/sft/qwen3_vl_4b_cot_8k/monitor/samples_seen_08000.predictions.jsonl `
+  --output output_train/sft/qwen3_vl_4b_cot_8k/monitor/samples_seen_08000.report.json
 ```
 
 Strict format requires exactly one final `Answer: B` line (or space-separated letters for a multi-select question). Relaxed accuracy is reported separately so format learning is not confused with reasoning accuracy.
