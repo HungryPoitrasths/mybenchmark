@@ -290,6 +290,7 @@ def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
     assert command[command.index("--eval_strategy") + 1] == "no"
     assert command[command.index("--save_strategy") + 1] == "no"
     assert command[command.index("--logging_strategy") + 1] == "no"
+    assert command[command.index("--report_to") + 1] == "none"
     assert "--save_steps" not in command
     assert "--logging_steps" not in command
 

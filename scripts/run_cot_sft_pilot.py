@@ -279,6 +279,8 @@ def build_sft_command(args: argparse.Namespace) -> list[str]:
         "100",
         "--logging_strategy",
         "no",
+        "--report_to",
+        "none",
         "--dataloader_num_workers",
         str(args.dataloader_workers),
         "--dataset_num_proc",
