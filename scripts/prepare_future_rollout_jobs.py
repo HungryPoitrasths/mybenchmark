@@ -32,21 +32,14 @@ from scripts.run_sampled_type_vlm_eval import (  # noqa: E402
     load_fixed_questions,
 )
 from scripts.generate_rollout_selection_spec import (  # noqa: E402
-    DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
-    DEFAULT_MESH_RAY_SHORTLIST_SIZE,
-    DEFAULT_MESH_RAY_SURFACE_SAMPLES,
     generate_selection_spec,
 )
 from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
-from src.frame_selector import (  # noqa: E402
-    FRAME_STRIDE_SCANNET,
-    FRAME_STRIDE_SCANNETPP,
-)
 
 
-PICTURE_PROMPT_VERSION = "agent-motion-picture-v1"
+PICTURE_PROMPT_VERSION = "agent-motion-picture-multiview-v2"
 VIDEO_PROMPT_VERSION = "agent-motion-video-v1"
-JOB_SCHEMA_VERSION = "predictive-spatial-generation-jobs-v1"
+JOB_SCHEMA_VERSION = "predictive-spatial-generation-jobs-v2"
 DEFAULT_GPT_MODEL = "gpt-image-1.5"
 DEFAULT_QWEN_CHECKPOINT = "Qwen/Qwen-Image-Edit-2511"
 DEFAULT_COSMOS_CHECKPOINT = "Cosmos-Predict2.5-14B/post-trained"
@@ -243,12 +236,38 @@ def _group_phrase(labels: list[str]) -> str:
     return ", ".join(json.dumps(label, ensure_ascii=False) for label in labels)
 
 
-def build_picture_prompt(action: dict[str, Any]) -> str:
+def build_picture_prompt(
+    action: dict[str, Any],
+    input_roles: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    roles = tuple(input_roles or ("source_view", "destination_environment"))
+    expected_roles = (
+        ("source_view", "destination_environment"),
+        (
+            "source_view",
+            "source_to_destination_bridge",
+            "destination_environment",
+        ),
+    )
+    if roles not in expected_roles:
+        raise ValueError("picture input roles must be source, optional bridge, destination")
     group = _group_phrase(action["moving_group_labels"])
     lines = [
-        "Edit only the supplied image while preserving its exact camera viewpoint and composition.",
-        f"The rigid moving group, in parent-to-descendant order, is: {group}.",
+        "Use the supplied images as ordered views of one unchanged scene.",
+        "Image 1 is the source view showing the moving group at its original location.",
     ]
+    if len(roles) == 3:
+        lines.append(
+            "Image 2 is a midpoint bridge view establishing spatial continuity from source to destination."
+        )
+    reference_names = "source and bridge images" if len(roles) == 3 else "source image"
+    lines.extend(
+        [
+            f"Image {len(roles)} is the destination environment and must be the exact output canvas: preserve its camera viewpoint, composition, dimensions, and all static scene content.",
+            f"Create the post-movement state in that destination canvas; the {reference_names} are references only.",
+            f"The rigid moving group, in parent-to-descendant order, is: {group}.",
+        ]
+    )
     if action["action_type"] == "orbit":
         lines.append(
             f"Move the group along a {action['orbit_angle_degrees']:g}-degree "
@@ -267,7 +286,7 @@ def build_picture_prompt(action: dict[str, Any]) -> str:
         [
             "Move every listed group member together as one rigid assembly; preserve all relative positions and orientations inside the group.",
             "Preserve the facing direction of every moved object; do not rotate objects in place.",
-            "Remove the group from its old location if that location is visible; never duplicate it.",
+            "Render the group once at its endpoint in the destination view; never duplicate it.",
             "Keep every unlisted object, wall, floor, furniture item, light, texture, and camera parameter unchanged.",
             "Do not add text, arrows, paths, boxes, markers, overlays, or new objects.",
             "Return only one photorealistic edited image.",
@@ -339,8 +358,41 @@ def assert_safe_generation_job(job: dict[str, Any]) -> None:
 def _resolve_spec_path(raw_path: Any, spec_path: Path) -> Path:
     path = Path(str(raw_path or ""))
     if not str(path):
-        raise ValueError("motion_frame_path is required")
+        raise ValueError("media path is required")
     return path if path.is_absolute() else (spec_path.parent / path).resolve()
+
+
+def _generation_images(spec: dict[str, Any], spec_path: Path) -> list[dict[str, str]]:
+    raw_images = spec.get("generation_images")
+    if not isinstance(raw_images, list) or len(raw_images) not in {2, 3}:
+        raise ValueError("generation_images must contain 2 or 3 ordered images")
+    expected_roles = (
+        ["source_view", "destination_environment"]
+        if len(raw_images) == 2
+        else [
+            "source_view",
+            "source_to_destination_bridge",
+            "destination_environment",
+        ]
+    )
+    images: list[dict[str, str]] = []
+    for index, (item, expected_role) in enumerate(zip(raw_images, expected_roles)):
+        if not isinstance(item, dict):
+            raise ValueError(f"generation_images[{index}] must be an object")
+        role = str(item.get("role") or "")
+        if role != expected_role:
+            raise ValueError(
+                f"generation_images[{index}].role must be {expected_role!r}"
+            )
+        path = _resolve_spec_path(item.get("path"), spec_path)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        images.append(
+            {"path": str(path.resolve()), "role": role, "sha256": _sha256_file(path)}
+        )
+    if len({item["path"] for item in images}) != len(images):
+        raise ValueError("generation_images must refer to distinct files")
+    return images
 
 
 def _context_media(spec: dict[str, Any], spec_path: Path) -> list[dict[str, Any]]:
@@ -394,7 +446,7 @@ def prepare_jobs(
     selection_spec_path: Path,
     output_dir: Path,
     seed: int,
-    expected_picture_per_type: int = 50,
+    expected_picture_per_type: int = 2,
 ) -> dict[str, Path]:
     questions, _, _ = load_fixed_questions(benchmark_path)
     selection_payload = json.loads(selection_spec_path.read_text(encoding="utf-8"))
@@ -442,12 +494,14 @@ def prepare_jobs(
         if qtype not in L2_ROLLOUT_TYPES:
             raise ValueError(f"{uid}: unsupported question type {qtype!r}")
 
-        motion_path = _resolve_spec_path(spec.get("motion_frame_path"), selection_spec_path)
-        if not motion_path.is_file():
-            raise FileNotFoundError(motion_path)
-        motion_sha = _sha256_file(motion_path)
+        generation_images = _generation_images(spec, selection_spec_path)
+        source_image = generation_images[0]
+        source_path = Path(source_image["path"])
+        source_sha = source_image["sha256"]
         action = build_safe_action(question, spec)
-        picture_prompt = build_picture_prompt(action)
+        picture_prompt = build_picture_prompt(
+            action, [item["role"] for item in generation_images]
+        )
         cosmos_prompt = build_cosmos_prompt(action)
         context_tail = _context_media(spec, selection_spec_path)
         common_identity = {
@@ -462,8 +516,8 @@ def prepare_jobs(
         video_reasons = list(spec.get("video_rejection_reasons") or [])
 
         for backend, model, checkpoint, media_dir, jobs in (
-            ("gpt", DEFAULT_GPT_MODEL, DEFAULT_GPT_MODEL, gpt_media_dir, gpt_jobs),
             ("qwen", "qwen-image-edit", DEFAULT_QWEN_CHECKPOINT, qwen_media_dir, qwen_jobs),
+            ("gpt", DEFAULT_GPT_MODEL, DEFAULT_GPT_MODEL, gpt_media_dir, gpt_jobs),
         ):
             output_path = (media_dir / f"{uid}.png").resolve()
             request_core = {
@@ -471,7 +525,10 @@ def prepare_jobs(
                 "checkpoint": checkpoint,
                 "seed": seed,
                 "prompt_version": PICTURE_PROMPT_VERSION,
-                "input_image_sha256": motion_sha,
+                "input_images": [
+                    {"role": item["role"], "sha256": item["sha256"]}
+                    for item in generation_images
+                ],
                 "prompt": picture_prompt,
             }
             request_sha = sha256_json(request_core)
@@ -482,8 +539,7 @@ def prepare_jobs(
                 "checkpoint": checkpoint,
                 "seed": seed,
                 "prompt_version": PICTURE_PROMPT_VERSION,
-                "input_image_path": str(motion_path.resolve()),
-                "input_image_sha256": motion_sha,
+                "input_images": generation_images,
                 "output_path": str(output_path),
                 "prompt": picture_prompt,
                 "request_sha256": request_sha,
@@ -491,20 +547,22 @@ def prepare_jobs(
             assert_safe_generation_job(job)
             if picture_eligible:
                 jobs.append(job)
-                picture_counts[qtype] += 1 if backend == "gpt" else 0
+                picture_counts[qtype] += 1 if backend == "qwen" else 0
                 media = [
-                    {
-                        "path": str(motion_path.resolve()),
-                        "role": "motion_reference_view",
-                        "kind": "context",
-                        "sha256": motion_sha,
-                    },
+                    *[
+                        {
+                            "path": item["path"],
+                            "role": item["role"],
+                            "kind": "context",
+                            "sha256": item["sha256"],
+                        }
+                        for item in generation_images
+                    ],
                     {
                         "path": str(output_path),
                         "role": "predicted_future_view",
                         "kind": "prediction",
                     },
-                    *context_tail,
                 ]
             else:
                 media = []
@@ -533,7 +591,7 @@ def prepare_jobs(
             "checkpoint": DEFAULT_COSMOS_CHECKPOINT,
             "seed": seed,
             "prompt_version": VIDEO_PROMPT_VERSION,
-            "input_image_sha256": motion_sha,
+            "input_image_sha256": source_sha,
             "prompt": cosmos_prompt,
             "duration_seconds": action["duration_seconds"],
         }
@@ -545,8 +603,8 @@ def prepare_jobs(
             "checkpoint": DEFAULT_COSMOS_CHECKPOINT,
             "seed": seed,
             "prompt_version": VIDEO_PROMPT_VERSION,
-            "input_image_path": str(motion_path.resolve()),
-            "input_image_sha256": motion_sha,
+            "input_image_path": str(source_path.resolve()),
+            "input_image_sha256": source_sha,
             "output_path": str(video_output),
             "frame_output_dir": str(frame_dir),
             "duration_seconds": action["duration_seconds"],
@@ -560,17 +618,17 @@ def prepare_jobs(
                 "inference_type": "image2world",
                 "name": uid,
                 "prompt": cosmos_prompt,
-                "input_path": str(motion_path.resolve()),
+                "input_path": str(source_path.resolve()),
             }
             (cosmos_input_dir / f"{uid}.json").write_text(
                 json.dumps(official_input, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             video_media = [
                 {
-                    "path": str(motion_path.resolve()),
+                    "path": str(source_path.resolve()),
                     "role": "motion_reference_view",
                     "kind": "context",
-                    "sha256": motion_sha,
+                    "sha256": source_sha,
                 },
                 *[
                     {
@@ -623,7 +681,7 @@ def prepare_jobs(
         "seed": seed,
     }
     job_paths: dict[str, Path] = {}
-    for backend, jobs in (("gpt", gpt_jobs), ("qwen", qwen_jobs), ("cosmos", cosmos_jobs)):
+    for backend, jobs in (("qwen", qwen_jobs), ("gpt", gpt_jobs), ("cosmos", cosmos_jobs)):
         path = private_dir / f"{backend}_jobs.json"
         path.write_text(
             json.dumps({**job_metadata, "backend": backend, "entries": jobs}, ensure_ascii=False, indent=2),
@@ -637,7 +695,7 @@ def prepare_jobs(
         "seed": seed,
         "benchmark_sha256": _sha256_file(benchmark_path),
     }
-    for backend in ("gpt", "qwen"):
+    for backend in ("qwen", "gpt"):
         path = manifest_dir / f"{backend}_picture.json"
         path.write_text(
             json.dumps(
@@ -678,28 +736,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannetpp_root", type=Path, default=None)
     parser.add_argument("--scannetpp_frame_root", type=Path, default=None)
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone")
-    parser.add_argument("--frame_stride_scannet", type=int, default=FRAME_STRIDE_SCANNET)
-    parser.add_argument("--frame_stride_scannetpp", type=int, default=FRAME_STRIDE_SCANNETPP)
-    parser.add_argument(
-        "--mesh_ray_shortlist_size",
-        type=int,
-        default=DEFAULT_MESH_RAY_SHORTLIST_SIZE,
-    )
-    parser.add_argument(
-        "--mesh_ray_surface_samples",
-        type=int,
-        default=DEFAULT_MESH_RAY_SURFACE_SAMPLES,
-    )
-    parser.add_argument(
-        "--mesh_ray_local_resamples",
-        type=int,
-        default=DEFAULT_MESH_RAY_LOCAL_RESAMPLES,
-    )
     parser.add_argument("--seed", type=int, default=20260725)
     parser.add_argument(
         "--expected_picture_per_type",
         type=int,
-        default=50,
+        default=2,
         help="maximum number of automatically selected questions per supported type",
     )
     args = parser.parse_args(argv)
@@ -707,14 +748,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(f"--benchmark_file not found: {args.benchmark_file}")
     if args.expected_picture_per_type <= 0:
         parser.error("--expected_picture_per_type must be positive")
-    if args.frame_stride_scannet <= 0 or args.frame_stride_scannetpp <= 0:
-        parser.error("frame strides must be positive")
-    if args.mesh_ray_shortlist_size <= 0:
-        parser.error("--mesh_ray_shortlist_size must be positive")
-    if args.mesh_ray_surface_samples <= 0:
-        parser.error("--mesh_ray_surface_samples must be positive")
-    if args.mesh_ray_local_resamples < 0:
-        parser.error("--mesh_ray_local_resamples must be non-negative")
     for field in ("scannet_root", "scannetpp_root", "scannetpp_frame_root"):
         path = getattr(args, field)
         if path is not None and not path.is_dir():
@@ -732,11 +765,6 @@ def main(argv: list[str] | None = None) -> None:
         scannetpp_frame_root=args.scannetpp_frame_root,
         scannetpp_sensor=args.scannetpp_sensor,
         expected_per_type=args.expected_picture_per_type,
-        frame_stride_scannet=args.frame_stride_scannet,
-        frame_stride_scannetpp=args.frame_stride_scannetpp,
-        mesh_ray_shortlist_size=args.mesh_ray_shortlist_size,
-        mesh_ray_surface_samples=args.mesh_ray_surface_samples,
-        mesh_ray_local_resamples=args.mesh_ray_local_resamples,
     )
     outputs = prepare_jobs(
         benchmark_path=args.benchmark_file,

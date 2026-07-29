@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import ExitStack
 from io import BytesIO
 import json
 import os
@@ -116,6 +117,37 @@ def _cached_output_matches(
     return False
 
 
+def _validated_input_image_paths(job: dict[str, Any]) -> list[Path]:
+    uid = str(job.get("question_uid") or "")
+    raw_images = job.get("input_images")
+    if not isinstance(raw_images, list) or len(raw_images) not in {2, 3}:
+        raise ValueError(f"{uid}: input_images must contain 2 or 3 ordered images")
+    expected_roles = (
+        ["source_view", "destination_environment"]
+        if len(raw_images) == 2
+        else [
+            "source_view",
+            "source_to_destination_bridge",
+            "destination_environment",
+        ]
+    )
+    paths: list[Path] = []
+    for index, (item, expected_role) in enumerate(zip(raw_images, expected_roles)):
+        if not isinstance(item, dict) or item.get("role") != expected_role:
+            raise ValueError(
+                f"{uid}: input_images[{index}] must have role {expected_role!r}"
+            )
+        path = Path(str(item.get("path") or ""))
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        if _sha256_file(path) != item.get("sha256"):
+            raise ValueError(
+                f"{uid}: input image {index + 1} hash changed after job preparation"
+            )
+        paths.append(path)
+    return paths
+
+
 def _update_manifest_result(
     manifest: dict[str, Any],
     *,
@@ -186,12 +218,10 @@ def run_jobs(
             raise ValueError("every job must be an object")
         assert_safe_generation_job(job)
         uid = str(job["question_uid"])
-        input_path = Path(str(job["input_image_path"]))
+        input_paths = _validated_input_image_paths(job)
         output_path = Path(str(job["output_path"]))
-        if _sha256_file(input_path) != job["input_image_sha256"]:
-            raise ValueError(f"{uid}: input image hash changed after job preparation")
-        with Image.open(input_path) as source:
-            target_size = source.size
+        with Image.open(input_paths[-1]) as destination:
+            target_size = destination.size
 
         started = time.monotonic()
         response_id: str | None = None
@@ -260,11 +290,12 @@ def make_gpt_generator(*, api_key: str, base_url: str) -> GenerateFn:
     client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
     def _generate(job: dict[str, Any]) -> tuple[Image.Image, str | None]:
-        input_path = Path(str(job["input_image_path"]))
-        with input_path.open("rb") as image_file:
+        input_paths = _validated_input_image_paths(job)
+        with ExitStack() as stack:
+            image_files = [stack.enter_context(path.open("rb")) for path in input_paths]
             response = client.images.edit(
                 model=str(job.get("model") or DEFAULT_GPT_MODEL),
-                image=image_file,
+                image=image_files,
                 prompt=str(job["prompt"]),
                 input_fidelity="high",
                 quality="high",
@@ -308,7 +339,7 @@ def make_qwen_generator(
         ) from exc
 
     dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-    pipeline = QwenImageEditPlusPipeline.from_pretrained(checkpoint, torch_dtype=dtype)
+    pipeline = QwenImageEditPlusPipeline.from_pretrained(checkpoint, dtype=dtype)
     if cpu_offload:
         if device != "cuda":
             raise ValueError("Qwen CPU offload requires --device cuda")
@@ -322,12 +353,14 @@ def make_qwen_generator(
     pipeline.set_progress_bar_config(disable=False)
 
     def _generate(job: dict[str, Any]) -> tuple[Image.Image, str | None]:
-        with Image.open(job["input_image_path"]) as source:
-            condition = source.convert("RGB")
+        conditions: list[Image.Image] = []
+        for input_path in _validated_input_image_paths(job):
+            with Image.open(input_path) as source:
+                conditions.append(source.convert("RGB").copy())
         generator = torch.Generator(device=generator_device).manual_seed(int(job["seed"]))
         with torch.inference_mode():
             result = pipeline(
-                image=[condition],
+                image=conditions,
                 prompt=str(job["prompt"]),
                 generator=generator,
                 true_cfg_scale=4.0,
