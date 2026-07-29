@@ -234,6 +234,64 @@ def make_attachment_pair_review_html(
 
 
 class RunPipelineReferabilityTests(unittest.TestCase):
+    def test_attachment_reference_clustering_requires_complete_matching_signature(self) -> None:
+        def question(ref_id: int, new_value: str, delta: list[float]) -> dict:
+            return {
+                "type": "attachment_move",
+                "root_id": 10,
+                "query_obj_id": 11,
+                "obj_ref_id": ref_id,
+                "reference_frame": "agent",
+                "old_correct_value": "left",
+                "new_correct_value": new_value,
+                "delta": delta,
+            }
+
+        questions = [
+            question(1, "right", [1.0, 0.0, 0.0]),
+            question(2, "right", [1.0, 0.0, 0.0]),
+            question(3, "front", [1.0, 0.0, 0.0]),
+            question(4, "right", [1.0, 0.0, 0.0]),
+            question(5, "right", [0.0, 1.0, 0.0]),
+        ]
+        objects_by_id = {
+            1: {"center": [0.0, 0.0, 0.0]},
+            2: {"center": [0.4, 0.0, 0.0]},
+            3: {"center": [0.3, 0.0, 0.0]},
+            4: {"center": [0.6, 0.0, 0.0]},
+            5: {"center": [0.2, 0.0, 0.0]},
+        }
+
+        clustered, dropped_refs, dropped_questions = (
+            run_pipeline_module._cluster_attachment_reference_questions(
+                questions,
+                objects_by_id=objects_by_id,
+                radius_m=0.5,
+            )
+        )
+
+        self.assertEqual([item["obj_ref_id"] for item in clustered], [1, 3, 4, 5])
+        self.assertEqual(dropped_refs, 1)
+        self.assertEqual(dropped_questions, 1)
+
+    def test_attachment_chain_only_does_not_require_mesh_resources(self) -> None:
+        self.assertEqual(
+            run_pipeline_module._scene_resource_requirements(
+                single_frame_requested_types=["L3_attachment_chain"],
+                cross_frame_requested_types=[],
+                occlusion_backend="mesh_ray",
+            ),
+            (False, False),
+        )
+        self.assertEqual(
+            run_pipeline_module._scene_resource_requirements(
+                single_frame_requested_types=["L3_attachment_chain"],
+                cross_frame_requested_types=["L1_distance"],
+                occlusion_backend="mesh_ray",
+            ),
+            (False, True),
+        )
+
     def test_build_reasoning_context_filters_mesh_visible_ids_by_bbox_ratio(self) -> None:
         image_name = "000123.jpg"
         objects = [make_object(1, "table"), make_object(2, "toilet paper")]
@@ -379,7 +437,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(RuntimeError, "expected 7"):
+            with self.assertRaisesRegex(RuntimeError, "expected 8"):
                 run_pipeline_module._load_pipeline_scene_status_doc(status_path)
 
     def test_scene_type_cap_does_not_limit_final_l1_types(self) -> None:
@@ -1105,7 +1163,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
             prompt_lower,
         )
 
-    def test_should_run_question_presence_review_only_for_l1_occlusion(self) -> None:
+    def test_should_run_question_presence_review_includes_self_move_occlusion(self) -> None:
         self.assertTrue(
             run_pipeline_module._should_run_question_presence_review(
                 {"level": "L1", "type": "occlusion"}
@@ -1114,6 +1172,26 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         self.assertFalse(
             run_pipeline_module._should_run_question_presence_review(
                 {"level": "L2", "type": "occlusion"}
+            )
+        )
+        self.assertTrue(
+            run_pipeline_module._should_run_question_presence_review(
+                {
+                    "level": "L2",
+                    "type": "object_move_occlusion",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 1,
+                }
+            )
+        )
+        self.assertFalse(
+            run_pipeline_module._should_run_question_presence_review(
+                {
+                    "level": "L2",
+                    "type": "object_move_occlusion",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 2,
+                }
             )
         )
         self.assertFalse(
@@ -5794,7 +5872,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
         benchmark = json.loads((output_dir / "benchmark.json").read_text(encoding="utf-8"))
         self.assertEqual(len(benchmark["questions"]), 2)
 
-    def test_run_pipeline_resume_rebuilds_final_output_without_reprocessing_completed_scenes(self) -> None:
+    def test_rebuild_benchmark_skips_pending_scene_generation(self) -> None:
         root = make_case_dir("pipeline_resume_rebuild_only")
         self.addCleanup(shutil.rmtree, root, True)
         data_root = root / "data"
@@ -5858,16 +5936,25 @@ class RunPipelineReferabilityTests(unittest.TestCase):
 
         first_benchmark = json.loads((output_dir / "benchmark.json").read_text(encoding="utf-8"))
 
+        pending_scene_id = "scene0001_00"
+        pending_image_name = "000456.jpg"
+        (data_root / pending_scene_id / "pose").mkdir(parents=True)
+        referability_cache["frames"].update(
+            make_simple_referability_cache(
+                {pending_scene_id: [pending_image_name]}
+            )["frames"]
+        )
+
         with (
             patch.object(
                 run_pipeline_module,
                 "parse_scene",
-                side_effect=AssertionError("resume should rebuild from cached raw scene questions only"),
+                side_effect=AssertionError("cache-only rebuild should not parse pending scenes"),
             ),
             patch.object(
                 run_pipeline_module,
                 "generate_all_questions",
-                side_effect=AssertionError("resume should not regenerate completed scenes"),
+                side_effect=AssertionError("cache-only rebuild should not generate questions"),
             ),
             patch.object(run_pipeline_module, "full_quality_pipeline", side_effect=lambda questions: questions),
             patch.object(run_pipeline_module, "compute_statistics", side_effect=lambda questions: {"total": len(questions)}),
@@ -5882,6 +5969,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 run_question_presence_review=False,
                 write_frame_debug=False,
                 resume=True,
+                rebuild_benchmark=True,
             )
 
         resumed_benchmark = json.loads((output_dir / "benchmark.json").read_text(encoding="utf-8"))
@@ -6245,6 +6333,355 @@ class VerticalObjectRotateQuestionFilterTests(unittest.TestCase):
 
         with self.assertLogs(run_pipeline_module.logger, level="WARNING"):
             self.assertEqual(self._filter(question, objects), [question])
+
+
+class CrossFrameCheckpointIntegrationTests(unittest.TestCase):
+    def test_resume_skips_completed_deferred_frame_and_matches_uninterrupted_run(self) -> None:
+        root = make_case_dir("cross_frame_checkpoint_resume")
+        self.addCleanup(shutil.rmtree, root, True)
+        data_root = root / "data"
+        resumed_output_dir = root / "resumed"
+        corrupt_output_dir = root / "corrupt"
+        invalid_state_output_dir = root / "invalid_state"
+        baseline_output_dir = root / "baseline"
+        scene_id = "scene0000_00"
+        frame_names = ["000001.jpg", "000002.jpg", "000003.jpg"]
+        scene_dir = data_root / scene_id
+        (scene_dir / "pose").mkdir(parents=True)
+        (scene_dir / f"{scene_id}_vh_clean.ply").write_text("ply\n", encoding="utf-8")
+
+        labels = {1: "chair", 2: "table", 3: "lamp"}
+        scene = {
+            "scene_id": scene_id,
+            "objects": [make_object(obj_id, label) for obj_id, label in labels.items()],
+            "attachment_edges": [
+                {"parent_id": 1, "child_id": 2, "type": "attachment"},
+                {"parent_id": 2, "child_id": 3, "type": "attachment"},
+            ],
+            "room_bounds": None,
+            "wall_objects": [],
+        }
+        referability_frames: dict[str, dict] = {}
+        for obj_id, frame_name in enumerate(frame_names, start=1):
+            label = labels[obj_id]
+            referability_frames[frame_name] = {
+                "frame_usable": True,
+                "candidate_visible_object_ids": [obj_id],
+                "crop_label_statuses": {label: "unique"},
+                "crop_label_counts": {label: 1},
+                "crop_referable_object_ids": [obj_id],
+                "full_frame_label_reviews": [],
+                "full_frame_label_statuses": {},
+                "full_frame_label_counts": {},
+                "attachment_referable_object_ids": [obj_id],
+                "referable_object_ids": [obj_id],
+                "label_statuses": {label: "unique"},
+                "label_counts": {label: 1},
+                "out_of_frame_label_reviews": [],
+                "out_of_frame_not_visible_labels": [],
+                "out_of_frame_label_to_object_ids": {},
+                "out_of_frame_vlm_early_stop": False,
+                "candidate_labels": [label],
+                "label_to_object_ids": {label: [obj_id]},
+            }
+        referability_cache = {
+            "version": "20.0",
+            "frames": {scene_id: referability_frames},
+        }
+        poses = {
+            frame_name: make_camera_pose_at(frame_name, float(index))
+            for index, frame_name in enumerate(frame_names)
+        }
+        reasoning_contexts = [
+            run_pipeline_module.ReasoningFrameContext(
+                image_name=frame_name,
+                camera_pose=poses[frame_name],
+                regular_referable_ids=frozenset({obj_id}),
+                attachment_referable_ids=frozenset({obj_id}),
+                cross_frame_visible_ids=frozenset({obj_id}),
+                cache_entry=referability_frames[frame_name],
+            )
+            for obj_id, frame_name in enumerate(frame_names, start=1)
+        ]
+
+        class FakeRoute:
+            auxiliary_image_names: list[str] = []
+            edge_count = 1
+            cost = 1.0
+            min_inliers = 10
+            min_inlier_ratio = 0.8
+
+        class FakeVisualPoseGraph:
+            def __init__(self, **_kwargs):
+                pass
+
+            def load_cache(self, _cache_path):
+                return False
+
+            def build(self):
+                pass
+
+            def save_cache(self, _cache_path):
+                pass
+
+            def diagnostics(self):
+                return {
+                    "pose_count": len(frame_names),
+                    "readable_count": len(frame_names),
+                    "graph_node_count": len(frame_names),
+                    "graph_edge_count": len(frame_names),
+                    "rejected_edge_counts": {},
+                }
+
+            def find_route(self, start, end, **_kwargs):
+                return None if start == end else FakeRoute()
+
+        def run_with_generator(output_dir: Path, generator, *, resume: bool = False):
+            with (
+                patch.object(
+                    run_pipeline_module,
+                    "parse_scene",
+                    side_effect=lambda *_args, **_kwargs: json.loads(json.dumps(scene)),
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "enrich_scene_with_attachment",
+                    side_effect=lambda _scene: None,
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "get_scene_attachment_graph",
+                    return_value={1: [2], 2: [3]},
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "get_scene_attached_by",
+                    return_value={2: 1, 3: 2},
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "get_scene_support_chain_graph",
+                    return_value={1: [2], 2: [3]},
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "get_scene_support_chain_by",
+                    return_value={2: 1, 3: 2},
+                ),
+                patch.object(run_pipeline_module, "has_nontrivial_attachment", return_value=True),
+                patch.object(run_pipeline_module, "_load_scene_geometry", return_value=None),
+                patch.object(
+                    run_pipeline_module,
+                    "load_axis_alignment",
+                    return_value=np.eye(4, dtype=np.float64),
+                ),
+                patch.object(run_pipeline_module, "load_scannet_poses", return_value=poses),
+                patch.object(
+                    run_pipeline_module,
+                    "_build_reasoning_frame_contexts",
+                    return_value=reasoning_contexts,
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "load_scannet_intrinsics",
+                    return_value=make_camera_intrinsics(),
+                ),
+                patch.object(run_pipeline_module, "load_instance_mesh_data", return_value=object()),
+                patch.object(
+                    run_pipeline_module,
+                    "compute_frame_object_visibility",
+                    return_value={
+                        obj_id: {"bbox_in_frame_ratio": 0.95}
+                        for obj_id in labels
+                    },
+                ),
+                patch.object(run_pipeline_module, "VisualPoseGraph", FakeVisualPoseGraph),
+                patch.object(
+                    run_pipeline_module,
+                    "generate_cross_frame_questions",
+                    side_effect=generator,
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "generate_all_questions",
+                    side_effect=AssertionError("single-frame generator should not run"),
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "full_quality_pipeline",
+                    side_effect=lambda questions: questions,
+                ),
+                patch.object(
+                    run_pipeline_module,
+                    "compute_statistics",
+                    side_effect=lambda questions: {"total": len(questions)},
+                ),
+                patch.object(run_pipeline_module.RayCaster, "from_ply", return_value=Mock()),
+            ):
+                return run_pipeline_module.run_pipeline(
+                    data_root=data_root,
+                    output_dir=output_dir,
+                    max_scenes=1,
+                    max_frames=3,
+                    use_occlusion=False,
+                    referability_cache=referability_cache,
+                    only_question_types=["L2_object_move_agent"],
+                    auxiliary_route_method=(
+                        run_pipeline_module.AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH
+                    ),
+                    run_question_presence_review=False,
+                    write_frame_debug=False,
+                    resume=resume,
+                )
+
+        interrupted_calls: list[str] = []
+
+        def interrupted_generator(**kwargs):
+            frame_name = kwargs["frame_1"].image_name
+            interrupted_calls.append(frame_name)
+            if frame_name == frame_names[1]:
+                raise KeyboardInterrupt("interrupt after first deferred shard")
+            return []
+
+        with self.assertRaisesRegex(KeyboardInterrupt, "first deferred shard"):
+            run_with_generator(resumed_output_dir, interrupted_generator)
+
+        checkpoint_dir = run_pipeline_module._cross_frame_scene_cache_dir(
+            resumed_output_dir,
+            scene_id,
+        )
+        manifest = json.loads((checkpoint_dir / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["completed_deferred_frames"], [frame_names[0]])
+        self.assertEqual(interrupted_calls, frame_names[:2])
+        shutil.copytree(resumed_output_dir, corrupt_output_dir)
+        shutil.copytree(resumed_output_dir, invalid_state_output_dir)
+
+        resumed_calls: list[str] = []
+
+        def resumed_generator(**kwargs):
+            resumed_calls.append(kwargs["frame_1"].image_name)
+            return []
+
+        resumed_questions = run_with_generator(
+            resumed_output_dir,
+            resumed_generator,
+            resume=True,
+        )
+        self.assertEqual(resumed_calls, frame_names[1:])
+        self.assertFalse(checkpoint_dir.exists())
+
+        baseline_calls: list[str] = []
+
+        def baseline_generator(**kwargs):
+            baseline_calls.append(kwargs["frame_1"].image_name)
+            return []
+
+        baseline_questions = run_with_generator(baseline_output_dir, baseline_generator)
+        self.assertEqual(baseline_calls, frame_names)
+        self.assertEqual(resumed_questions, baseline_questions)
+
+        corrupt_checkpoint_dir = run_pipeline_module._cross_frame_scene_cache_dir(
+            corrupt_output_dir,
+            scene_id,
+        )
+        (
+            corrupt_checkpoint_dir
+            / "deferred"
+            / f"0001_{frame_names[0]}.json"
+        ).unlink()
+        corrupt_resume_calls: list[str] = []
+
+        def corrupt_resume_generator(**kwargs):
+            corrupt_resume_calls.append(kwargs["frame_1"].image_name)
+            return []
+
+        corrupt_questions = run_with_generator(
+            corrupt_output_dir,
+            corrupt_resume_generator,
+            resume=True,
+        )
+        self.assertEqual(corrupt_resume_calls, frame_names)
+        self.assertEqual(corrupt_questions, baseline_questions)
+        self.assertFalse(corrupt_checkpoint_dir.exists())
+
+        invalid_state_checkpoint_dir = run_pipeline_module._cross_frame_scene_cache_dir(
+            invalid_state_output_dir,
+            scene_id,
+        )
+        invalid_pre_cross_path = invalid_state_checkpoint_dir / "pre_cross.json"
+        invalid_pre_cross = json.loads(invalid_pre_cross_path.read_text(encoding="utf-8"))
+        invalid_pre_cross["scene_questions"] = [{"question": "stale partial state"}]
+        invalid_pre_cross["scene_pair_counts"] = "invalid"
+        invalid_pre_cross_path.write_text(
+            json.dumps(invalid_pre_cross),
+            encoding="utf-8",
+        )
+        invalid_state_calls: list[str] = []
+
+        def invalid_state_generator(**kwargs):
+            invalid_state_calls.append(kwargs["frame_1"].image_name)
+            return []
+
+        invalid_state_questions = run_with_generator(
+            invalid_state_output_dir,
+            invalid_state_generator,
+            resume=True,
+        )
+        self.assertEqual(invalid_state_calls, frame_names)
+        self.assertEqual(invalid_state_questions, baseline_questions)
+        self.assertFalse(invalid_state_checkpoint_dir.exists())
+
+        resumed_raw = (
+            run_pipeline_module._raw_scene_questions_cache_dir(resumed_output_dir)
+            / f"{scene_id}.json"
+        ).read_bytes()
+        baseline_raw = (
+            run_pipeline_module._raw_scene_questions_cache_dir(baseline_output_dir)
+            / f"{scene_id}.json"
+        ).read_bytes()
+        self.assertEqual(resumed_raw, baseline_raw)
+
+
+class CrossFrameCheckpointHelperTests(unittest.TestCase):
+    def test_counter_checkpoint_round_trip_preserves_tuple_keys(self) -> None:
+        original = Counter({"agent": 3, ("L2", "move", "1"): 2})
+
+        restored = run_pipeline_module._counter_from_checkpoint(
+            run_pipeline_module._counter_checkpoint_payload(original)
+        )
+
+        self.assertEqual(restored, original)
+
+    def test_rng_checkpoint_restores_python_and_numpy_sequences(self) -> None:
+        original_python_state = run_pipeline_module.random.getstate()
+        original_numpy_state = np.random.get_state()
+        try:
+            run_pipeline_module.random.seed(12345)
+            np.random.seed(54321)
+            checkpoint = run_pipeline_module._rng_checkpoint_payload()
+            expected_python = run_pipeline_module.random.random()
+            expected_numpy = float(np.random.random())
+            run_pipeline_module.random.random()
+            np.random.random()
+
+            run_pipeline_module._restore_rng_checkpoint(checkpoint)
+
+            self.assertEqual(run_pipeline_module.random.random(), expected_python)
+            self.assertEqual(float(np.random.random()), expected_numpy)
+        finally:
+            run_pipeline_module.random.setstate(original_python_state)
+            np.random.set_state(original_numpy_state)
+
+    def test_atomic_checkpoint_write_replaces_complete_json(self) -> None:
+        root = make_case_dir("atomic_cross_checkpoint")
+        self.addCleanup(shutil.rmtree, root, True)
+        path = root / "manifest.json"
+
+        run_pipeline_module._write_json_file_atomic(path, {"step": 1})
+        run_pipeline_module._write_json_file_atomic(path, {"step": 2})
+
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"step": 2})
+        self.assertEqual(list(root.glob("*.tmp")), [])
 
 if __name__ == "__main__":
     unittest.main()

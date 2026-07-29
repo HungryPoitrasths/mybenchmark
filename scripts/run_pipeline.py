@@ -2599,8 +2599,7 @@ def _normalize_manual_attachment_role_sets(
         )
     projected_ids = set(_normalize_object_ids(entry.get("candidate_visible_object_ids")))
     normalized_sets: list[dict[str, dict[str, object]]] = []
-    role_keys: set[tuple[int, ...]] = set()
-    labels_by_object: dict[int, str] = {}
+    role_keys: set[tuple[tuple[int, str], ...]] = set()
     for set_index, raw_roles in enumerate(candidates, start=1):
         roles: dict[str, dict[str, object]] = {}
         role_ids: list[int] = []
@@ -2630,13 +2629,6 @@ def _normalize_manual_attachment_role_sets(
                     f"role {role!r} uses object id {obj_id}, which is not one of the "
                     "projected frame objects"
                 )
-            previous_label = labels_by_object.get(obj_id)
-            if previous_label is not None and previous_label.lower() != label.lower():
-                raise ValueError(
-                    f"Manual attachment frame {scene_id}/{image_name} object id {obj_id} "
-                    f"uses conflicting labels {previous_label!r} and {label!r}"
-                )
-            labels_by_object[obj_id] = label
             role_ids.append(obj_id)
             roles[role] = {"id": obj_id, "label": label}
         if len(set(role_ids)) != len(role_ids):
@@ -2644,11 +2636,14 @@ def _normalize_manual_attachment_role_sets(
                 f"Manual attachment frame {scene_id}/{image_name} annotation {set_index} "
                 "must use four distinct object ids"
             )
-        role_key = tuple(role_ids)
+        role_key = tuple(
+            (int(roles[role]["id"]), str(roles[role]["label"]).strip().lower())
+            for role in ("moved", "child", "grandchild", "contrast")
+        )
         if role_key in role_keys:
             raise ValueError(
                 f"Manual attachment frame {scene_id}/{image_name} contains duplicate "
-                f"role set {role_key}"
+                f"role set {tuple(role_ids)}"
             )
         role_keys.add(role_key)
         option_labels = {
@@ -2705,7 +2700,6 @@ def _merge_manual_attachment_cache(
         raise ValueError("Referability cache frames field must be an object")
 
     manual_graph: dict[str, dict[str, list[int]]] = {}
-    child_parent_by_scene: dict[str, dict[int, int]] = {}
     manual_scene_ids: list[str] = []
     merged_frame_count = 0
     added_frame_count = 0
@@ -2717,7 +2711,6 @@ def _merge_manual_attachment_cache(
         manual_scene_ids.append(scene_id)
         target_scene_frames = _nested_scene_frames_for_update(merged_frames, scene_id)
         scene_graph = manual_graph.setdefault(scene_id, {})
-        child_parent = child_parent_by_scene.setdefault(scene_id, {})
 
         for raw_image_name, raw_entry in raw_scene_frames.items():
             image_name = str(raw_image_name).strip()
@@ -2743,13 +2736,6 @@ def _merge_manual_attachment_cache(
                     pair = [parent_id, attached_id]
                     if pair not in attachment_pairs:
                         attachment_pairs.append(pair)
-                    previous_parent = child_parent.get(attached_id)
-                    if previous_parent is not None and previous_parent != parent_id:
-                        raise ValueError(
-                            f"Manual attachment scene {scene_id} assigns child {attached_id} "
-                            f"to conflicting parents {previous_parent} and {parent_id}"
-                        )
-                    child_parent[attached_id] = parent_id
                     children = scene_graph.setdefault(str(parent_id), [])
                     if attached_id not in children:
                         children.append(attached_id)
@@ -6628,6 +6614,7 @@ def run_pipeline(
     generator_progress_log_seconds: float = 15.0,
     slow_generator_warn_seconds: float = 60.0,
     resume: bool = False,
+    rebuild_benchmark: bool = False,
     reset: int | None = None,
     only_question_types: list[str] | None = None,
     scene_type_cap: int | None = None,
@@ -6643,7 +6630,7 @@ def run_pipeline(
     scannetpp_depth_cache_size: int = DEFAULT_DEPTH_CACHE_SIZE,
     attachment_reference_cluster_radius_m: float = 0.5,
 ):
-    """Execute the full PSR-Bench data generation pipeline."""
+    """Execute the PSR-Bench generation pipeline or rebuild cached outputs."""
     _set_pipeline_random_seed()
     only_question_types = _normalize_only_question_types(only_question_types)
 
@@ -6685,6 +6672,10 @@ def run_pipeline(
         raise ValueError("reset must be >= 1")
     if reset is not None and not resume:
         raise ValueError("reset requires resume=True")
+    if rebuild_benchmark and not resume:
+        raise ValueError("rebuild_benchmark requires resume=True")
+    if rebuild_benchmark and reset is not None:
+        raise ValueError("rebuild_benchmark cannot be combined with reset")
     if max_questions_per_scene_type is not None:
         scene_type_cap = int(max_questions_per_scene_type)
     elif scene_type_cap is None:
@@ -6876,15 +6867,23 @@ def run_pipeline(
             target_scene_ids=target_scene_ids,
         )
         if corrupted_scene_ids:
+            recovery_action = (
+                "excluded from the benchmark rebuild"
+                if rebuild_benchmark
+                else "regenerated"
+            )
             logger.warning(
-                "Resume found %d scene status record(s) with missing raw scene cache; they will be regenerated: %s",
+                "Resume found %d scene status record(s) with missing raw scene cache; they will be %s: %s",
                 len(corrupted_scene_ids),
+                recovery_action,
                 ", ".join(corrupted_scene_ids),
             )
-            _delete_cross_frame_scene_cache_dirs(output_dir, corrupted_scene_ids)
+            if not rebuild_benchmark:
+                _delete_cross_frame_scene_cache_dirs(output_dir, corrupted_scene_ids)
         if scene_status_changed:
             _write_json_file(scene_status_path, scene_status_doc)
-        _delete_cross_frame_scene_cache_dirs(output_dir, completed_scene_ids)
+        if not rebuild_benchmark:
+            _delete_cross_frame_scene_cache_dirs(output_dir, completed_scene_ids)
     else:
         _clear_pipeline_resume_state(output_dir)
         scene_status_doc = _build_empty_pipeline_scene_status_doc()
@@ -6917,6 +6916,34 @@ def run_pipeline(
             logger.info(
                 "All target scenes already have cached raw scene questions; rebuilding final outputs from cache only"
             )
+
+    if rebuild_benchmark:
+        logger.info(
+            "Cache-only benchmark rebuild: using %d completed scene(s) and skipping %d pending scene(s)",
+            len(completed_scene_ids),
+            len(pending_scene_entries),
+        )
+        return _rebuild_pipeline_outputs(
+            data_root=data_root,
+            output_dir=output_dir,
+            questions_dir=questions_dir,
+            frame_debug_dir=frame_debug_dir,
+            raw_questions_dir=raw_questions_dir,
+            scene_ids=completed_scene_ids,
+            referability_cache=referability_cache,
+            write_frame_debug=write_frame_debug,
+            run_question_dinox_audit=run_question_dinox_audit,
+            run_question_presence_review=run_question_presence_review,
+            vlm_url=vlm_url,
+            vlm_model=vlm_model,
+            question_presence_review_workers=question_presence_review_workers,
+            scene_type_cap=scene_type_cap,
+            frame_type_cap=frame_type_cap,
+            frame_type_object_cap=frame_type_object_cap,
+            dataset=dataset,
+            scannetpp_sensor=scannetpp_sensor,
+            scannetpp_frame_root=scannetpp_frame_root,
+        )
 
     def _format_observability_value(value: object) -> str:
         if isinstance(value, bool):
@@ -9594,6 +9621,14 @@ def main():
         help="Resume from output_dir/scene_status.json and _raw_questions_scene_cache instead of starting a new run",
     )
     parser.add_argument(
+        "--rebuild_benchmark",
+        action="store_true",
+        help=(
+            "With --resume, skip all pending scene generation and rebuild "
+            "benchmark.json from completed _raw_questions_scene_cache entries only"
+        ),
+    )
+    parser.add_argument(
         "--reset",
         type=int,
         default=None,
@@ -9690,6 +9725,10 @@ def main():
         parser.error("--reset must be >= 1")
     if args.reset is not None and not args.resume:
         parser.error("--reset requires --resume")
+    if args.rebuild_benchmark and not args.resume:
+        parser.error("--rebuild_benchmark requires --resume")
+    if args.rebuild_benchmark and args.reset is not None:
+        parser.error("--rebuild_benchmark cannot be combined with --reset")
     if args.max_questions_per_scene_type is not None and int(args.max_questions_per_scene_type) < 0:
         parser.error("--max_questions_per_scene_type must be >= 0")
     if args.scene_type_cap is not None and int(args.scene_type_cap) < 0:
@@ -9773,6 +9812,7 @@ def main():
         generator_progress_log_seconds=args.generator_progress_log_seconds,
         slow_generator_warn_seconds=args.slow_generator_warn_seconds,
         resume=args.resume,
+        rebuild_benchmark=args.rebuild_benchmark,
         reset=args.reset,
         only_question_types=args.only_question_types,
         scene_type_cap=args.scene_type_cap,
