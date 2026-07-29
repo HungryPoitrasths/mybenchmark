@@ -5958,7 +5958,6 @@ _L3_CANONICAL_QUESTION_TYPES = {
     "coordinate_rotation_object_centric",
     "coordinate_rotation_allocentric",
 }
-_L2_FRAME_TYPE_OBJECT_CAP = 2
 _L3_FRAME_TYPE_OBJECT_CAP = 1
 _L1_FRAME_TYPE_OBJECT_CAP = 1
 _PUBLIC_TO_CANONICAL_QUESTION_TYPES = {
@@ -6154,9 +6153,7 @@ def _frame_has_attachment_pair(
     return any(child_ids for child_ids in graph.values())
 
 
-# Multi-image question types may reuse a semantic object pair from a few
-# different viewpoints, while preventing one frame pair from duplicating it.
-_L2_L3_PAIR_SCENE_CAP = 3
+_L1_L3_PAIR_SCENE_CAP = 3
 
 
 def _apply_incremental_question_caps(
@@ -6212,7 +6209,7 @@ def _apply_incremental_question_caps(
             effective_frame_type_object_cap = _L1_FRAME_TYPE_OBJECT_CAP
         elif canonical_type in _L2_CANONICAL_QUESTION_TYPES:
             effective_frame_type_cap = 0
-            effective_frame_type_object_cap = _L2_FRAME_TYPE_OBJECT_CAP
+            effective_frame_type_object_cap = 0
         elif canonical_type in _L3_CANONICAL_QUESTION_TYPES:
             effective_frame_type_cap = 0
             effective_frame_type_object_cap = _L3_FRAME_TYPE_OBJECT_CAP
@@ -6226,19 +6223,19 @@ def _apply_incremental_question_caps(
             and frame_object_counts[frame_object_key] >= effective_frame_type_object_cap
         ):
             continue
-        # L1/L2/L3 all allow a pair to recur across a few viewpoints, but not
-        # within the same frame identity and never more than three scene-wide.
-        if frame_pair_key is not None and frame_pair_counter[frame_pair_key] >= 1:
-            continue
-        if pair_key is not None and pair_counter[pair_key] >= _L2_L3_PAIR_SCENE_CAP:
-            continue
+        pair_diversity_cap_applies = canonical_type not in _L2_CANONICAL_QUESTION_TYPES
+        if pair_diversity_cap_applies:
+            if frame_pair_key is not None and frame_pair_counter[frame_pair_key] >= 1:
+                continue
+            if pair_key is not None and pair_counter[pair_key] >= _L1_L3_PAIR_SCENE_CAP:
+                continue
         kept.append(question)
         scene_counts[canonical_type] += 1
         frame_counts[frame_key] += 1
         frame_object_counts[frame_object_key] += 1
-        if pair_key is not None:
+        if pair_diversity_cap_applies and pair_key is not None:
             pair_counter[pair_key] += 1
-        if frame_pair_key is not None:
+        if pair_diversity_cap_applies and frame_pair_key is not None:
             frame_pair_counter[frame_pair_key] += 1
     return kept
 
@@ -7700,24 +7697,8 @@ def run_pipeline(
                         def _pair_budget_remaining(
                             canonical_type: str, id_a: int, id_b: int,
                         ) -> bool:
-                            # Soft early-exit hint for the L2 move/rotate
-                            # generators: mirrors the same (type, object pair)
-                            # cap enforced authoritatively afterward by
-                            # _apply_scene_type_cap(pair_counts=scene_pair_counts)
-                            # below, using scene_pair_counts as it stood BEFORE
-                            # this frame (each pair is visited at most once per
-                            # frame per generator, so this can't go stale
-                            # mid-frame). Lets expensive per-move-source
-                            # collision-search/ray-casting be skipped once a
-                            # pair has already hit its cap, instead of being
-                            # computed and discarded post-hoc.
-                            pair = tuple(sorted((str(id_a), str(id_b))))
-                            if pair[0] == pair[1]:
-                                return True
-                            return (
-                                scene_pair_counts[(canonical_type, pair[0], pair[1])]
-                                < _L2_L3_PAIR_SCENE_CAP
-                            )
+                            _ = canonical_type, id_a, id_b
+                            return True
 
                         if single_frame_requested_types:
                             questions = _call_generate_all_questions_compat(

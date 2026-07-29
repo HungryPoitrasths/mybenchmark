@@ -35,7 +35,7 @@ def _question(
     }
 
 
-def test_l2_caps_each_object_at_two_without_capping_the_frame_type_total() -> None:
+def test_l2_does_not_cap_questions_per_object_or_frame() -> None:
     questions = []
     index = 0
     for object_id in (7, 8):
@@ -59,10 +59,7 @@ def test_l2_caps_each_object_at_two_without_capping_the_frame_type_total() -> No
     )
 
     assert [question["question"] for question in kept] == [
-        "question 0",
-        "question 1",
-        "question 4",
-        "question 5",
+        f"question {index}" for index in range(8)
     ]
 
 
@@ -423,4 +420,30 @@ def test_l1_pair_repeats_once_per_frame_pair_and_three_times_per_scene() -> None
         "pair 0",
         "pair 1",
         "pair 2",
+    ]
+
+
+def test_l2_pair_repeats_are_not_capped() -> None:
+    questions = []
+    for index in range(4):
+        question = {
+            "scene_id": "scene0000_00",
+            "level": "L2",
+            "type": "object_move_agent",
+            "image_name": "frame-a.jpg",
+            "reasoning_frame_2": "frame-b.jpg",
+            "cross_frame_layout": "a_to_b",
+            "object_frame_groups": {"frame_1": [1], "frame_2": [2]},
+            "moved_obj_id": 1,
+            "query_obj_id": 2,
+            "question": f"pair {index}",
+        }
+        questions.extend([question, {**question, "question": f"duplicate {index}"}])
+
+    kept = run_pipeline._apply_scene_type_cap(questions, scene_type_cap=0)
+
+    assert [question["question"] for question in kept] == [
+        item
+        for index in range(4)
+        for item in (f"pair {index}", f"duplicate {index}")
     ]
