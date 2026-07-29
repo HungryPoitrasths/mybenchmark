@@ -85,7 +85,9 @@ Pass a separately reviewed file to the builder with `--template-path`. Template 
 
 The pilot selector operates only on records accepted by the fact, answer, response, and image validators. It deduplicates `question_uid` values before sampling.
 
-Build the fixed 10k training manifest with L1/L2/L3 counts of 3000/4000/3000:
+Build the fixed 10k training manifest with L1/L2/L3 counts of 4669/661/4670.
+The pilot includes every available validated L2 record without duplication and splits the
+remaining capacity nearly evenly between L1 and L3:
 
 ```powershell
 python scripts/build_cot_sft.py output_train/benchmark.json `

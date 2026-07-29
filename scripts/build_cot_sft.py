@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
         default="all",
         help=(
             "Select a deterministic training or monitoring subset after CoT validation. "
-            "The 10k preset uses L1/L2/L3=3000/4000/3000; the validation preset "
+            "The 10k preset uses L1/L2/L3=4669/661/4670; the validation preset "
             "uses 20 records for each of the 16 supported types."
         ),
     )
