@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "scope": {
+    "included_question_types": [
+      "direction_agent",
+      "occlusion",
+      "distance",
+      "direction_object_centric",
+      "direction_allocentric",
+      "object_move_agent",
+      "object_move_distance",
+      "object_move_occlusion",
+      "object_rotate_object_centric",
+      "object_move_object_centric",
+      "object_move_allocentric",
+      "object_remove",
+      "attachment_chain",
+      "coordinate_rotation_agent",
+      "coordinate_rotation_object_centric",
+      "coordinate_rotation_allocentric"
+    ],
+    "excluded_question_types": ["attachment_move"]
+  },
+  "global_rules": {
+    "horizontal_directions_only": true,
+    "single_axis_requires_neutral_other_axis": true,
+    "template_count_per_signature": 12,
+    "reasoning_sentence_count": "2-4",
+    "answer_format": "Answer: {letter_or_space_separated_letters}",
+    "think_tags": false,
+    "template_model_receives_images": false,
+    "exact_internal_geometry_in_templates": false
+  },
+  "occlusion": {
+    "not_occluded_does_not_mean_fully_in_frame": true,
+    "not_visible_reason_is_not_inferred": true,
+    "out_of_frame_source_priority": ["geometry_in_frame_ratio", "bbox_in_frame_ratio"],
+    "blocker_min_confidence": 0.8
+  },
+  "movement": {
+    "movement_modes": ["direct", "supported"],
+    "reference_motion_modes": ["stationary", "co_moved", "co_orbited"],
+    "agent_frame": "first main camera",
+    "pairwise_occlusion_view": "last main camera"
+  },
+  "rotation": {
+    "coordinate_rotation_angles": [90, 180, 270],
+    "l2_object_orbit_heading": "reface orbit center at new query position",
+    "l3_object_centric_heading": "preserve original ref-to-face world heading"
+  }
+}
