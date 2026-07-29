@@ -281,6 +281,8 @@ def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
     assert "--external_plugins" in command
     assert "cot_sft_milestone_plugin.py" in command[command.index("--external_plugins") + 1]
     assert command[command.index("--callbacks") + 1] == "cot_sample_milestones"
+    assert command[command.index("--tuner_type") + 1] == "lora"
+    assert "--train_type" not in command
     assert command[command.index("--optim") + 1] == "adamw_torch"
     assert command[command.index("--attn_impl") + 1] == "sdpa"
     assert command[command.index("--eval_strategy") + 1] == "no"

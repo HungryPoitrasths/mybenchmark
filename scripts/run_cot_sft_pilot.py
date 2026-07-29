@@ -221,7 +221,7 @@ def build_sft_command(args: argparse.Namespace) -> list[str]:
         str(args.train_dataset.resolve()),
         "--val_dataset",
         str(args.monitor_dataset.resolve()),
-        "--train_type",
+        "--tuner_type",
         "lora",
         "--torch_dtype",
         "bfloat16",
