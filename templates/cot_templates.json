@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "description": "Twelve deterministic English template patterns. At render time, every signature receives a separate set of twelve templates whose wording includes only that signature's saved discrete facts.",
+  "styles": [
+    {"id": "style_00", "template": "{observation}. {transformation}. Therefore, {conclusion}."},
+    {"id": "style_01", "template": "Begin with the scene setup: {observation}. Apply the relevant spatial update: {transformation}. This gives {conclusion}."},
+    {"id": "style_02", "template": "The starting fact is that {observation}. Following the stated reference convention, {transformation}. Hence, {conclusion}."},
+    {"id": "style_03", "template": "Use this observation: {observation}. The required spatial reasoning is: {transformation}. The resulting relation is {conclusion}."},
+    {"id": "style_04", "template": "First establish that {observation}. Then update the relation as follows: {transformation}. It follows that {conclusion}."},
+    {"id": "style_05", "template": "For this comparison, {observation}. Evaluating the specified change shows that {transformation}. Thus, {conclusion}."},
+    {"id": "style_06", "template": "The relevant reference frame or scene fact is: {observation}. Within that setup, {transformation}. Consequently, {conclusion}."},
+    {"id": "style_07", "template": "Start from the recorded condition: {observation}. Its spatial consequence is that {transformation}. Therefore, {conclusion}."},
+    {"id": "style_08", "template": "Keep the stated reference convention fixed: {observation}. Under that convention, {transformation}. The final result is {conclusion}."},
+    {"id": "style_09", "template": "The initial comparison states that {observation}. After accounting for the relevant relation, {transformation}. Accordingly, {conclusion}."},
+    {"id": "style_10", "template": "Consider the saved spatial fact: {observation}. Resolve the requested step by noting that {transformation}. This means {conclusion}."},
+    {"id": "style_11", "template": "The question is grounded in this condition: {observation}. The decisive spatial step is that {transformation}. We can conclude that {conclusion}."}
+  ],
+  "signature_templates": {}
+}
