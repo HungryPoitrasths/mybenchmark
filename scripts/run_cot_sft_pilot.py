@@ -261,6 +261,8 @@ def build_sft_command(args: argparse.Namespace) -> list[str]:
         str(args.max_grad_norm),
         "--max_length",
         str(args.max_length),
+        "--max_pixels",
+        str(args.max_pixels),
         "--gradient_checkpointing",
         "true",
         "--attn_impl",
@@ -313,6 +315,8 @@ def build_infer_command(
             "0",
             "--max_new_tokens",
             str(args.max_new_tokens),
+            "--max_pixels",
+            str(args.max_pixels),
             "--stream",
             "false",
             "--result_path",
@@ -430,6 +434,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--max-length", type=int, default=8192)
     parser.add_argument(
+        "--max-pixels",
+        type=int,
+        default=786432,
+        help=(
+            "Maximum pixels per image; 786432 is 1024x768 and approximately "
+            "768 merged visual tokens for Qwen3-VL."
+        ),
+    )
+    parser.add_argument(
         "--attn-impl",
         choices=("sdpa", "flash_attn", "eager"),
         default="sdpa",
@@ -480,6 +493,10 @@ def main() -> int:
     for name, value in sample_intervals.items():
         if value <= 0:
             raise ValueError(f"{name} must be positive")
+    if args.max_length <= 0:
+        raise ValueError("max_length must be positive")
+    if args.max_pixels <= 0:
+        raise ValueError("max_pixels must be positive")
     if args.eval_every_samples % args.save_every_samples != 0:
         raise ValueError(
             "eval_every_samples must be an integer multiple of save_every_samples"
@@ -521,6 +538,8 @@ def main() -> int:
         "epochs": args.epochs,
         "world_size": world_size,
         "global_batch": global_batch,
+        "max_length": args.max_length,
+        "max_pixels": args.max_pixels,
         "save_every_samples": args.save_every_samples,
         "eval_every_samples": args.eval_every_samples,
         "log_every_samples": args.log_every_samples,

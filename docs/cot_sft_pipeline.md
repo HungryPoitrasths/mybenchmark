@@ -137,7 +137,8 @@ python scripts/run_cot_sft_pilot.py `
   --monitor-sidecar output_val/cot/monitor_val_320.sidecar.jsonl `
   --output-dir output_train/sft/qwen3_vl_4b_cot_8k `
   --devices 0,1 `
-  --max-length 4096 `
+  --max-length 8192 `
+  --max-pixels 786432 `
   --attn-impl sdpa `
   --dry-run
 ```
@@ -165,7 +166,7 @@ The launcher ignores incomplete checkpoint directories when resolving `latest` a
 
 To rerun only checkpoint generation/evaluation after an interrupted monitoring pass, use `--skip-train --skip-completed-evals`. Use `--skip-base-eval` when the base report is intentionally excluded.
 
-The default `max_length` is 8192. Before the full run, inspect image counts and processed token lengths, then lower this value or the processor's visual-token budget if the heaviest samples do not pass a 100-step smoke test.
+The default `max_length` is 8192 and the per-image budget is 786432 pixels (`1024 * 768`). Qwen3-VL uses a patch size of 16 and a spatial merge size of 2, so this is approximately 768 merged visual tokens per image. The pilot contains samples with up to eight images; their visual input is therefore about 6144 tokens at the configured cap. By contrast, 4096 tokens without an image budget can cause MS-SWIFT to delete every over-length retry candidate before training starts. Do not switch to left or right truncation for this failure: truncation can remove either the question or the final `Answer:` supervision. Before the full run, inspect processed token lengths and complete a short smoke test.
 
 ## Standalone prediction evaluation
 

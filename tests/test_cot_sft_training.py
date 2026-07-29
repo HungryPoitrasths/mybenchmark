@@ -270,6 +270,7 @@ def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
         warmup_ratio=0.03,
         max_grad_norm=1.0,
         max_length=8192,
+        max_pixels=786432,
         attn_impl="sdpa",
         dataloader_workers=4,
         dataset_workers=4,
@@ -285,6 +286,7 @@ def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
     assert "--train_type" not in command
     assert command[command.index("--optim") + 1] == "adamw_torch"
     assert command[command.index("--attn_impl") + 1] == "sdpa"
+    assert command[command.index("--max_pixels") + 1] == "786432"
     assert command[command.index("--eval_strategy") + 1] == "no"
     assert command[command.index("--save_strategy") + 1] == "no"
     assert command[command.index("--logging_strategy") + 1] == "no"
@@ -312,6 +314,7 @@ def test_sft_command_includes_resume_checkpoint(tmp_path: Path) -> None:
         warmup_ratio=0.03,
         max_grad_norm=1.0,
         max_length=4096,
+        max_pixels=786432,
         attn_impl="sdpa",
         dataloader_workers=4,
         dataset_workers=4,
