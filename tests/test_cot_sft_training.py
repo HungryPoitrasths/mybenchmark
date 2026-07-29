@@ -270,6 +270,7 @@ def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
         warmup_ratio=0.03,
         max_grad_norm=1.0,
         max_length=8192,
+        attn_impl="sdpa",
         dataloader_workers=4,
         dataset_workers=4,
         seed=42,
@@ -281,6 +282,7 @@ def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
     assert "cot_sft_milestone_plugin.py" in command[command.index("--external_plugins") + 1]
     assert command[command.index("--callbacks") + 1] == "cot_sample_milestones"
     assert command[command.index("--optim") + 1] == "adamw_torch"
+    assert command[command.index("--attn_impl") + 1] == "sdpa"
     assert command[command.index("--eval_strategy") + 1] == "no"
     assert command[command.index("--save_strategy") + 1] == "no"
     assert command[command.index("--logging_strategy") + 1] == "no"
@@ -308,6 +310,7 @@ def test_sft_command_includes_resume_checkpoint(tmp_path: Path) -> None:
         warmup_ratio=0.03,
         max_grad_norm=1.0,
         max_length=4096,
+        attn_impl="sdpa",
         dataloader_workers=4,
         dataset_workers=4,
         seed=42,

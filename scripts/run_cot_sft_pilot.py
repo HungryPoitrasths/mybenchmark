@@ -264,7 +264,7 @@ def build_sft_command(args: argparse.Namespace) -> list[str]:
         "--gradient_checkpointing",
         "true",
         "--attn_impl",
-        "flash_attn",
+        args.attn_impl,
         "--external_plugins",
         str(plugin_path),
         "--callbacks",
@@ -429,6 +429,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--max-length", type=int, default=8192)
+    parser.add_argument(
+        "--attn-impl",
+        choices=("sdpa", "flash_attn", "eager"),
+        default="sdpa",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=320)
     parser.add_argument("--dataloader-workers", type=int, default=4)
     parser.add_argument("--dataset-workers", type=int, default=4)

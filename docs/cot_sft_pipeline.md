@@ -138,10 +138,11 @@ python scripts/run_cot_sft_pilot.py `
   --output-dir output_train/sft/qwen3_vl_4b_cot_8k `
   --devices 0,1 `
   --max-length 4096 `
+  --attn-impl sdpa `
   --dry-run
 ```
 
-Remove `--dry-run` to train. The launcher uses the explicit `adamw_torch` AdamW optimizer, BF16 LoRA on the language model, leaves the vision encoder frozen, trains the aligner, and uses global batch 32. Its callback logs training loss every 100 sample exposures, saves a checkpoint every 500 exposures, and computes teacher-forced validation loss every 2000 exposures. Each evaluation prints `eval_loss` to the terminal and writes all evaluation metrics to the corresponding `checkpoint-*/eval_metrics.json`. For the initial 8k, two-epoch run, this produces 160 training-loss records, 32 checkpoints, and 8 validation points. Each reported sample count is at most 31 samples beyond its target milestone.
+Remove `--dry-run` to train. The launcher defaults to PyTorch SDPA, so Flash Attention is optional. It uses the explicit `adamw_torch` AdamW optimizer, BF16 LoRA on the language model, leaves the vision encoder frozen, trains the aligner, and uses global batch 32. Its callback logs training loss every 100 sample exposures, saves a checkpoint every 500 exposures, and computes teacher-forced validation loss every 2000 exposures. Each evaluation prints `eval_loss` to the terminal and writes all evaluation metrics to the corresponding `checkpoint-*/eval_metrics.json`. For the initial 8k, two-epoch run, this produces 160 training-loss records, 32 checkpoints, and 8 validation points. Each reported sample count is at most 31 samples beyond its target milestone.
 
 After training, the launcher maps the eight evaluation checkpoints to `samples_seen_02000` through `samples_seen_16000`, runs deterministic generation on the same monitoring questions for those checkpoints, and writes:
 
