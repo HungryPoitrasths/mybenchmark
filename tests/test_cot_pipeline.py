@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,12 @@ from src.cot.models import FactExtractionError
 from src.cot.pipeline import build_dataset
 from src.cot.render import render_response
 from src.cot.templates import load_template_library, templates_for_signature
-from src.cot.validators import validate_answer_mapping, validate_response
+from src.cot.validators import (
+    validate_answer_mapping,
+    validate_fact_consistency,
+    validate_reasoning_consistency,
+    validate_response,
+)
 
 
 def _load_template_script():
@@ -149,13 +155,114 @@ def _supported_questions() -> list[dict[str, object]]:
 @pytest.mark.parametrize("question", _supported_questions(), ids=lambda value: str(value["type"]))
 def test_all_supported_types_extract_and_render(question: dict[str, object]) -> None:
     record = build_fact_record(question)
+    validate_fact_consistency(record)
     validate_answer_mapping(question, record)
     response_a, template_a = render_response(record, seed=42)
     response_b, template_b = render_response(record, seed=42)
     validate_response(response_a, record)
+    validate_reasoning_consistency(response_a, record)
     assert (response_a, template_a) == (response_b, template_b)
     assert response_a.splitlines()[-1] == "Answer: " + " ".join(record.answer_letters)
     assert response_a.count("Answer:") == 1
+
+
+def test_counterclockwise_orbit_reasoning_has_no_clockwise_contradiction() -> None:
+    question = next(
+        item.copy()
+        for item in _supported_questions()
+        if item["type"] == "object_rotate_object_centric"
+    )
+    question["rotation_direction"] = "counterclockwise"
+    record = build_fact_record(question)
+
+    response, _ = render_response(record, seed=42)
+
+    validate_reasoning_consistency(response, record)
+    assert "90 degrees counterclockwise" in response
+    assert "prescribed clockwise" not in response
+    assert "prescribed orbit angle is 90 degrees" in response
+
+
+def test_reasoning_consistency_rejects_opposite_rotation_direction() -> None:
+    question = next(
+        item.copy()
+        for item in _supported_questions()
+        if item["type"] == "object_rotate_object_centric"
+    )
+    question["rotation_direction"] = "counterclockwise"
+    record = build_fact_record(question)
+    response, _ = render_response(record, seed=42)
+    contradictory = response.replace(
+        "prescribed orbit angle is 90 degrees",
+        "prescribed clockwise rotation is 90 degrees",
+    )
+
+    with pytest.raises(FactExtractionError, match="contradicts the saved direction"):
+        validate_reasoning_consistency(contradictory, record)
+
+
+def test_fact_consistency_rejects_semantic_result_mismatch() -> None:
+    record = build_fact_record(
+        _question("direction_agent", "left", obj_a_label="cup", obj_b_label="chair")
+    )
+    corrupted = replace(record, facts={**record.facts, "result": "right"})
+
+    with pytest.raises(FactExtractionError, match="does not match facts.result"):
+        validate_fact_consistency(corrupted)
+
+
+def test_fact_consistency_rejects_axis_layout_mismatch() -> None:
+    record = build_fact_record(
+        _question("direction_agent", "left", obj_a_label="cup", obj_b_label="chair")
+    )
+    corrupted = replace(
+        record,
+        facts={**record.facts, "horizontal_axis": "left", "depth_axis": "front"},
+    )
+
+    with pytest.raises(FactExtractionError, match="single_axis has 0 neutral axes"):
+        validate_fact_consistency(corrupted)
+
+
+def test_fact_consistency_accepts_pairwise_occlusion_role_annotations() -> None:
+    question = next(
+        item.copy()
+        for item in _supported_questions()
+        if item["type"] == "object_move_occlusion"
+    )
+    query = question["query_obj_label"]
+    reference = question["obj_ref_label"]
+    question["options"] = [
+        f"the {query} (moved/query object) is occluded by the {reference} (reference object)",
+        "neither object occludes the other",
+    ]
+    question["correct_value"] = question["options"][0]
+    question["new_correct_value"] = question["options"][0]
+    question["answer"] = "A"
+    question["new_pairwise_occlusion_relation"] = "query_occluded_by_reference"
+
+    validate_fact_consistency(build_fact_record(question))
+
+
+def test_fact_consistency_rejects_reversed_pairwise_occlusion() -> None:
+    question = next(
+        item.copy()
+        for item in _supported_questions()
+        if item["type"] == "object_move_occlusion"
+    )
+    query = question["query_obj_label"]
+    reference = question["obj_ref_label"]
+    question["options"] = [
+        f"the {reference} (reference object) is occluded by the {query} (query object)",
+        "neither object occludes the other",
+    ]
+    question["correct_value"] = question["options"][0]
+    question["new_correct_value"] = question["options"][0]
+    question["answer"] = "A"
+    question["new_pairwise_occlusion_relation"] = "query_occluded_by_reference"
+
+    with pytest.raises(FactExtractionError, match="contradicts relation"):
+        validate_fact_consistency(build_fact_record(question))
 
 
 def test_vertical_direction_is_rejected() -> None:

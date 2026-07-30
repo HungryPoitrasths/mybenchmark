@@ -84,12 +84,14 @@ _DIRECTION_CONTEXTS = {
 }
 
 
-def _detail_context(detail: str) -> str:
+def _detail_context(detail: str, *, question_type: str) -> str:
     if detail in _DETAIL_CONTEXTS:
         return _DETAIL_CONTEXTS[detail]
     if detail in _DIRECTION_CONTEXTS:
         return _DIRECTION_CONTEXTS[detail]
     if detail.isdigit():
+        if question_type == "object_rotate_object_centric":
+            return f"the prescribed orbit angle is {detail} degrees"
         return f"the prescribed clockwise rotation is {detail} degrees"
     if "_to_" in detail:
         before, after = detail.split("_to_", 1)
@@ -101,7 +103,9 @@ def _signature_context(signature_id: str) -> str:
     head, *details = signature_id.split(".")
     question_type = head.removeprefix("L1_").removeprefix("L2_").removeprefix("L3_")
     base = _QUESTION_TYPE_CONTEXTS.get(question_type, "This question uses the saved spatial relations")
-    detail_text = "; ".join(_detail_context(detail) for detail in details)
+    detail_text = "; ".join(
+        _detail_context(detail, question_type=question_type) for detail in details
+    )
     return f"{base}; {detail_text}" if detail_text else base
 
 

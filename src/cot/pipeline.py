@@ -9,7 +9,13 @@ from .images import resolve_image_paths
 from .models import FactExtractionError
 from .render import render_response
 from .templates import load_template_library
-from .validators import validate_answer_mapping, validate_response, validate_sft_item
+from .validators import (
+    validate_answer_mapping,
+    validate_fact_consistency,
+    validate_reasoning_consistency,
+    validate_response,
+    validate_sft_item,
+)
 
 
 def format_user_prompt(question: dict[str, Any], image_count: int) -> str:
@@ -44,6 +50,7 @@ def build_dataset(
         uid = question_uid(question)
         try:
             record = build_fact_record(question)
+            validate_fact_consistency(record)
             validate_answer_mapping(question, record)
             response, template_id = render_response(
                 record,
@@ -51,6 +58,7 @@ def build_dataset(
                 template_library=library,
             )
             validate_response(response, record)
+            validate_reasoning_consistency(response, record)
             images, image_diagnostics = resolve_image_paths(
                 question,
                 benchmark_path=benchmark_path,
@@ -83,8 +91,10 @@ def build_dataset(
                 validation={
                     "passed": True,
                     "fact_source": "benchmark_oracle",
+                    "fact_consistency": "passed",
                     "answer_mapping": "passed",
                     "response_format": "passed",
+                    "reasoning_consistency": "passed",
                     "image_count": len(images),
                 },
             )

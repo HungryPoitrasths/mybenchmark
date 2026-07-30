@@ -433,7 +433,12 @@ def _rotate_object_facts(question: dict[str, Any], answer: str) -> tuple[dict[st
     components = _direction_components(answer, cardinal=False)
     facts = _base_facts(question)
     angle = int(question.get("rotation_angle"))
-    direction = str(question.get("rotation_direction") or "clockwise")
+    direction = str(question.get("rotation_direction") or "clockwise").strip().lower()
+    if direction not in {"clockwise", "counterclockwise"}:
+        raise FactExtractionError(
+            "invalid_rotation_direction",
+            f"unsupported rotation direction {direction!r}",
+        )
     facts.update(
         moved_object=_label(question, "moved_obj_label"),
         observer=_label(question, "query_obj_label"),
