@@ -25,7 +25,6 @@ from scripts.run_sampled_type_vlm_eval import _sha256_file, load_fixed_questions
 from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
 from src.datasets import make_data_source  # noqa: E402
 from src.frame_selector import (  # noqa: E402
-    _passes_absolute_image_quality_gate,
     _project_object_roi,
     _read_image_quality_metrics,
 )
@@ -54,7 +53,7 @@ from src.virtual_ops import apply_movement, apply_orbit_rotation  # noqa: E402
 SELECTION_SCHEMA_VERSION = "predictive-spatial-selection-v2"
 SELECTION_AUDIT_SCHEMA_VERSION = "predictive-spatial-selection-audit-v2"
 SELECTION_CHECKPOINT_SCHEMA_VERSION = "predictive-spatial-selection-checkpoint-v2"
-SELECTION_ALGORITHM_VERSION = "source-destination-route-v1"
+SELECTION_ALGORITHM_VERSION = "source-destination-route-v2"
 MESH_RAY_SURFACE_SAMPLES = 64
 MESH_RAY_BBOX_SAMPLES = 0
 MESH_RAY_LOCAL_RESAMPLES = 4
@@ -506,8 +505,6 @@ def _evaluate_question_route(
                 return None, f"image_unreadable:{image_name}"
             laplacian = float(quality["laplacian_variance"])
             tenengrad = float(quality["tenengrad"])
-            if not _passes_absolute_image_quality_gate(laplacian, tenengrad):
-                return None, f"image_quality_below_threshold:{image_name}"
             quality_metrics[image_name] = {
                 "laplacian_variance": laplacian,
                 "tenengrad": tenengrad,
