@@ -466,7 +466,7 @@ def _question_dedupe_key(question: dict[str, Any]) -> str:
 
 
 def _load_benchmark(path: Path) -> list[dict[str, Any]]:
-    with path.open(encoding="utf-8") as f:
+    with path.open(encoding="utf-8-sig") as f:
         data = json.load(f)
     questions = data.get("questions", data) if isinstance(data, dict) else data
     if not isinstance(questions, list):
