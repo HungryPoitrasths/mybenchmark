@@ -563,7 +563,7 @@ def load_questions(
 
 
 def load_fixed_questions(benchmark_path: Path) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    with benchmark_path.open(encoding="utf-8") as f:
+    with benchmark_path.open(encoding="utf-8-sig") as f:
         data = json.load(f)
 
     if isinstance(data, dict):
