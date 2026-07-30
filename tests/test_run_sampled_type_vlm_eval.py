@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,14 +14,42 @@ from scripts.run_sampled_type_vlm_eval import (
     _should_omit_temperature,
     build_prompt,
     call_model,
+    load_fixed_questions,
     load_questions,
+    load_rollout_manifest,
+    parse_args,
     parse_answers,
+    resolve_rollout_images,
     resolve_question_images,
     result_from_question,
 )
+from scripts.validate_rollout_manifest import validate_manifest
 
 
 class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
+    def test_load_fixed_questions_accepts_utf8_bom(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            benchmark_path = Path(temporary_directory) / "benchmark.json"
+            benchmark_path.write_text(
+                json.dumps(
+                    {
+                        "questions": [{"question_uid": "question-1", "question": "Where?"}],
+                        "metadata": {"source": "test"},
+                        "sampling_stats": {"count": 1},
+                    }
+                ),
+                encoding="utf-8-sig",
+            )
+
+            questions, metadata, sampling_stats = load_fixed_questions(benchmark_path)
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0]["question"], "Where?")
+        self.assertEqual(questions[0]["_source_question_uid"], "question-1")
+        self.assertEqual(metadata["source"], "test")
+        self.assertEqual(metadata["deduped_question_count"], 1)
+        self.assertEqual(sampling_stats, {"count": 1})
+
     def test_call_model_reads_proxy_stream_reasoning_content(self) -> None:
         class FakeCompletions:
             def create(self, **_kwargs):
@@ -301,6 +330,216 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
         user_content = captured_kwargs["messages"][1]["content"]
         image_blocks = [b for b in user_content if b["type"] == "image_url"]
         self.assertEqual(len(image_blocks), 2)
+
+    def test_call_model_interleaves_fixed_rollout_role_labels(self) -> None:
+        captured_kwargs = {}
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return iter([{"choices": [{"delta": {"content": "Answer: A"}}]}])
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "future.jpg"
+            path.write_bytes(b"fake")
+            call_model(
+                FakeClient(),
+                api_provider="openai_chat",
+                model="qwen3.5-flash",
+                image_paths=[path],
+                image_roles=["predicted future destination view after the operation"],
+                prompt="Question?",
+                max_tokens=16,
+                temperature=0.0,
+                api_image_max_px=0,
+            )
+
+        content = captured_kwargs["messages"][1]["content"]
+        self.assertEqual(content[0]["type"], "text")
+        self.assertEqual(
+            content[0]["text"],
+            "Image 1 role: predicted future destination view after the operation.",
+        )
+        self.assertEqual(content[1]["type"], "image_url")
+        self.assertEqual(content[2], {"type": "text", "text": "Question?"})
+        self.assertEqual(
+            captured_kwargs["extra_body"],
+            {"enable_thinking": True},
+        )
+
+    def test_call_model_disables_qwen_thinking_for_direct_answers(self) -> None:
+        captured_kwargs = {}
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return iter([{"choices": [{"delta": {"content": "A"}}]}])
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        call_model(
+            FakeClient(),
+            api_provider="openai_chat",
+            model="qwen3.5-flash",
+            image_paths=[Path("unused.jpg")],
+            prompt="Question?",
+            max_tokens=16,
+            temperature=0.0,
+            api_image_max_px=0,
+            blind=True,
+            direct=True,
+        )
+
+        self.assertEqual(
+            captured_kwargs["extra_body"],
+            {"enable_thinking": False},
+        )
+
+    def test_rollout_manifest_rejects_answer_leakage(self) -> None:
+        with TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "predictive-spatial-rollout-v1",
+                        "entries": [{"question_uid": "q1", "correct_value": "left"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "forbidden GT/answer field"):
+                load_rollout_manifest(manifest_path)
+
+    def test_rollout_manifest_rejects_answer_bearing_legacy_uid(self) -> None:
+        with TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "predictive-spatial-rollout-v1",
+                        "entries": [
+                            {"question_uid": '{"scene_id":"s1","answer":"B"}'}
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "embeds answer-bearing JSON"):
+                load_rollout_manifest(manifest_path)
+
+    def test_picture_rollout_context_only_removes_prediction_in_place(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("source.jpg", "destination.jpg", "future.jpg", "query.jpg"):
+                (root / name).write_bytes(name.encode("ascii"))
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "predictive-spatial-rollout-v1",
+                        "entries": [
+                            {
+                                "question_uid": "q1",
+                                "question_type": "object_move_agent",
+                                "scene_id": "scene0000_00",
+                                "picture": {
+                                    "eligible": True,
+                                    "rejection_reasons": [],
+                                    "media": [
+                                        {"path": "source.jpg", "role": "source_view", "kind": "context"},
+                                        {"path": "destination.jpg", "role": "destination_environment", "kind": "context"},
+                                        {"path": "future.jpg", "role": "predicted_future_view", "kind": "prediction"},
+                                        {"path": "query.jpg", "role": "query_reference_view", "kind": "context"},
+                                    ],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest = load_rollout_manifest(manifest_path)
+            question = {"question_uid": "q1", "_rollout_manifest_uid": "q1"}
+            full, full_error = resolve_rollout_images(
+                question, manifest, mode="picture", context_only=False
+            )
+            context, context_error = resolve_rollout_images(
+                question, manifest, mode="picture", context_only=True
+            )
+
+        self.assertIsNone(full_error)
+        self.assertEqual([item.path.name for item in full], ["source.jpg", "destination.jpg", "future.jpg", "query.jpg"])
+        self.assertIsNone(context_error)
+        self.assertEqual([item.path.name for item in context], ["source.jpg", "destination.jpg", "query.jpg"])
+        self.assertEqual([item.role for item in context], ["source_view", "destination_environment", "query_reference_view"])
+
+    def test_video_rollout_requires_exactly_eight_ordered_frames(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "motion.jpg").write_bytes(b"motion")
+            media = [
+                {"path": "motion.jpg", "role": "motion_reference_view", "kind": "context"}
+            ]
+            for index in range(8):
+                name = f"frame-{index}.jpg"
+                (root / name).write_bytes(name.encode("ascii"))
+                media.append(
+                    {
+                        "path": name,
+                        "role": "predicted_video_frame",
+                        "kind": "prediction",
+                        "frame_index": index,
+                    }
+                )
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "predictive-spatial-rollout-v1",
+                        "entries": [
+                            {
+                                "question_uid": "q1",
+                                "question_type": "object_move_agent",
+                                "scene_id": "scene0000_00",
+                                "video": {
+                                    "eligible": True,
+                                    "rejection_reasons": [],
+                                    "media": media,
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest = load_rollout_manifest(manifest_path)
+            resolutions, error = resolve_rollout_images(
+                {"question_uid": "q1"}, manifest, mode="video", context_only=False
+            )
+            report = validate_manifest(
+                manifest,
+                mode="video",
+                expected_per_type=50,
+                strict_provenance=False,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(len(resolutions), 9)
+        self.assertEqual(resolutions[1].role, "predicted_video_frame:1/8")
+        self.assertEqual(resolutions[-1].role, "predicted_video_frame:8/8")
+        self.assertTrue(report["valid"], report["errors"])
+
+    def test_rollout_cli_enforces_mode_combinations(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(["--context_only"])
+        with self.assertRaises(SystemExit):
+            parse_args(["--picture", "--video", "--rollout_manifest", "missing.json"])
+        with self.assertRaises(SystemExit):
+            parse_args(["--picture", "--blind", "--rollout_manifest", "missing.json"])
 
     def test_result_from_question_populates_aux_image_fields(self) -> None:
         question = {

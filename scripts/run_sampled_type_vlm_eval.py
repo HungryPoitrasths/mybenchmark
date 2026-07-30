@@ -1392,6 +1392,11 @@ def _should_omit_temperature(model: str) -> bool:
     )
 
 
+def _supports_qwen_thinking_control(model: str) -> bool:
+    normalized = str(model).strip().lower().replace("_", "-")
+    return "qwen3.5" in normalized or "qwen3-5" in normalized
+
+
 def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
     if api_provider == "anthropic":
         from anthropic import Anthropic
@@ -1496,6 +1501,7 @@ def call_model(
     api_image_max_px: int,
     blind: bool = False,
     image_roles: list[str | None] | None = None,
+    direct: bool = False,
 ) -> str:
     omit_temperature = _should_omit_temperature(model)
     encoded: list[tuple[str, str]] = []
@@ -1612,6 +1618,8 @@ def call_model(
         chat_kwargs["max_tokens"] = max_tokens
     if not omit_temperature:
         chat_kwargs["temperature"] = temperature
+    if _supports_qwen_thinking_control(model):
+        chat_kwargs["extra_body"] = {"enable_thinking": not direct}
 
     # Stream explicitly: some OpenAI-compatible proxies always reply with SSE chunks
     # for certain models, which the SDK cannot parse in non-streaming mode (it returns
@@ -2358,6 +2366,7 @@ def run_api_question(
                 api_image_max_px=args.api_image_max_px,
                 blind=getattr(args, "blind", False),
                 image_roles=[rollout_role_label(r.role) for r in resolutions],
+                direct=getattr(args, "direct", False),
             )
             print(f"[{idx}/{total}] done", flush=True)
             break
