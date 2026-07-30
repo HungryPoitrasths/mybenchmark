@@ -419,6 +419,48 @@ def test_completed_predictions_require_every_monitor_uid() -> None:
     )
 
 
+def test_checkpoint_evaluation_assigns_fixed_queues_to_gpus(
+    tmp_path: Path, monkeypatch
+) -> None:
+    script = _load_pilot_script()
+    milestones = [
+        {
+            "milestone": milestone,
+            "milestone_name": f"samples_seen_{milestone:05d}",
+            "path": str(tmp_path / f"checkpoint-{index}"),
+        }
+        for index, milestone in enumerate((2_000, 4_000, 6_000, 8_000), start=1)
+    ]
+    assigned_devices: dict[str, str] = {}
+
+    def fake_evaluate(args, *, result_path, env, **kwargs):
+        assigned_devices[result_path.stem] = env["CUDA_VISIBLE_DEVICES"]
+        return {"strict_accuracy": 0.5}
+
+    monkeypatch.setattr(script, "run_or_reuse_evaluation", fake_evaluate)
+
+    summaries = script.evaluate_checkpoint_milestones(
+        Namespace(),
+        sidecar=[],
+        milestones=milestones,
+        monitor_dir=tmp_path / "monitor",
+        devices=["0", "1"],
+    )
+
+    assert assigned_devices == {
+        "samples_seen_02000.predictions": "0",
+        "samples_seen_04000.predictions": "1",
+        "samples_seen_06000.predictions": "0",
+        "samples_seen_08000.predictions": "1",
+    }
+    assert [row["checkpoint"]["milestone"] for row in summaries] == [
+        2_000,
+        4_000,
+        6_000,
+        8_000,
+    ]
+
+
 def test_checkpoint_discovery_includes_teacher_forced_eval_loss(tmp_path: Path) -> None:
     script = _load_pilot_script()
     checkpoint = tmp_path / "checkpoint-32"

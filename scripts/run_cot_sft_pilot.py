@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -429,6 +430,66 @@ def run_or_reuse_evaluation(
     )
 
 
+def evaluate_checkpoint_milestones(
+    args: argparse.Namespace,
+    *,
+    sidecar: list[dict[str, Any]],
+    milestones: list[dict[str, Any]],
+    monitor_dir: Path,
+    devices: list[str],
+) -> list[dict[str, Any]]:
+    if not milestones:
+        return []
+    if not devices:
+        raise ValueError("checkpoint evaluation requires at least one GPU")
+
+    queues = [milestones[index::len(devices)] for index in range(len(devices))]
+
+    def evaluate_queue(
+        device: str, queue: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        env = build_cuda_environment(device)
+        names = [str(milestone["milestone_name"]) for milestone in queue]
+        print(f"GPU {device} checkpoint evaluation queue: {names}", flush=True)
+        summaries: list[dict[str, Any]] = []
+        for milestone in queue:
+            name = str(milestone["milestone_name"])
+            checkpoint = Path(str(milestone["path"]))
+            report = run_or_reuse_evaluation(
+                args,
+                sidecar=sidecar,
+                result_path=monitor_dir / f"{name}.predictions.jsonl",
+                report_path=monitor_dir / f"{name}.report.json",
+                checkpoint=checkpoint,
+                env=env,
+            )
+            summaries.append(
+                {"name": name, "checkpoint": milestone, "report": report}
+            )
+        return summaries
+
+    active_queues = [
+        (device, queue)
+        for device, queue in zip(devices, queues)
+        if queue
+    ]
+    if len(active_queues) == 1:
+        return evaluate_queue(*active_queues[0])
+
+    summaries: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=len(active_queues)) as executor:
+        futures = [
+            executor.submit(evaluate_queue, device, queue)
+            for device, queue in active_queues
+        ]
+        for future in futures:
+            summaries.extend(future.result())
+    return sorted(
+        summaries,
+        key=lambda row: int(row["checkpoint"]["milestone"]),
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-dataset", type=Path, required=True)
@@ -637,7 +698,8 @@ def main() -> int:
         )
         return 0
 
-    eval_env = build_cuda_environment(args.devices.split(",")[0].strip())
+    eval_devices = [value.strip() for value in args.devices.split(",") if value.strip()]
+    eval_env = build_cuda_environment(eval_devices[0])
     monitor_dir = args.output_dir / "monitor"
     summaries: list[dict[str, Any]] = []
 
@@ -654,19 +716,15 @@ def main() -> int:
         summaries.append({"name": "base", "report": report})
 
     if not args.skip_checkpoint_eval:
-        for milestone in milestones:
-            name = str(milestone["milestone_name"])
-            checkpoint = Path(str(milestone["path"]))
-            result_path = monitor_dir / f"{name}.predictions.jsonl"
-            report = run_or_reuse_evaluation(
+        summaries.extend(
+            evaluate_checkpoint_milestones(
                 args,
                 sidecar=monitor_sidecar,
-                result_path=result_path,
-                report_path=monitor_dir / f"{name}.report.json",
-                checkpoint=checkpoint,
-                env=eval_env,
+                milestones=milestones,
+                monitor_dir=monitor_dir,
+                devices=eval_devices,
             )
-            summaries.append({"name": name, "checkpoint": milestone, "report": report})
+        )
     write_json(monitor_dir / "learning_curve.json", summaries)
     return 0
 
