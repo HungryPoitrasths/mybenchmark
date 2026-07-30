@@ -327,7 +327,12 @@ def make_gpt_generator(*, api_key: str, base_url: str) -> GenerateFn:
 
 
 def make_qwen_generator(
-    *, checkpoint: str, device: str, cpu_offload: bool = False
+    *,
+    checkpoint: str,
+    device: str,
+    cpu_offload: bool = False,
+    num_inference_steps: int = 40,
+    vae_tiling: bool = False,
 ) -> GenerateFn:
     try:
         import torch
@@ -348,7 +353,7 @@ def make_qwen_generator(
     else:
         pipeline.to(device)
         generator_device = device
-    if hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_tiling"):
+    if vae_tiling and hasattr(pipeline, "vae") and hasattr(pipeline.vae, "enable_tiling"):
         pipeline.vae.enable_tiling()
     pipeline.set_progress_bar_config(disable=False)
 
@@ -365,7 +370,7 @@ def make_qwen_generator(
                 generator=generator,
                 true_cfg_scale=4.0,
                 negative_prompt="",
-                num_inference_steps=40,
+                num_inference_steps=num_inference_steps,
             )
         images = getattr(result, "images", None) or []
         if not images:
@@ -388,6 +393,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--qwen_checkpoint", default=DEFAULT_QWEN_CHECKPOINT)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--qwen_cpu_offload", action="store_true", help="Offload Qwen modules to CPU between calls to reduce single-GPU memory")
+    parser.add_argument(
+        "--qwen_num_inference_steps",
+        type=int,
+        default=40,
+        help="Qwen denoising steps; lower values are faster but may reduce image quality (default: 40)",
+    )
+    parser.add_argument(
+        "--qwen_vae_tiling",
+        action="store_true",
+        help="Tile VAE encoding/decoding to reduce GPU memory use; this is slower",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Generate only the first N jobs for preflight; later runs resume from the manifest")
     args = parser.parse_args(argv)
     if not args.jobs.is_file():
@@ -398,6 +414,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("retry values must be non-negative")
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
+    if args.qwen_num_inference_steps <= 0:
+        parser.error("--qwen_num_inference_steps must be positive")
     return args
 
 
@@ -424,6 +442,8 @@ def main(argv: list[str] | None = None) -> None:
             checkpoint=args.qwen_checkpoint,
             device=args.device,
             cpu_offload=args.qwen_cpu_offload,
+            num_inference_steps=args.qwen_num_inference_steps,
+            vae_tiling=args.qwen_vae_tiling,
         )
     effective_retries = args.retries if args.backend == "gpt" else 0
     stats = run_jobs(
