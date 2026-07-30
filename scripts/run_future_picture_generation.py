@@ -120,17 +120,25 @@ def _cached_output_matches(
 def _validated_input_image_paths(job: dict[str, Any]) -> list[Path]:
     uid = str(job.get("question_uid") or "")
     raw_images = job.get("input_images")
-    if not isinstance(raw_images, list) or len(raw_images) not in {2, 3}:
-        raise ValueError(f"{uid}: input_images must contain 2 or 3 ordered images")
-    expected_roles = (
-        ["source_view", "destination_environment"]
-        if len(raw_images) == 2
-        else [
-            "source_view",
-            "source_to_destination_bridge",
-            "destination_environment",
-        ]
-    )
+    backend = str(job.get("backend") or "")
+    if backend == "qwen":
+        expected_roles = ["moving_group_reference", "destination_environment"]
+    elif backend == "gpt":
+        if not isinstance(raw_images, list) or len(raw_images) not in {2, 3}:
+            raise ValueError(f"{uid}: GPT input_images must contain 2 or 3 ordered images")
+        expected_roles = (
+            ["source_view", "destination_environment"]
+            if len(raw_images) == 2
+            else [
+                "source_view",
+                "source_to_destination_bridge",
+                "destination_environment",
+            ]
+        )
+    else:
+        raise ValueError(f"{uid}: unsupported picture backend {backend!r}")
+    if not isinstance(raw_images, list) or len(raw_images) != len(expected_roles):
+        raise ValueError(f"{uid}: input_images must contain roles {expected_roles}")
     paths: list[Path] = []
     for index, (item, expected_role) in enumerate(zip(raw_images, expected_roles)):
         if not isinstance(item, dict) or item.get("role") != expected_role:

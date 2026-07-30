@@ -37,13 +37,15 @@ from scripts.generate_rollout_selection_spec import (  # noqa: E402
 from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
 
 
-PICTURE_PROMPT_VERSION = "agent-motion-picture-multiview-v2"
+GPT_PICTURE_PROMPT_VERSION = "agent-motion-picture-multiview-v2"
+QWEN_PICTURE_PROMPT_VERSION = "agent-motion-picture-crop-reference-v1"
 VIDEO_PROMPT_VERSION = "agent-motion-video-v1"
 JOB_SCHEMA_VERSION = "predictive-spatial-generation-jobs-v2"
 DEFAULT_GPT_MODEL = "gpt-image-1.5"
 DEFAULT_QWEN_CHECKPOINT = "Qwen/Qwen-Image-Edit-2511"
 DEFAULT_COSMOS_CHECKPOINT = "Cosmos-Predict2.5-14B/post-trained"
 SAFE_CONTEXT_ROLES = {"destination_to_query_bridge", "query_reference_view"}
+GENERATION_BACKENDS = frozenset({"qwen", "gpt", "cosmos"})
 
 
 def canonical_json(value: Any) -> str:
@@ -295,6 +297,44 @@ def build_picture_prompt(
     return "\n".join(lines)
 
 
+def build_qwen_picture_prompt(action: dict[str, Any]) -> str:
+    """Instruct Qwen to edit one destination canvas from a compact object reference."""
+    group = _group_phrase(action["moving_group_labels"])
+    lines = [
+        "Use exactly two supplied images as different kinds of visual input.",
+        "Picture 1 is a compact reference crop of the moving group only; use it only to preserve the group's appearance.",
+        "Picture 2 is the destination environment and is the only output canvas.",
+        "Generate one photorealistic image from Picture 2's camera viewpoint, composition, and aspect ratio.",
+        "Never show Picture 1's background or crop boundary in the output.",
+        "Never make a collage, diptych, split screen, mirrored room, repeated room, or duplicated camera view.",
+        f"The rigid moving group, in parent-to-descendant order, is: {group}.",
+    ]
+    if action["action_type"] == "orbit":
+        lines.append(
+            f"Move the group along a {action['orbit_angle_degrees']:g}-degree "
+            f"{action['orbit_direction']} floor-plane orbit around "
+            f'"{action["orbit_anchor_label"]}".'
+        )
+        lines.append(
+            f"From Picture 2's camera viewpoint, its endpoint displacement is "
+            f"{action['agent_motion_text']}."
+        )
+    else:
+        lines.append(
+            f"Place the group in Picture 2 after translating it on the floor plane "
+            f"{action['agent_motion_text']}."
+        )
+    lines.extend(
+        [
+            "Render the group once at its endpoint, preserving its internal relative positions and orientations.",
+            "Keep every unlisted object, wall, floor, furniture item, light, texture, and camera parameter in Picture 2 unchanged.",
+            "Do not add text, arrows, paths, boxes, markers, overlays, or new objects.",
+            "Return only the single edited destination image.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def build_cosmos_prompt(action: dict[str, Any]) -> str:
     group = _group_phrase(action["moving_group_labels"])
     lines = [
@@ -395,6 +435,26 @@ def _generation_images(spec: dict[str, Any], spec_path: Path) -> list[dict[str, 
     return images
 
 
+def _qwen_reference_image(spec: dict[str, Any], spec_path: Path) -> dict[str, str]:
+    item = spec.get("qwen_reference_image")
+    if not isinstance(item, dict) or item.get("role") != "moving_group_reference":
+        raise ValueError(
+            "selection entry is missing qwen_reference_image; regenerate the selection spec"
+        )
+    path = _resolve_spec_path(item.get("path"), spec_path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    actual_sha = _sha256_file(path)
+    expected_sha = str(item.get("sha256") or "")
+    if expected_sha and actual_sha != expected_sha:
+        raise ValueError(f"Qwen moving-group reference hash changed: {path}")
+    return {
+        "path": str(path.resolve()),
+        "role": "moving_group_reference",
+        "sha256": actual_sha,
+    }
+
+
 def _context_media(spec: dict[str, Any], spec_path: Path) -> list[dict[str, Any]]:
     media: list[dict[str, Any]] = []
     for index, item in enumerate(spec.get("answer_context_media") or []):
@@ -447,7 +507,10 @@ def prepare_jobs(
     output_dir: Path,
     seed: int,
     expected_picture_per_type: int = 2,
+    generation_backends: frozenset[str] = GENERATION_BACKENDS,
 ) -> dict[str, Path]:
+    if not generation_backends or not generation_backends <= GENERATION_BACKENDS:
+        raise ValueError(f"generation_backends must be a non-empty subset of {sorted(GENERATION_BACKENDS)}")
     questions, _, _ = load_fixed_questions(benchmark_path)
     selection_payload = json.loads(selection_spec_path.read_text(encoding="utf-8"))
     raw_specs = selection_payload.get("entries") if isinstance(selection_payload, dict) else None
@@ -495,6 +558,11 @@ def prepare_jobs(
             raise ValueError(f"{uid}: unsupported question type {qtype!r}")
 
         generation_images = _generation_images(spec, selection_spec_path)
+        qwen_reference = (
+            _qwen_reference_image(spec, selection_spec_path)
+            if "qwen" in generation_backends
+            else None
+        )
         source_image = generation_images[0]
         source_path = Path(source_image["path"])
         source_sha = source_image["sha256"]
@@ -502,6 +570,7 @@ def prepare_jobs(
         picture_prompt = build_picture_prompt(
             action, [item["role"] for item in generation_images]
         )
+        qwen_picture_prompt = build_qwen_picture_prompt(action)
         cosmos_prompt = build_cosmos_prompt(action)
         context_tail = _context_media(spec, selection_spec_path)
         common_identity = {
@@ -519,17 +588,30 @@ def prepare_jobs(
             ("qwen", "qwen-image-edit", DEFAULT_QWEN_CHECKPOINT, qwen_media_dir, qwen_jobs),
             ("gpt", DEFAULT_GPT_MODEL, DEFAULT_GPT_MODEL, gpt_media_dir, gpt_jobs),
         ):
+            if backend not in generation_backends:
+                continue
+            input_images = (
+                [qwen_reference, generation_images[-1]]
+                if backend == "qwen"
+                else generation_images
+            )
+            backend_prompt = qwen_picture_prompt if backend == "qwen" else picture_prompt
+            prompt_version = (
+                QWEN_PICTURE_PROMPT_VERSION
+                if backend == "qwen"
+                else GPT_PICTURE_PROMPT_VERSION
+            )
             output_path = (media_dir / f"{uid}.png").resolve()
             request_core = {
                 "model": model,
                 "checkpoint": checkpoint,
                 "seed": seed,
-                "prompt_version": PICTURE_PROMPT_VERSION,
+                "prompt_version": prompt_version,
                 "input_images": [
                     {"role": item["role"], "sha256": item["sha256"]}
-                    for item in generation_images
+                    for item in input_images
                 ],
-                "prompt": picture_prompt,
+                "prompt": backend_prompt,
             }
             request_sha = sha256_json(request_core)
             job = {
@@ -538,10 +620,10 @@ def prepare_jobs(
                 "model": model,
                 "checkpoint": checkpoint,
                 "seed": seed,
-                "prompt_version": PICTURE_PROMPT_VERSION,
-                "input_images": generation_images,
+                "prompt_version": prompt_version,
+                "input_images": input_images,
                 "output_path": str(output_path),
-                "prompt": picture_prompt,
+                "prompt": backend_prompt,
                 "request_sha256": request_sha,
             }
             assert_safe_generation_job(job)
@@ -577,90 +659,91 @@ def prepare_jobs(
                             model=model,
                             checkpoint=checkpoint,
                             seed=seed,
-                            prompt_version=PICTURE_PROMPT_VERSION,
+                            prompt_version=prompt_version,
                             request_sha256=request_sha,
                         ),
                     },
                 }
             )
 
-        video_output = (cosmos_media_dir / f"{uid}.mp4").resolve()
-        frame_dir = (cosmos_media_dir / uid / "frames").resolve()
-        cosmos_request_core = {
-            "model": "cosmos-predict2.5",
-            "checkpoint": DEFAULT_COSMOS_CHECKPOINT,
-            "seed": seed,
-            "prompt_version": VIDEO_PROMPT_VERSION,
-            "input_image_sha256": source_sha,
-            "prompt": cosmos_prompt,
-            "duration_seconds": action["duration_seconds"],
-        }
-        cosmos_request_sha = sha256_json(cosmos_request_core)
-        cosmos_job = {
-            **common_identity,
-            "backend": "cosmos",
-            "model": "cosmos-predict2.5",
-            "checkpoint": DEFAULT_COSMOS_CHECKPOINT,
-            "seed": seed,
-            "prompt_version": VIDEO_PROMPT_VERSION,
-            "input_image_path": str(source_path.resolve()),
-            "input_image_sha256": source_sha,
-            "output_path": str(video_output),
-            "frame_output_dir": str(frame_dir),
-            "duration_seconds": action["duration_seconds"],
-            "prompt": cosmos_prompt,
-            "request_sha256": cosmos_request_sha,
-        }
-        assert_safe_generation_job(cosmos_job)
-        if video_eligible:
-            cosmos_jobs.append(cosmos_job)
-            official_input = {
-                "inference_type": "image2world",
-                "name": uid,
+        if "cosmos" in generation_backends:
+            video_output = (cosmos_media_dir / f"{uid}.mp4").resolve()
+            frame_dir = (cosmos_media_dir / uid / "frames").resolve()
+            cosmos_request_core = {
+                "model": "cosmos-predict2.5",
+                "checkpoint": DEFAULT_COSMOS_CHECKPOINT,
+                "seed": seed,
+                "prompt_version": VIDEO_PROMPT_VERSION,
+                "input_image_sha256": source_sha,
                 "prompt": cosmos_prompt,
-                "input_path": str(source_path.resolve()),
+                "duration_seconds": action["duration_seconds"],
             }
-            (cosmos_input_dir / f"{uid}.json").write_text(
-                json.dumps(official_input, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-            video_media = [
-                {
-                    "path": str(source_path.resolve()),
-                    "role": "motion_reference_view",
-                    "kind": "context",
-                    "sha256": source_sha,
-                },
-                *[
-                    {
-                        "path": str(frame_dir / f"frame_{index:02d}.jpg"),
-                        "role": "predicted_video_frame",
-                        "kind": "prediction",
-                        "frame_index": index,
-                    }
-                    for index in range(8)
-                ],
-                *context_tail,
-            ]
-        else:
-            video_media = []
-        video_entries.append(
-            {
+            cosmos_request_sha = sha256_json(cosmos_request_core)
+            cosmos_job = {
                 **common_identity,
-                "video": {
-                    "eligible": video_eligible,
-                    "rejection_reasons": video_reasons,
-                    "media": video_media,
-                    "target_duration_seconds": action["duration_seconds"],
-                    "generation": _generation_provenance(
-                        model="cosmos-predict2.5",
-                        checkpoint=DEFAULT_COSMOS_CHECKPOINT,
-                        seed=seed,
-                        prompt_version=VIDEO_PROMPT_VERSION,
-                        request_sha256=cosmos_request_sha,
-                    ),
-                },
+                "backend": "cosmos",
+                "model": "cosmos-predict2.5",
+                "checkpoint": DEFAULT_COSMOS_CHECKPOINT,
+                "seed": seed,
+                "prompt_version": VIDEO_PROMPT_VERSION,
+                "input_image_path": str(source_path.resolve()),
+                "input_image_sha256": source_sha,
+                "output_path": str(video_output),
+                "frame_output_dir": str(frame_dir),
+                "duration_seconds": action["duration_seconds"],
+                "prompt": cosmos_prompt,
+                "request_sha256": cosmos_request_sha,
             }
-        )
+            assert_safe_generation_job(cosmos_job)
+            if video_eligible:
+                cosmos_jobs.append(cosmos_job)
+                official_input = {
+                    "inference_type": "image2world",
+                    "name": uid,
+                    "prompt": cosmos_prompt,
+                    "input_path": str(source_path.resolve()),
+                }
+                (cosmos_input_dir / f"{uid}.json").write_text(
+                    json.dumps(official_input, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                video_media = [
+                    {
+                        "path": str(source_path.resolve()),
+                        "role": "motion_reference_view",
+                        "kind": "context",
+                        "sha256": source_sha,
+                    },
+                    *[
+                        {
+                            "path": str(frame_dir / f"frame_{index:02d}.jpg"),
+                            "role": "predicted_video_frame",
+                            "kind": "prediction",
+                            "frame_index": index,
+                        }
+                        for index in range(8)
+                    ],
+                    *context_tail,
+                ]
+            else:
+                video_media = []
+            video_entries.append(
+                {
+                    **common_identity,
+                    "video": {
+                        "eligible": video_eligible,
+                        "rejection_reasons": video_reasons,
+                        "media": video_media,
+                        "target_duration_seconds": action["duration_seconds"],
+                        "generation": _generation_provenance(
+                            model="cosmos-predict2.5",
+                            checkpoint=DEFAULT_COSMOS_CHECKPOINT,
+                            seed=seed,
+                            prompt_version=VIDEO_PROMPT_VERSION,
+                            request_sha256=cosmos_request_sha,
+                        ),
+                    },
+                }
+            )
 
     if expected_picture_per_type > 0:
         excess_counts = {
@@ -682,6 +765,8 @@ def prepare_jobs(
     }
     job_paths: dict[str, Path] = {}
     for backend, jobs in (("qwen", qwen_jobs), ("gpt", gpt_jobs), ("cosmos", cosmos_jobs)):
+        if backend not in generation_backends:
+            continue
         path = private_dir / f"{backend}_jobs.json"
         path.write_text(
             json.dumps({**job_metadata, "backend": backend, "entries": jobs}, ensure_ascii=False, indent=2),
@@ -689,19 +774,24 @@ def prepare_jobs(
         )
         job_paths[f"{backend}_jobs"] = path
 
-    public_metadata = {
-        "prompt_version_picture": PICTURE_PROMPT_VERSION,
-        "prompt_version_video": VIDEO_PROMPT_VERSION,
-        "seed": seed,
-        "benchmark_sha256": _sha256_file(benchmark_path),
-    }
     for backend in ("qwen", "gpt"):
+        if backend not in generation_backends:
+            continue
+        picture_prompt_version = (
+            QWEN_PICTURE_PROMPT_VERSION if backend == "qwen" else GPT_PICTURE_PROMPT_VERSION
+        )
         path = manifest_dir / f"{backend}_picture.json"
         path.write_text(
             json.dumps(
                 {
                     "schema_version": ROLLOUT_SCHEMA_VERSION,
-                    "metadata": {**public_metadata, "generator": backend},
+                    "metadata": {
+                        "prompt_version_picture": picture_prompt_version,
+                        "prompt_version_video": VIDEO_PROMPT_VERSION,
+                        "seed": seed,
+                        "benchmark_sha256": _sha256_file(benchmark_path),
+                        "generator": backend,
+                    },
                     "entries": picture_entries[backend],
                 },
                 ensure_ascii=False,
@@ -710,21 +800,28 @@ def prepare_jobs(
             encoding="utf-8",
         )
         job_paths[f"{backend}_manifest"] = path
-    cosmos_manifest_path = manifest_dir / "cosmos_video.json"
-    cosmos_manifest_path.write_text(
-        json.dumps(
-            {
-                "schema_version": ROLLOUT_SCHEMA_VERSION,
-                "metadata": {**public_metadata, "generator": "cosmos-predict2.5"},
-                "entries": video_entries,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    job_paths["cosmos_manifest"] = cosmos_manifest_path
-    job_paths["cosmos_inputs"] = cosmos_input_dir
+    if "cosmos" in generation_backends:
+        cosmos_manifest_path = manifest_dir / "cosmos_video.json"
+        cosmos_manifest_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": ROLLOUT_SCHEMA_VERSION,
+                    "metadata": {
+                        "prompt_version_picture": GPT_PICTURE_PROMPT_VERSION,
+                        "prompt_version_video": VIDEO_PROMPT_VERSION,
+                        "seed": seed,
+                        "benchmark_sha256": _sha256_file(benchmark_path),
+                        "generator": "cosmos-predict2.5",
+                    },
+                    "entries": video_entries,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        job_paths["cosmos_manifest"] = cosmos_manifest_path
+        job_paths["cosmos_inputs"] = cosmos_input_dir
     return job_paths
 
 
@@ -737,6 +834,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannetpp_frame_root", type=Path, default=None)
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone")
     parser.add_argument("--seed", type=int, default=20260725)
+    parser.add_argument(
+        "--backends",
+        nargs="+",
+        choices=sorted(GENERATION_BACKENDS),
+        default=sorted(GENERATION_BACKENDS),
+        help="generation artifacts to recreate; use qwen alone to preserve GPT and Cosmos artifacts",
+    )
     parser.add_argument(
         "--expected_picture_per_type",
         type=int,
@@ -772,6 +876,7 @@ def main(argv: list[str] | None = None) -> None:
         output_dir=args.output_dir,
         seed=args.seed,
         expected_picture_per_type=args.expected_picture_per_type,
+        generation_backends=frozenset(args.backends),
     )
     print(f"{'selection_spec':20s}: {selection_paths.spec}")
     print(f"{'selection_audit':20s}: {selection_paths.audit}")

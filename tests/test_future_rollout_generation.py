@@ -201,7 +201,17 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 poses={"source.jpg": self._pose([0, 0, 0])},
                 data_source=SimpleNamespace(image_path=lambda name: root / name),
             )
-            entry = _materialize_route(candidate, context, root / "rollout")
+            qwen_reference = {
+                "path": str(root / "qwen_reference.png"),
+                "role": "moving_group_reference",
+                "sha256": "a" * 64,
+            }
+            with patch.object(
+                selection_generator,
+                "_materialize_qwen_moving_group_reference",
+                return_value=qwen_reference,
+            ):
+                entry = _materialize_route(candidate, context, root / "rollout")
             self.assertEqual(
                 [item["role"] for item in entry["generation_images"]],
                 ["source_view", "source_to_destination_bridge", "destination_environment"],
@@ -210,7 +220,49 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 [item["role"] for item in entry["answer_context_media"]],
                 ["destination_to_query_bridge", "query_reference_view"],
             )
+            self.assertEqual(entry["qwen_reference_image"], qwen_reference)
             self.assertTrue(all(Path(item["path"]).is_file() for item in entry["generation_images"]))
+
+    def test_qwen_reference_is_a_padded_moving_group_crop(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            Image.new("RGB", (100, 80), color=(20, 30, 40)).save(source)
+            moved = self._object(1, [0.0, 0.0, 0.5], "table")
+            candidate = RouteCandidate(
+                question={
+                    "question_uid": "uid-1",
+                    "type": "object_move_agent",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 1,
+                    "delta": [0.5, 0.0, 0.0],
+                },
+                source_index=0,
+                dataset="scannet",
+                scene_id="scene0000_00",
+                generation_image_names=("source.png", "destination.png"),
+                generation_roles=("source_view", "destination_environment"),
+                score_key=(1.0,),
+                metrics={},
+            )
+            context = SimpleNamespace(
+                objects=[moved],
+                objects_by_id={1: moved},
+                attachment_graph={},
+                poses={"source.png": self._pose([0, 0, 0])},
+                intrinsics=SimpleNamespace(width=100, height=80),
+            )
+            with patch.object(
+                selection_generator,
+                "_project_object_roi",
+                return_value={"roi_bounds": (40, 60, 20, 40)},
+            ):
+                reference = selection_generator._materialize_qwen_moving_group_reference(
+                    candidate, context, root / "rollout", source
+                )
+            self.assertEqual(reference["role"], "moving_group_reference")
+            with Image.open(reference["path"]) as image:
+                self.assertEqual(image.size, (44, 44))
 
     def test_static_visibility_uses_registered_depth_before_mesh_fallback(self) -> None:
         obj = self._object(1, [0.0, 0.0, 1.0], "table")
@@ -395,9 +447,11 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             source = root / "source.png"
             bridge = root / "bridge.png"
             destination = root / "destination.png"
+            qwen_reference = root / "qwen_reference.png"
             Image.new("RGB", (32, 24), color=(10, 20, 30)).save(source)
             Image.new("RGB", (40, 30), color=(20, 30, 40)).save(bridge)
             Image.new("RGB", (48, 36), color=(30, 40, 50)).save(destination)
+            Image.new("RGB", (12, 10), color=(25, 35, 45)).save(qwen_reference)
             benchmark_path = root / "benchmark.json"
             benchmark_path.write_text(
                 json.dumps(
@@ -442,6 +496,11 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                                         "role": "destination_environment",
                                     },
                                 ],
+                                "qwen_reference_image": {
+                                    "path": str(qwen_reference),
+                                    "role": "moving_group_reference",
+                                    "sha256": selection_generator._sha256_file(qwen_reference),
+                                },
                                 "camera_rotation_world_to_camera": self.CAMERA_ROTATION_WORLD_TO_CAMERA,
                                 "picture_eligible": True,
                                 "video_eligible": True,
@@ -472,8 +531,26 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             qwen_jobs = json.loads(outputs["qwen_jobs"].read_text(encoding="utf-8"))
             gpt_job = gpt_jobs["entries"][0]
             qwen_job = qwen_jobs["entries"][0]
-            self.assertEqual(gpt_job["input_images"], qwen_job["input_images"])
-            self.assertEqual(gpt_job["prompt"], qwen_job["prompt"])
+            self.assertEqual(
+                [item["role"] for item in qwen_job["input_images"]],
+                ["moving_group_reference", "destination_environment"],
+            )
+            self.assertEqual(qwen_job["input_images"][-1], gpt_job["input_images"][-1])
+            self.assertIn("Never make a collage", qwen_job["prompt"])
+            self.assertNotEqual(gpt_job["prompt"], qwen_job["prompt"])
+            cosmos_jobs_before = outputs["cosmos_jobs"].read_bytes()
+            cosmos_manifest_before = outputs["cosmos_manifest"].read_bytes()
+            qwen_only_outputs = prepare_jobs(
+                benchmark_path=benchmark_path,
+                selection_spec_path=selection_path,
+                output_dir=root / "rollouts",
+                seed=7,
+                expected_picture_per_type=50,
+                generation_backends=frozenset({"qwen"}),
+            )
+            self.assertEqual(set(qwen_only_outputs), {"qwen_jobs", "qwen_manifest"})
+            self.assertEqual(outputs["cosmos_jobs"].read_bytes(), cosmos_jobs_before)
+            self.assertEqual(outputs["cosmos_manifest"].read_bytes(), cosmos_manifest_before)
             self.assertNotIn("input_image_path", gpt_job)
             self.assertNotIn("where is the chair", gpt_job["prompt"].lower())
 
@@ -510,6 +587,15 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             self.assertEqual(len(full), 4)
             with Image.open(full[-1].path) as generated:
                 self.assertEqual(generated.size, (48, 36))
+
+            qwen_stats = run_jobs(
+                jobs_path=outputs["qwen_jobs"],
+                manifest_path=outputs["qwen_manifest"],
+                generate=fake_generate,
+                retries=0,
+                retry_delay=0,
+            )
+            self.assertEqual(qwen_stats, {"generated": 1, "cached": 0, "failed": 0})
 
             cached = run_jobs(
                 jobs_path=outputs["gpt_jobs"],

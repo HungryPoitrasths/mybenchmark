@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 import numpy as np
+from PIL import Image
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -662,6 +663,53 @@ def _copy_media(source: Path, target: Path) -> Path:
     return target.resolve()
 
 
+def _materialize_qwen_moving_group_reference(
+    candidate: RouteCandidate,
+    context: SceneContext,
+    output_dir: Path,
+    source_image: Path,
+) -> dict[str, str]:
+    """Crop the source-view moving group so Qwen does not receive two full scenes."""
+    motion = _apply_question_motion(
+        candidate.question, context.objects, context.attachment_graph
+    )
+    source_pose = context.poses[candidate.generation_image_names[0]]
+    bounds: list[tuple[int, int, int, int]] = []
+    for obj_id in motion.moved_ids:
+        roi_bounds = _project_object_roi(
+            context.objects_by_id[obj_id], source_pose, context.intrinsics
+        ).get("roi_bounds")
+        if roi_bounds is None:
+            raise ValueError(f"{candidate.question['question_uid']}: missing source ROI for {obj_id}")
+        bounds.append(tuple(int(value) for value in roi_bounds))
+
+    with Image.open(source_image) as image:
+        width, height = image.size
+        intrinsic_width = max(int(context.intrinsics.width), 1)
+        intrinsic_height = max(int(context.intrinsics.height), 1)
+        left = min(item[0] for item in bounds) * width // intrinsic_width
+        right = max(item[1] for item in bounds) * width // intrinsic_width
+        top = min(item[2] for item in bounds) * height // intrinsic_height
+        bottom = max(item[3] for item in bounds) * height // intrinsic_height
+        padding = max(12, round(0.15 * max(right - left, bottom - top)))
+        left = max(0, left - padding)
+        top = max(0, top - padding)
+        right = min(width, right + padding)
+        bottom = min(height, bottom + padding)
+        if right - left < 2 or bottom - top < 2:
+            raise ValueError(f"{candidate.question['question_uid']}: invalid moving-group crop")
+        reference = image.convert("RGB").crop((left, top, right, bottom))
+
+    target = output_dir / "media" / "qwen_references" / f"{candidate.question['question_uid']}.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    reference.save(target, format="PNG")
+    return {
+        "path": str(target.resolve()),
+        "role": "moving_group_reference",
+        "sha256": _sha256_file(target),
+    }
+
+
 def _materialize_route(
     candidate: RouteCandidate, context: SceneContext, output_dir: Path
 ) -> dict[str, Any]:
@@ -691,6 +739,9 @@ def _materialize_route(
     motion = _apply_question_motion(
         candidate.question, context.objects, context.attachment_graph
     )
+    qwen_reference = _materialize_qwen_moving_group_reference(
+        candidate, context, output_dir, copied_by_role["source_view"]
+    )
     moving_group = [
         {
             "obj_id": obj_id,
@@ -705,6 +756,7 @@ def _materialize_route(
         "question_uid": uid,
         "source_index": candidate.source_index,
         "generation_images": generation_images,
+        "qwen_reference_image": qwen_reference,
         "camera_rotation_world_to_camera": np.asarray(
             source_pose.rotation, dtype=np.float64
         ).tolist(),

@@ -31,6 +31,10 @@ earlier frame. Without a bridge it uses source and destination only.
     {"path": "frames/bridge.jpg", "role": "source_to_destination_bridge"},
     {"path": "frames/destination.jpg", "role": "destination_environment"}
   ],
+  "qwen_reference_image": {
+    "path": "media/qwen_references/uid.png",
+    "role": "moving_group_reference"
+  },
   "camera_rotation_world_to_camera": [
     [1.0, 0.0, 0.0],
     [0.0, 0.94, -0.34],
@@ -76,15 +80,15 @@ python scripts/prepare_future_rollout_jobs.py `
 
 ## Picture generation
 
-Qwen and GPT receive identical ordered image lists, prompts, seeds, and question
-order. The prompt identifies Image 1 as the source, an optional Image 2 as the
-route bridge, and the final image as the destination canvas. The output must
-preserve the final image's camera, composition, dimensions, and static scene
-while placing the rigid moving group at its endpoint exactly once.
+GPT receives the ordered source, optional bridge, and destination views. Qwen
+receives a compact source-view crop of the moving group plus the full destination
+environment. The destination is Qwen's only output canvas; the crop supplies
+appearance reference without asking the model to fuse two complete room views.
+The Qwen prompt explicitly rejects collages, split screens, mirrored rooms, and
+duplicated camera views.
 
-This project caps Qwen-Image-Edit-2511 at three input images as an engineering
-choice. The Diffusers `QwenImageEditPlusPipeline` accepts an image list, but the
-three-image cap is not claimed to be a proven model maximum.
+Qwen's two-image job format is `moving_group_reference`, then
+`destination_environment`. Its input hashes are checked at generation time.
 
 Run Qwen first, initially with one preflight job:
 
@@ -95,7 +99,7 @@ python scripts/run_future_picture_generation.py `
   --manifest rollout/run_20260729/manifests/qwen_picture.json `
   --qwen_checkpoint /path/to/Qwen-Image-Edit-2511 `
   --device cuda `
-  --qwen_cpu_offload `
+  --qwen_num_inference_steps 28 `
   --limit 1
 ```
 
@@ -113,6 +117,11 @@ python scripts/run_future_picture_generation.py `
 Remove `--limit 1` after preflight. Every input hash is checked at generation
 time. Both backends normalize output to the final destination image dimensions
 and update manifests incrementally for resumable execution.
+
+To recreate only the Qwen selection artifacts, moving-group crops, jobs, and
+picture manifest while preserving completed GPT and Cosmos artifacts, rerun the
+preparation command with `--backends qwen`. Cosmos receives the original source
+view as its Image2World input; it does not consume Qwen's predicted image.
 
 ## Cosmos single-image baseline
 
