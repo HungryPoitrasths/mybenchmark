@@ -646,6 +646,46 @@ def _load_scene_context(
     )
 
 
+def _load_materialization_context(
+    *,
+    dataset: str,
+    scene_id: str,
+    scannet_root: Path | None,
+    scannetpp_root: Path | None,
+    scannetpp_frame_root: Path | None,
+    scannetpp_sensor: str,
+) -> SceneContext:
+    """Load only the camera and object data needed to copy views and make crops."""
+    root = scannetpp_root if dataset == "scannetpp" else scannet_root
+    scene_dir = _resolve_scene_dir(root, dataset, scene_id)
+    data_source = make_data_source(
+        dataset,
+        scene_dir,
+        sensor=scannetpp_sensor,
+        frame_root=scannetpp_frame_root,
+    )
+    scene = data_source.load_scene()
+    try:
+        attachment_graph = get_scene_attachment_graph(scene)
+    except KeyError:
+        enrich_scene_with_attachment(scene)
+        attachment_graph = get_scene_attachment_graph(scene)
+    objects = [obj for obj in scene.get("objects", []) if isinstance(obj, dict)]
+    return SceneContext(
+        dataset=dataset,
+        scene_id=scene_id,
+        scene_dir=scene_dir,
+        data_source=data_source,
+        objects=objects,
+        objects_by_id={int(obj["id"]): obj for obj in objects},
+        attachment_graph=attachment_graph,
+        intrinsics=data_source.load_intrinsics(),
+        poses=data_source.load_poses(),
+        ray_caster=None,
+        instance_mesh_data=None,
+    )
+
+
 def _question_required_instance_ids(question: dict[str, Any]) -> set[int]:
     required = {
         _coerce_int(question.get("moved_obj_id"), field="moved_obj_id"),
@@ -800,18 +840,23 @@ def _materialize_routes(
     for candidate in candidates:
         grouped[(candidate.dataset, candidate.scene_id)].append(candidate)
     materialized: dict[int, dict[str, Any]] = {}
-    for (dataset, scene_id), scene_candidates in grouped.items():
-        required_ids: set[int] = set()
-        for candidate in scene_candidates:
-            required_ids.update(_question_required_instance_ids(candidate.question))
-        context = _load_scene_context(
+    scene_count = len(grouped)
+    for scene_index, ((dataset, scene_id), scene_candidates) in enumerate(
+        grouped.items(), start=1
+    ):
+        print(
+            f"[selection] materializing {scene_index}/{scene_count} "
+            f"{dataset}:{scene_id} routes={len(scene_candidates)}",
+            file=sys.stderr,
+            flush=True,
+        )
+        context = _load_materialization_context(
             dataset=dataset,
             scene_id=scene_id,
             scannet_root=scannet_root,
             scannetpp_root=scannetpp_root,
             scannetpp_frame_root=scannetpp_frame_root,
             scannetpp_sensor=scannetpp_sensor,
-            required_instance_ids=required_ids,
         )
         for candidate in scene_candidates:
             materialized[candidate.source_index] = _materialize_route(
