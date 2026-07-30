@@ -22,6 +22,14 @@ from src.cot.evaluation import evaluate_predictions
 
 CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
 STANDARD_TRAIN_COUNTS = {8_000, 10_000}
+CUDA_DEVICE_ORDER = "PCI_BUS_ID"
+
+
+def build_cuda_environment(devices: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["CUDA_DEVICE_ORDER"] = CUDA_DEVICE_ORDER
+    env["CUDA_VISIBLE_DEVICES"] = devices
+    return env
 
 
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -580,8 +588,7 @@ def main() -> int:
     }
     write_json(args.output_dir / "pilot_manifest.json", manifest)
 
-    train_env = os.environ.copy()
-    train_env["CUDA_VISIBLE_DEVICES"] = args.devices
+    train_env = build_cuda_environment(args.devices)
     train_env["NPROC_PER_NODE"] = str(world_size)
     train_env["COT_SFT_TRAIN_COUNT"] = str(len(train_rows))
     train_env["COT_SFT_GLOBAL_BATCH"] = str(global_batch)
@@ -618,8 +625,7 @@ def main() -> int:
         )
         return 0
 
-    eval_env = os.environ.copy()
-    eval_env["CUDA_VISIBLE_DEVICES"] = args.devices.split(",")[0].strip()
+    eval_env = build_cuda_environment(args.devices.split(",")[0].strip())
     monitor_dir = args.output_dir / "monitor"
     summaries: list[dict[str, Any]] = []
 

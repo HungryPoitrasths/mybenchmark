@@ -145,6 +145,8 @@ python scripts/run_cot_sft_pilot.py `
 
 Remove `--dry-run` to train. The launcher defaults to PyTorch SDPA, so Flash Attention is optional. It disables external experiment reporters (`--report_to none`); the milestone callback writes the required loss, checkpoint, and evaluation artifacts without TensorBoard. It uses the explicit `adamw_torch` AdamW optimizer, BF16 LoRA on the language model, leaves the vision encoder frozen, trains the aligner, and uses global batch 32. Its callback logs training loss every 100 sample exposures, saves a checkpoint every 500 exposures, and computes teacher-forced validation loss every 2000 exposures. Each evaluation prints `eval_loss` to the terminal and writes all evaluation metrics to the corresponding `checkpoint-*/eval_metrics.json`. For the initial 8k, two-epoch run, this produces 160 training-loss records, 32 checkpoints, and 8 validation points. Each reported sample count is at most 31 samples beyond its target milestone.
 
+The launcher sets `CUDA_DEVICE_ORDER=PCI_BUS_ID`, so numeric values passed to `--devices` match the physical indices printed by `nvidia-smi`, including on mixed-GPU servers where CUDA's default fastest-first order differs from PCI order.
+
 After training, the launcher maps the eight evaluation checkpoints to `samples_seen_02000` through `samples_seen_16000`, runs deterministic generation on the same monitoring questions for those checkpoints, and writes:
 
 - `checkpoint_index.json`: global-step to sample-exposure mapping;

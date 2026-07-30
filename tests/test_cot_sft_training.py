@@ -250,6 +250,17 @@ def test_8k_training_loss_schedule_has_160_points() -> None:
     assert schedule[500] == 16_000
 
 
+def test_cuda_environment_uses_nvidia_smi_pci_order(monkeypatch) -> None:
+    script = _load_pilot_script()
+    monkeypatch.setenv("CUDA_DEVICE_ORDER", "FASTEST_FIRST")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "4,5")
+
+    env = script.build_cuda_environment("0,1")
+
+    assert env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+    assert env["CUDA_VISIBLE_DEVICES"] == "0,1"
+
+
 def test_sft_command_registers_exact_milestone_callback(tmp_path: Path) -> None:
     script = _load_pilot_script()
     args = Namespace(
