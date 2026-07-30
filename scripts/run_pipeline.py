@@ -142,7 +142,7 @@ RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
 CROSS_FRAME_CHECKPOINT_VERSION = 3
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
-L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 150, "train": 600}
+L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 300, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -9427,7 +9427,7 @@ def main():
         help="Dataset split. ScanNet v2: filters discovered scene dirs by the matching "
         "SCANNET_METADATA_SPLIT_FILES entry. ScanNet++: selects the matching "
         "SCANNETPP_METADATA_SPLIT_FILES entry; overridden by --scannetpp_split_file. "
-        "Candidate budgets per scene/type are val L1=75 and L2/L3=150, or "
+            "Candidate budgets per scene/type are val L1=75 and L2/L3=300, or "
         "train L1=300 and L2/L3=600; final type totals are not capped. "
         "'all' or omitted scans every scene directory under --data_root.",
     )
