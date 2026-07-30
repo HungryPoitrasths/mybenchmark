@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from argparse import Namespace
 from pathlib import Path
 
@@ -351,6 +352,47 @@ def test_latest_resume_skips_incomplete_checkpoint(tmp_path: Path) -> None:
     incomplete = tmp_path / "checkpoint-32"
     incomplete.mkdir()
     (incomplete / "eval_metrics.json").write_text("{}\n", encoding="utf-8")
+
+    selected = script.resolve_resume_checkpoint("latest", tmp_path)
+
+    assert selected == complete
+
+
+def test_nested_checkpoint_discovery_uses_latest_complete_run(tmp_path: Path) -> None:
+    script = _load_pilot_script()
+    old_run = tmp_path / "v7-20260730-080000"
+    new_run = tmp_path / "v8-20260730-091012"
+    old_checkpoint = old_run / "checkpoint-63"
+    new_checkpoint = new_run / "checkpoint-125"
+    for checkpoint in (old_checkpoint, new_checkpoint):
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.json").write_text("{}\n", encoding="utf-8")
+        (checkpoint / "adapter_model.safetensors").write_bytes(b"weights")
+    os.utime(old_run, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(new_run, ns=(2_000_000_000, 2_000_000_000))
+
+    rows = script.discover_checkpoints(
+        tmp_path,
+        train_count=8_000,
+        global_batch=32,
+    )
+
+    assert [row["global_step"] for row in rows] == [125]
+    assert Path(rows[0]["path"]) == new_checkpoint.resolve()
+
+
+def test_latest_resume_uses_newest_run_with_complete_checkpoint(tmp_path: Path) -> None:
+    script = _load_pilot_script()
+    complete = tmp_path / "v7-20260730-080000" / "checkpoint-500"
+    complete.mkdir(parents=True)
+    (complete / "trainer_state.json").write_text("{}\n", encoding="utf-8")
+    (complete / "adapter_model.safetensors").write_bytes(b"weights")
+    incomplete_run = tmp_path / "v8-20260730-091012"
+    incomplete = incomplete_run / "checkpoint-16"
+    incomplete.mkdir(parents=True)
+    (incomplete / "eval_metrics.json").write_text("{}\n", encoding="utf-8")
+    os.utime(complete.parent, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(incomplete_run, ns=(2_000_000_000, 2_000_000_000))
 
     selected = script.resolve_resume_checkpoint("latest", tmp_path)
 

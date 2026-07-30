@@ -121,15 +121,41 @@ def is_resumable_checkpoint(path: Path) -> bool:
     return any((path / name).is_file() for name in weight_names)
 
 
+def checkpoint_directories(output_dir: Path) -> list[Path]:
+    if not output_dir.is_dir():
+        return []
+    groups: dict[Path, list[Path]] = {}
+    for path in output_dir.rglob("checkpoint-*"):
+        if path.is_dir() and CHECKPOINT_RE.fullmatch(path.name) is not None:
+            groups.setdefault(path.parent, []).append(path)
+    if not groups:
+        return []
+
+    complete_groups = {
+        parent: paths
+        for parent, paths in groups.items()
+        if any(is_resumable_checkpoint(path) for path in paths)
+    }
+    candidates = complete_groups or groups
+    _, selected = max(
+        candidates.items(),
+        key=lambda item: (item[0].stat().st_mtime_ns, str(item[0])),
+    )
+    return sorted(
+        selected,
+        key=lambda path: int(CHECKPOINT_RE.fullmatch(path.name).group(1)),
+    )
+
+
 def resolve_resume_checkpoint(value: str | None, output_dir: Path) -> Path | None:
     if value is None:
         return None
     if value.strip().lower() == "latest":
         candidates = [
             path
-            for path in output_dir.iterdir()
+            for path in checkpoint_directories(output_dir)
             if is_resumable_checkpoint(path)
-        ] if output_dir.is_dir() else []
+        ]
         if not candidates:
             raise ValueError(f"no resumable checkpoint found in {output_dir}")
         return max(candidates, key=lambda path: int(CHECKPOINT_RE.fullmatch(path.name).group(1)))
@@ -141,19 +167,6 @@ def resolve_resume_checkpoint(value: str | None, output_dir: Path) -> Path | Non
     return checkpoint
 
 
-def checkpoint_directories(output_dir: Path) -> list[Path]:
-    if not output_dir.is_dir():
-        return []
-    return sorted(
-        (
-            path
-            for path in output_dir.iterdir()
-            if path.is_dir() and CHECKPOINT_RE.fullmatch(path.name) is not None
-        ),
-        key=lambda path: int(CHECKPOINT_RE.fullmatch(path.name).group(1)),
-    )
-
-
 def discover_checkpoints(
     output_dir: Path,
     *,
@@ -161,12 +174,11 @@ def discover_checkpoints(
     global_batch: int,
 ) -> list[dict[str, Any]]:
     checkpoints: list[dict[str, Any]] = []
-    if not output_dir.is_dir():
-        return checkpoints
-    for path in output_dir.iterdir():
+    paths = checkpoint_directories(output_dir)
+    if any(is_resumable_checkpoint(path) for path in paths):
+        paths = [path for path in paths if is_resumable_checkpoint(path)]
+    for path in paths:
         match = CHECKPOINT_RE.fullmatch(path.name)
-        if match is None or not path.is_dir():
-            continue
         step = int(match.group(1))
         checkpoint = {
             "path": str(path.resolve()),
