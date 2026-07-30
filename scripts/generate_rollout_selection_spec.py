@@ -53,7 +53,7 @@ from src.virtual_ops import apply_movement, apply_orbit_rotation  # noqa: E402
 SELECTION_SCHEMA_VERSION = "predictive-spatial-selection-v2"
 SELECTION_AUDIT_SCHEMA_VERSION = "predictive-spatial-selection-audit-v2"
 SELECTION_CHECKPOINT_SCHEMA_VERSION = "predictive-spatial-selection-checkpoint-v2"
-SELECTION_ALGORITHM_VERSION = "source-destination-route-v3"
+SELECTION_ALGORITHM_VERSION = "source-destination-route-v4"
 MESH_RAY_SURFACE_SAMPLES = 64
 MESH_RAY_BBOX_SAMPLES = 0
 MESH_RAY_LOCAL_RESAMPLES = 4
@@ -519,11 +519,9 @@ def _evaluate_question_route(
         for obj_id in motion.moved_ids:
             obj = context.objects_by_id[obj_id]
             _, projection = _projection_gate(obj, source_pose, context)
-            visible, ratio, backend, visibility = _cached_static_visibility(
+            _, ratio, backend, visibility = _cached_static_visibility(
                 obj, image_name=source_name, pose=source_pose, context=context
             )
-            if not visible:
-                return None, f"source_not_fully_visible:{obj_id}"
             source_ratios.append(ratio)
             source_metrics[str(obj_id)] = {
                 "projection": projection,
@@ -536,14 +534,10 @@ def _evaluate_question_route(
         destination_ratios: list[float] = []
         for obj_id in motion.moved_ids:
             moved_obj = motion.moved_objects_by_id[obj_id]
-            projection_ok, projection = _projection_gate(moved_obj, destination_pose, context)
-            if not projection_ok:
-                return None, f"destination_projection_gate_failed:{obj_id}"
-            visible, ratio, visibility = _future_visibility(
+            _, projection = _projection_gate(moved_obj, destination_pose, context)
+            _, ratio, visibility = _future_visibility(
                 obj_id, pose=destination_pose, context=context, motion=motion
             )
-            if not visible:
-                return None, f"destination_future_not_fully_visible:{obj_id}"
             destination_ratios.append(ratio)
             destination_metrics[str(obj_id)] = {
                 "projection": projection,
@@ -555,17 +549,13 @@ def _evaluate_question_route(
         query_id = _coerce_int(question.get("query_obj_id"), field="query_obj_id")
         if query_id not in motion.moved_ids:
             query_obj = context.objects_by_id[query_id]
-            projection_ok, projection = _projection_gate(query_obj, destination_pose, context)
-            if not projection_ok:
-                return None, f"destination_query_projection_gate_failed:{query_id}"
-            visible, ratio, backend, visibility = _cached_static_visibility(
+            _, projection = _projection_gate(query_obj, destination_pose, context)
+            _, ratio, backend, visibility = _cached_static_visibility(
                 query_obj,
                 image_name=destination_name,
                 pose=destination_pose,
                 context=context,
             )
-            if not visible:
-                return None, f"destination_query_not_fully_visible:{query_id}"
             destination_metrics[f"query:{query_id}"] = {
                 "projection": projection,
                 "visibility_backend": backend,
