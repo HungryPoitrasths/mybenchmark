@@ -53,7 +53,7 @@ from src.virtual_ops import apply_movement, apply_orbit_rotation  # noqa: E402
 SELECTION_SCHEMA_VERSION = "predictive-spatial-selection-v2"
 SELECTION_AUDIT_SCHEMA_VERSION = "predictive-spatial-selection-audit-v2"
 SELECTION_CHECKPOINT_SCHEMA_VERSION = "predictive-spatial-selection-checkpoint-v2"
-SELECTION_ALGORITHM_VERSION = "source-destination-route-v2"
+SELECTION_ALGORITHM_VERSION = "source-destination-route-v3"
 MESH_RAY_SURFACE_SAMPLES = 64
 MESH_RAY_BBOX_SAMPLES = 0
 MESH_RAY_LOCAL_RESAMPLES = 4
@@ -518,9 +518,7 @@ def _evaluate_question_route(
         source_ratios: list[float] = []
         for obj_id in motion.moved_ids:
             obj = context.objects_by_id[obj_id]
-            projection_ok, projection = _projection_gate(obj, source_pose, context)
-            if not projection_ok:
-                return None, f"source_projection_gate_failed:{obj_id}"
+            _, projection = _projection_gate(obj, source_pose, context)
             visible, ratio, backend, visibility = _cached_static_visibility(
                 obj, image_name=source_name, pose=source_pose, context=context
             )
