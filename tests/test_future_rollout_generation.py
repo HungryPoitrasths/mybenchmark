@@ -606,6 +606,25 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             )
             self.assertEqual(cached, {"generated": 0, "cached": 1, "failed": 0})
 
+            prepared_again = prepare_jobs(
+                benchmark_path=benchmark_path,
+                selection_spec_path=selection_path,
+                output_dir=root / "rollouts",
+                seed=7,
+                expected_picture_per_type=50,
+            )
+            cached_after_prepare = run_jobs(
+                jobs_path=prepared_again["gpt_jobs"],
+                manifest_path=prepared_again["gpt_manifest"],
+                generate=fake_generate,
+                retries=0,
+                retry_delay=0,
+            )
+            self.assertEqual(
+                cached_after_prepare, {"generated": 0, "cached": 1, "failed": 0}
+            )
+            self.assertEqual(calls.count(uid), 2)
+
             cosmos_input = json.loads(
                 next(outputs["cosmos_inputs"].glob("*.json")).read_text(encoding="utf-8")
             )

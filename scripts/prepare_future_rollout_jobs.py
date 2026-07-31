@@ -500,6 +500,41 @@ def _generation_provenance(
     }
 
 
+def _completed_picture_results(manifest_path: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """Load reusable generation records before replacing an existing manifest."""
+    if not manifest_path.is_file():
+        return {}
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    results: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in payload.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        uid = str(entry.get("question_uid") or "")
+        picture = entry.get("picture")
+        generation = picture.get("generation") if isinstance(picture, dict) else None
+        if not uid or not isinstance(generation, dict):
+            continue
+        request_sha = str(generation.get("request_sha256") or "")
+        if generation.get("status") not in {"succeeded", "cached"} or len(request_sha) != 64:
+            continue
+        prediction = next(
+            (
+                item
+                for item in picture.get("media", [])
+                if isinstance(item, dict) and item.get("kind") == "prediction"
+            ),
+            None,
+        )
+        output_sha = str(prediction.get("sha256") or "").lower() if prediction else ""
+        if len(output_sha) != 64:
+            continue
+        results[(uid, request_sha)] = {
+            "generation": dict(generation),
+            "output_sha256": output_sha,
+        }
+    return results
+
+
 def prepare_jobs(
     *,
     benchmark_path: Path,
@@ -524,6 +559,11 @@ def prepare_jobs(
     qwen_media_dir = output_dir / "media" / "qwen"
     cosmos_media_dir = output_dir / "media" / "cosmos"
     cosmos_input_dir = private_dir / "cosmos_inputs"
+    completed_picture_results = {
+        backend: _completed_picture_results(manifest_dir / f"{backend}_picture.json")
+        for backend in ("gpt", "qwen")
+        if backend in generation_backends
+    }
     for directory in (
         private_dir,
         manifest_dir,
@@ -627,9 +667,27 @@ def prepare_jobs(
                 "request_sha256": request_sha,
             }
             assert_safe_generation_job(job)
+            generation = _generation_provenance(
+                model=model,
+                checkpoint=checkpoint,
+                seed=seed,
+                prompt_version=prompt_version,
+                request_sha256=request_sha,
+            )
             if picture_eligible:
                 jobs.append(job)
                 picture_counts[qtype] += 1 if backend == "qwen" else 0
+                prediction = {
+                    "path": str(output_path),
+                    "role": "predicted_future_view",
+                    "kind": "prediction",
+                }
+                completed = completed_picture_results.get(backend, {}).get(
+                    (uid, request_sha)
+                )
+                if completed is not None:
+                    generation = completed["generation"]
+                    prediction["sha256"] = completed["output_sha256"]
                 media = [
                     *[
                         {
@@ -640,11 +698,7 @@ def prepare_jobs(
                         }
                         for item in generation_images
                     ],
-                    {
-                        "path": str(output_path),
-                        "role": "predicted_future_view",
-                        "kind": "prediction",
-                    },
+                    prediction,
                 ]
             else:
                 media = []
@@ -655,13 +709,7 @@ def prepare_jobs(
                         "eligible": picture_eligible,
                         "rejection_reasons": picture_reasons,
                         "media": media,
-                        "generation": _generation_provenance(
-                            model=model,
-                            checkpoint=checkpoint,
-                            seed=seed,
-                            prompt_version=prompt_version,
-                            request_sha256=request_sha,
-                        ),
+                        "generation": generation,
                     },
                 }
             )
