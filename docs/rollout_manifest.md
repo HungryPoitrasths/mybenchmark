@@ -49,13 +49,14 @@ earlier frame. Without a bridge it uses source and destination only.
 }
 ```
 
-The source view must pass image-quality, projection, and visibility checks for
-every moved object and transitive attachment at its original position. The
-destination view must pass image-quality, projection, and counterfactual
-visibility checks for the complete moved group at its future position, plus
-projection and visibility checks for the static query object. A selected bridge
-must exist, have a valid pose, and pass image quality. This avoids requiring one
-camera to contain both the original and future object positions.
+The selector records projection and visibility measurements for every moved
+object and transitive attachment, then uses them to rank routes rather than as
+hard rejection gates. A selected bridge must exist, have a valid pose, and pass
+image quality. This avoids requiring one camera to contain both the original and
+future object positions. A Qwen reference crop encloses the moving-group members
+that project into the source view. Members without a valid source ROI are omitted
+from the crop bounds; if none have a valid ROI, the source view is used as the
+fallback reference.
 
 The generated `moving_group` contains the complete transitive attachment chain,
 with the moved parent first. Camera rotation remains private and is used only to

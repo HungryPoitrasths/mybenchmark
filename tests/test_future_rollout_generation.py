@@ -264,6 +264,85 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             with Image.open(reference["path"]) as image:
                 self.assertEqual(image.size, (44, 44))
 
+    def test_qwen_reference_omits_group_member_without_source_roi(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            Image.new("RGB", (100, 80), color=(20, 30, 40)).save(source)
+            moved = self._object(1, [0.0, 0.0, 0.5], "table")
+            attached = self._object(2, [0.0, 0.0, 1.0], "book")
+            candidate = RouteCandidate(
+                question={
+                    "question_uid": "uid-1",
+                    "type": "object_move_agent",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 1,
+                    "delta": [0.5, 0.0, 0.0],
+                },
+                source_index=0,
+                dataset="scannet",
+                scene_id="scene0000_00",
+                generation_image_names=("source.png", "destination.png"),
+                generation_roles=("source_view", "destination_environment"),
+                score_key=(1.0,),
+                metrics={},
+            )
+            context = SimpleNamespace(
+                objects=[moved, attached],
+                objects_by_id={1: moved, 2: attached},
+                attachment_graph={1: [2]},
+                poses={"source.png": self._pose([0, 0, 0])},
+                intrinsics=SimpleNamespace(width=100, height=80),
+            )
+
+            def project(obj, *_args):
+                return {"roi_bounds": (40, 60, 20, 40) if obj["id"] == 1 else None}
+
+            with patch.object(selection_generator, "_project_object_roi", side_effect=project):
+                reference = selection_generator._materialize_qwen_moving_group_reference(
+                    candidate, context, root / "rollout", source
+                )
+            with Image.open(reference["path"]) as image:
+                self.assertEqual(image.size, (44, 44))
+
+    def test_qwen_reference_falls_back_to_source_when_group_has_no_roi(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.png"
+            Image.new("RGB", (100, 80), color=(20, 30, 40)).save(source)
+            moved = self._object(1, [0.0, 0.0, 0.5], "table")
+            candidate = RouteCandidate(
+                question={
+                    "question_uid": "uid-1",
+                    "type": "object_move_agent",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 1,
+                    "delta": [0.5, 0.0, 0.0],
+                },
+                source_index=0,
+                dataset="scannet",
+                scene_id="scene0000_00",
+                generation_image_names=("source.png", "destination.png"),
+                generation_roles=("source_view", "destination_environment"),
+                score_key=(1.0,),
+                metrics={},
+            )
+            context = SimpleNamespace(
+                objects=[moved],
+                objects_by_id={1: moved},
+                attachment_graph={},
+                poses={"source.png": self._pose([0, 0, 0])},
+                intrinsics=SimpleNamespace(width=100, height=80),
+            )
+            with patch.object(
+                selection_generator, "_project_object_roi", return_value={"roi_bounds": None}
+            ):
+                reference = selection_generator._materialize_qwen_moving_group_reference(
+                    candidate, context, root / "rollout", source
+                )
+            with Image.open(reference["path"]) as image:
+                self.assertEqual(image.size, (100, 80))
+
     def test_static_visibility_uses_registered_depth_before_mesh_fallback(self) -> None:
         obj = self._object(1, [0.0, 0.0, 1.0], "table")
         context = SimpleNamespace(

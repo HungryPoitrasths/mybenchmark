@@ -715,30 +715,53 @@ def _materialize_qwen_moving_group_reference(
     )
     source_pose = context.poses[candidate.generation_image_names[0]]
     bounds: list[tuple[int, int, int, int]] = []
+    omitted_ids: list[int] = []
+    intrinsic_width = max(int(context.intrinsics.width), 1)
+    intrinsic_height = max(int(context.intrinsics.height), 1)
     for obj_id in motion.moved_ids:
         roi_bounds = _project_object_roi(
             context.objects_by_id[obj_id], source_pose, context.intrinsics
         ).get("roi_bounds")
         if roi_bounds is None:
-            raise ValueError(f"{candidate.question['question_uid']}: missing source ROI for {obj_id}")
-        bounds.append(tuple(int(value) for value in roi_bounds))
+            omitted_ids.append(obj_id)
+            continue
+        left, right, top, bottom = (int(value) for value in roi_bounds)
+        clipped = (
+            max(0, min(intrinsic_width, left)),
+            max(0, min(intrinsic_width, right)),
+            max(0, min(intrinsic_height, top)),
+            max(0, min(intrinsic_height, bottom)),
+        )
+        if clipped[1] <= clipped[0] or clipped[3] <= clipped[2]:
+            omitted_ids.append(obj_id)
+            continue
+        bounds.append(clipped)
+
+    if omitted_ids:
+        fallback = "visible group members" if bounds else "the full source view"
+        print(
+            f"[selection] {candidate.question['question_uid']}: source ROI unavailable "
+            f"for moving-group object(s) {omitted_ids}; Qwen reference uses {fallback}",
+            file=sys.stderr,
+            flush=True,
+        )
 
     with Image.open(source_image) as image:
         width, height = image.size
-        intrinsic_width = max(int(context.intrinsics.width), 1)
-        intrinsic_height = max(int(context.intrinsics.height), 1)
-        left = min(item[0] for item in bounds) * width // intrinsic_width
-        right = max(item[1] for item in bounds) * width // intrinsic_width
-        top = min(item[2] for item in bounds) * height // intrinsic_height
-        bottom = max(item[3] for item in bounds) * height // intrinsic_height
-        padding = max(12, round(0.15 * max(right - left, bottom - top)))
-        left = max(0, left - padding)
-        top = max(0, top - padding)
-        right = min(width, right + padding)
-        bottom = min(height, bottom + padding)
-        if right - left < 2 or bottom - top < 2:
-            raise ValueError(f"{candidate.question['question_uid']}: invalid moving-group crop")
-        reference = image.convert("RGB").crop((left, top, right, bottom))
+        reference = image.convert("RGB")
+        if bounds:
+            left = min(item[0] for item in bounds) * width // intrinsic_width
+            right = max(item[1] for item in bounds) * width // intrinsic_width
+            top = min(item[2] for item in bounds) * height // intrinsic_height
+            bottom = max(item[3] for item in bounds) * height // intrinsic_height
+            padding = max(12, round(0.15 * max(right - left, bottom - top)))
+            left = max(0, left - padding)
+            top = max(0, top - padding)
+            right = min(width, right + padding)
+            bottom = min(height, bottom + padding)
+            if right - left < 2 or bottom - top < 2:
+                raise ValueError(f"{candidate.question['question_uid']}: invalid moving-group crop")
+            reference = reference.crop((left, top, right, bottom))
 
     target = output_dir / "media" / "qwen_references" / f"{candidate.question['question_uid']}.png"
     target.parent.mkdir(parents=True, exist_ok=True)
