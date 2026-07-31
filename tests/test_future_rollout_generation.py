@@ -512,6 +512,31 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             checkpoints = list(old_path.parent.glob("selection_checkpoint_*.jsonl"))
             self.assertEqual(len(checkpoints), 2)
 
+    def test_checkpoint_match_tolerates_derived_uid_changes(self) -> None:
+        record = {
+            "source_index": 7,
+            "question_uid": "old-derived-uid",
+            "question_type": "object_move_distance",
+            "scene_id": "scene0000_00",
+        }
+        question = {
+            "question_uid": "new-derived-uid",
+            "type": "object_move_distance",
+            "scene_id": "scene0000_00",
+        }
+        self.assertTrue(
+            selection_generator._checkpoint_record_matches_question(
+                record, source_index=7, question=question
+            )
+        )
+        self.assertFalse(
+            selection_generator._checkpoint_record_matches_question(
+                record,
+                source_index=7,
+                question={**question, "scene_id": "scene0001_00"},
+            )
+        )
+
     def test_prepare_cli_removes_selector_tuning_and_invokes_route_selection(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

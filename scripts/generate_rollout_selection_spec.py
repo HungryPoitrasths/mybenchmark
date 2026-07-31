@@ -1061,9 +1061,11 @@ def _append_checkpoint_result(path: Path, record: dict[str, Any]) -> None:
 def _checkpoint_record_matches_question(
     record: dict[str, Any], *, source_index: int, question: dict[str, Any]
 ) -> bool:
+    # The checkpoint header already pins the exact benchmark bytes. A question
+    # UID also includes loader-injected dataset metadata, so it is not stable
+    # across metadata-normalization fixes even when the benchmark is unchanged.
     return bool(
         int(record.get("source_index", -1)) == source_index
-        and str(record.get("question_uid") or "") == str(question.get("question_uid") or "")
         and str(record.get("question_type") or "") == str(question.get("type") or "")
         and str(record.get("scene_id") or "") == str(question.get("scene_id") or "").strip()
     )
