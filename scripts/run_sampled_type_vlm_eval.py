@@ -474,9 +474,21 @@ def _load_benchmark(path: Path) -> list[dict[str, Any]]:
     return [q for q in questions if isinstance(q, dict)]
 
 
-def _infer_dataset(root: Path, benchmark_path: Path) -> str:
-    text = f"{root.as_posix()}/{benchmark_path.as_posix()}".lower()
-    return "scannetpp" if "scannetpp" in text else "scannet"
+def _infer_question_dataset(question: dict[str, Any], *source_paths: Path) -> str:
+    explicit = str(question.get("_dataset") or question.get("dataset") or "").strip().lower()
+    if explicit in {"scannet", "scannetpp"}:
+        return explicit
+
+    source_text = " ".join(
+        [str(question.get("_source_benchmark") or ""), *(path.as_posix() for path in source_paths)]
+    ).lower()
+    if "scannetpp" in source_text:
+        return "scannetpp"
+
+    # ScanNet and ScanNet++ use unambiguous scene-id formats, which lets us
+    # recover when a curated subset dropped or corrupted its dataset field.
+    scene_id = str(question.get("scene_id") or "").strip()
+    return "scannet" if re.fullmatch(r"scene\d{4}_\d{2}", scene_id) else "scannetpp"
 
 
 def _load_questions_from_roots(roots: list[Path]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -490,12 +502,7 @@ def _load_questions_from_roots(roots: list[Path]) -> tuple[list[dict[str, Any]],
             source_files.append(str(benchmark_path))
             for q in _load_benchmark(benchmark_path):
                 item = dict(q)
-                dataset = str(
-                    item.get("_dataset")
-                    or item.get("dataset")
-                    or _infer_dataset(root, benchmark_path)
-                )
-                item["_dataset"] = dataset
+                item["_dataset"] = _infer_question_dataset(item, root, benchmark_path)
                 item["_source_root"] = str(root)
                 item["_source_benchmark"] = str(benchmark_path)
                 if item.get("question_uid") is not None:
@@ -527,8 +534,7 @@ def load_questions_from_subset(subset_path: Path) -> tuple[list[dict[str, Any]],
 
     for q in _load_benchmark(subset_path):
         item = dict(q)
-        dataset = str(item.get("_dataset") or item.get("dataset") or "unknown")
-        item["_dataset"] = dataset
+        item["_dataset"] = _infer_question_dataset(item, subset_path)
         item["_source_root"] = str(subset_path.parent)
         item["_source_benchmark"] = str(subset_path)
         if item.get("question_uid") is not None:
@@ -587,7 +593,7 @@ def load_fixed_questions(benchmark_path: Path) -> tuple[list[dict[str, Any]], di
         if not isinstance(q, dict):
             continue
         item = dict(q)
-        item["_dataset"] = str(item.get("_dataset") or item.get("dataset") or "unknown")
+        item["_dataset"] = _infer_question_dataset(item, benchmark_path)
         item["_source_root"] = str(benchmark_path.parent)
         item["_source_benchmark"] = str(benchmark_path)
         if item.get("question_uid") is not None:
@@ -649,11 +655,7 @@ def sample_questions(
         per_scene: Counter[str] = Counter()
         relaxed_added = 0
         relaxed_cap = scene_cap
-        max_scene_count = max(
-            (Counter(str(q.get("scene_id") or "unknown") for q in group).values()),
-            default=0,
-        )
-        while len(chosen) < per_type and relaxed_cap <= max(1, max_scene_count):
+        while len(chosen) < per_type:
             before = len(chosen)
             for q in group:
                 if len(chosen) >= per_type:
@@ -717,30 +719,47 @@ def _ordered_unique_letters(values: list[str], letters: str) -> list[str]:
     return [letter for letter in letters.upper() if letter in seen]
 
 
+def _parse_multi_candidate(candidate: str, letters: str) -> list[str]:
+    allowed = re.escape(letters.upper())
+    tokens = re.findall(rf"(?<![A-Z0-9])([{allowed}])(?![A-Z0-9])", candidate)
+    if tokens:
+        return _ordered_unique_letters(tokens, letters)
+    compact = re.sub(r"[\s,;/&+|\-]+", "", candidate)
+    if compact and re.fullmatch(rf"[{allowed}]+", compact):
+        return _ordered_unique_letters(list(compact), letters)
+    return []
+
+
 def parse_answers(raw: str | None, letters: str) -> list[str]:
     if not raw:
         return []
     allowed = re.escape(letters.upper())
     upper = raw.strip().upper()
-    answer_line_patterns = [
-        rf"(?:FINAL\s+)?ANSWER\s*[:锛歖]\s*([^\r\n]+)",
-        rf"(?:CHOICES?|OPTIONS?)\s*[:锛歖]?\s*([^\r\n]+)",
-    ]
-    candidates: list[str] = []
-    for pattern in answer_line_patterns:
-        match = re.search(pattern, upper)
-        if match:
-            candidates.append(match.group(1))
-            break
-    candidates.append(upper)
 
-    for candidate in candidates:
-        tokens = re.findall(rf"(?<![A-Z0-9])([{allowed}])(?![A-Z0-9])", candidate)
-        if tokens:
-            return _ordered_unique_letters(tokens, letters)
-        compact = re.sub(r"[\s,;/&+|，、.\-]+", "", candidate)
-        if compact and re.fullmatch(rf"[{allowed}]+", compact):
-            return _ordered_unique_letters(list(compact), letters)
+    parsed = _parse_multi_candidate(upper, letters)
+    if parsed and re.fullmatch(rf"[\s{allowed},;/&+|\-]+", upper):
+        return parsed
+
+    tail = re.search(
+        rf"(?:^|[\r\n.!?])\s*([\(\[]?[{allowed}]"
+        rf"(?:\s*(?:[,;/&+|\-]|\bAND\b)\s*[{allowed}])*\s*[\)\]]?)\s*$",
+        upper,
+    )
+    if tail:
+        parsed = _parse_multi_candidate(tail.group(1), letters)
+        if parsed:
+            return parsed
+
+    patterns = [
+        r"(?:FINAL\s+)?ANSWER(?:S)?(?:\s+IS|\s+ARE)?\s*[:：-]?\s*([^\r\n]+)",
+        r"(?:CHOICES?|OPTIONS?)(?:\s+IS|\s+ARE)?\s*[:：-]?\s*([^\r\n]+)",
+    ]
+    for pattern in patterns:
+        matches = list(re.finditer(pattern, upper))
+        if matches:
+            parsed = _parse_multi_candidate(matches[-1].group(1), letters)
+            if parsed:
+                return parsed
     return []
 
 
@@ -749,19 +768,24 @@ def parse_answer(raw: str | None, letters: str) -> str | None:
         return None
     allowed = re.escape(letters.upper())
     upper = raw.strip().upper()
-    if re.fullmatch(f"[{allowed}]", upper):
+    if re.fullmatch(rf"[{allowed}]", upper):
         return upper
 
+    # Some direct-answer models append the final letter to the last punctuation
+    # mark after emitting hidden or visible reasoning (for example, "...sense.B").
+    tail = re.search(rf"(?:^|[\r\n.!?])\s*[\(\[]?([{allowed}])[\)\].!?]?\s*$", upper)
+    if tail:
+        return tail.group(1)
+
     patterns = [
-        rf"(?:FINAL\s+)?ANSWER\s*[:：]\s*[\(\[]?\s*([{allowed}])\s*[\)\]]?",
-        rf"(?:CHOICE|OPTION)\s*[:：]?\s*[\(\[]?\s*([{allowed}])\s*[\)\]]?",
+        rf"(?:FINAL\s+)?ANSWER(?:\s+IS)?\s*[:：-]?\s*[\(\[]?\s*([{allowed}])\s*[\)\]]?",
+        rf"(?:CHOICE|OPTION)(?:\s+IS)?\s*[:：-]?\s*[\(\[]?\s*([{allowed}])\s*[\)\]]?",
         rf"^[\(\[]?\s*([{allowed}])\s*[\)\].:：-]",
     ]
     for pattern in patterns:
-        m = re.search(pattern, upper)
-        if m:
-            return m.group(1)
-
+        matches = list(re.finditer(pattern, upper))
+        if matches:
+            return matches[-1].group(1)
     return None
 
 
@@ -1452,13 +1476,18 @@ def _get_field(value: Any, name: str) -> Any:
     return getattr(value, name, None)
 
 
-def _extract_chat_choice_text(choice: Any) -> str:
+def _extract_chat_choice_text(choice: Any, *, include_reasoning: bool = True) -> str:
     parts: list[str] = []
+    field_names = (
+        ("content", "reasoning_content", "text")
+        if include_reasoning
+        else ("content", "text")
+    )
     for container_name in ("delta", "message"):
         container = _get_field(choice, container_name)
         if container is None:
             continue
-        for field_name in ("content", "reasoning_content", "text"):
+        for field_name in field_names:
             text = _content_text(_get_field(container, field_name))
             if text:
                 parts.append(text)
@@ -1468,11 +1497,14 @@ def _extract_chat_choice_text(choice: Any) -> str:
     return "".join(parts)
 
 
-def _extract_chat_response_text(response: Any) -> str:
+def _extract_chat_response_text(response: Any, *, include_reasoning: bool = True) -> str:
     if isinstance(response, str):
         return response
     choices = _get_field(response, "choices") or []
-    parts = [_extract_chat_choice_text(choice) for choice in choices]
+    parts = [
+        _extract_chat_choice_text(choice, include_reasoning=include_reasoning)
+        for choice in choices
+    ]
     text = "".join(part for part in parts if part)
     if text:
         return text
@@ -1627,12 +1659,17 @@ def call_model(
     chat_kwargs["stream"] = True
     stream = client.chat.completions.create(**chat_kwargs)
     parts: list[str] = []
+    reasoning_fallback_parts: list[str] = []
     for chunk in stream:
-        text = _extract_chat_response_text(chunk)
+        text = _extract_chat_response_text(chunk, include_reasoning=not direct)
         if text:
             parts.append(text)
+        if direct:
+            fallback_text = _extract_chat_response_text(chunk, include_reasoning=True)
+            if fallback_text:
+                reasoning_fallback_parts.append(fallback_text)
     return _require_response_text(
-        "".join(parts),
+        "".join(parts) or "".join(reasoning_fallback_parts),
         provider=api_provider,
         model=model,
     )
@@ -1670,16 +1707,7 @@ def save_results(
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def result_from_question(
-    question: dict[str, Any],
-    *,
-    image_resolutions: list[ImageResolution],
-    raw_response: str | None,
-    error: str | None,
-) -> dict[str, Any]:
-    primary_resolution = image_resolutions[0]
-    aux_resolutions = image_resolutions[1:]
-    has_rollout_media = any(resolution.role for resolution in image_resolutions)
+def _answer_fields(question: dict[str, Any], raw_response: str | None) -> dict[str, Any]:
     letters = allowed_letters(question)
     multi_select = is_multi_select_question(question)
     gt_answers = normalize_answer_letters(
@@ -1690,10 +1718,47 @@ def result_from_question(
     predictions = parse_answers(raw_response, letters) if multi_select else []
     prediction = ",".join(predictions) if multi_select else parse_answer(raw_response, letters)
     gt_answer = ",".join(gt_answers) if multi_select else (gt_answers[0] if gt_answers else "")
+    correct = (
+        bool(predictions and gt_answers and set(predictions) == set(gt_answers))
+        if multi_select
+        else bool(prediction and gt_answer and prediction == gt_answer)
+    )
+    fields: dict[str, Any] = {
+        "gt_answer": gt_answer,
+        "prediction": prediction,
+        "correct": correct,
+    }
     if multi_select:
-        correct = bool(predictions and gt_answers and set(predictions) == set(gt_answers))
-    else:
-        correct = bool(prediction and gt_answer and prediction == gt_answer)
+        fields.update(
+            {
+                "multi_select": True,
+                "gt_answers": gt_answers,
+                "predictions": predictions,
+            }
+        )
+        if question.get("correct_values") is not None:
+            fields["correct_values"] = question.get("correct_values")
+    return fields
+
+
+def refresh_cached_result(question: dict[str, Any], cached: dict[str, Any]) -> dict[str, Any]:
+    row = dict(cached)
+    row.update(_answer_fields(question, cached.get("raw_response")))
+    row["question_uid"] = question.get("question_uid")
+    row["dataset"] = question.get("_dataset")
+    return row
+
+
+def result_from_question(
+    question: dict[str, Any],
+    *,
+    image_resolutions: list[ImageResolution],
+    raw_response: str | None,
+    error: str | None,
+) -> dict[str, Any]:
+    primary_resolution = image_resolutions[0]
+    aux_resolutions = image_resolutions[1:]
+    has_rollout_media = any(resolution.role for resolution in image_resolutions)
 
     row = {
         "question_uid": question.get("question_uid"),
@@ -1723,12 +1788,10 @@ def result_from_question(
         "attachment_child_id": question.get("attachment_child_id"),
         "question": question.get("question"),
         "options": question.get("options"),
-        "gt_answer": gt_answer,
         "correct_value": question.get("correct_value"),
-        "prediction": prediction,
         "raw_response": raw_response,
-        "correct": correct,
         "error": error,
+        **_answer_fields(question, raw_response),
     }
     if question.get("_oracle_info"):
         row["oracle_info"] = question.get("_oracle_info")
@@ -1743,12 +1806,6 @@ def result_from_question(
         row["bev_manifest_sha256"] = question.get("_bev_manifest_sha256")
         row["bev_direction_mode"] = question.get("_bev_direction_mode")
         row["bev_task_frame_kind"] = question.get("_bev_task_frame_kind")
-    if multi_select:
-        row["multi_select"] = True
-        row["gt_answers"] = gt_answers
-        row["predictions"] = predictions
-        if question.get("correct_values") is not None:
-            row["correct_values"] = question.get("correct_values")
     return row
 
 
@@ -2511,6 +2568,10 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
 
     output_json = Path(args.output_json)
     existing = load_existing_results(output_json)
+    existing_by_dedupe = {
+        _question_dedupe_key(row): row
+        for row in existing.values()
+    }
     results_by_uid: dict[str, dict[str, Any]] = {}
 
     client_factory: ThreadLocalOpenAIClientFactory | None = None
@@ -2541,7 +2602,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     for idx, question in enumerate(selected, 1):
         uid = str(question["question_uid"])
         qtype = str(question.get("type") or "")
-        cached = existing.get(uid)
+        cached = existing.get(uid) or existing_by_dedupe.get(_question_dedupe_key(question))
         cached_condition = str(cached.get("evaluation_condition", "baseline")) if cached else None
         cache_matches_condition = cached_condition == condition
         if manifest is not None and cached is not None:
@@ -2560,9 +2621,8 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             and cache_matches_condition
             and (not args.force or not is_targeted)
             and cached.get("raw_response") is not None
-            and cached.get("prediction") is not None
         ):
-            results_by_uid[uid] = cached
+            results_by_uid[uid] = refresh_cached_result(question, cached)
             continue
 
         resolution_error: str | None = None

@@ -18,10 +18,13 @@ from scripts.run_sampled_type_vlm_eval import (
     load_questions,
     load_rollout_manifest,
     parse_args,
+    parse_answer,
     parse_answers,
+    refresh_cached_result,
     resolve_rollout_images,
     resolve_question_images,
     result_from_question,
+    sample_questions,
 )
 from scripts.validate_rollout_manifest import validate_manifest
 
@@ -76,6 +79,34 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
         )
 
         self.assertEqual(response, "Reasoning: visible. Answer: B")
+
+    def test_call_model_direct_prefers_final_content_over_reasoning(self) -> None:
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return iter(
+                    [
+                        {"choices": [{"delta": {"reasoning_content": "Long analysis."}}]},
+                        {"choices": [{"delta": {"content": "B"}}]},
+                    ]
+                )
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        response = call_model(
+            FakeClient(),
+            api_provider="openai_chat",
+            model="ep-test",
+            image_paths=[Path("unused.jpg")],
+            prompt="Question?",
+            max_tokens=16,
+            temperature=0.0,
+            api_image_max_px=0,
+            blind=True,
+            direct=True,
+        )
+
+        self.assertEqual(response, "B")
 
     def test_call_model_rejects_empty_stream_response(self) -> None:
         class FakeCompletions:
@@ -166,6 +197,61 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
         self.assertEqual(parse_answers("Answer: C and A", "ABC"), ["A", "C"])
         self.assertEqual(parse_answers("AC", "ABC"), ["A", "C"])
 
+    def test_parse_answer_accepts_direct_letter_appended_after_reasoning(self) -> None:
+        response = (
+            "The cabinet is to the left. So answer B? "
+            "After checking the camera frame, that makes sense.B"
+        )
+
+        self.assertEqual(parse_answer(response, "ABCD"), "B")
+
+    def test_parse_answers_does_not_collect_option_letters_from_reasoning(self) -> None:
+        response = "I considered option B but rejected it. Final answer: D"
+
+        self.assertEqual(parse_answers(response, "ABCD"), ["D"])
+
+    def test_sample_questions_runs_when_scene_cap_exceeds_each_scene_count(self) -> None:
+        questions = [
+            {
+                "question_uid": f"q{index}",
+                "type": "occlusion",
+                "scene_id": f"scene{index:04d}_00",
+            }
+            for index in range(5)
+        ]
+
+        sampled, stats = sample_questions(
+            questions,
+            per_type=5,
+            scene_cap=3,
+            seed=1,
+        )
+
+        self.assertEqual(len(sampled), 5)
+        self.assertEqual(stats["occlusion"]["sampled"], 5)
+
+    def test_refresh_cached_result_reparses_without_new_api_response(self) -> None:
+        question = {
+            "question_uid": "new-uid",
+            "answer": "B",
+            "options": ["left", "right", "front", "back"],
+            "_dataset": "scannetpp",
+        }
+        cached = {
+            "question_uid": "old-uid",
+            "raw_response": "Reasoning that ends with the direct choice.B",
+            "prediction": None,
+            "correct": False,
+            "dataset": "unknown",
+        }
+
+        refreshed = refresh_cached_result(question, cached)
+
+        self.assertEqual(refreshed["prediction"], "B")
+        self.assertTrue(refreshed["correct"])
+        self.assertEqual(refreshed["dataset"], "scannetpp")
+        self.assertEqual(refreshed["question_uid"], "new-uid")
+
     def test_result_from_question_scores_multi_select_as_set(self) -> None:
         question = {
             "question_uid": "q1",
@@ -254,6 +340,39 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
             questions, _metadata = load_questions([root])
 
         self.assertEqual(questions[0]["_dataset"], "scannetpp")
+
+    def test_load_questions_recovers_dataset_from_scene_id(self) -> None:
+        with TemporaryDirectory() as tmp:
+            subset = Path(tmp) / "benchmark50.json"
+            subset.write_text(
+                json.dumps(
+                    {
+                        "questions": [
+                            {
+                                "_dataset": "0-9",
+                                "scene_id": "c49a8c6cff",
+                                "image_name": "frame.jpg",
+                                "type": "object_move_agent",
+                                "question": "Where?",
+                            },
+                            {
+                                "scene_id": "scene0633_00",
+                                "image_name": "3.jpg",
+                                "type": "direction_agent",
+                                "question": "Where now?",
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            questions, _metadata = load_questions([], subset)
+
+        self.assertEqual(
+            [question["_dataset"] for question in questions],
+            ["scannetpp", "scannet"],
+        )
 
     def test_resolve_question_images_returns_single_resolution_for_ordinary_question(
         self,
