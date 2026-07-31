@@ -13,6 +13,37 @@ DTYPES = {
 }
 
 
+def add_sft_placeholder_arguments(parser: argparse.ArgumentParser) -> None:
+    """Accept common SFT options without applying them to the GPU workload."""
+    group = parser.add_argument_group(
+        "SFT compatibility options",
+        "Accepted for SFT-style launch commands but intentionally unused.",
+    )
+    group.add_argument("--model-name-or-path", default="Qwen/Qwen3-VL-4B-Instruct")
+    group.add_argument("--dataset-path", default="data/train.jsonl")
+    group.add_argument("--output-dir", default="output/qwen3-vl-4b-sft")
+    group.add_argument("--num-train-epochs", type=float, default=3.0)
+    group.add_argument("--per-device-train-batch-size", type=int, default=1)
+    group.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    group.add_argument("--learning-rate", type=float, default=2e-5)
+    group.add_argument("--weight-decay", type=float, default=0.01)
+    group.add_argument("--warmup-ratio", type=float, default=0.03)
+    group.add_argument("--lr-scheduler-type", default="cosine")
+    group.add_argument("--optim", default="adamw_torch_fused")
+    group.add_argument("--max-seq-length", type=int, default=4096)
+    group.add_argument("--logging-steps", type=int, default=10)
+    group.add_argument("--save-steps", type=int, default=500)
+    group.add_argument("--save-total-limit", type=int, default=2)
+    group.add_argument("--lora-r", type=int, default=64)
+    group.add_argument("--lora-alpha", type=int, default=128)
+    group.add_argument("--lora-dropout", type=float, default=0.05)
+    group.add_argument("--seed", type=int, default=42)
+    group.add_argument("--bf16", action="store_true")
+    group.add_argument("--gradient-checkpointing", action="store_true")
+    group.add_argument("--deepspeed")
+    group.add_argument("--report-to", default="none")
+
+
 @dataclass
 class GpuWorkload:
     device: torch.device
@@ -144,6 +175,7 @@ def main() -> None:
         default="float16",
         help="Matrix dtype. float16 normally drives tensor cores most effectively. Default: float16.",
     )
+    add_sft_placeholder_arguments(parser)
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
