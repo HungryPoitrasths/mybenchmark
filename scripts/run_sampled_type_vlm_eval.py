@@ -19,8 +19,10 @@ Example:
         --scannet_image_root data/scannet \
         --scannetpp_image_root output/scannetpp_iphone_frames \
         --scannetpp_sensor iphone \
-        --vlm_url https://www.packyapi.com/v1 \
-        --vlm_model qwen3.5-flash \
+        --base_url http://home.aaron-family.top:3000/openai \
+        --model gpt-5.4 \
+        --api_provider openai_responses \
+        --reasoning_effort none \
         --output_json output/type_sample_eval/results.json \
         --output_html output/type_sample_eval/viewer.html
 
@@ -86,6 +88,11 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from scripts.make_viewer import _collect_aux_image_names
 
+
+DEFAULT_BASE_URL = "http://home.aaron-family.top:3000/openai"
+DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_REASONING_EFFORT = "none"
+REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 
 SYSTEM_PROMPT = (
     "You are a careful vision-language assistant solving multiple-choice "
@@ -1434,6 +1441,13 @@ def _should_omit_temperature(model: str) -> bool:
     )
 
 
+def _supports_explicit_temperature(model: str, reasoning_effort: str | None) -> bool:
+    """GPT-5 accepts sampling controls only when reasoning is disabled."""
+    if not _should_omit_temperature(model):
+        return True
+    return (model or "").lower().startswith("gpt-5") and reasoning_effort == "none"
+
+
 def _supports_qwen_thinking_control(model: str) -> bool:
     normalized = str(model).strip().lower().replace("_", "-")
     return "qwen3.5" in normalized or "qwen3-5" in normalized
@@ -1549,11 +1563,13 @@ def call_model(
     max_tokens: int,
     temperature: float,
     api_image_max_px: int,
+    reasoning_effort: str | None = None,
+    store_response: bool = False,
     blind: bool = False,
     image_roles: list[str | None] | None = None,
     direct: bool = False,
 ) -> str:
-    omit_temperature = _should_omit_temperature(model)
+    supports_temperature = _supports_explicit_temperature(model, reasoning_effort)
     encoded: list[tuple[str, str]] = []
     if not blind:
         encoded = [_encode_image(path, api_image_max_px) for path in image_paths]
@@ -1584,8 +1600,11 @@ def call_model(
                 {"role": "user", "content": user_content},
             ],
             "max_output_tokens": max_tokens,
+            "store": store_response,
         }
-        if not omit_temperature:
+        if reasoning_effort and _is_reasoning_chat_model(model):
+            response_kwargs["reasoning"] = {"effort": reasoning_effort}
+        if supports_temperature:
             response_kwargs["temperature"] = temperature
         response = client.responses.create(**response_kwargs)
         output_text = getattr(response, "output_text", None)
@@ -1620,7 +1639,7 @@ def call_model(
             "messages": [{"role": "user", "content": anthropic_user_content}],
             "max_tokens": max_tokens,
         }
-        if not omit_temperature:
+        if supports_temperature:
             message_kwargs["temperature"] = temperature
         response = client.messages.create(**message_kwargs)
         chunks = [
@@ -1664,9 +1683,11 @@ def call_model(
     if _is_reasoning_chat_model(model):
         # GPT-5 / o-series: use max_completion_tokens.
         chat_kwargs["max_completion_tokens"] = max_tokens
+        if reasoning_effort:
+            chat_kwargs["reasoning_effort"] = reasoning_effort
     else:
         chat_kwargs["max_tokens"] = max_tokens
-    if not omit_temperature:
+    if supports_temperature:
         chat_kwargs["temperature"] = temperature
     if _supports_qwen_thinking_control(model):
         chat_kwargs["extra_body"] = {"enable_thinking": not direct}
@@ -2442,6 +2463,8 @@ def run_api_question(
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
                 api_image_max_px=args.api_image_max_px,
+                reasoning_effort=getattr(args, "reasoning_effort", None),
+                store_response=bool(getattr(args, "store_response", False)),
                 blind=getattr(args, "blind", False),
                 image_roles=[rollout_role_label(r.role) for r in resolutions],
                 direct=getattr(args, "direct", False),
@@ -2566,6 +2589,8 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "model": args.model,
             "base_url": args.base_url,
             "api_provider": args.api_provider,
+            "reasoning_effort": getattr(args, "reasoning_effort", None),
+            "response_storage_enabled": bool(getattr(args, "store_response", False)),
             "scannetpp_sensor": args.scannetpp_sensor,
             "vlm_workers": args.vlm_workers,
             "oracle": bool(getattr(args, "oracle", False)),
@@ -2603,8 +2628,12 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             or (os.getenv(args.api_key_env) if args.api_key_env else None)
             or os.getenv(default_api_key_env)
             or os.getenv("DASHSCOPE_API_KEY")
-            or "EMPTY"
         )
+        if not api_key:
+            raise RuntimeError(
+                "No API key found. Set OPENAI_API_KEY, use --api_key_env, or pass "
+                "--api_key (environment variables are recommended)."
+            )
         client_factory = ThreadLocalOpenAIClientFactory(
             api_provider=args.api_provider,
             base_url=args.base_url,
@@ -2769,17 +2798,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--scannet_image_root", action="append", default=None, help="ScanNet image root; can be repeated")
     parser.add_argument("--scannetpp_image_root", action="append", default=None, help="ScanNet++ image root; can be repeated")
     parser.add_argument("--scannetpp_sensor", choices=("iphone", "dslr"), default="iphone", help="ScanNet++ image layout, matching scripts/make_viewer.py")
-    parser.add_argument("--base_url", "--vlm_url", dest="base_url", default="https://www.packyapi.com/v1", help="OpenAI-compatible API base URL for the VLM server")
-    parser.add_argument("--model", "--vlm_model", dest="model", default="qwen3.5-flash", help="Served model name exposed by the VLM endpoint")
+    parser.add_argument("--base_url", "--vlm_url", dest="base_url", default=DEFAULT_BASE_URL, help="OpenAI-compatible API base URL for the VLM server")
+    parser.add_argument("--model", "--vlm_model", dest="model", default=DEFAULT_MODEL, help="Served model name exposed by the VLM endpoint")
     parser.add_argument(
         "--api_provider",
         choices=("openai_chat", "openai_responses", "anthropic"),
-        default="openai_chat",
+        default="openai_responses",
         help="Wire protocol to use for image+text VLM calls",
     )
     parser.add_argument("--api_key", default=None, help="API key; otherwise read from --api_key_env or provider defaults")
-    parser.add_argument("--api_key_env", default=None, help="Environment variable for API key")
-    parser.add_argument("--max_tokens", type=int, default=3072, help="Maximum model output tokens")
+    parser.add_argument("--api_key_env", default=None, help="Environment variable for API key; defaults to OPENAI_API_KEY")
+    parser.add_argument(
+        "--reasoning_effort",
+        choices=REASONING_EFFORTS,
+        default=DEFAULT_REASONING_EFFORT,
+        help="Reasoning effort for OpenAI Responses requests",
+    )
+    parser.add_argument(
+        "--store_response",
+        action="store_true",
+        help="Allow OpenAI Responses requests to be stored (disabled by default)",
+    )
+    parser.add_argument("--max_tokens", type=int, default=3072, help="Maximum model output tokens, including reasoning tokens")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
     parser.add_argument("--api_image_max_px", type=int, default=1280, help="Resize longest image side for API; 0 disables")
     parser.add_argument("--html_image_max_px", type=int, default=720, help="Resize longest image side embedded in HTML; 0 disables")
