@@ -315,8 +315,11 @@ def build_sft_command(args: argparse.Namespace) -> list[str]:
         str(args.output_dir.resolve()),
     ]
     resume_checkpoint = getattr(args, "resume_from_checkpoint", None)
+    initial_adapter = getattr(args, "initial_adapter", None)
     if resume_checkpoint is not None:
         command.extend(["--resume_from_checkpoint", str(Path(resume_checkpoint).resolve())])
+    elif initial_adapter is not None:
+        command.extend(["--adapters", str(Path(initial_adapter).resolve())])
     return command
 
 
@@ -328,7 +331,11 @@ def build_infer_command(
 ) -> list[str]:
     command = [args.swift_bin, "infer"]
     if checkpoint is None:
-        command.extend(["--model", args.model])
+        initial_adapter = getattr(args, "initial_adapter", None)
+        if initial_adapter is None:
+            command.extend(["--model", args.model])
+        else:
+            command.extend(["--adapters", str(Path(initial_adapter).resolve())])
     else:
         command.extend(["--adapters", str(checkpoint.resolve())])
     command.extend(
@@ -499,6 +506,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--monitor-sidecar", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", default="Qwen/Qwen3-VL-4B-Instruct")
+    initialization = parser.add_mutually_exclusive_group(required=True)
+    initialization.add_argument(
+        "--initial-adapter",
+        type=Path,
+        help=(
+            "LoRA checkpoint that initializes this 2k stage. The adapter weights are "
+            "loaded while optimizer and scheduler state are reset."
+        ),
+    )
+    initialization.add_argument(
+        "--allow-base-model-start",
+        action="store_true",
+        help="Explicitly allow a fresh 2k run from --model without an 8k adapter.",
+    )
     parser.add_argument("--swift-bin", default="swift")
     parser.add_argument("--devices", default="0,1")
     parser.add_argument("--epochs", type=int, default=2)
@@ -554,6 +575,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.initial_adapter is not None:
+        args.initial_adapter = args.initial_adapter.resolve()
+        adapter_config = args.initial_adapter / "adapter_config.json"
+        if not adapter_config.is_file():
+            raise ValueError(
+                f"initial adapter is missing adapter_config.json: {args.initial_adapter}"
+            )
     train_rows = load_jsonl(args.train_dataset)
     train_sidecar = load_jsonl(args.train_sidecar)
     monitor_rows = load_jsonl(args.monitor_dataset)
@@ -618,6 +646,9 @@ def main() -> int:
     manifest = {
         "schema_version": "predictive-spatial-cot-sft-pilot-v1",
         "model": args.model,
+        "initial_adapter": (
+            str(args.initial_adapter) if args.initial_adapter is not None else None
+        ),
         "train_count": len(train_rows),
         "train_sidecar": str(args.train_sidecar.resolve()),
         "isolation": isolation_report,
