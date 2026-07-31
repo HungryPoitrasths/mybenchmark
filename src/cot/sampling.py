@@ -41,6 +41,7 @@ SUPPORTED_TYPE_ORDER = tuple(
 
 PILOT_TRAIN_8K_LEVEL_QUOTAS = {"L1": 3669, "L2": 661, "L3": 3670}
 PILOT_TRAIN_LEVEL_QUOTAS = {"L1": 4669, "L2": 661, "L3": 4670}
+PILOT_TRAIN_2K_LEVEL_QUOTAS = {"L1": 350, "L2": 1300, "L3": 350}
 MONITOR_VALIDATION_PER_TYPE = 20
 
 
@@ -292,6 +293,10 @@ def select_stratified(
 
 def select_pilot_train(rows: list[dict[str, Any]], *, seed: int = 42) -> SelectionResult:
     return select_stratified(rows, level_quotas=PILOT_TRAIN_LEVEL_QUOTAS, seed=seed)
+
+
+def select_pilot_train_2k(rows: list[dict[str, Any]], *, seed: int = 42) -> SelectionResult:
+    return select_stratified(rows, level_quotas=PILOT_TRAIN_2K_LEVEL_QUOTAS, seed=seed)
 
 
 def select_pilot_train_8k(rows: list[dict[str, Any]], *, seed: int = 42) -> SelectionResult:

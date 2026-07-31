@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch an 8k or 10k CoT SFT pilot with sample-based logging and evaluation."""
+"""Launch the 2k CoT SFT stage with sample-based logging and evaluation."""
 
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ from src.cot.evaluation import evaluate_predictions
 
 
 CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
-STANDARD_TRAIN_COUNTS = {8_000, 10_000}
+STANDARD_TRAIN_COUNT = 2_000
+STANDARD_MONITOR_COUNT = 320
 CUDA_DEVICE_ORDER = "PCI_BUS_ID"
 
 
@@ -504,9 +505,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--optimizer", default="adamw_torch")
-    parser.add_argument("--save-every-samples", type=int, default=500)
-    parser.add_argument("--eval-every-samples", type=int, default=2000)
-    parser.add_argument("--log-every-samples", type=int, default=100)
+    parser.add_argument("--save-every-samples", type=int, default=250)
+    parser.add_argument("--eval-every-samples", type=int, default=500)
+    parser.add_argument("--log-every-samples", type=int, default=50)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--aligner-learning-rate", type=float, default=1e-5)
     parser.add_argument("--lora-rank", type=int, default=32)
@@ -557,13 +558,16 @@ def main() -> int:
     train_sidecar = load_jsonl(args.train_sidecar)
     monitor_rows = load_jsonl(args.monitor_dataset)
     monitor_sidecar = load_jsonl(args.monitor_sidecar)
-    if not args.allow_nonstandard_counts and len(train_rows) not in STANDARD_TRAIN_COUNTS:
-        expected = " or ".join(str(value) for value in sorted(STANDARD_TRAIN_COUNTS))
+    if not args.allow_nonstandard_counts and len(train_rows) != STANDARD_TRAIN_COUNT:
         raise ValueError(
-            f"pilot train dataset must contain {expected} rows, got {len(train_rows)}"
+            f"pilot train dataset must contain {STANDARD_TRAIN_COUNT} rows, "
+            f"got {len(train_rows)}"
         )
-    if not args.allow_nonstandard_counts and len(monitor_rows) != 320:
-        raise ValueError(f"monitor dataset must contain 320 rows, got {len(monitor_rows)}")
+    if not args.allow_nonstandard_counts and len(monitor_rows) != STANDARD_MONITOR_COUNT:
+        raise ValueError(
+            f"monitor dataset must contain {STANDARD_MONITOR_COUNT} rows, "
+            f"got {len(monitor_rows)}"
+        )
     if len(train_rows) != len(train_sidecar):
         raise ValueError("train dataset and sidecar row counts do not match")
     if len(monitor_rows) != len(monitor_sidecar):

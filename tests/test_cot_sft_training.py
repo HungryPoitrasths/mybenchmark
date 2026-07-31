@@ -9,6 +9,7 @@ import pytest
 
 from src.cot.evaluation import evaluate_predictions, parse_strict_answer
 from src.cot.sampling import (
+    PILOT_TRAIN_2K_LEVEL_QUOTAS,
     PILOT_TRAIN_8K_LEVEL_QUOTAS,
     PILOT_TRAIN_LEVEL_QUOTAS,
     SUPPORTED_TYPE_ORDER,
@@ -16,6 +17,7 @@ from src.cot.sampling import (
     SamplingError,
     select_monitor_validation,
     select_pilot_train,
+    select_pilot_train_2k,
     select_pilot_train_8k,
 )
 
@@ -68,6 +70,22 @@ def test_monitor_selection_rejects_underfilled_type() -> None:
     ]
     with pytest.raises(SamplingError, match="object_remove"):
         select_monitor_validation(rows)
+
+
+def test_2k_pilot_uses_l2_dense_level_quotas() -> None:
+    rows = [
+        _row(question_type, index)
+        for level, question_types in TYPES_BY_LEVEL.items()
+        for question_type in question_types
+        for index in range(PILOT_TRAIN_2K_LEVEL_QUOTAS[level])
+    ]
+
+    result = select_pilot_train_2k(rows, seed=11)
+
+    assert len(result.indices) == 2_000
+    assert result.report["selected_by_level"] == PILOT_TRAIN_2K_LEVEL_QUOTAS
+    selected_uids = [rows[index]["question_uid"] for index in result.indices]
+    assert len(selected_uids) == len(set(selected_uids))
 
 
 def test_pilot_selection_redistributes_short_type_without_duplicates() -> None:
@@ -249,6 +267,21 @@ def test_8k_training_loss_schedule_has_160_points() -> None:
     assert schedule[4] == 100
     assert schedule[250] == 8_000
     assert schedule[500] == 16_000
+
+
+def test_2k_stage_uses_eight_evaluation_milestones() -> None:
+    script = _load_pilot_script()
+    schedule = script.milestone_steps(
+        train_count=2_000,
+        global_batch=32,
+        epochs=2,
+        interval=500,
+    )
+
+    assert len(schedule) == 8
+    assert list(schedule.values()) == list(range(500, 4_001, 500))
+    assert schedule[63] == 2_000
+    assert schedule[126] == 4_000
 
 
 def test_cuda_environment_uses_nvidia_smi_pci_order(monkeypatch) -> None:
