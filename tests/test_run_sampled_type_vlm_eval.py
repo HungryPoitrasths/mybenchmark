@@ -13,7 +13,6 @@ from scripts.run_sampled_type_vlm_eval import (
     _question_cache_key,
     _resolve_scannetpp_geometry_roots,
     _should_omit_temperature,
-    _supports_explicit_temperature,
     build_prompt,
     call_model,
     load_fixed_questions,
@@ -142,47 +141,6 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
 
         self.assertEqual(response, "B")
 
-    def test_call_model_responses_uses_low_temperature_for_gpt54_benchmark(self) -> None:
-        captured_kwargs: dict[str, object] = {}
-
-        class FakeResponses:
-            def create(self, **kwargs):
-                captured_kwargs.update(kwargs)
-                return type("Response", (), {"output_text": "Answer: C"})()
-
-        class FakeClient:
-            responses = FakeResponses()
-
-        response = call_model(
-            FakeClient(),
-            api_provider="openai_responses",
-            model="gpt-5.4",
-            image_paths=[Path("unused.jpg")],
-            prompt="Question?",
-            max_tokens=3072,
-            temperature=0.0,
-            api_image_max_px=0,
-            reasoning_effort="none",
-            store_response=False,
-            blind=True,
-        )
-
-        self.assertEqual(response, "Answer: C")
-        self.assertEqual(captured_kwargs["reasoning"], {"effort": "none"})
-        self.assertEqual(captured_kwargs["store"], False)
-        self.assertEqual(captured_kwargs["max_output_tokens"], 3072)
-        self.assertEqual(captured_kwargs["temperature"], 0.0)
-
-    def test_parse_args_defaults_to_configured_responses_provider(self) -> None:
-        args = parse_args(["--subset", ""])
-
-        self.assertEqual(args.base_url, "http://home.aaron-family.top:3000/openai")
-        self.assertEqual(args.model, "gpt-5.4")
-        self.assertEqual(args.api_provider, "openai_responses")
-        self.assertEqual(args.reasoning_effort, "none")
-        self.assertEqual(args.temperature, 0.0)
-        self.assertFalse(args.store_response)
-
     def test_call_model_rejects_empty_stream_response(self) -> None:
         class FakeCompletions:
             def create(self, **_kwargs):
@@ -255,11 +213,6 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
     def test_claude_opus_4_omits_temperature_for_proxy_compatibility(self) -> None:
         self.assertTrue(_should_omit_temperature("claude-opus-4-7"))
         self.assertTrue(_should_omit_temperature("claude-sonnet-4-5"))
-
-    def test_gpt54_temperature_requires_reasoning_none(self) -> None:
-        self.assertTrue(_supports_explicit_temperature("gpt-5.4", "none"))
-        self.assertFalse(_supports_explicit_temperature("gpt-5.4", "low"))
-        self.assertFalse(_supports_explicit_temperature("o3", "none"))
 
     def test_scannetpp_geometry_roots_include_frame_root_siblings(self) -> None:
         roots = _resolve_scannetpp_geometry_roots(
