@@ -38,7 +38,7 @@ from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
 
 
 GPT_PICTURE_PROMPT_VERSION = "agent-motion-picture-multiview-v2"
-QWEN_PICTURE_PROMPT_VERSION = "agent-motion-picture-crop-reference-v1"
+QWEN_PICTURE_PROMPT_VERSION = "agent-motion-picture-cross-frame-reference-v2"
 VIDEO_PROMPT_VERSION = "agent-motion-video-v1"
 JOB_SCHEMA_VERSION = "predictive-spatial-generation-jobs-v2"
 DEFAULT_GPT_MODEL = "gpt-image-1.5"
@@ -146,7 +146,9 @@ def describe_agent_motion(components: dict[str, float], *, threshold_m: float = 
     return ", ".join(phrases[:-1]) + ", and " + phrases[-1]
 
 
-def _moving_group_labels(question: dict[str, Any], spec: dict[str, Any]) -> list[str]:
+def _moving_group_members(
+    question: dict[str, Any], spec: dict[str, Any]
+) -> list[dict[str, Any]]:
     raw_group = spec.get("moving_group")
     has_attachments = bool(question.get("has_attachment_chain"))
     if raw_group is None:
@@ -157,7 +159,7 @@ def _moving_group_labels(question: dict[str, Any], spec: dict[str, Any]) -> list
         raw_group = [{"label": question.get("moved_obj_label")}]
     if not isinstance(raw_group, list) or not raw_group:
         raise ValueError("moving_group must be a non-empty array")
-    labels: list[str] = []
+    members: list[dict[str, Any]] = []
     object_ids: list[int] = []
     for index, item in enumerate(raw_group):
         if has_attachments and not isinstance(item, dict):
@@ -166,16 +168,31 @@ def _moving_group_labels(question: dict[str, Any], spec: dict[str, Any]) -> list
             )
         label_value = item.get("label") if isinstance(item, dict) else item
         label = _safe_label(label_value, field=f"moving_group[{index}].label")
-        labels.append(label)
+        visual_role = (
+            item.get("visual_reference_role", "moving_group_reference")
+            if isinstance(item, dict)
+            else "moving_group_reference"
+        )
+        if visual_role not in {"moving_group_reference", "destination_environment"}:
+            raise ValueError(
+                f"moving_group[{index}].visual_reference_role must identify a Qwen input"
+            )
+        member: dict[str, Any] = {
+            "label": label,
+            "visual_reference_role": visual_role,
+        }
         if has_attachments:
             raw_id = item.get("obj_id")
             if isinstance(raw_id, bool) or not isinstance(raw_id, int):
                 raise ValueError(f"moving_group[{index}].obj_id must be an integer")
             object_ids.append(raw_id)
+            member["obj_id"] = raw_id
+        members.append(member)
     moved_label = _safe_label(question.get("moved_obj_label"), field="moved_obj_label")
-    if labels[0] != moved_label:
+    if members[0]["label"] != moved_label:
         raise ValueError(
-            f"moving_group must start with moved object {moved_label!r}, found {labels[0]!r}"
+            f"moving_group must start with moved object {moved_label!r}, "
+            f"found {members[0]['label']!r}"
         )
     if has_attachments:
         moved_id = question.get("moved_obj_id")
@@ -199,14 +216,15 @@ def _moving_group_labels(question: dict[str, Any], spec: dict[str, Any]) -> list
                 "moving_group omits benchmark-known attachment ids: "
                 + ", ".join(str(value) for value in missing_known_ids)
             )
-    return labels
+    return members
 
 
 def build_safe_action(question: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:
     qtype = str(question.get("type") or "")
     if qtype not in L2_ROLLOUT_TYPES:
         raise ValueError(f"unsupported rollout question type: {qtype!r}")
-    moving_group_labels = _moving_group_labels(question, spec)
+    moving_group_members = _moving_group_members(question, spec)
+    moving_group_labels = [item["label"] for item in moving_group_members]
     components = world_delta_to_agent_components(
         question.get("delta"),
         spec.get("camera_rotation_world_to_camera"),
@@ -214,6 +232,16 @@ def build_safe_action(question: dict[str, Any], spec: dict[str, Any]) -> dict[st
     action: dict[str, Any] = {
         "action_type": "orbit" if qtype == "object_rotate_object_centric" else "translate",
         "moving_group_labels": moving_group_labels,
+        "source_reference_labels": [
+            item["label"]
+            for item in moving_group_members
+            if item["visual_reference_role"] == "moving_group_reference"
+        ],
+        "destination_reference_labels": [
+            item["label"]
+            for item in moving_group_members
+            if item["visual_reference_role"] == "destination_environment"
+        ],
         "agent_motion_text": describe_agent_motion(components),
         "path_length_m": round(float(components["path_length_m"]), 4),
         "duration_seconds": action_duration_seconds(float(components["path_length_m"])),
@@ -298,17 +326,26 @@ def build_picture_prompt(
 
 
 def build_qwen_picture_prompt(action: dict[str, Any]) -> str:
-    """Instruct Qwen to edit one destination canvas from a compact object reference."""
+    """Instruct Qwen to edit a destination that may show frame-2-only group members."""
     group = _group_phrase(action["moving_group_labels"])
+    source_group = _group_phrase(action.get("source_reference_labels") or [])
+    destination_group = _group_phrase(action.get("destination_reference_labels") or [])
     lines = [
         "Use exactly two supplied images as different kinds of visual input.",
-        "Picture 1 is a compact reference crop of the moving group only; use it only to preserve the group's appearance.",
+        "Picture 1 is a compact source-view reference crop; use it only to preserve the appearance of the group members it shows.",
         "Picture 2 is the destination environment and is the only output canvas.",
         "Generate one photorealistic image from Picture 2's camera viewpoint, composition, and aspect ratio.",
         "Never show Picture 1's background or crop boundary in the output.",
         "Never make a collage, diptych, split screen, mirrored room, repeated room, or duplicated camera view.",
         f"The rigid moving group, in parent-to-descendant order, is: {group}.",
     ]
+    if source_group:
+        lines.append(f"Picture 1 visually references these group members: {source_group}.")
+    if destination_group:
+        lines.append(
+            "Picture 2 itself visually references these additional group members at their "
+            f"original locations: {destination_group}."
+        )
     if action["action_type"] == "orbit":
         lines.append(
             f"Move the group along a {action['orbit_angle_degrees']:g}-degree "
@@ -326,6 +363,8 @@ def build_qwen_picture_prompt(action: dict[str, Any]) -> str:
         )
     lines.extend(
         [
+            "Move every listed member, including members referenced only in Picture 2, as one rigid assembly.",
+            "Remove any moved member already visible at its original Picture 2 location before rendering the assembly at its endpoint.",
             "Render the group once at its endpoint, preserving its internal relative positions and orientations.",
             "Keep every unlisted object, wall, floor, furniture item, light, texture, and camera parameter in Picture 2 unchanged.",
             "Do not add text, arrows, paths, boxes, markers, overlays, or new objects.",
@@ -598,9 +637,19 @@ def prepare_jobs(
             raise ValueError(f"{uid}: unsupported question type {qtype!r}")
 
         generation_images = _generation_images(spec, selection_spec_path)
+        picture_eligible = bool(spec.get("picture_eligible", True))
+        picture_reasons = list(spec.get("picture_rejection_reasons") or [])
+        qwen_specific_eligible = bool(spec.get("qwen_picture_eligible", True))
+        qwen_picture_eligible = picture_eligible and qwen_specific_eligible
+        qwen_picture_reasons = [
+            *picture_reasons,
+            *list(spec.get("qwen_picture_rejection_reasons") or []),
+        ]
+        if picture_eligible and not qwen_specific_eligible and not qwen_picture_reasons:
+            qwen_picture_reasons.append("qwen_picture_ineligible")
         qwen_reference = (
             _qwen_reference_image(spec, selection_spec_path)
-            if "qwen" in generation_backends
+            if "qwen" in generation_backends and qwen_picture_eligible
             else None
         )
         source_image = generation_images[0]
@@ -619,8 +668,6 @@ def prepare_jobs(
             "scene_id": question.get("scene_id"),
         }
 
-        picture_eligible = bool(spec.get("picture_eligible", True))
-        picture_reasons = list(spec.get("picture_rejection_reasons") or [])
         video_eligible = bool(spec.get("video_eligible", True))
         video_reasons = list(spec.get("video_rejection_reasons") or [])
 
@@ -630,10 +677,16 @@ def prepare_jobs(
         ):
             if backend not in generation_backends:
                 continue
+            backend_picture_eligible = (
+                qwen_picture_eligible if backend == "qwen" else picture_eligible
+            )
+            backend_picture_reasons = (
+                qwen_picture_reasons if backend == "qwen" else picture_reasons
+            )
             input_images = (
                 [qwen_reference, generation_images[-1]]
-                if backend == "qwen"
-                else generation_images
+                if backend == "qwen" and qwen_reference is not None
+                else ([] if backend == "qwen" else generation_images)
             )
             backend_prompt = qwen_picture_prompt if backend == "qwen" else picture_prompt
             prompt_version = (
@@ -666,7 +719,8 @@ def prepare_jobs(
                 "prompt": backend_prompt,
                 "request_sha256": request_sha,
             }
-            assert_safe_generation_job(job)
+            if backend_picture_eligible:
+                assert_safe_generation_job(job)
             generation = _generation_provenance(
                 model=model,
                 checkpoint=checkpoint,
@@ -674,7 +728,7 @@ def prepare_jobs(
                 prompt_version=prompt_version,
                 request_sha256=request_sha,
             )
-            if picture_eligible:
+            if backend_picture_eligible:
                 jobs.append(job)
                 picture_counts[qtype] += 1 if backend == "qwen" else 0
                 prediction = {
@@ -706,8 +760,8 @@ def prepare_jobs(
                 {
                     **common_identity,
                     "picture": {
-                        "eligible": picture_eligible,
-                        "rejection_reasons": picture_reasons,
+                        "eligible": backend_picture_eligible,
+                        "rejection_reasons": backend_picture_reasons,
                         "media": media,
                         "generation": generation,
                     },

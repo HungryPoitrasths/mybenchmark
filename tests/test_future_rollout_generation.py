@@ -27,6 +27,7 @@ from scripts.prepare_future_rollout_jobs import (
     action_duration_seconds,
     build_cosmos_prompt,
     build_picture_prompt,
+    build_qwen_picture_prompt,
     build_safe_action,
     prepare_jobs,
     world_delta_to_agent_components,
@@ -249,7 +250,10 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 objects=[moved],
                 objects_by_id={1: moved},
                 attachment_graph={},
-                poses={"source.png": self._pose([0, 0, 0])},
+                poses={
+                    "source.png": self._pose([0, 0, 0]),
+                    "destination.png": self._pose([1, 0, 0]),
+                },
                 intrinsics=SimpleNamespace(width=100, height=80),
             )
             with patch.object(
@@ -264,7 +268,7 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             with Image.open(reference["path"]) as image:
                 self.assertEqual(image.size, (44, 44))
 
-    def test_qwen_reference_omits_group_member_without_source_roi(self) -> None:
+    def test_qwen_reference_uses_destination_for_frame_2_group_member(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source.png"
@@ -278,6 +282,7 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                     "moved_obj_id": 1,
                     "query_obj_id": 1,
                     "delta": [0.5, 0.0, 0.0],
+                    "object_frame_groups": {"frame_1": [1], "frame_2": [2]},
                 },
                 source_index=0,
                 dataset="scannet",
@@ -291,7 +296,10 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 objects=[moved, attached],
                 objects_by_id={1: moved, 2: attached},
                 attachment_graph={1: [2]},
-                poses={"source.png": self._pose([0, 0, 0])},
+                poses={
+                    "source.png": self._pose([0, 0, 0]),
+                    "destination.png": self._pose([1, 0, 0]),
+                },
                 intrinsics=SimpleNamespace(width=100, height=80),
             )
 
@@ -302,6 +310,9 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 reference = selection_generator._materialize_qwen_moving_group_reference(
                     candidate, context, root / "rollout", source
                 )
+            self.assertEqual(reference["source_obj_ids"], [1])
+            self.assertEqual(reference["destination_obj_ids"], [2])
+            self.assertEqual(reference["unavailable_obj_ids"], [])
             with Image.open(reference["path"]) as image:
                 self.assertEqual(image.size, (44, 44))
 
@@ -331,7 +342,10 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 objects=[moved],
                 objects_by_id={1: moved},
                 attachment_graph={},
-                poses={"source.png": self._pose([0, 0, 0])},
+                poses={
+                    "source.png": self._pose([0, 0, 0]),
+                    "destination.png": self._pose([1, 0, 0]),
+                },
                 intrinsics=SimpleNamespace(width=100, height=80),
             )
             with patch.object(
@@ -340,8 +354,97 @@ class FutureRolloutGenerationTests(unittest.TestCase):
                 reference = selection_generator._materialize_qwen_moving_group_reference(
                     candidate, context, root / "rollout", source
                 )
+            self.assertEqual(reference["source_obj_ids"], [])
+            self.assertEqual(reference["destination_obj_ids"], [])
+            self.assertEqual(reference["unavailable_obj_ids"], [1])
             with Image.open(reference["path"]) as image:
                 self.assertEqual(image.size, (100, 80))
+
+    def test_materialization_records_cross_frame_visual_reference_roles(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("source.png", "destination.png"):
+                Image.new("RGB", (100, 80), color=(20, 30, 40)).save(root / name)
+            moved = self._object(1, [0.0, 0.0, 0.5], "counter")
+            attached = self._object(2, [0.0, 0.0, 1.0], "pot cover")
+            candidate = RouteCandidate(
+                question={
+                    "question_uid": "uid-cross-frame",
+                    "type": "object_move_object_centric",
+                    "moved_obj_id": 1,
+                    "query_obj_id": 1,
+                    "delta": [0.5, 0.0, 0.0],
+                    "has_attachment_chain": True,
+                    "object_frame_groups": {"frame_1": [1], "frame_2": [2]},
+                },
+                source_index=0,
+                dataset="scannetpp",
+                scene_id="scene-id",
+                generation_image_names=("source.png", "destination.png"),
+                generation_roles=("source_view", "destination_environment"),
+                score_key=(1.0,),
+                metrics={},
+            )
+            context = SimpleNamespace(
+                objects=[moved, attached],
+                objects_by_id={1: moved, 2: attached},
+                attachment_graph={1: [2]},
+                poses={
+                    "source.png": self._pose([0, 0, 0]),
+                    "destination.png": self._pose([1, 0, 0]),
+                },
+                intrinsics=SimpleNamespace(width=100, height=80),
+                data_source=SimpleNamespace(image_path=lambda name: root / name),
+            )
+            with patch.object(
+                selection_generator,
+                "_project_object_roi",
+                return_value={"roi_bounds": (40, 60, 20, 40)},
+            ):
+                entry = _materialize_route(candidate, context, root / "rollout")
+            self.assertEqual(
+                [item["visual_reference_role"] for item in entry["moving_group"]],
+                ["moving_group_reference", "destination_environment"],
+            )
+            self.assertEqual(entry["qwen_reference_image"]["source_obj_ids"], [1])
+            self.assertEqual(entry["qwen_reference_image"]["destination_obj_ids"], [2])
+            self.assertTrue(entry["qwen_picture_eligible"])
+            self.assertEqual(entry["qwen_picture_rejection_reasons"], [])
+
+    def test_qwen_prompt_identifies_cross_frame_group_members(self) -> None:
+        question = {
+            "type": "object_move_agent",
+            "moved_obj_id": 1,
+            "moved_obj_label": "counter",
+            "query_obj_id": 1,
+            "delta": [0.5, 0.0, 0.0],
+            "has_attachment_chain": True,
+            "attachment_parent_id": 1,
+            "attachment_child_id": 2,
+        }
+        spec = {
+            "camera_rotation_world_to_camera": self.CAMERA_ROTATION_WORLD_TO_CAMERA,
+            "moving_group": [
+                {
+                    "obj_id": 1,
+                    "label": "counter",
+                    "visual_reference_role": "moving_group_reference",
+                },
+                {
+                    "obj_id": 2,
+                    "label": "pot cover",
+                    "visual_reference_role": "destination_environment",
+                },
+            ],
+        }
+        action = build_safe_action(question, spec)
+        prompt = build_qwen_picture_prompt(action)
+        self.assertIn('Picture 1 visually references these group members: "counter".', prompt)
+        self.assertIn(
+            'Picture 2 itself visually references these additional group members at their original locations: "pot cover".',
+            prompt,
+        )
+        self.assertIn("including members referenced only in Picture 2", prompt)
 
     def test_static_visibility_uses_registered_depth_before_mesh_fallback(self) -> None:
         obj = self._object(1, [0.0, 0.0, 1.0], "table")
@@ -632,6 +735,42 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             self.assertEqual(outputs["cosmos_manifest"].read_bytes(), cosmos_manifest_before)
             self.assertNotIn("input_image_path", gpt_job)
             self.assertNotIn("where is the chair", gpt_job["prompt"].lower())
+
+            ineligible_selection = root / "private_selection_qwen_ineligible.json"
+            ineligible_payload = json.loads(selection_path.read_text(encoding="utf-8"))
+            ineligible_entry = ineligible_payload["entries"][0]
+            ineligible_entry.pop("qwen_reference_image")
+            ineligible_entry["qwen_picture_eligible"] = False
+            ineligible_entry["qwen_picture_rejection_reasons"] = [
+                "moving_group_without_visual_reference:2"
+            ]
+            ineligible_selection.write_text(
+                json.dumps(ineligible_payload), encoding="utf-8"
+            )
+            ineligible_outputs = prepare_jobs(
+                benchmark_path=benchmark_path,
+                selection_spec_path=ineligible_selection,
+                output_dir=root / "rollouts_qwen_ineligible",
+                seed=7,
+                expected_picture_per_type=50,
+                generation_backends=frozenset({"qwen", "gpt"}),
+            )
+            ineligible_jobs = json.loads(
+                ineligible_outputs["qwen_jobs"].read_text(encoding="utf-8")
+            )
+            eligible_gpt_jobs = json.loads(
+                ineligible_outputs["gpt_jobs"].read_text(encoding="utf-8")
+            )
+            ineligible_manifest = json.loads(
+                ineligible_outputs["qwen_manifest"].read_text(encoding="utf-8")
+            )
+            self.assertEqual(ineligible_jobs["entries"], [])
+            self.assertEqual(len(eligible_gpt_jobs["entries"]), 1)
+            self.assertFalse(ineligible_manifest["entries"][0]["picture"]["eligible"])
+            self.assertEqual(
+                ineligible_manifest["entries"][0]["picture"]["rejection_reasons"],
+                ["moving_group_without_visual_reference:2"],
+            )
 
             manifest = load_rollout_manifest(outputs["gpt_manifest"])
             uid = manifest.entry_order[0]

@@ -41,10 +41,19 @@ earlier frame. Without a bridge it uses source and destination only.
     [0.0, 0.34, 0.94]
   ],
   "moving_group": [
-    {"obj_id": 20, "label": "desk"},
-    {"obj_id": 26, "label": "white box on the desk"}
+    {
+      "obj_id": 20,
+      "label": "desk",
+      "visual_reference_role": "moving_group_reference"
+    },
+    {
+      "obj_id": 26,
+      "label": "white box on the desk",
+      "visual_reference_role": "destination_environment"
+    }
   ],
   "picture_eligible": true,
+  "qwen_picture_eligible": true,
   "video_eligible": true
 }
 ```
@@ -54,9 +63,11 @@ object and transitive attachment, then uses them to rank routes rather than as
 hard rejection gates. A selected bridge must exist, have a valid pose, and pass
 image quality. This avoids requiring one camera to contain both the original and
 future object positions. A Qwen reference crop encloses the moving-group members
-that project into the source view. Members without a valid source ROI are omitted
-from the crop bounds; if none have a valid ROI, the source view is used as the
-fallback reference.
+assigned to the source view. Cross-frame members assigned to `frame_2` use the
+full destination environment as their visual reference instead of being
+incorrectly required to have a source ROI. A member absent from both inputs makes
+only the Qwen picture job ineligible; it does not abort materialization or disable
+the GPT and Cosmos jobs.
 
 The generated `moving_group` contains the complete transitive attachment chain,
 with the moved parent first. Camera rotation remains private and is used only to
@@ -82,11 +93,13 @@ python scripts/prepare_future_rollout_jobs.py `
 ## Picture generation
 
 GPT receives the ordered source, optional bridge, and destination views. Qwen
-receives a compact source-view crop of the moving group plus the full destination
-environment. The destination is Qwen's only output canvas; the crop supplies
-appearance reference without asking the model to fuse two complete room views.
-The Qwen prompt explicitly rejects collages, split screens, mirrored rooms, and
-duplicated camera views.
+receives a compact source-view crop plus the full destination environment. The
+crop supplies the appearance of source-visible moving-group members. The
+destination is Qwen's only output canvas and also supplies the appearance of
+group members that the benchmark intentionally assigns to `frame_2`. The Qwen
+prompt names both groups, requires all of them to move as one assembly, and
+explicitly rejects collages, split screens, mirrored rooms, and duplicated
+camera views.
 
 Qwen's two-image job format is `moving_group_reference`, then
 `destination_environment`. Its input hashes are checked at generation time.

@@ -703,45 +703,101 @@ def _copy_media(source: Path, target: Path) -> Path:
     return target.resolve()
 
 
+def _question_frame_group_ids(question: dict[str, Any], frame_key: str) -> set[int]:
+    raw_groups = question.get("object_frame_groups")
+    raw_ids = raw_groups.get(frame_key) if isinstance(raw_groups, dict) else None
+    if not isinstance(raw_ids, (list, tuple)):
+        return set()
+    resolved: set[int] = set()
+    for value in raw_ids:
+        try:
+            resolved.add(_coerce_int(value, field=f"object_frame_groups.{frame_key}"))
+        except ValueError:
+            continue
+    return resolved
+
+
+def _clipped_object_roi(
+    obj: dict[str, Any], pose: Any, context: SceneContext
+) -> tuple[int, int, int, int] | None:
+    raw_bounds = _project_object_roi(obj, pose, context.intrinsics).get("roi_bounds")
+    if raw_bounds is None:
+        return None
+    intrinsic_width = max(int(context.intrinsics.width), 1)
+    intrinsic_height = max(int(context.intrinsics.height), 1)
+    left, right, top, bottom = (int(value) for value in raw_bounds)
+    clipped = (
+        max(0, min(intrinsic_width, left)),
+        max(0, min(intrinsic_width, right)),
+        max(0, min(intrinsic_height, top)),
+        max(0, min(intrinsic_height, bottom)),
+    )
+    if clipped[1] <= clipped[0] or clipped[3] <= clipped[2]:
+        return None
+    return clipped
+
+
+def _qwen_moving_group_reference_layout(
+    candidate: RouteCandidate,
+    context: SceneContext,
+) -> tuple[dict[int, tuple[int, int, int, int]], set[int], set[int]]:
+    """Assign each moved member to the Qwen input that actually shows it."""
+    motion = _apply_question_motion(
+        candidate.question, context.objects, context.attachment_graph
+    )
+    source_pose = context.poses[candidate.generation_image_names[0]]
+    destination_pose = context.poses[candidate.generation_image_names[-1]]
+    frame_1_ids = _question_frame_group_ids(candidate.question, "frame_1")
+    frame_2_ids = _question_frame_group_ids(candidate.question, "frame_2")
+    source_bounds: dict[int, tuple[int, int, int, int]] = {}
+    destination_ids: set[int] = set()
+    unavailable_ids: set[int] = set()
+
+    for obj_id in motion.moved_ids:
+        # Cross-frame questions deliberately reserve some objects for the last view.
+        if obj_id in frame_2_ids and obj_id not in frame_1_ids:
+            destination_ids.add(obj_id)
+            continue
+        source_roi = _clipped_object_roi(
+            context.objects_by_id[obj_id], source_pose, context
+        )
+        if source_roi is not None:
+            source_bounds[obj_id] = source_roi
+            continue
+        destination_roi = _clipped_object_roi(
+            context.objects_by_id[obj_id], destination_pose, context
+        )
+        if destination_roi is not None:
+            destination_ids.add(obj_id)
+        else:
+            unavailable_ids.add(obj_id)
+    return source_bounds, destination_ids, unavailable_ids
+
+
 def _materialize_qwen_moving_group_reference(
     candidate: RouteCandidate,
     context: SceneContext,
     output_dir: Path,
     source_image: Path,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     """Crop the source-view moving group so Qwen does not receive two full scenes."""
-    motion = _apply_question_motion(
-        candidate.question, context.objects, context.attachment_graph
+    source_bounds, destination_ids, unavailable_ids = _qwen_moving_group_reference_layout(
+        candidate, context
     )
-    source_pose = context.poses[candidate.generation_image_names[0]]
-    bounds: list[tuple[int, int, int, int]] = []
-    omitted_ids: list[int] = []
     intrinsic_width = max(int(context.intrinsics.width), 1)
     intrinsic_height = max(int(context.intrinsics.height), 1)
-    for obj_id in motion.moved_ids:
-        roi_bounds = _project_object_roi(
-            context.objects_by_id[obj_id], source_pose, context.intrinsics
-        ).get("roi_bounds")
-        if roi_bounds is None:
-            omitted_ids.append(obj_id)
-            continue
-        left, right, top, bottom = (int(value) for value in roi_bounds)
-        clipped = (
-            max(0, min(intrinsic_width, left)),
-            max(0, min(intrinsic_width, right)),
-            max(0, min(intrinsic_height, top)),
-            max(0, min(intrinsic_height, bottom)),
-        )
-        if clipped[1] <= clipped[0] or clipped[3] <= clipped[2]:
-            omitted_ids.append(obj_id)
-            continue
-        bounds.append(clipped)
-
-    if omitted_ids:
-        fallback = "visible group members" if bounds else "the full source view"
+    bounds = list(source_bounds.values())
+    if destination_ids:
         print(
-            f"[selection] {candidate.question['question_uid']}: source ROI unavailable "
-            f"for moving-group object(s) {omitted_ids}; Qwen reference uses {fallback}",
+            f"[selection] {candidate.question['question_uid']}: moving-group object(s) "
+            f"{sorted(destination_ids)} use the destination environment as their visual reference",
+            file=sys.stderr,
+            flush=True,
+        )
+    if unavailable_ids:
+        print(
+            f"[selection] {candidate.question['question_uid']}: moving-group object(s) "
+            f"{sorted(unavailable_ids)} have no visual reference in either Qwen input",
             file=sys.stderr,
             flush=True,
         )
@@ -770,6 +826,9 @@ def _materialize_qwen_moving_group_reference(
         "path": str(target.resolve()),
         "role": "moving_group_reference",
         "sha256": _sha256_file(target),
+        "source_obj_ids": sorted(source_bounds),
+        "destination_obj_ids": sorted(destination_ids),
+        "unavailable_obj_ids": sorted(unavailable_ids),
     }
 
 
@@ -805,15 +864,37 @@ def _materialize_route(
     qwen_reference = _materialize_qwen_moving_group_reference(
         candidate, context, output_dir, copied_by_role["source_view"]
     )
-    moving_group = [
-        {
+    source_reference_ids = {
+        int(value) for value in qwen_reference.get("source_obj_ids", motion.moved_ids)
+    }
+    destination_reference_ids = {
+        int(value) for value in qwen_reference.get("destination_obj_ids", [])
+    }
+    unavailable_ids = {
+        int(value) for value in qwen_reference.get("unavailable_obj_ids", [])
+    }
+    moving_group: list[dict[str, Any]] = []
+    for obj_id in motion.moved_ids:
+        item: dict[str, Any] = {
             "obj_id": obj_id,
             "label": str(context.objects_by_id[obj_id].get("label") or "").strip(),
         }
-        for obj_id in motion.moved_ids
-    ]
+        if obj_id in source_reference_ids:
+            item["visual_reference_role"] = "moving_group_reference"
+        elif obj_id in destination_reference_ids:
+            item["visual_reference_role"] = "destination_environment"
+        moving_group.append(item)
     if any(not item["label"] for item in moving_group):
         raise ValueError(f"{uid}: moving group contains an empty label")
+    qwen_rejection_reasons: list[str] = []
+    if not source_reference_ids:
+        qwen_rejection_reasons.append("no_source_moving_group_reference")
+    if unavailable_ids:
+        qwen_rejection_reasons.append(
+            "moving_group_without_visual_reference:"
+            + ",".join(str(value) for value in sorted(unavailable_ids))
+        )
+    qwen_picture_eligible = not qwen_rejection_reasons
     source_pose = context.poses[candidate.generation_image_names[0]]
     entry: dict[str, Any] = {
         "question_uid": uid,
@@ -825,6 +906,8 @@ def _materialize_route(
         ).tolist(),
         "moving_group": moving_group,
         "picture_eligible": True,
+        "qwen_picture_eligible": qwen_picture_eligible,
+        "qwen_picture_rejection_reasons": qwen_rejection_reasons,
         "video_eligible": True,
         "answer_context_media": answer_context_media,
     }
@@ -845,7 +928,13 @@ def _materialize_route(
                 candidate.generation_roles,
                 generation_images,
             )
-        ]
+        ],
+        "qwen_visual_references": {
+            "source_obj_ids": sorted(source_reference_ids),
+            "destination_obj_ids": sorted(destination_reference_ids),
+            "unavailable_obj_ids": sorted(unavailable_ids),
+            "eligible": qwen_picture_eligible,
+        },
     }
     return entry
 
