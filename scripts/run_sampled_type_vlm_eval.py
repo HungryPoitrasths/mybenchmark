@@ -1439,11 +1439,23 @@ def _supports_qwen_thinking_control(model: str) -> bool:
     return "qwen3.5" in normalized or "qwen3-5" in normalized
 
 
-def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
+def make_client(
+    api_provider: str,
+    base_url: str,
+    api_key: str,
+    timeout: float,
+    *,
+    credential_kind: str = "api_key",
+):
     if api_provider == "anthropic":
         from anthropic import Anthropic
 
-        return Anthropic(api_key=api_key, base_url=base_url, timeout=timeout)
+        credential = (
+            {"auth_token": api_key}
+            if credential_kind == "auth_token"
+            else {"api_key": api_key}
+        )
+        return Anthropic(**credential, base_url=base_url, timeout=timeout)
 
     from openai import OpenAI
 
@@ -1451,19 +1463,64 @@ def make_client(api_provider: str, base_url: str, api_key: str, timeout: float):
 
 
 class ThreadLocalOpenAIClientFactory:
-    def __init__(self, *, api_provider: str, base_url: str, api_key: str, timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        api_provider: str,
+        base_url: str,
+        api_key: str,
+        timeout: float,
+        credential_kind: str = "api_key",
+    ) -> None:
         self.api_provider = api_provider
         self.base_url = base_url
         self.api_key = api_key
         self.timeout = timeout
+        self.credential_kind = credential_kind
         self.local = threading.local()
 
     def get_client(self) -> Any:
         client = getattr(self.local, "client", None)
         if client is None:
-            client = make_client(self.api_provider, self.base_url, self.api_key, self.timeout)
+            client = make_client(
+                self.api_provider,
+                self.base_url,
+                self.api_key,
+                self.timeout,
+                credential_kind=self.credential_kind,
+            )
             self.local.client = client
         return client
+
+
+def _resolve_api_credential(args: argparse.Namespace) -> tuple[str, str]:
+    if args.api_key:
+        return args.api_key, "api_key"
+
+    if args.api_key_env:
+        value = os.getenv(args.api_key_env)
+        if value:
+            kind = (
+                "auth_token"
+                if args.api_provider == "anthropic"
+                and args.api_key_env.upper().endswith("AUTH_TOKEN")
+                else "api_key"
+            )
+            return value, kind
+
+    if args.api_provider == "anthropic":
+        auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN")
+        if auth_token:
+            return auth_token, "auth_token"
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        if anthropic_api_key:
+            return anthropic_api_key, "api_key"
+    else:
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if openai_api_key:
+            return openai_api_key, "api_key"
+
+    return os.getenv("DASHSCOPE_API_KEY") or "EMPTY", "api_key"
 
 
 def _content_text(value: Any) -> str:
@@ -2597,19 +2654,13 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
 
     client_factory: ThreadLocalOpenAIClientFactory | None = None
     if not args.skip_api:
-        default_api_key_env = "ANTHROPIC_AUTH_TOKEN" if args.api_provider == "anthropic" else "OPENAI_API_KEY"
-        api_key = (
-            args.api_key
-            or (os.getenv(args.api_key_env) if args.api_key_env else None)
-            or os.getenv(default_api_key_env)
-            or os.getenv("DASHSCOPE_API_KEY")
-            or "EMPTY"
-        )
+        api_key, credential_kind = _resolve_api_credential(args)
         client_factory = ThreadLocalOpenAIClientFactory(
             api_provider=args.api_provider,
             base_url=args.base_url,
             api_key=api_key,
             timeout=args.timeout,
+            credential_kind=credential_kind,
         )
 
     only_types: set[str] | None = (

@@ -1,7 +1,11 @@
 import json
+import os
+import sys
+import types
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from scripts.extract_l3_attachment_chain_multiselect import (
     MULTI_SELECT_NOTE,
@@ -12,12 +16,14 @@ from scripts.run_sampled_type_vlm_eval import (
     _option_html,
     _question_cache_key,
     _resolve_scannetpp_geometry_roots,
+    _resolve_api_credential,
     _should_omit_temperature,
     build_prompt,
     call_model,
     load_fixed_questions,
     load_questions,
     load_rollout_manifest,
+    make_client,
     parse_args,
     parse_answer,
     parse_answers,
@@ -31,6 +37,51 @@ from scripts.validate_rollout_manifest import validate_manifest
 
 
 class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
+    def test_anthropic_auth_token_uses_bearer_credential(self) -> None:
+        args = types.SimpleNamespace(
+            api_key=None,
+            api_key_env="ANTHROPIC_AUTH_TOKEN",
+            api_provider="anthropic",
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "token-value"}, clear=True):
+            credential, kind = _resolve_api_credential(args)
+
+        self.assertEqual(credential, "token-value")
+        self.assertEqual(kind, "auth_token")
+
+    def test_anthropic_api_key_keeps_x_api_key_credential(self) -> None:
+        args = types.SimpleNamespace(
+            api_key=None,
+            api_key_env=None,
+            api_provider="anthropic",
+        )
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "key-value"}, clear=True):
+            credential, kind = _resolve_api_credential(args)
+
+        self.assertEqual(credential, "key-value")
+        self.assertEqual(kind, "api_key")
+
+    def test_make_client_passes_anthropic_auth_token(self) -> None:
+        captured_kwargs = {}
+
+        def fake_anthropic(**kwargs):
+            captured_kwargs.update(kwargs)
+            return object()
+
+        fake_module = types.ModuleType("anthropic")
+        fake_module.Anthropic = fake_anthropic
+        with patch.dict(sys.modules, {"anthropic": fake_module}):
+            make_client(
+                "anthropic",
+                "https://example.test",
+                "token-value",
+                30,
+                credential_kind="auth_token",
+            )
+
+        self.assertEqual(captured_kwargs["auth_token"], "token-value")
+        self.assertNotIn("api_key", captured_kwargs)
+
     def test_subset_keeps_same_stem_with_distinct_options(self) -> None:
         first = {
             "dataset": "scannetpp",
