@@ -512,28 +512,87 @@ class FutureRolloutGenerationTests(unittest.TestCase):
             checkpoints = list(old_path.parent.glob("selection_checkpoint_*.jsonl"))
             self.assertEqual(len(checkpoints), 2)
 
-    def test_checkpoint_match_tolerates_derived_uid_changes(self) -> None:
-        record = {
-            "source_index": 7,
-            "question_uid": "old-derived-uid",
-            "question_type": "object_move_distance",
-            "scene_id": "scene0000_00",
-        }
-        question = {
-            "question_uid": "new-derived-uid",
-            "type": "object_move_distance",
-            "scene_id": "scene0000_00",
-        }
+    def test_checkpoint_remap_survives_uid_and_source_index_changes(self) -> None:
+        questions = [
+            {
+                "scene_id": "scan-a",
+                "image_name": "before.jpg",
+                "type": "object_move_distance",
+                "question": "Before?",
+                "options": ["A", "B"],
+                "answer": "A",
+            },
+            {
+                "scene_id": "scan-a",
+                "image_name": "shared.jpg",
+                "type": "object_move_distance",
+                "question": "Shared stem?",
+                "options": ["first", "second"],
+                "answer": "A",
+            },
+            {
+                "scene_id": "scan-a",
+                "image_name": "shared.jpg",
+                "type": "object_move_distance",
+                "question": "Shared stem?",
+                "options": ["third", "fourth"],
+                "answer": "B",
+            },
+            {
+                "scene_id": "scan-a",
+                "image_name": "after.jpg",
+                "type": "object_move_agent",
+                "question": "After?",
+                "options": ["A", "B"],
+                "answer": "B",
+            },
+        ]
+        with TemporaryDirectory() as tmp:
+            benchmark = Path(tmp) / "benchmark.json"
+            benchmark.write_text(json.dumps({"questions": questions}), encoding="utf-8")
+            current_questions, _, _ = selection_generator.load_fixed_questions(benchmark)
+            legacy_questions = [questions[0], questions[1], questions[3]]
+
+            self.assertEqual(len(current_questions), 4)
+            self.assertEqual(len(legacy_questions), 3)
+            checkpoint_results = {
+                source_index: {
+                    "kind": "question_result",
+                    "source_index": source_index,
+                    "question_uid": selection_generator._checkpoint_derived_question_uid(
+                        {**question, "_dataset": "unknown"}
+                    ),
+                    "question_type": question["type"],
+                    "dataset": "scannetpp",
+                    "scene_id": question["scene_id"],
+                    "status": "rejected",
+                    "rejection": {
+                        "source_index": source_index,
+                        "question_uid": selection_generator._checkpoint_derived_question_uid(
+                            {**question, "_dataset": "unknown"}
+                        ),
+                        "question_type": question["type"],
+                        "scene_id": question["scene_id"],
+                        "reason": "route_not_eligible",
+                    },
+                }
+                for source_index, question in enumerate(legacy_questions)
+            }
+            indexed_questions = list(enumerate(current_questions))
+            remapped, unmatched = selection_generator._remap_checkpoint_results(
+                checkpoint_results,
+                benchmark_path=benchmark,
+                indexed_questions=indexed_questions,
+            )
+
+        self.assertEqual(unmatched, 0)
+        self.assertEqual(set(remapped), {0, 1, 3})
+        self.assertEqual(set(range(4)) - set(remapped), {2})
+        self.assertEqual(remapped[3]["question_uid"], current_questions[3]["question_uid"])
+        self.assertEqual(remapped[3]["rejection"]["source_index"], 3)
         self.assertTrue(
             selection_generator._checkpoint_record_matches_question(
-                record, source_index=7, question=question
-            )
-        )
-        self.assertFalse(
-            selection_generator._checkpoint_record_matches_question(
-                record,
-                source_index=7,
-                question={**question, "scene_id": "scene0001_00"},
+                remapped[3], source_index=3, question=current_questions[3]
             )
         )
 

@@ -77,7 +77,11 @@ projection markers, coordinates, or answer fields enter generation requests.
 The current pilot selects at most two questions per supported L2 type by
 default. Completed results are stored in a fingerprinted
 `private_jobs/selection_checkpoint_*.jsonl`; the v2 schema and route algorithm
-fingerprint prevent older selector checkpoints from being reused.
+fingerprint prevent older selector checkpoints from being reused. Within a
+compatible checkpoint, records also carry a dataset-independent question
+content key. When loader metadata or deduplication changes shift derived UIDs
+and source indices for the same benchmark bytes, preparation migrates matching
+records to the current indices before resuming instead of recomputing them.
 
 ```powershell
 python scripts/prepare_future_rollout_jobs.py `

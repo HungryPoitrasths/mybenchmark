@@ -22,7 +22,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.run_sampled_type_vlm_eval import _sha256_file, load_fixed_questions  # noqa: E402
+from scripts.run_sampled_type_vlm_eval import (  # noqa: E402
+    _infer_question_dataset,
+    _sha256_file,
+    load_fixed_questions,
+)
 from scripts.validate_rollout_manifest import L2_ROLLOUT_TYPES  # noqa: E402
 from src.datasets import make_data_source  # noqa: E402
 from src.frame_selector import (  # noqa: E402
@@ -1005,6 +1009,20 @@ def _checkpoint_path(output_dir: Path, configuration: dict[str, Any]) -> Path:
     return output_dir / "private_jobs" / f"selection_checkpoint_{fingerprint}.jsonl"
 
 
+def _write_checkpoint(
+    path: Path, configuration: dict[str, Any], results: dict[int, dict[str, Any]]
+) -> None:
+    header = {"kind": "header", "configuration": configuration}
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        stream.write(json.dumps(header, ensure_ascii=False, sort_keys=True) + "\n")
+        for source_index in sorted(results):
+            stream.write(
+                json.dumps(results[source_index], ensure_ascii=False, sort_keys=True) + "\n"
+            )
+    temporary.replace(path)
+
+
 def _load_or_create_checkpoint(
     path: Path, configuration: dict[str, Any]
 ) -> dict[int, dict[str, Any]]:
@@ -1044,11 +1062,7 @@ def _load_or_create_checkpoint(
                     needs_rewrite = True
                 results[source_index] = record
     if needs_rewrite:
-        with path.with_suffix(path.suffix + ".tmp").open("w", encoding="utf-8") as stream:
-            stream.write(json.dumps(expected_header, ensure_ascii=False, sort_keys=True) + "\n")
-            for source_index in sorted(results):
-                stream.write(json.dumps(results[source_index], ensure_ascii=False, sort_keys=True) + "\n")
-        path.with_suffix(path.suffix + ".tmp").replace(path)
+        _write_checkpoint(path, configuration, results)
     return results
 
 
@@ -1058,16 +1072,187 @@ def _append_checkpoint_result(path: Path, record: dict[str, Any]) -> None:
         stream.flush()
 
 
+def _checkpoint_json_key(payload: Any) -> str:
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()
+
+
+def _checkpoint_question_content_key(question: dict[str, Any]) -> str:
+    """Identify a benchmark question without loader-derived dataset metadata."""
+    return _checkpoint_json_key(
+        {
+            "scene_id": question.get("scene_id"),
+            "image_name": question.get("image_name"),
+            "type": question.get("type"),
+            "question": question.get("question"),
+            "options": question.get("options"),
+            "answer": question.get("answer"),
+        }
+    )
+
+
+def _checkpoint_derived_question_uid(question: dict[str, Any]) -> str:
+    return _checkpoint_json_key(
+        {
+            "dataset": question.get("_dataset"),
+            "scene_id": question.get("scene_id"),
+            "image_name": question.get("image_name"),
+            "type": question.get("type"),
+            "question": question.get("question"),
+            "options": question.get("options"),
+            "answer": question.get("answer"),
+        }
+    )
+
+
+def _legacy_checkpoint_content_keys(benchmark_path: Path) -> dict[str, set[str]]:
+    """Map UIDs from known loader variants back to stable benchmark content."""
+    with benchmark_path.open(encoding="utf-8-sig") as stream:
+        data = json.load(stream)
+    raw_questions = data.get("questions", []) if isinstance(data, dict) else data
+    if not isinstance(raw_questions, list):
+        raise ValueError(f"Unsupported benchmark structure: {benchmark_path}")
+
+    content_keys: dict[str, set[str]] = defaultdict(set)
+    for raw_question in raw_questions:
+        if not isinstance(raw_question, dict):
+            continue
+        question = dict(raw_question)
+        old_dataset = str(
+            question.get("_dataset") or question.get("dataset") or "unknown"
+        )
+        inferred_dataset = _infer_question_dataset(question, benchmark_path)
+        stable_key = _checkpoint_question_content_key(question)
+        for dataset in {old_dataset, inferred_dataset}:
+            uid = _checkpoint_derived_question_uid(
+                {**question, "_dataset": dataset}
+            )
+            content_keys[uid].add(stable_key)
+    return content_keys
+
+
+def _checkpoint_record_metadata_matches(
+    record: dict[str, Any], question: dict[str, Any]
+) -> bool:
+    return bool(
+        str(record.get("question_type") or "") == str(question.get("type") or "")
+        and str(record.get("scene_id") or "")
+        == str(question.get("scene_id") or "").strip()
+    )
+
+
+def _normalize_checkpoint_record(
+    record: dict[str, Any], *, source_index: int, question: dict[str, Any]
+) -> dict[str, Any]:
+    normalized = dict(record)
+    normalized.update(
+        {
+            "kind": "question_result",
+            "source_index": source_index,
+            "question_uid": str(question.get("question_uid") or ""),
+            "question_content_key": _checkpoint_question_content_key(question),
+            "question_type": str(question.get("type") or ""),
+            "dataset": _infer_dataset(question),
+            "scene_id": str(question.get("scene_id") or "").strip(),
+        }
+    )
+    if isinstance(record.get("rejection"), dict):
+        rejection = dict(record["rejection"])
+        rejection.update(
+            {
+                "source_index": source_index,
+                "question_uid": str(question.get("question_uid") or ""),
+                "question_type": str(question.get("type") or ""),
+                "scene_id": str(question.get("scene_id") or "").strip(),
+            }
+        )
+        normalized["rejection"] = rejection
+    return normalized
+
+
+def _remap_checkpoint_results(
+    checkpoint_results: dict[int, dict[str, Any]],
+    *,
+    benchmark_path: Path,
+    indexed_questions: list[tuple[int, dict[str, Any]]],
+) -> tuple[dict[int, dict[str, Any]], int]:
+    if not checkpoint_results:
+        return {}, 0
+
+    current_by_uid: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    current_by_content: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+    for source_index, question in indexed_questions:
+        current_by_uid[str(question.get("question_uid") or "")].append(
+            (source_index, question)
+        )
+        current_by_content[_checkpoint_question_content_key(question)].append(
+            (source_index, question)
+        )
+
+    legacy_content_keys: dict[str, set[str]] | None = None
+
+    def resolve_content(
+        content_key: str, record: dict[str, Any]
+    ) -> tuple[int, dict[str, Any]] | None:
+        matches = [
+            item
+            for item in current_by_content.get(content_key, [])
+            if _checkpoint_record_metadata_matches(record, item[1])
+        ]
+        if len(matches) > 1:
+            record_dataset = str(record.get("dataset") or "").strip().lower()
+            dataset_matches = [
+                item for item in matches if _infer_dataset(item[1]) == record_dataset
+            ]
+            if dataset_matches:
+                matches = dataset_matches
+        return matches[0] if len(matches) == 1 else None
+
+    remapped: dict[int, dict[str, Any]] = {}
+    unmatched = 0
+    for _, record in sorted(checkpoint_results.items()):
+        target: tuple[int, dict[str, Any]] | None = None
+        stored_content_key = str(record.get("question_content_key") or "")
+        if stored_content_key:
+            target = resolve_content(stored_content_key, record)
+
+        record_uid = str(record.get("question_uid") or "")
+        if target is None and record_uid:
+            uid_matches = [
+                item
+                for item in current_by_uid.get(record_uid, [])
+                if _checkpoint_record_metadata_matches(record, item[1])
+            ]
+            if len(uid_matches) == 1:
+                target = uid_matches[0]
+
+        if target is None and record_uid:
+            if legacy_content_keys is None:
+                legacy_content_keys = _legacy_checkpoint_content_keys(benchmark_path)
+            uid_content_keys = legacy_content_keys.get(record_uid, set())
+            if len(uid_content_keys) == 1:
+                target = resolve_content(next(iter(uid_content_keys)), record)
+
+        if target is None or target[0] in remapped:
+            unmatched += 1
+            continue
+        source_index, question = target
+        remapped[source_index] = _normalize_checkpoint_record(
+            record, source_index=source_index, question=question
+        )
+    return remapped, unmatched
+
+
 def _checkpoint_record_matches_question(
     record: dict[str, Any], *, source_index: int, question: dict[str, Any]
 ) -> bool:
-    # The checkpoint header already pins the exact benchmark bytes. A question
-    # UID also includes loader-injected dataset metadata, so it is not stable
-    # across metadata-normalization fixes even when the benchmark is unchanged.
     return bool(
         int(record.get("source_index", -1)) == source_index
-        and str(record.get("question_type") or "") == str(question.get("type") or "")
-        and str(record.get("scene_id") or "") == str(question.get("scene_id") or "").strip()
+        and str(record.get("question_content_key") or "")
+        == _checkpoint_question_content_key(question)
+        and _checkpoint_record_metadata_matches(record, question)
     )
 
 
@@ -1076,6 +1261,7 @@ def _eligible_checkpoint_record(candidate: RouteCandidate) -> dict[str, Any]:
         "kind": "question_result",
         "source_index": candidate.source_index,
         "question_uid": str(candidate.question.get("question_uid") or ""),
+        "question_content_key": _checkpoint_question_content_key(candidate.question),
         "question_type": str(candidate.question.get("type") or ""),
         "dataset": candidate.dataset,
         "scene_id": candidate.scene_id,
@@ -1090,12 +1276,13 @@ def _eligible_checkpoint_record(candidate: RouteCandidate) -> dict[str, Any]:
 
 
 def _rejected_checkpoint_record(
-    rejection: dict[str, Any], *, dataset: str
+    rejection: dict[str, Any], *, dataset: str, question: dict[str, Any]
 ) -> dict[str, Any]:
     return {
         "kind": "question_result",
         "source_index": int(rejection["source_index"]),
         "question_uid": str(rejection.get("question_uid") or ""),
+        "question_content_key": _checkpoint_question_content_key(question),
         "question_type": str(rejection.get("question_type") or ""),
         "dataset": dataset,
         "scene_id": str(rejection.get("scene_id") or ""),
@@ -1154,7 +1341,27 @@ def generate_selection_spec(
         scannetpp_sensor=scannetpp_sensor,
     )
     checkpoint_path = _checkpoint_path(output_dir, configuration)
-    checkpoint_results = _load_or_create_checkpoint(checkpoint_path, configuration)
+    loaded_checkpoint_results = _load_or_create_checkpoint(checkpoint_path, configuration)
+    checkpoint_results, unmatched_checkpoint_records = _remap_checkpoint_results(
+        loaded_checkpoint_results,
+        benchmark_path=benchmark_path,
+        indexed_questions=indexed_questions,
+    )
+    if checkpoint_results != loaded_checkpoint_results:
+        _write_checkpoint(checkpoint_path, configuration, checkpoint_results)
+        print(
+            f"[selection] migrated {len(checkpoint_results)} checkpoint records "
+            "to current question indices",
+            file=sys.stderr,
+            flush=True,
+        )
+    if unmatched_checkpoint_records:
+        print(
+            f"[selection] ignored {unmatched_checkpoint_records} checkpoint records "
+            "that could not be matched to current questions",
+            file=sys.stderr,
+            flush=True,
+        )
     grouped: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = defaultdict(list)
     for source_index, question in indexed_questions:
         grouped[(_infer_dataset(question), str(question.get("scene_id") or "").strip())].append(
@@ -1226,7 +1433,10 @@ def generate_selection_spec(
                 }
                 rejected.append(rejection)
                 _append_checkpoint_result(
-                    checkpoint_path, _rejected_checkpoint_record(rejection, dataset=dataset)
+                    checkpoint_path,
+                    _rejected_checkpoint_record(
+                        rejection, dataset=dataset, question=question
+                    ),
                 )
                 processed_indices.add(source_index)
                 progress.advance(was_eligible=False)
@@ -1257,7 +1467,10 @@ def generate_selection_spec(
                 }
                 rejected.append(rejection)
                 _append_checkpoint_result(
-                    checkpoint_path, _rejected_checkpoint_record(rejection, dataset=dataset)
+                    checkpoint_path,
+                    _rejected_checkpoint_record(
+                        rejection, dataset=dataset, question=question
+                    ),
                 )
                 processed_indices.add(source_index)
                 progress.advance(was_eligible=False)
@@ -1278,7 +1491,10 @@ def generate_selection_spec(
                 }
                 rejected.append(rejection)
                 _append_checkpoint_result(
-                    checkpoint_path, _rejected_checkpoint_record(rejection, dataset=dataset)
+                    checkpoint_path,
+                    _rejected_checkpoint_record(
+                        rejection, dataset=dataset, question=question
+                    ),
                 )
                 progress.advance(was_eligible=False)
             else:
