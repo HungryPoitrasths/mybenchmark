@@ -10,6 +10,7 @@ from scripts.extract_l3_attachment_chain_multiselect import (
 from scripts.run_sampled_type_vlm_eval import (
     ImageResolution,
     _option_html,
+    _question_cache_key,
     _resolve_scannetpp_geometry_roots,
     _should_omit_temperature,
     build_prompt,
@@ -30,6 +31,38 @@ from scripts.validate_rollout_manifest import validate_manifest
 
 
 class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
+    def test_subset_keeps_same_stem_with_distinct_options(self) -> None:
+        first = {
+            "dataset": "scannetpp",
+            "scene_id": "scene-1",
+            "image_name": "frame.jpg",
+            "type": "attachment_chain",
+            "question": "What moves with the table?",
+            "options": ["the lamp", "the chair"],
+            "answer": "A",
+        }
+        second = {
+            **first,
+            "options": ["the monitor", "the keyboard"],
+            "answer": "B",
+        }
+        with TemporaryDirectory() as temporary_directory:
+            subset_path = Path(temporary_directory) / "benchmark50.json"
+            subset_path.write_text(
+                json.dumps({"questions": [first, second, dict(first)]}),
+                encoding="utf-8",
+            )
+
+            questions, metadata = load_questions([], subset_path)
+
+        self.assertEqual(len(questions), 2)
+        self.assertEqual(metadata["deduped_question_count"], 2)
+        self.assertEqual(metadata["duplicate_question_count"], 1)
+        self.assertNotEqual(
+            _question_cache_key(questions[0]),
+            _question_cache_key(questions[1]),
+        )
+
     def test_load_fixed_questions_accepts_utf8_bom(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             benchmark_path = Path(temporary_directory) / "benchmark.json"

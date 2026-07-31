@@ -458,9 +458,27 @@ def _question_uid(question: dict[str, Any]) -> str:
 def _question_dedupe_key(question: dict[str, Any]) -> str:
     return _json_key(
         {
+            "dataset": question.get("_dataset") or question.get("dataset"),
             "scene_id": question.get("scene_id"),
             "image_name": question.get("image_name"),
+            "type": question.get("type"),
             "question": question.get("question"),
+            "options": question.get("options"),
+            "answer": question.get("answer"),
+        }
+    )
+
+
+def _question_cache_key(question: dict[str, Any]) -> str:
+    """Identify the model-visible question while excluding its ground-truth answer."""
+    return _json_key(
+        {
+            "dataset": question.get("_dataset") or question.get("dataset"),
+            "scene_id": question.get("scene_id"),
+            "image_name": question.get("image_name"),
+            "type": question.get("type"),
+            "question": question.get("question"),
+            "options": question.get("options"),
         }
     )
 
@@ -521,7 +539,7 @@ def _load_questions_from_roots(roots: list[Path]) -> tuple[list[dict[str, Any]],
         "source_file_count": len(source_files),
         "deduped_question_count": len(questions),
         "duplicate_question_count": duplicate_count,
-        "dedupe_rule": "scene_id + image_name + question",
+        "dedupe_rule": "dataset + scene_id + image_name + type + question + options + answer",
         "input_mode": "roots",
     }
     return questions, metadata
@@ -553,7 +571,7 @@ def load_questions_from_subset(subset_path: Path) -> tuple[list[dict[str, Any]],
         "source_file_count": 1,
         "deduped_question_count": len(questions),
         "duplicate_question_count": duplicate_count,
-        "dedupe_rule": "scene_id + image_name + question",
+        "dedupe_rule": "dataset + scene_id + image_name + type + question + options + answer",
         "input_mode": "subset",
         "subset_path": str(subset_path),
     }
@@ -613,7 +631,7 @@ def load_fixed_questions(benchmark_path: Path) -> tuple[list[dict[str, Any]], di
             "source_file_count": 1,
             "deduped_question_count": len(questions),
             "duplicate_question_count": duplicate_count,
-            "dedupe_rule": "scene_id + image_name + question",
+            "dedupe_rule": "dataset + scene_id + image_name + type + question + options + answer",
             "input_mode": "benchmark_file",
             "benchmark_file": str(benchmark_path),
         }
@@ -2205,14 +2223,15 @@ pre {{
 """
 
 
-def _result_dedupe_key(row: dict[str, Any]) -> tuple[Any, Any, Any]:
-    return (row.get("scene_id"), row.get("image_name"), row.get("question"))
+def _result_dedupe_key(row: dict[str, Any]) -> str:
+    uid = row.get("question_uid")
+    return str(uid) if uid else _question_cache_key(row)
 
 
 def dedupe_results_by_frame_question(
     results: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
-    seen: set[tuple[Any, Any, Any]] = set()
+    seen: set[str] = set()
     filtered: list[dict[str, Any]] = []
     dropped = 0
     for row in results:
@@ -2302,7 +2321,9 @@ def postprocess_existing_html(
         payload["results"] = filtered
         payload["summary"] = {"by_type": summary}
         metadata = payload.setdefault("metadata", {})
-        metadata["result_dedupe_rule"] = "scene_id + image_name + question"
+        metadata["result_dedupe_rule"] = (
+            "question_uid; fallback dataset + scene_id + image_name + type + question + options"
+        )
         metadata["result_dedupe_dropped_count"] = json_dropped
         json_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -2568,8 +2589,8 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
 
     output_json = Path(args.output_json)
     existing = load_existing_results(output_json)
-    existing_by_dedupe = {
-        _question_dedupe_key(row): row
+    existing_by_cache_key = {
+        _question_cache_key(row): row
         for row in existing.values()
     }
     results_by_uid: dict[str, dict[str, Any]] = {}
@@ -2602,7 +2623,7 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     for idx, question in enumerate(selected, 1):
         uid = str(question["question_uid"])
         qtype = str(question.get("type") or "")
-        cached = existing.get(uid) or existing_by_dedupe.get(_question_dedupe_key(question))
+        cached = existing.get(uid) or existing_by_cache_key.get(_question_cache_key(question))
         cached_condition = str(cached.get("evaluation_condition", "baseline")) if cached else None
         cache_matches_condition = cached_condition == condition
         if manifest is not None and cached is not None:
