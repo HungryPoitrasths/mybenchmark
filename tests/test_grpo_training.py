@@ -296,6 +296,15 @@ def test_launcher_builds_native_two_gpu_lora_grpo_command(tmp_path: Path) -> Non
     assert command[command.index("--freeze_aligner") + 1] == "true"
     assert command[command.index("--vllm_enable_lora") + 1] == "true"
     assert command[command.index("--max_steps") + 1] == "2"
+    assert "--deepspeed" not in command
+
+    args.deepspeed = "zero2"
+    deepspeed_command = launcher.build_swift_command(
+        args,
+        prepared_dataset=tmp_path / "prepared.jsonl",
+        resume_checkpoint=None,
+    )
+    assert deepspeed_command[deepspeed_command.index("--deepspeed") + 1] == "zero2"
 
 
 def test_launcher_dry_run_writes_manifest_without_swift(

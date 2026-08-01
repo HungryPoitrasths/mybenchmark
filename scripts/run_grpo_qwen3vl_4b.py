@@ -92,6 +92,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--vllm-max-model-len", type=int, default=10240)
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.45)
     parser.add_argument("--vllm-tensor-parallel-size", type=int, default=1)
+    parser.add_argument(
+        "--deepspeed",
+        choices=("none", "zero2", "zero3"),
+        default="none",
+        help="Optional DeepSpeed strategy; 4B LoRA on 96GB GPUs does not require it.",
+    )
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--top-p", type=float, default=1.0)
@@ -259,8 +265,6 @@ def build_swift_command(
         str(args.lora_rank),
         "--sleep_level",
         "1",
-        "--deepspeed",
-        "zero2",
         "--gradient_checkpointing",
         "true",
         "--attn_impl",
@@ -330,6 +334,8 @@ def build_swift_command(
         "--output_dir",
         str(args.output_dir.resolve()),
     ]
+    if args.deepspeed != "none":
+        command.extend(["--deepspeed", args.deepspeed])
     if args.max_steps is not None:
         command.extend(["--max_steps", str(args.max_steps)])
     if resume_checkpoint is not None:
