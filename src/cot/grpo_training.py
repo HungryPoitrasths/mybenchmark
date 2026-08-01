@@ -3,14 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .facts import question_uid
-from .images import resolve_image_paths
-from .pipeline import format_user_prompt
-from .sampling import SUPPORTED_TYPE_ORDER, TYPES_BY_LEVEL
+
+# MS-SWIFT loads external plugin files as top-level modules, outside the src.cot
+# package. Add the repository root so package imports work in both contexts.
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.cot.facts import question_uid
+from src.cot.images import resolve_image_paths
+from src.cot.pipeline import format_user_prompt
+from src.cot.sampling import SUPPORTED_TYPE_ORDER, TYPES_BY_LEVEL
 
 
 R1_COMPLETION_RE = re.compile(

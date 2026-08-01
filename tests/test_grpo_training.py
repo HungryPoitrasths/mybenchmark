@@ -34,6 +34,15 @@ def _load_balanced_builder():
     return module
 
 
+def _load_grpo_external_plugin():
+    path = Path(__file__).resolve().parents[1] / "src" / "cot" / "grpo_training.py"
+    spec = importlib.util.spec_from_file_location("grpo_training_external_plugin", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         for row in rows:
@@ -186,6 +195,13 @@ def test_grpo_subset_builder_allocates_exact_max_min_quotas() -> None:
     )
 
     assert quotas == {"large_a": 3, "large_b": 3, "medium": 3, "rare": 1}
+
+
+def test_grpo_plugin_supports_ms_swift_top_level_import() -> None:
+    plugin = _load_grpo_external_plugin()
+
+    assert plugin.orms["psr_answer"] is plugin.PSRAnswerReward
+    assert plugin.orms["psr_format"] is plugin.PSRFormatReward
 
 
 def test_answer_and_format_rewards_are_independent() -> None:
