@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Launch the 2k CoT SFT stage with sample-based logging and evaluation."""
+"""Launch pilot or curriculum CoT SFT with sample-based logging and evaluation."""
 
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+import hashlib
 import json
 import math
 import os
@@ -25,6 +27,12 @@ CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
 STANDARD_TRAIN_COUNT = 2_000
 STANDARD_MONITOR_COUNT = 320
 CUDA_DEVICE_ORDER = "PCI_BUS_ID"
+CURRICULUM_SCHEMA_VERSION = "predictive-spatial-cot-curriculum-v1"
+CURRICULUM_TRAIN_COUNT = 20_480
+CURRICULUM_LEVEL_COUNTS = {"L1": 8_192, "L2": 6_144, "L3": 6_144}
+CURRICULUM_STAGE1_COUNT = 6_144
+CURRICULUM_GLOBAL_BATCH = 32
+CURRICULUM_MODEL = "Qwen/Qwen3-VL-4B-Instruct"
 
 
 def build_cuda_environment(devices: str) -> dict[str, str]:
@@ -49,6 +57,21 @@ def write_json(path: Path, payload: Any) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _milestone_values(total_exposures: int, interval: int) -> list[int]:
+    values = list(range(interval, total_exposures + 1, interval))
+    if not values or values[-1] != total_exposures:
+        values.append(total_exposures)
+    return values
 
 
 def validate_disjoint_sidecars(
@@ -101,12 +124,109 @@ def milestone_steps(
 ) -> dict[int, int]:
     steps_per_epoch = math.ceil(train_count / global_batch)
     result: dict[int, int] = {}
-    for milestone in range(interval, train_count * epochs + 1, interval):
+    for milestone in _milestone_values(train_count * epochs, interval):
         epoch_index, within_epoch = divmod(milestone - 1, train_count)
         exposure_in_epoch = within_epoch + 1
         step = epoch_index * steps_per_epoch + math.ceil(exposure_in_epoch / global_batch)
         result[step] = milestone
     return result
+
+
+def validate_curriculum_manifest(
+    path: Path,
+    *,
+    train_rows: list[dict[str, Any]],
+    train_sidecar: list[dict[str, Any]],
+) -> dict[str, Any]:
+    payload = load_json(path)
+    if not isinstance(payload, dict) or payload.get("schema_version") != CURRICULUM_SCHEMA_VERSION:
+        raise ValueError(
+            f"curriculum manifest must use schema_version {CURRICULUM_SCHEMA_VERSION!r}"
+        )
+    samples = payload.get("samples")
+    if not isinstance(samples, list) or len(samples) != CURRICULUM_TRAIN_COUNT:
+        raise ValueError("curriculum manifest must contain exactly 20,480 samples")
+    if len(train_rows) != len(samples) or len(train_sidecar) != len(samples):
+        raise ValueError("curriculum manifest, train dataset, and sidecar counts differ")
+
+    levels: list[str] = []
+    schedule_hasher = hashlib.sha256()
+    for index, (sample, train_row, sidecar) in enumerate(
+        zip(samples, train_rows, train_sidecar), start=1
+    ):
+        if not isinstance(sample, dict):
+            raise ValueError(f"curriculum sample {index} is not an object")
+        sample_uid = str(sample.get("sample_uid") or "")
+        question_uid_value = str(sample.get("question_uid") or "")
+        level = str(sample.get("level") or "").upper()
+        if not sample_uid or not question_uid_value or level not in CURRICULUM_LEVEL_COUNTS:
+            raise ValueError(f"curriculum sample {index} has incomplete identity metadata")
+        if int(sample.get("exposure_index") or 0) != index:
+            raise ValueError(f"curriculum exposure order breaks at row {index}")
+        if str(train_row.get("sample_uid") or "") != sample_uid:
+            raise ValueError(f"train dataset order differs from curriculum at row {index}")
+        if str(sidecar.get("sample_uid") or "") != sample_uid:
+            raise ValueError(f"train sidecar order differs from curriculum at row {index}")
+        if str(train_row.get("question_uid") or "") != question_uid_value:
+            raise ValueError(f"train dataset question_uid differs at row {index}")
+        if str(sidecar.get("question_uid") or "") != question_uid_value:
+            raise ValueError(f"train sidecar question_uid differs at row {index}")
+        if int(train_row.get("curriculum_exposure") or 0) != index:
+            raise ValueError(f"train dataset exposure index differs at row {index}")
+        if int(sidecar.get("curriculum_exposure") or 0) != index:
+            raise ValueError(f"train sidecar exposure index differs at row {index}")
+        messages = train_row.get("messages") or []
+        if (
+            len(messages) < 1
+            or messages[0] != {"role": "user", "content": sample.get("user_content")}
+            or train_row.get("images") != sample.get("images")
+        ):
+            raise ValueError(f"train prompt/images differ from curriculum at row {index}")
+        levels.append(level)
+        schedule_hasher.update(f"{index}|{sample_uid}|{level}\n".encode("utf-8"))
+
+    if any(level != "L1" for level in levels[:CURRICULUM_STAGE1_COUNT]):
+        raise ValueError("the first 6,144 curriculum samples must all be L1")
+    if dict(Counter(levels)) != CURRICULUM_LEVEL_COUNTS:
+        raise ValueError(f"invalid curriculum level counts: {dict(Counter(levels))}")
+
+    expected_pattern = (
+        ("A", {"L1": 4, "L2": 14, "L3": 14}),
+        ("B", {"L1": 5, "L2": 14, "L3": 13}),
+        ("A", {"L1": 4, "L2": 14, "L3": 14}),
+        ("C", {"L1": 5, "L2": 13, "L3": 14}),
+        ("A", {"L1": 4, "L2": 14, "L3": 14}),
+        ("B", {"L1": 5, "L2": 14, "L3": 13}),
+        ("C", {"L1": 5, "L2": 13, "L3": 14}),
+    )
+    stage2 = samples[CURRICULUM_STAGE1_COUNT:]
+    for batch_index in range(0, len(stage2), CURRICULUM_GLOBAL_BATCH):
+        batch = stage2[batch_index : batch_index + CURRICULUM_GLOBAL_BATCH]
+        expected_name, expected_counts = expected_pattern[
+            (batch_index // CURRICULUM_GLOBAL_BATCH) % len(expected_pattern)
+        ]
+        names = {str(sample.get("stage2_batch_pattern") or "") for sample in batch}
+        counts = Counter(str(sample.get("level") or "").upper() for sample in batch)
+        if names != {expected_name} or dict(counts) != expected_counts:
+            raise ValueError(
+                f"invalid stage-two global batch {batch_index // CURRICULUM_GLOBAL_BATCH}: "
+                f"pattern={sorted(names)}, counts={dict(counts)}"
+            )
+
+    schedule_sha256 = schedule_hasher.hexdigest()
+    declared_sha256 = str((payload.get("statistics") or {}).get("schedule_sha256") or "")
+    if declared_sha256 != schedule_sha256:
+        raise ValueError("curriculum schedule SHA256 does not match its samples")
+    return {
+        "path": str(path.resolve()),
+        "file_sha256": file_sha256(path),
+        "schedule_sha256": schedule_sha256,
+        "stage1_end_exposure": CURRICULUM_STAGE1_COUNT,
+        "level_counts": CURRICULUM_LEVEL_COUNTS,
+        "optimizer_steps": CURRICULUM_TRAIN_COUNT // CURRICULUM_GLOBAL_BATCH,
+        "dataset_shuffle": False,
+        "train_dataloader_shuffle": False,
+    }
 
 
 def is_resumable_checkpoint(path: Path) -> bool:
@@ -199,6 +319,75 @@ def discover_checkpoints(
     return sorted(checkpoints, key=lambda row: int(row["global_step"]))
 
 
+def verify_stage2_smoke_test(
+    output_dir: Path,
+    *,
+    initial_adapter: Path,
+    expected_steps: int,
+) -> dict[str, Any]:
+    checkpoints = [
+        path for path in checkpoint_directories(output_dir) if is_resumable_checkpoint(path)
+    ]
+    if not checkpoints:
+        raise RuntimeError("smoke test did not produce a resumable checkpoint")
+    checkpoint = max(
+        checkpoints,
+        key=lambda path: int(CHECKPOINT_RE.fullmatch(path.name).group(1)),
+    )
+    checkpoint_step = int(CHECKPOINT_RE.fullmatch(checkpoint.name).group(1))
+    if checkpoint_step != expected_steps:
+        raise RuntimeError(
+            f"smoke checkpoint step mismatch: expected {expected_steps}, got {checkpoint_step}"
+        )
+
+    trainer_state = load_json(checkpoint / "trainer_state.json")
+    if int(trainer_state.get("global_step") or 0) != expected_steps:
+        raise RuntimeError("smoke trainer_state.json has an unexpected global_step")
+
+    args_path = checkpoint / "args.json"
+    if not args_path.is_file():
+        args_path = checkpoint.parent / "args.json"
+    if not args_path.is_file():
+        raise RuntimeError("smoke test output is missing MS-SWIFT args.json")
+    swift_args = load_json(args_path)
+    adapters = swift_args.get("adapters") or []
+    if isinstance(adapters, str):
+        adapters = [adapters]
+    expected_adapter = initial_adapter.resolve()
+    resolved_adapters = {Path(str(path)).expanduser().resolve() for path in adapters}
+    if expected_adapter not in resolved_adapters:
+        raise RuntimeError(
+            f"MS-SWIFT did not record the requested initial adapter: {expected_adapter}"
+        )
+    if swift_args.get("resume_from_checkpoint") not in (None, ""):
+        raise RuntimeError("smoke test unexpectedly resumed optimizer/trainer state")
+
+    if not any(
+        (checkpoint / name).is_file()
+        for name in ("adapter_model.safetensors", "adapter_model.bin")
+    ):
+        raise RuntimeError("smoke checkpoint is missing adapter model weights")
+    required_files = ("optimizer.pt", "scheduler.pt", "eval_metrics.json")
+    missing = [name for name in required_files if not (checkpoint / name).is_file()]
+    if missing:
+        raise RuntimeError(f"smoke checkpoint is missing required files: {missing}")
+
+    eval_metrics = load_json(checkpoint / "eval_metrics.json")
+    report = {
+        "schema_version": "predictive-spatial-cot-stage2-smoke-v1",
+        "passed": True,
+        "initial_adapter": str(expected_adapter),
+        "checkpoint": str(checkpoint.resolve()),
+        "global_step": checkpoint_step,
+        "eval_loss": eval_metrics.get("eval_loss"),
+        "optimizer_state_created": True,
+        "scheduler_state_created": True,
+        "resume_from_checkpoint": None,
+    }
+    write_json(output_dir / "stage2_smoke_test_report.json", report)
+    return report
+
+
 def map_milestones(
     checkpoints: list[dict[str, Any]],
     *,
@@ -209,7 +398,7 @@ def map_milestones(
         return []
     mapped: list[dict[str, Any]] = []
     used_paths: set[str] = set()
-    for milestone in range(interval, total_exposures + 1, interval):
+    for milestone in _milestone_values(total_exposures, interval):
         candidate = min(
             checkpoints,
             key=lambda row: (
@@ -314,12 +503,26 @@ def build_sft_command(args: argparse.Namespace) -> list[str]:
         "--output_dir",
         str(args.output_dir.resolve()),
     ]
+    if getattr(args, "curriculum_manifest", None) is not None:
+        command.extend(
+            [
+                "--dataset_shuffle",
+                "false",
+                "--train_dataloader_shuffle",
+                "false",
+                "--group_by_length",
+                "false",
+            ]
+        )
     resume_checkpoint = getattr(args, "resume_from_checkpoint", None)
     initial_adapter = getattr(args, "initial_adapter", None)
     if resume_checkpoint is not None:
         command.extend(["--resume_from_checkpoint", str(Path(resume_checkpoint).resolve())])
     elif initial_adapter is not None:
         command.extend(["--adapters", str(Path(initial_adapter).resolve())])
+    smoke_test_steps = getattr(args, "smoke_test_steps", None)
+    if smoke_test_steps is not None:
+        command.extend(["--max_steps", str(smoke_test_steps)])
     return command
 
 
@@ -506,19 +709,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--monitor-sidecar", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--model", default="Qwen/Qwen3-VL-4B-Instruct")
+    parser.add_argument(
+        "--curriculum-manifest",
+        type=Path,
+        help="Canonical 20,480-row curriculum JSON produced by build_mixed_cot_ablation.py.",
+    )
     initialization = parser.add_mutually_exclusive_group(required=True)
     initialization.add_argument(
         "--initial-adapter",
         type=Path,
         help=(
-            "LoRA checkpoint that initializes this 2k stage. The adapter weights are "
+            "LoRA checkpoint that initializes a continuation stage. The adapter weights are "
             "loaded while optimizer and scheduler state are reset."
         ),
     )
     initialization.add_argument(
         "--allow-base-model-start",
         action="store_true",
-        help="Explicitly allow a fresh 2k run from --model without an 8k adapter.",
+        help="Explicitly allow a fresh run from --model without an initial adapter.",
     )
     parser.add_argument("--swift-bin", default="swift")
     parser.add_argument("--devices", default="0,1")
@@ -529,8 +737,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-every-samples", type=int, default=250)
     parser.add_argument("--eval-every-samples", type=int, default=500)
     parser.add_argument("--log-every-samples", type=int, default=50)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--aligner-learning-rate", type=float, default=1e-5)
+    parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--aligner-learning-rate", type=float, default=5e-6)
     parser.add_argument("--lora-rank", type=int, default=32)
     parser.add_argument("--lora-alpha", type=int, default=64)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
@@ -569,6 +777,14 @@ def parse_args() -> argparse.Namespace:
         help="Reuse completed reports or predictions when resuming monitoring.",
     )
     parser.add_argument("--allow-nonstandard-counts", action="store_true")
+    parser.add_argument(
+        "--smoke-test-steps",
+        type=int,
+        help=(
+            "Run a fresh adapter-continuation smoke test for this many optimizer "
+            "steps, save/evaluate at the final step, verify MS-SWIFT artifacts, and exit."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -586,7 +802,18 @@ def main() -> int:
     train_sidecar = load_jsonl(args.train_sidecar)
     monitor_rows = load_jsonl(args.monitor_dataset)
     monitor_sidecar = load_jsonl(args.monitor_sidecar)
-    if not args.allow_nonstandard_counts and len(train_rows) != STANDARD_TRAIN_COUNT:
+    curriculum_report = None
+    if args.curriculum_manifest is not None:
+        curriculum_report = validate_curriculum_manifest(
+            args.curriculum_manifest,
+            train_rows=train_rows,
+            train_sidecar=train_sidecar,
+        )
+    if (
+        args.curriculum_manifest is None
+        and not args.allow_nonstandard_counts
+        and len(train_rows) != STANDARD_TRAIN_COUNT
+    ):
         raise ValueError(
             f"pilot train dataset must contain {STANDARD_TRAIN_COUNT} rows, "
             f"got {len(train_rows)}"
@@ -612,6 +839,13 @@ def main() -> int:
         raise ValueError("max_length must be positive")
     if args.max_pixels <= 0:
         raise ValueError("max_pixels must be positive")
+    if args.smoke_test_steps is not None:
+        if args.smoke_test_steps <= 0:
+            raise ValueError("smoke_test_steps must be positive")
+        if args.initial_adapter is None:
+            raise ValueError("a stage-two smoke test requires --initial-adapter")
+        if args.resume_from_checkpoint is not None:
+            raise ValueError("a stage-two smoke test must start fresh, not resume")
     if args.eval_every_samples % args.save_every_samples != 0:
         raise ValueError(
             "eval_every_samples must be an integer multiple of save_every_samples"
@@ -625,7 +859,52 @@ def main() -> int:
     global_batch = (
         world_size * args.per_device_batch_size * args.gradient_accumulation_steps
     )
-    total_exposures = len(train_rows) * args.epochs
+    if args.curriculum_manifest is not None:
+        curriculum_settings = {
+            "model": (args.model, CURRICULUM_MODEL),
+            "epochs": (args.epochs, 1),
+            "per_device_batch_size": (args.per_device_batch_size, 2),
+            "gradient_accumulation_steps": (args.gradient_accumulation_steps, 8),
+            "global_batch": (global_batch, CURRICULUM_GLOBAL_BATCH),
+            "learning_rate": (args.learning_rate, 1e-4),
+            "aligner_learning_rate": (args.aligner_learning_rate, 1e-5),
+            "optimizer": (args.optimizer, "adamw_torch"),
+            "lora_rank": (args.lora_rank, 32),
+            "lora_alpha": (args.lora_alpha, 64),
+            "lora_dropout": (args.lora_dropout, 0.05),
+            "weight_decay": (args.weight_decay, 0.01),
+            "warmup_ratio": (args.warmup_ratio, 0.03),
+            "max_grad_norm": (args.max_grad_norm, 1.0),
+            "max_length": (args.max_length, 8_192),
+            "max_pixels": (args.max_pixels, 786_432),
+            "save_every_samples": (args.save_every_samples, 2_048),
+            "eval_every_samples": (args.eval_every_samples, 2_048),
+            "log_every_samples": (args.log_every_samples, 256),
+        }
+        mismatches = [
+            f"{name}={actual!r} (expected {expected!r})"
+            for name, (actual, expected) in curriculum_settings.items()
+            if actual != expected
+        ]
+        if mismatches:
+            raise ValueError("invalid curriculum settings: " + "; ".join(mismatches))
+        if not args.allow_base_model_start or args.initial_adapter is not None:
+            raise ValueError("curriculum training must use --allow-base-model-start")
+        if args.resume_from_checkpoint is not None:
+            raise ValueError("a fresh curriculum run cannot use --resume-from-checkpoint")
+    smoke_test_exposures = (
+        samples_seen_for_step(
+            args.smoke_test_steps,
+            train_count=len(train_rows),
+            global_batch=global_batch,
+        )
+        if args.smoke_test_steps is not None
+        else None
+    )
+    total_exposures = smoke_test_exposures or len(train_rows) * args.epochs
+    save_every_samples = smoke_test_exposures or args.save_every_samples
+    eval_every_samples = smoke_test_exposures or args.eval_every_samples
+    log_every_samples = global_batch if smoke_test_exposures else args.log_every_samples
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.resume_from_checkpoint = resolve_resume_checkpoint(
         args.resume_from_checkpoint,
@@ -651,24 +930,31 @@ def main() -> int:
         ),
         "train_count": len(train_rows),
         "train_sidecar": str(args.train_sidecar.resolve()),
+        "train_dataset_sha256": file_sha256(args.train_dataset),
+        "train_sidecar_sha256": file_sha256(args.train_sidecar),
+        "curriculum": curriculum_report,
+        "dataset_shuffle": False if curriculum_report is not None else None,
+        "train_dataloader_shuffle": False if curriculum_report is not None else None,
         "isolation": isolation_report,
         "monitor_count": len(monitor_rows),
         "epochs": args.epochs,
+        "smoke_test_steps": args.smoke_test_steps,
         "world_size": world_size,
         "global_batch": global_batch,
         "max_length": args.max_length,
         "max_pixels": args.max_pixels,
-        "save_every_samples": args.save_every_samples,
-        "eval_every_samples": args.eval_every_samples,
-        "log_every_samples": args.log_every_samples,
+        "save_every_samples": save_every_samples,
+        "eval_every_samples": eval_every_samples,
+        "log_every_samples": log_every_samples,
         "log_steps": {
             str(step): milestone
             for step, milestone in milestone_steps(
                 train_count=len(train_rows),
                 global_batch=global_batch,
                 epochs=args.epochs,
-                interval=args.log_every_samples,
+                interval=log_every_samples,
             ).items()
+            if args.smoke_test_steps is None or step <= args.smoke_test_steps
         },
         "checkpoint_steps": {
             str(step): milestone
@@ -676,8 +962,9 @@ def main() -> int:
                 train_count=len(train_rows),
                 global_batch=global_batch,
                 epochs=args.epochs,
-                interval=args.save_every_samples,
+                interval=save_every_samples,
             ).items()
+            if args.smoke_test_steps is None or step <= args.smoke_test_steps
         },
         "evaluation_steps": {
             str(step): milestone
@@ -685,8 +972,9 @@ def main() -> int:
                 train_count=len(train_rows),
                 global_batch=global_batch,
                 epochs=args.epochs,
-                interval=args.eval_every_samples,
+                interval=eval_every_samples,
             ).items()
+            if args.smoke_test_steps is None or step <= args.smoke_test_steps
         },
         "total_exposures": total_exposures,
         "resume_from_checkpoint": (
@@ -701,9 +989,9 @@ def main() -> int:
     train_env["COT_SFT_TRAIN_COUNT"] = str(len(train_rows))
     train_env["COT_SFT_GLOBAL_BATCH"] = str(global_batch)
     train_env["COT_SFT_EPOCHS"] = str(args.epochs)
-    train_env["COT_SFT_SAVE_EVERY_SAMPLES"] = str(args.save_every_samples)
-    train_env["COT_SFT_EVAL_EVERY_SAMPLES"] = str(args.eval_every_samples)
-    train_env["COT_SFT_LOG_EVERY_SAMPLES"] = str(args.log_every_samples)
+    train_env["COT_SFT_SAVE_EVERY_SAMPLES"] = str(save_every_samples)
+    train_env["COT_SFT_EVAL_EVERY_SAMPLES"] = str(eval_every_samples)
+    train_env["COT_SFT_LOG_EVERY_SAMPLES"] = str(log_every_samples)
     if not args.skip_train:
         run_command(training_command, env=train_env, dry_run=args.dry_run)
 
@@ -715,12 +1003,23 @@ def main() -> int:
     milestones = map_milestones(
         checkpoints,
         total_exposures=total_exposures,
-        interval=args.eval_every_samples,
+        interval=eval_every_samples,
     )
     write_json(
         args.output_dir / "checkpoint_index.json",
         {"checkpoints": checkpoints, "milestones": milestones},
     )
+    if args.smoke_test_steps is not None:
+        if args.dry_run:
+            print("Smoke-test dry run: artifact verification skipped.", flush=True)
+            return 0
+        smoke_report = verify_stage2_smoke_test(
+            args.output_dir,
+            initial_adapter=args.initial_adapter,
+            expected_steps=args.smoke_test_steps,
+        )
+        print(json.dumps({"cot_stage2_smoke_test": smoke_report}, ensure_ascii=False))
+        return 0
     if args.dry_run:
         print(
             subprocess.list2cmdline(

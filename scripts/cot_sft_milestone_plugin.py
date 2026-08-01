@@ -31,7 +31,10 @@ def milestone_steps(
     steps_per_epoch = math.ceil(train_count / global_batch)
     result: dict[int, int] = {}
     total_exposures = train_count * epochs
-    for milestone in range(interval, total_exposures + 1, interval):
+    milestones = list(range(interval, total_exposures + 1, interval))
+    if not milestones or milestones[-1] != total_exposures:
+        milestones.append(total_exposures)
+    for milestone in milestones:
         epoch_index, within_epoch = divmod(milestone - 1, train_count)
         exposure_in_epoch = within_epoch + 1
         step = epoch_index * steps_per_epoch + math.ceil(exposure_in_epoch / global_batch)

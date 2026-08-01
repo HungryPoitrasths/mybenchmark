@@ -170,6 +170,134 @@ To rerun only checkpoint generation/evaluation after an interrupted monitoring p
 
 The default `max_length` is 8192 and the per-image budget is 786432 pixels (`1024 * 768`). Qwen3-VL uses a patch size of 16 and a spatial merge size of 2, so this is approximately 768 merged visual tokens per image. The pilot contains samples with up to eight images; their visual input is therefore about 6144 tokens at the configured cap. By contrast, 4096 tokens without an image budget can cause MS-SWIFT to delete every over-length retry candidate before training starts. Do not switch to left or right truncation for this failure: truncation can remove either the question or the final `Answer:` supervision. Before the full run, inspect processed token lengths and complete a short smoke test.
 
+## Matched three-target curriculum
+
+This ablation combines the exact old 8k training UIDs with the disjoint stage-two 2k
+questions. It then creates three datasets with identical question order, prompts, images,
+and repetition schedule:
+
+- `answer_only`: only `Answer: B` (or ordered space-separated multi-select letters);
+- `fixed_template_cot`: the existing deterministic fact/template reasoning;
+- `teacher_cot`: independent VLM reasoning retained only when its final answer is correct.
+
+The teacher never receives the saved answer or oracle fields. A malformed, repetitive, or
+wrong response consumes one semantic attempt; at most two semantic attempts are allowed.
+Transport retries do not consume semantic attempts. If both semantic attempts fail, that
+question is absent from all three datasets.
+
+First reconstruct the exact 10k candidate pool:
+
+```powershell
+python scripts/build_mixed_cot_ablation.py merge `
+  --benchmark output_train/benchmark.json `
+  --old-sidecar cot/train/pilot_train_8k.sidecar.jsonl `
+  --stage2 output_train/stage2_train_2k.json `
+  --output cot/train/mixed_train_10k.json
+```
+
+Before a full API run, test a small deterministic sample. `--limit-per-type 2` selects at
+most two questions of each type; `--limit`, repeated `--question-uid`, or both can narrow it
+further. The JSONL cache contains every transport event and semantic attempt, so rerunning
+the same command resumes completed questions.
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+python scripts/filter_correct_teacher_cot.py cot/train/mixed_train_10k.json `
+  --output cot/train/mixed_train_10k.teacher.small.json `
+  --cache-jsonl cot/train/mixed_train_10k.teacher.small.cache.jsonl `
+  --base-url https://your-openai-compatible-server/v1 `
+  --model your-teacher-vlm `
+  --max-attempts 2 `
+  --workers 4 `
+  --max-output-tokens 384 `
+  --limit-per-type 2 `
+  --scannet-image-root D:\datasets\scannet\scans `
+  --scannetpp-image-root D:\datasets\scannetpp\data
+```
+
+For the full filter, use a separate output/cache and omit all small-sample options:
+
+```powershell
+python scripts/filter_correct_teacher_cot.py cot/train/mixed_train_10k.json `
+  --output cot/train/mixed_train_10k.teacher.success.json `
+  --cache-jsonl cot/train/mixed_train_10k.teacher.cache.jsonl `
+  --base-url https://your-openai-compatible-server/v1 `
+  --model your-teacher-vlm `
+  --max-attempts 2 `
+  --workers 4 `
+  --max-output-tokens 384 `
+  --scannet-image-root D:\datasets\scannet\scans `
+  --scannetpp-image-root D:\datasets\scannetpp\data
+```
+
+Build the matched exports. Every teacher-success question appears at least once. A type
+with fewer than 300 teacher-success questions is deterministically repeated to 300 before
+the curriculum streams are formed. The builder fails instead of silently omitting unique
+questions if the retained pool cannot fit the agreed curriculum capacity.
+
+```powershell
+python scripts/build_mixed_cot_ablation.py finalize `
+  cot/train/mixed_train_10k.teacher.success.json `
+  --output cot/train/mixed_train_curriculum_three_targets.json `
+  --output-prefix cot/train/mixed_train_curriculum `
+  --type-floor 300 `
+  --scannet-image-root D:\datasets\scannet\scans `
+  --scannetpp-image-root D:\datasets\scannetpp\data
+```
+
+The continuous one-epoch schedule contains 20,480 exposures (640 optimizer steps at global
+batch 32). Exposures 1-6,144 are all L1. Stage 2 contains L1/L2/L3 counts of
+2,048/6,144/6,144, using the seven-batch pattern `A,B,A,C,A,B,C` repeated 64 times.
+The complete L1/L2/L3 counts are therefore 8,192/6,144/6,144. Dataset preprocessing shuffle,
+training dataloader shuffle, and length grouping are all disabled, so one optimizer and
+scheduler traverse this exact order without a stage restart.
+
+Launch three fresh LoRAs from the base model. This loop deliberately contains neither
+`--initial-adapter` nor `--resume-from-checkpoint`; each output directory must be new.
+
+```powershell
+$variants = @("answer_only", "fixed_template_cot", "teacher_cot")
+foreach ($variant in $variants) {
+  python scripts/run_cot_sft_pilot.py `
+    --train-dataset "cot/train/mixed_train_curriculum.$variant.ms_swift.jsonl" `
+    --train-sidecar "cot/train/mixed_train_curriculum.$variant.sidecar.jsonl" `
+    --curriculum-manifest cot/train/mixed_train_curriculum_three_targets.json `
+    --monitor-dataset cot/val/monitor_val_320.ms_swift_eval.jsonl `
+    --monitor-sidecar cot/val/monitor_val_320.sidecar.jsonl `
+    --model Qwen/Qwen3-VL-4B-Instruct `
+    --allow-base-model-start `
+    --output-dir "cot_result/qwen3_vl_4b_curriculum_$variant" `
+    --devices 5,6 `
+    --epochs 1 `
+    --per-device-batch-size 2 `
+    --gradient-accumulation-steps 8 `
+    --learning-rate 1e-4 `
+    --aligner-learning-rate 1e-5 `
+    --lora-rank 32 `
+    --lora-alpha 64 `
+    --lora-dropout 0.05 `
+    --weight-decay 0.01 `
+    --warmup-ratio 0.03 `
+    --max-grad-norm 1 `
+    --max-length 8192 `
+    --max-pixels 786432 `
+    --log-every-samples 256 `
+    --save-every-samples 2048 `
+    --eval-every-samples 2048
+}
+```
+
+Curriculum mode verifies the master schedule hash, all 20,480 sample IDs and row positions,
+the exact level/batch composition, base-model initialization, and required hyperparameters
+before training. It records the dataset, sidecar, curriculum-file, and schedule SHA256 values
+plus both shuffle flags in `pilot_manifest.json`. Checkpoints/evaluations occur at every
+2,048 exposures, including the L1 stage boundary at 6,144 and the final exposure at 20,480.
+
+Teacher-forced loss is not directly comparable across the three target styles because they
+supervise very different numbers of answer tokens. Use the same generated-answer monitoring
+metrics (strict accuracy, per-level accuracy, and per-type accuracy) for the primary ablation;
+interpret loss curves only within each target style.
+
 ## Standalone prediction evaluation
 
 MS-SWIFT prediction files can also be evaluated independently:
