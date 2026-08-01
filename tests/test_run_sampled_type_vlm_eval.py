@@ -261,6 +261,19 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
         self.assertIn("list all letters comma-separated", prompt)
         self.assertIn("Answer: <letter(s)>", prompt)
 
+    def test_blind_prompt_forces_a_single_answer_on_the_last_line(self) -> None:
+        prompt = build_prompt(
+            {
+                "question": "Where is the chair?",
+                "options": ["left", "right"],
+            },
+            blind=True,
+        )
+
+        self.assertIn("Images are intentionally unavailable", prompt)
+        self.assertIn("Do not request an image and do not abstain.", prompt)
+        self.assertTrue(prompt.endswith("Answer: <single letter>"))
+
     def test_claude_opus_4_omits_temperature_for_proxy_compatibility(self) -> None:
         self.assertTrue(_should_omit_temperature("claude-opus-4-7"))
         self.assertTrue(_should_omit_temperature("claude-sonnet-4-5"))

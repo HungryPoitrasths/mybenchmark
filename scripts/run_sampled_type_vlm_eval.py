@@ -114,6 +114,17 @@ DIRECT_MULTI_SELECT_PROMPT_SUFFIX = (
     "Answer with the correct letter(s) only, comma-separated if more than one. Do not explain."
 )
 
+BLIND_PROMPT_INSTRUCTION = (
+    "Images are intentionally unavailable for this benchmark condition.\n"
+    "You must select exactly one option using only the question text and choices.\n"
+    "Do not request an image and do not abstain."
+)
+BLIND_MULTI_SELECT_PROMPT_INSTRUCTION = (
+    "Images are intentionally unavailable for this benchmark condition.\n"
+    "You must select the required option(s) using only the question text and choices.\n"
+    "Do not request an image and do not abstain."
+)
+
 QTYPE_ORDER = [
     "direction_agent",
     "occlusion",
@@ -706,13 +717,25 @@ def sample_questions(
     return sampled, sampling_stats
 
 
-def build_prompt(question: dict[str, Any], direct: bool = False, oracle: bool = False) -> str:
+def build_prompt(
+    question: dict[str, Any],
+    direct: bool = False,
+    oracle: bool = False,
+    blind: bool = False,
+) -> str:
     parts = [str(question.get("question") or "").strip(), ""]
     if oracle and "_oracle_info" in question:
         parts.insert(0, question["_oracle_info"] + "\n")
     options = question.get("options") or []
     for idx, option in enumerate(options):
         parts.append(f"{chr(65 + idx)}) {option}")
+    if blind:
+        blind_instruction = (
+            BLIND_MULTI_SELECT_PROMPT_INSTRUCTION
+            if is_multi_select_question(question)
+            else BLIND_PROMPT_INSTRUCTION
+        )
+        parts.extend(["", blind_instruction])
     if direct:
         suffix = DIRECT_MULTI_SELECT_PROMPT_SUFFIX if is_multi_select_question(question) else DIRECT_PROMPT_SUFFIX
     else:
@@ -2480,7 +2503,12 @@ def run_api_question(
 ) -> dict[str, Any]:
     raw_response: str | None = None
     error: str | None = None
-    prompt = build_prompt(question, direct=getattr(args, "direct", False), oracle=getattr(args, "oracle", False))
+    prompt = build_prompt(
+        question,
+        direct=getattr(args, "direct", False),
+        oracle=getattr(args, "oracle", False),
+        blind=getattr(args, "blind", False),
+    )
     auxiliary_count = max(0, len(resolutions) - 1)
     frame_note = f" (+{auxiliary_count} more frame(s))" if auxiliary_count else ""
     print(
