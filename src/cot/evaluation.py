@@ -9,6 +9,15 @@ from .sampling import SUPPORTED_TYPE_ORDER, TYPES_BY_LEVEL
 
 
 STRICT_ANSWER_RE = re.compile(r"^Answer: ([A-Z](?: [A-Z])*)$")
+STRICT_R1_RE = re.compile(
+    r"\A<think>(?P<thinking>.*?)</think>\s*"
+    r"<answer>\s*(?P<answer>[A-Z](?: [A-Z])*)\s*</answer>\s*\Z",
+    re.DOTALL,
+)
+RELAXED_R1_ANSWER_RE = re.compile(
+    r"<answer>\s*([A-D](?:[\s,]+[A-D])*)\s*</answer>",
+    re.IGNORECASE,
+)
 RELAXED_ANSWER_RE = re.compile(
     r"\b(?:answer|option)\s*(?::|is)?\s*([A-D](?:[\s,]+[A-D])*)\b",
     re.IGNORECASE,
@@ -20,12 +29,43 @@ def _normalize_letters(value: str) -> str:
     return " ".join(re.findall(r"[A-Z]", value.upper()))
 
 
+def _validate_letters(
+    value: str,
+    *,
+    option_count: int,
+    multi_select: bool,
+) -> str | None:
+    letters = value.split()
+    if not letters or (not multi_select and len(letters) != 1):
+        return None
+    if len(set(letters)) != len(letters) or option_count <= 0:
+        return None
+    if any(
+        len(letter) != 1
+        or not "A" <= letter <= "Z"
+        or ord(letter) - ord("A") >= option_count
+        for letter in letters
+    ):
+        return None
+    return " ".join(letters)
+
+
 def parse_strict_answer(
     response: str,
     *,
     option_count: int,
     multi_select: bool,
 ) -> str | None:
+    r1_match = STRICT_R1_RE.fullmatch(response)
+    if r1_match is not None:
+        if not r1_match.group("thinking").strip():
+            return None
+        return _validate_letters(
+            r1_match.group("answer"),
+            option_count=option_count,
+            multi_select=multi_select,
+        )
+
     if response.count("Answer:") != 1:
         return None
     lines = response.rstrip().splitlines()
@@ -34,16 +74,11 @@ def parse_strict_answer(
     match = STRICT_ANSWER_RE.fullmatch(lines[-1])
     if match is None:
         return None
-    letters = match.group(1).split()
-    if not multi_select and len(letters) != 1:
-        return None
-    if len(set(letters)) != len(letters):
-        return None
-    if option_count <= 0:
-        return None
-    if any(ord(letter) - ord("A") >= option_count for letter in letters):
-        return None
-    return " ".join(letters)
+    return _validate_letters(
+        match.group(1),
+        option_count=option_count,
+        multi_select=multi_select,
+    )
 
 
 def parse_relaxed_answer(
@@ -59,17 +94,24 @@ def parse_relaxed_answer(
     )
     if strict is not None:
         return strict
+    r1_candidates = list(RELAXED_R1_ANSWER_RE.finditer(response[-500:]))
     candidates = list(RELAXED_ANSWER_RE.finditer(response[-500:]))
     bare = BARE_ANSWER_RE.fullmatch(response.strip())
-    raw = candidates[-1].group(1) if candidates else bare.group(1) if bare else ""
-    letters = re.findall(r"[A-D]", raw.upper())
-    if not letters or (not multi_select and len(letters) != 1):
-        return None
-    if len(set(letters)) != len(letters):
-        return None
-    if any(ord(letter) - ord("A") >= option_count for letter in letters):
-        return None
-    return " ".join(letters)
+    raw = (
+        r1_candidates[-1].group(1)
+        if r1_candidates
+        else candidates[-1].group(1)
+        if candidates
+        else bare.group(1)
+        if bare
+        else ""
+    )
+    normalized = _normalize_letters(raw)
+    return _validate_letters(
+        normalized,
+        option_count=option_count,
+        multi_select=multi_select,
+    )
 
 
 def prediction_response(row: dict[str, Any]) -> str:
