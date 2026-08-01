@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import time
+from io import BytesIO
 from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,11 @@ if str(ROOT) not in sys.path:
 from src.cot.evaluation import parse_strict_answer
 from src.cot.facts import build_fact_record, question_uid
 from src.cot.images import resolve_image_paths
+
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - resizing is optional
+    Image = None
 
 
 SYSTEM_PROMPT = (
@@ -110,44 +116,200 @@ def question_prompt(question: dict[str, Any], image_count: int) -> str:
     )
 
 
-def encode_image(path: Path) -> str:
+def encode_image(path: Path, max_px: int = 0) -> tuple[str, str]:
     mime = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};base64,{encoded}"
+    if max_px > 0 and Image is not None:
+        with Image.open(path) as image:
+            image = image.convert("RGB")
+            image.thumbnail((max_px, max_px))
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=90)
+        return base64.b64encode(buffer.getvalue()).decode("ascii"), "image/jpeg"
+    return base64.b64encode(path.read_bytes()).decode("ascii"), mime
 
 
-def build_request_messages(prompt: str, image_paths: list[Path]) -> list[dict[str, Any]]:
-    content: list[dict[str, Any]] = [
-        {"type": "image_url", "image_url": {"url": encode_image(path)}}
-        for path in image_paths
-    ]
-    content.append({"type": "text", "text": prompt})
+def build_request_messages(
+    prompt: str, encoded_images: list[tuple[str, str]]
+) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    content.extend(
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{mime};base64,{encoded}"},
+        }
+        for encoded, mime in encoded_images
+    )
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": content},
     ]
 
 
-def extract_response_text(response: Any) -> str:
-    if isinstance(response, dict):
-        choices = response.get("choices") or []
-        message = choices[0].get("message", {}) if choices else {}
-        content = message.get("content", "") if isinstance(message, dict) else ""
-    else:
-        choices = getattr(response, "choices", None) or []
-        message = getattr(choices[0], "message", None) if choices else None
-        content = getattr(message, "content", "") if message is not None else ""
+def _get_field(value: Any, name: str) -> Any:
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+
+
+def _content_text(content: Any) -> str:
+    if content is None:
+        return ""
     if isinstance(content, str):
-        return content.strip()
+        return content
     if isinstance(content, list):
         parts: list[str] = []
         for part in content:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                parts.append(part["text"])
-            elif isinstance(getattr(part, "text", None), str):
-                parts.append(part.text)
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            text = _get_field(part, "text") or _get_field(part, "content")
+            if text:
+                parts.append(str(text))
+        return "".join(parts)
+    return str(content)
+
+
+def extract_response_text(response: Any, *, include_reasoning: bool = True) -> str:
+    if isinstance(response, str):
+        return response.strip()
+    choices = _get_field(response, "choices") or []
+    parts: list[str] = []
+    fields = ("reasoning_content", "content", "text") if include_reasoning else ("content", "text")
+    for choice in choices:
+        for container_name in ("delta", "message"):
+            container = _get_field(choice, container_name)
+            if container is None:
+                continue
+            for field in fields:
+                text = _content_text(_get_field(container, field))
+                if text:
+                    parts.append(text)
+        text = _content_text(_get_field(choice, "text"))
+        if text:
+            parts.append(text)
+    if parts:
         return "".join(parts).strip()
-    return ""
+    return _content_text(_get_field(response, "content")).strip()
+
+
+def _is_reasoning_chat_model(model: str) -> bool:
+    return str(model).lower().startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _should_omit_temperature(model: str) -> bool:
+    name = str(model).lower()
+    return _is_reasoning_chat_model(model) or name.startswith(
+        ("claude-opus-4", "claude-sonnet-4", "claude-4")
+    )
+
+
+def _supports_qwen_thinking_control(model: str) -> bool:
+    normalized = str(model).strip().lower().replace("_", "-")
+    return "qwen3.5" in normalized or "qwen3-5" in normalized
+
+
+def _require_response_text(text: str, *, provider: str, model: str) -> str:
+    text = text.strip()
+    if not text:
+        raise RuntimeError(
+            f"{provider} returned an empty response for model {model!r}; check the "
+            "base URL, model name, provider protocol, and streaming compatibility"
+        )
+    return text
+
+
+def call_model(
+    client: Any,
+    *,
+    api_provider: str,
+    model: str,
+    encoded_images: list[tuple[str, str]],
+    prompt: str,
+    max_tokens: int,
+    temperature: float,
+) -> str:
+    omit_temperature = _should_omit_temperature(model)
+    if api_provider == "openai_responses":
+        user_content: list[dict[str, Any]] = [
+            {
+                "type": "input_image",
+                "image_url": f"data:{mime};base64,{encoded}",
+            }
+            for encoded, mime in encoded_images
+        ]
+        user_content.append({"type": "input_text", "text": prompt})
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
+                },
+                {"role": "user", "content": user_content},
+            ],
+            "max_output_tokens": max_tokens,
+        }
+        if not omit_temperature:
+            kwargs["temperature"] = temperature
+        response = client.responses.create(**kwargs)
+        output_text = _get_field(response, "output_text")
+        if output_text:
+            return str(output_text).strip()
+        parts: list[str] = []
+        for item in _get_field(response, "output") or []:
+            for content in _get_field(item, "content") or []:
+                text = _get_field(content, "text")
+                if text:
+                    parts.append(str(text))
+        return _require_response_text("\n".join(parts), provider=api_provider, model=model)
+
+    if api_provider == "anthropic":
+        user_content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime,
+                    "data": encoded,
+                },
+            }
+            for encoded, mime in encoded_images
+        ]
+        user_content.append({"type": "text", "text": prompt})
+        kwargs = {
+            "model": model,
+            "system": SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_content}],
+            "max_tokens": max_tokens,
+        }
+        if not omit_temperature:
+            kwargs["temperature"] = temperature
+        response = client.messages.create(**kwargs)
+        parts = [
+            str(_get_field(block, "text"))
+            for block in (_get_field(response, "content") or [])
+            if _get_field(block, "type") == "text" and _get_field(block, "text")
+        ]
+        return _require_response_text("\n".join(parts), provider=api_provider, model=model)
+
+    kwargs = {
+        "model": model,
+        "messages": build_request_messages(prompt, encoded_images),
+        "stream": True,
+    }
+    if _is_reasoning_chat_model(model):
+        kwargs["max_completion_tokens"] = max_tokens
+    else:
+        kwargs["max_tokens"] = max_tokens
+    if not omit_temperature:
+        kwargs["temperature"] = temperature
+    if _supports_qwen_thinking_control(model):
+        kwargs["extra_body"] = {"enable_thinking": True}
+    response = client.chat.completions.create(**kwargs)
+    if _get_field(response, "choices") is not None:
+        return _require_response_text(
+            extract_response_text(response), provider=api_provider, model=model
+        )
+    parts = [extract_response_text(chunk) for chunk in response]
+    return _require_response_text("".join(parts), provider=api_provider, model=model)
 
 
 def repeated_ngram(reasoning: str, *, width: int = 8, threshold: int = 3) -> bool:
@@ -235,24 +397,76 @@ def select_questions(
 
 
 class ThreadLocalClientFactory:
-    def __init__(self, *, api_key: str, base_url: str, timeout: float):
+    def __init__(
+        self,
+        *,
+        api_provider: str,
+        api_key: str,
+        base_url: str,
+        timeout: float,
+        credential_kind: str = "api_key",
+    ):
+        self.api_provider = api_provider
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
+        self.credential_kind = credential_kind
         self.local = threading.local()
 
     def __call__(self) -> Any:
         client = getattr(self.local, "client", None)
         if client is None:
-            from openai import OpenAI
+            if self.api_provider == "anthropic":
+                from anthropic import Anthropic
 
-            client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout,
-            )
+                credential = (
+                    {"auth_token": self.api_key}
+                    if self.credential_kind == "auth_token"
+                    else {"api_key": self.api_key}
+                )
+                client = Anthropic(
+                    **credential,
+                    base_url=self.base_url,
+                    timeout=self.timeout,
+                )
+            else:
+                from openai import OpenAI
+
+                client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    timeout=self.timeout,
+                )
             self.local.client = client
         return client
+
+
+def resolve_api_credential(args: argparse.Namespace) -> tuple[str, str]:
+    direct = str(getattr(args, "api_key", None) or "").strip()
+    if direct:
+        return direct, "api_key"
+    env_name = str(getattr(args, "api_key_env", None) or "").strip()
+    if env_name:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            kind = (
+                "auth_token"
+                if args.api_provider == "anthropic" and env_name.upper().endswith("AUTH_TOKEN")
+                else "api_key"
+            )
+            return value, kind
+    if args.api_provider == "anthropic":
+        auth_token = os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
+        if auth_token:
+            return auth_token, "auth_token"
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        if anthropic_key:
+            return anthropic_key, "api_key"
+    else:
+        openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if openai_key:
+            return openai_key, "api_key"
+    return os.getenv("DASHSCOPE_API_KEY", "").strip() or "EMPTY", "api_key"
 
 
 def input_fingerprint(
@@ -262,8 +476,10 @@ def input_fingerprint(
     images: list[Path],
     model: str,
     base_url: str,
+    api_provider: str,
     temperature: float,
     max_tokens: int,
+    image_max_px: int,
 ) -> str:
     material = json.dumps(
         {
@@ -273,8 +489,10 @@ def input_fingerprint(
             "images": [str(path.resolve()) for path in images],
             "model": model,
             "base_url": base_url,
+            "api_provider": api_provider,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "image_max_px": image_max_px,
         },
         sort_keys=True,
         ensure_ascii=False,
@@ -302,14 +520,18 @@ def process_question(
         )
         image_paths = [Path(path) for path in images]
         prompt = question_prompt(question, len(image_paths))
+        image_max_px = int(getattr(args, "api_image_max_px", 0) or 0)
+        encoded_images = [encode_image(path, image_max_px) for path in image_paths]
         fingerprint = input_fingerprint(
             uid=uid,
             prompt=prompt,
             images=image_paths,
             model=args.model,
             base_url=args.base_url,
+            api_provider=getattr(args, "api_provider", "openai_chat"),
             temperature=args.temperature,
             max_tokens=args.max_output_tokens,
+            image_max_px=image_max_px,
         )
         expected_letters(question)
     except Exception as exc:
@@ -357,22 +579,20 @@ def process_question(
     ]
     start_attempt = max(completed_attempts, default=0) + 1
     new_records: list[dict[str, Any]] = []
-    messages: list[dict[str, Any]] | None = None
     for semantic_attempt in range(start_attempt, args.max_attempts + 1):
-        if messages is None:
-            messages = build_request_messages(prompt, image_paths)
         response_text: str | None = None
         transport_errors: list[str] = []
         for transport_attempt in range(1, args.transport_retries + 1):
             try:
-                response = client_factory().chat.completions.create(
+                response_text = call_model(
+                    client_factory(),
+                    api_provider=getattr(args, "api_provider", "openai_chat"),
                     model=args.model,
-                    messages=messages,
+                    encoded_images=encoded_images,
+                    prompt=prompt,
                     max_tokens=args.max_output_tokens,
                     temperature=args.temperature,
-                    stream=False,
                 )
-                response_text = extract_response_text(response)
                 break
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
@@ -451,13 +671,13 @@ def run_filter(
         requested_uids=args.question_uid,
     )
     if client_factory is None:
-        api_key = os.getenv(args.api_key_env, "").strip()
-        if not api_key:
-            raise ValueError(f"environment variable {args.api_key_env} is empty")
+        api_key, credential_kind = resolve_api_credential(args)
         client_factory = ThreadLocalClientFactory(
+            api_provider=args.api_provider,
             api_key=api_key,
             base_url=args.base_url,
             timeout=args.timeout,
+            credential_kind=credential_kind,
         )
 
     cached_records = load_cache(args.cache_jsonl)
@@ -512,6 +732,7 @@ def run_filter(
         output_question["teacher_cot"] = teacher_cot
         output_question["teacher_cot_metadata"] = {
             "model": args.model,
+            "api_provider": args.api_provider,
             "status": status,
             "semantic_attempts": metadata.get("semantic_attempts"),
             "independent_from_gold": True,
@@ -548,6 +769,7 @@ def run_filter(
         "teacher": {
             "model": args.model,
             "base_url": args.base_url,
+            "api_provider": args.api_provider,
             "max_semantic_attempts": args.max_attempts,
             "max_output_tokens": args.max_output_tokens,
             "temperature": args.temperature,
@@ -563,26 +785,84 @@ def run_filter(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("benchmark", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--cache-jsonl", type=Path)
-    parser.add_argument("--base-url", default="https://api.openai.com/v1")
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
-    parser.add_argument("--max-attempts", type=int, default=2)
-    parser.add_argument("--transport-retries", type=int, default=3)
-    parser.add_argument("--retry-delay", type=float, default=1.0)
+    parser.add_argument("--output", "--output-json", "--output_json", dest="output", type=Path, required=True)
+    parser.add_argument("--cache-jsonl", "--cache_jsonl", dest="cache_jsonl", type=Path)
+    parser.add_argument(
+        "--base-url",
+        "--base_url",
+        "--vlm-url",
+        "--vlm_url",
+        dest="base_url",
+        default="https://www.packyapi.com/v1",
+    )
+    parser.add_argument("--model", "--vlm-model", "--vlm_model", dest="model", required=True)
+    parser.add_argument(
+        "--api-provider",
+        "--api_provider",
+        dest="api_provider",
+        choices=("openai_chat", "openai_responses", "anthropic"),
+        default="openai_chat",
+        help="Wire protocol used by the VLM endpoint.",
+    )
+    parser.add_argument("--api-key", "--api_key", dest="api_key")
+    parser.add_argument("--api-key-env", "--api_key_env", dest="api_key_env")
+    parser.add_argument("--max-attempts", "--max_attempts", dest="max_attempts", type=int, default=2)
+    parser.add_argument(
+        "--transport-retries",
+        "--transport_retries",
+        "--retries",
+        dest="transport_retries",
+        type=int,
+        default=3,
+    )
+    parser.add_argument("--retry-delay", "--retry_delay", dest="retry_delay", type=float, default=1.0)
     parser.add_argument("--timeout", type=float, default=120.0)
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--max-output-tokens", type=int, default=384)
+    parser.add_argument("--workers", "--vlm-workers", "--vlm_workers", dest="workers", type=int, default=4)
+    parser.add_argument(
+        "--max-output-tokens",
+        "--max-tokens",
+        "--max_tokens",
+        dest="max_output_tokens",
+        type=int,
+        default=384,
+    )
     parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--api-image-max-px",
+        "--api_image_max_px",
+        dest="api_image_max_px",
+        type=int,
+        default=1280,
+        help="Resize the longest image side before API calls; 0 disables resizing.",
+    )
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--limit-per-type", type=int)
-    parser.add_argument("--question-uid", action="append", default=[])
+    parser.add_argument("--limit-per-type", "--limit_per_type", dest="limit_per_type", type=int)
+    parser.add_argument("--question-uid", "--question_uid", dest="question_uid", action="append", default=[])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--progress-every", type=int, default=25)
-    parser.add_argument("--scannet-image-root", action="append", type=Path, default=[])
-    parser.add_argument("--scannetpp-image-root", action="append", type=Path, default=[])
-    parser.add_argument("--scannetpp-sensor", choices=("iphone", "dslr"), default="iphone")
+    parser.add_argument("--progress-every", "--progress_every", dest="progress_every", type=int, default=25)
+    parser.add_argument(
+        "--scannet-image-root",
+        "--scannet_image_root",
+        dest="scannet_image_root",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    parser.add_argument(
+        "--scannetpp-image-root",
+        "--scannetpp_image_root",
+        dest="scannetpp_image_root",
+        action="append",
+        type=Path,
+        default=[],
+    )
+    parser.add_argument(
+        "--scannetpp-sensor",
+        "--scannetpp_sensor",
+        dest="scannetpp_sensor",
+        choices=("iphone", "dslr"),
+        default="iphone",
+    )
     return parser
 
 
@@ -606,6 +886,8 @@ def main() -> int:
         raise ValueError("--limit must be positive")
     if args.limit_per_type is not None and args.limit_per_type <= 0:
         raise ValueError("--limit-per-type must be positive")
+    if args.api_image_max_px < 0:
+        raise ValueError("--api-image-max-px cannot be negative")
     statistics = run_filter(args)
     print(json.dumps(statistics, ensure_ascii=False, indent=2))
     return 0

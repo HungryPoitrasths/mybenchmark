@@ -207,6 +207,7 @@ python scripts/filter_correct_teacher_cot.py cot/train/mixed_train_10k.json `
   --cache-jsonl cot/train/mixed_train_10k.teacher.small.cache.jsonl `
   --base-url https://your-openai-compatible-server/v1 `
   --model your-teacher-vlm `
+  --api-provider openai_chat `
   --max-attempts 2 `
   --workers 4 `
   --max-output-tokens 384 `
@@ -223,12 +224,22 @@ python scripts/filter_correct_teacher_cot.py cot/train/mixed_train_10k.json `
   --cache-jsonl cot/train/mixed_train_10k.teacher.cache.jsonl `
   --base-url https://your-openai-compatible-server/v1 `
   --model your-teacher-vlm `
+  --api-provider openai_chat `
   --max-attempts 2 `
   --workers 4 `
   --max-output-tokens 384 `
   --scannet-image-root D:\datasets\scannet\scans `
   --scannetpp-image-root D:\datasets\scannetpp\data
 ```
+
+The VLM calling flags intentionally match `run_sampled_type_vlm_eval.py`. Select
+`--api-provider openai_chat` for OpenAI-compatible chat endpoints, including vLLM,
+SGLang, DashScope, and most proxy services; select `openai_responses` for the OpenAI
+Responses API; or select `anthropic` for Anthropic's native Messages API. The aliases
+`--vlm_url`, `--vlm_model`, `--vlm_workers`, `--max_tokens`, and underscore-style
+image-root flags are also accepted. Credentials can be passed with `--api-key`, named
+with `--api-key-env`, or discovered from `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN`, or `DASHSCOPE_API_KEY` as appropriate.
 
 Build the matched exports. Every teacher-success question appears at least once. A type
 with fewer than 300 teacher-success questions is deterministically repeated to 300 before

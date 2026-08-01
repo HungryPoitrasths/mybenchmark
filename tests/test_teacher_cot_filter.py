@@ -69,6 +69,8 @@ def _args(tmp_path: Path, benchmark: Path, output_name: str = "teacher.json") ->
         cache_jsonl=tmp_path / "teacher.cache.jsonl",
         base_url="https://teacher.invalid/v1",
         model="teacher-vlm",
+        api_provider="openai_chat",
+        api_key=None,
         api_key_env="TEST_API_KEY",
         max_attempts=2,
         transport_retries=2,
@@ -77,6 +79,7 @@ def _args(tmp_path: Path, benchmark: Path, output_name: str = "teacher.json") ->
         workers=1,
         max_output_tokens=384,
         temperature=0.2,
+        api_image_max_px=0,
         limit=None,
         limit_per_type=None,
         question_uid=[],
@@ -239,3 +242,72 @@ def test_small_sample_selection_is_deterministic_and_per_type_limited() -> None:
         counts[row["type"]] = counts.get(row["type"], 0) + 1
     assert len(selected_a) == 3
     assert max(counts.values()) <= 2
+
+
+def test_responses_and_anthropic_protocols_use_native_multimodal_payloads() -> None:
+    script = _load_script()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class Responses:
+        def create(self, **kwargs: Any) -> Any:
+            calls.append(("responses", kwargs))
+            return SimpleNamespace(output_text=_reasoning("A"))
+
+    responses_client = SimpleNamespace(responses=Responses())
+    responses_text = script.call_model(
+        responses_client,
+        api_provider="openai_responses",
+        model="gpt-4.1",
+        encoded_images=[("encoded", "image/jpeg")],
+        prompt="Solve this question",
+        max_tokens=384,
+        temperature=0.2,
+    )
+
+    class Messages:
+        def create(self, **kwargs: Any) -> Any:
+            calls.append(("anthropic", kwargs))
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=_reasoning("A"))]
+            )
+
+    anthropic_client = SimpleNamespace(messages=Messages())
+    anthropic_text = script.call_model(
+        anthropic_client,
+        api_provider="anthropic",
+        model="claude-sonnet-4-5",
+        encoded_images=[("encoded", "image/png")],
+        prompt="Solve this question",
+        max_tokens=384,
+        temperature=0.2,
+    )
+
+    assert responses_text.endswith("Answer: A")
+    assert anthropic_text.endswith("Answer: A")
+    responses_kwargs = calls[0][1]
+    assert responses_kwargs["max_output_tokens"] == 384
+    assert responses_kwargs["input"][1]["content"][0]["type"] == "input_image"
+    anthropic_kwargs = calls[1][1]
+    assert anthropic_kwargs["messages"][0]["content"][0]["type"] == "image"
+    assert "temperature" not in anthropic_kwargs
+
+
+def test_reasoning_chat_model_uses_completion_token_budget_without_temperature() -> None:
+    script = _load_script()
+    calls: list[dict[str, Any]] = []
+    client = _FakeClient([_reasoning("A")], calls)
+
+    response = script.call_model(
+        client,
+        api_provider="openai_chat",
+        model="gpt-5.2",
+        encoded_images=[("encoded", "image/jpeg")],
+        prompt="Solve this question",
+        max_tokens=384,
+        temperature=0.2,
+    )
+
+    assert response.endswith("Answer: A")
+    assert calls[0]["max_completion_tokens"] == 384
+    assert "max_tokens" not in calls[0]
+    assert "temperature" not in calls[0]
