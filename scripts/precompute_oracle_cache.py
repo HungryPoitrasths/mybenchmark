@@ -78,7 +78,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
 
-    with open(args.subset) as f:
+    with open(args.subset, encoding="utf-8-sig") as f:
         raw = json.load(f)
     questions = raw if isinstance(raw, list) else raw.get("questions", list(raw.values())[0] if isinstance(list(raw.values())[0], list) else [])
 
