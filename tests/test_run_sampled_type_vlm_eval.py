@@ -12,7 +12,13 @@ from scripts.extract_l3_attachment_chain_multiselect import (
     convert_attachment_chain_question,
 )
 from scripts.run_sampled_type_vlm_eval import (
+    DirectAnswerMissingError,
     ImageResolution,
+    _cache_entry_matches_request,
+    _canonical_sha256,
+    _direct_response_has_final_answer,
+    _evaluation_cache_signature_payload,
+    _evaluation_mode,
     _option_html,
     _question_cache_key,
     _resolve_scannetpp_geometry_roots,
@@ -20,6 +26,7 @@ from scripts.run_sampled_type_vlm_eval import (
     _should_omit_temperature,
     build_prompt,
     call_model,
+    evaluate,
     load_fixed_questions,
     load_questions,
     load_rollout_manifest,
@@ -31,6 +38,7 @@ from scripts.run_sampled_type_vlm_eval import (
     resolve_rollout_images,
     resolve_question_images,
     result_from_question,
+    run_api_question,
     sample_questions,
 )
 from scripts.validate_rollout_manifest import validate_manifest
@@ -114,6 +122,101 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
             _question_cache_key(questions[1]),
         )
 
+    def test_cache_signature_rejects_other_modes_and_legacy_rows(self) -> None:
+        common = {
+            "model": "model-a",
+            "base_url": "https://example.test/v1",
+            "api_provider": "openai_chat",
+            "temperature": 0.0,
+            "max_tokens": 128,
+            "api_image_max_px": 720,
+            "evaluation_condition": "baseline",
+            "oracle_mode": "none",
+            "rollout_manifest_sha256": None,
+            "bev_manifest_sha256": None,
+            "scannetpp_sensor": "iphone",
+        }
+        cot_payload = _evaluation_cache_signature_payload(
+            mode="cot", blind=False, direct=False, **common
+        )
+        direct_payload = _evaluation_cache_signature_payload(
+            mode="direct", blind=False, direct=True, **common
+        )
+        blind_payload = _evaluation_cache_signature_payload(
+            mode="blind", blind=True, direct=False, **common
+        )
+        cot_signature = _canonical_sha256(cot_payload)
+
+        self.assertEqual(_evaluation_mode(blind=False, direct=False), "cot")
+        self.assertEqual(_evaluation_mode(blind=False, direct=True), "direct")
+        self.assertEqual(_evaluation_mode(blind=True, direct=False), "blind")
+        self.assertEqual(_evaluation_mode(blind=True, direct=True), "blind")
+        self.assertNotEqual(cot_signature, _canonical_sha256(direct_payload))
+        self.assertNotEqual(cot_signature, _canonical_sha256(blind_payload))
+        self.assertTrue(
+            _cache_entry_matches_request(
+                {"mode": "cot", "cache_signature": cot_signature},
+                mode="cot",
+                cache_signature=cot_signature,
+            )
+        )
+        self.assertFalse(
+            _cache_entry_matches_request(
+                {"mode": "direct", "cache_signature": cot_signature},
+                mode="cot",
+                cache_signature=cot_signature,
+            )
+        )
+        self.assertFalse(
+            _cache_entry_matches_request(
+                {"evaluation_condition": "baseline"},
+                mode="cot",
+                cache_signature=cot_signature,
+            )
+        )
+
+    def test_evaluate_records_mode_and_cache_signature(self) -> None:
+        question = {
+            "question_uid": "question-1",
+            "dataset": "scannet",
+            "scene_id": "scene0000_00",
+            "image_name": "0.jpg",
+            "type": "occlusion",
+            "question": "Is the chair visible?",
+            "options": ["yes", "no"],
+            "answer": "A",
+        }
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            benchmark_path = root / "benchmark.json"
+            output_path = root / "results.json"
+            benchmark_path.write_text(
+                json.dumps({"questions": [question]}), encoding="utf-8"
+            )
+            args = parse_args(
+                [
+                    "--benchmark_file",
+                    str(benchmark_path),
+                    "--subset",
+                    str(benchmark_path),
+                    "--blind",
+                    "--skip_api",
+                    "--output_json",
+                    str(output_path),
+                ]
+            )
+
+            results, metadata, _sampling_stats = evaluate(args)
+
+        self.assertEqual(metadata["mode"], "blind")
+        self.assertTrue(metadata["blind"])
+        self.assertFalse(metadata["direct"])
+        self.assertEqual(
+            metadata["cache_signature_payload"]["mode"], metadata["mode"]
+        )
+        self.assertEqual(results[0]["mode"], "blind")
+        self.assertEqual(results[0]["cache_signature"], metadata["cache_signature"])
+
     def test_load_fixed_questions_accepts_utf8_bom(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             benchmark_path = Path(temporary_directory) / "benchmark.json"
@@ -191,6 +294,90 @@ class RunSampledTypeVlmEvalMultiselectTests(unittest.TestCase):
         )
 
         self.assertEqual(response, "B")
+
+    def test_call_model_direct_rejects_reasoning_only_response(self) -> None:
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return iter(
+                    [{"choices": [{"delta": {"reasoning_content": "Long analysis."}}]}]
+                )
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with self.assertRaisesRegex(DirectAnswerMissingError, "no final answer content"):
+            call_model(
+                FakeClient(),
+                api_provider="openai_chat",
+                model="ep-test",
+                image_paths=[Path("unused.jpg")],
+                prompt="Question?",
+                max_tokens=16,
+                temperature=0.0,
+                api_image_max_px=0,
+                blind=True,
+                direct=True,
+            )
+
+    def test_direct_response_requires_a_parseable_final_option(self) -> None:
+        question = {"options": ["left", "right", "front", "back"], "answer": "B"}
+
+        self.assertTrue(_direct_response_has_final_answer(question, "B"))
+        self.assertTrue(
+            _direct_response_has_final_answer(question, "Analysis.\nAnswer: B")
+        )
+        self.assertFalse(
+            _direct_response_has_final_answer(question, "Analysis without a final choice")
+        )
+
+    def test_run_api_question_marks_unparseable_direct_content_as_error(self) -> None:
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return iter(
+                    [{"choices": [{"delta": {"content": "Analysis without an option"}}]}]
+                )
+
+        class FakeClient:
+            chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        args = types.SimpleNamespace(
+            direct=True,
+            oracle=False,
+            blind=True,
+            api_provider="openai_chat",
+            model="ep-test",
+            max_tokens=16,
+            temperature=0.0,
+            api_image_max_px=0,
+            retries=0,
+            retry_delay=0.0,
+            delay=0.0,
+        )
+        factory = types.SimpleNamespace(get_client=lambda: FakeClient())
+        question = {
+            "question_uid": "q-direct",
+            "type": "direction_agent",
+            "question": "Where?",
+            "options": ["left", "right", "front", "back"],
+            "answer": "B",
+            "_evaluation_mode": "direct",
+            "_direct": True,
+            "_blind": True,
+            "_cache_signature": "signature",
+        }
+
+        row = run_api_question(
+            args=args,
+            client_factory=factory,
+            idx=1,
+            total=1,
+            question=question,
+            resolutions=[ImageResolution(None, ())],
+        )
+
+        self.assertIsNone(row["raw_response"])
+        self.assertIsNone(row["prediction"])
+        self.assertTrue(row["error"].startswith("invalid_direct_response:"))
 
     def test_call_model_rejects_empty_stream_response(self) -> None:
         class FakeCompletions:

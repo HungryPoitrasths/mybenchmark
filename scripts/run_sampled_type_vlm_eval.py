@@ -125,6 +125,12 @@ BLIND_MULTI_SELECT_PROMPT_INSTRUCTION = (
     "Do not request an image and do not abstain."
 )
 
+CACHE_SIGNATURE_SCHEMA = "sampled-type-vlm-eval-cache-v1"
+
+
+class DirectAnswerMissingError(RuntimeError):
+    """Raised when direct mode produces no parseable final answer."""
+
 QTYPE_ORDER = [
     "direction_agent",
     "occlusion",
@@ -494,6 +500,82 @@ def _question_cache_key(question: dict[str, Any]) -> str:
     )
 
 
+def _evaluation_mode(*, blind: bool, direct: bool) -> str:
+    if blind:
+        return "blind"
+    return "direct" if direct else "cot"
+
+
+def _canonical_sha256(payload: Any) -> str:
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _prompt_template_sha256() -> str:
+    return _canonical_sha256(
+        {
+            "system": SYSTEM_PROMPT,
+            "cot": PROMPT_SUFFIX,
+            "cot_multi_select": MULTI_SELECT_PROMPT_SUFFIX,
+            "direct": DIRECT_PROMPT_SUFFIX,
+            "direct_multi_select": DIRECT_MULTI_SELECT_PROMPT_SUFFIX,
+            "blind": BLIND_PROMPT_INSTRUCTION,
+            "blind_multi_select": BLIND_MULTI_SELECT_PROMPT_INSTRUCTION,
+        }
+    )
+
+
+def _evaluation_cache_signature_payload(
+    *,
+    mode: str,
+    blind: bool,
+    direct: bool,
+    model: str,
+    base_url: str,
+    api_provider: str,
+    temperature: float,
+    max_tokens: int,
+    api_image_max_px: int,
+    evaluation_condition: str,
+    oracle_mode: str,
+    rollout_manifest_sha256: str | None,
+    bev_manifest_sha256: str | None,
+    scannetpp_sensor: str,
+) -> dict[str, Any]:
+    return {
+        "schema": CACHE_SIGNATURE_SCHEMA,
+        "mode": mode,
+        "blind": blind,
+        "direct": direct,
+        "model": str(model).strip(),
+        "base_url": str(base_url).strip().rstrip("/"),
+        "api_provider": str(api_provider).strip(),
+        "temperature": float(temperature),
+        "max_tokens": int(max_tokens),
+        "api_image_max_px": int(api_image_max_px),
+        "evaluation_condition": evaluation_condition,
+        "oracle_mode": oracle_mode,
+        "rollout_manifest_sha256": rollout_manifest_sha256,
+        "bev_manifest_sha256": bev_manifest_sha256,
+        "scannetpp_sensor": scannetpp_sensor,
+        "prompt_template_sha256": _prompt_template_sha256(),
+    }
+
+
+def _cache_entry_matches_request(
+    cached: dict[str, Any] | None,
+    *,
+    mode: str,
+    cache_signature: str,
+) -> bool:
+    if not cached:
+        return False
+    return (
+        cached.get("mode") == mode
+        and cached.get("cache_signature") == cache_signature
+    )
+
+
 def _load_benchmark(path: Path) -> list[dict[str, Any]]:
     with path.open(encoding="utf-8-sig") as f:
         data = json.load(f)
@@ -840,6 +922,13 @@ def normalize_answer_letters(value: Any, letters: str, *, multi_select: bool) ->
         return parse_answers(text, letters)
     parsed = parse_answer(text, letters)
     return [parsed] if parsed else []
+
+
+def _direct_response_has_final_answer(question: dict[str, Any], raw: str | None) -> bool:
+    letters = allowed_letters(question)
+    if is_multi_select_question(question):
+        return bool(parse_answers(raw, letters))
+    return parse_answer(raw, letters) is not None
 
 
 def _mime_for_path(path: Path) -> str:
@@ -1757,17 +1846,17 @@ def call_model(
     chat_kwargs["stream"] = True
     stream = client.chat.completions.create(**chat_kwargs)
     parts: list[str] = []
-    reasoning_fallback_parts: list[str] = []
     for chunk in stream:
         text = _extract_chat_response_text(chunk, include_reasoning=not direct)
         if text:
             parts.append(text)
-        if direct:
-            fallback_text = _extract_chat_response_text(chunk, include_reasoning=True)
-            if fallback_text:
-                reasoning_fallback_parts.append(fallback_text)
+    final_text = "".join(parts)
+    if direct and not final_text.strip():
+        raise DirectAnswerMissingError(
+            f"{api_provider} returned no final answer content for direct mode"
+        )
     return _require_response_text(
-        "".join(parts) or "".join(reasoning_fallback_parts),
+        final_text,
         provider=api_provider,
         model=model,
     )
@@ -1844,6 +1933,10 @@ def refresh_cached_result(question: dict[str, Any], cached: dict[str, Any]) -> d
     row.update(_answer_fields(question, cached.get("raw_response")))
     row["question_uid"] = question.get("question_uid")
     row["dataset"] = question.get("_dataset")
+    row["mode"] = question.get("_evaluation_mode")
+    row["blind"] = bool(question.get("_blind"))
+    row["direct"] = bool(question.get("_direct"))
+    row["cache_signature"] = question.get("_cache_signature")
     return row
 
 
@@ -1875,6 +1968,10 @@ def result_from_question(
             p for r in image_resolutions for p in r.checked_paths
         ],
         "media_roles": [r.role for r in image_resolutions],
+        "mode": question.get("_evaluation_mode"),
+        "blind": bool(question.get("_blind")),
+        "direct": bool(question.get("_direct")),
+        "cache_signature": question.get("_cache_signature"),
         "evaluation_condition": question.get("_evaluation_condition", "baseline"),
         "level": question.get("level"),
         "type": question.get("type"),
@@ -2518,7 +2615,7 @@ def run_api_question(
     )
     for attempt in range(args.retries + 1):
         try:
-            raw_response = call_model(
+            candidate_response = call_model(
                 client_factory.get_client(),
                 api_provider=args.api_provider,
                 model=args.model,
@@ -2531,11 +2628,23 @@ def run_api_question(
                 image_roles=[rollout_role_label(r.role) for r in resolutions],
                 direct=getattr(args, "direct", False),
             )
+            if getattr(args, "direct", False) and not _direct_response_has_final_answer(
+                question, candidate_response
+            ):
+                raise DirectAnswerMissingError(
+                    "model response did not contain a parseable final option"
+                )
+            raw_response = candidate_response
             print(f"[{idx}/{total}] done", flush=True)
             break
         except Exception as exc:  # pragma: no cover - network/API dependent
             if attempt >= args.retries:
-                error = f"api_error: {exc}"
+                error_kind = (
+                    "invalid_direct_response"
+                    if isinstance(exc, DirectAnswerMissingError)
+                    else "api_error"
+                )
+                error = f"{error_kind}: {exc}"
                 print(f"[{idx}/{total}] failed: {exc}", flush=True)
             else:
                 is_rate_limit = "429" in str(exc) or "quota" in str(exc).lower()
@@ -2583,6 +2692,9 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
     picture = bool(getattr(args, "picture", False))
     video = bool(getattr(args, "video", False))
     context_only = bool(getattr(args, "context_only", False))
+    blind = bool(getattr(args, "blind", False))
+    direct = bool(getattr(args, "direct", False))
+    mode = _evaluation_mode(blind=blind, direct=direct)
     condition = rollout_condition(
         picture=picture,
         video=video,
@@ -2641,6 +2753,29 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
         scannet_root = None
         scannetpp_roots = []
 
+    cache_signature_payload = _evaluation_cache_signature_payload(
+        mode=mode,
+        blind=blind,
+        direct=direct,
+        model=args.model,
+        base_url=args.base_url,
+        api_provider=args.api_provider,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        api_image_max_px=args.api_image_max_px,
+        evaluation_condition=condition,
+        oracle_mode=oracle_mode,
+        rollout_manifest_sha256=manifest.sha256 if manifest else None,
+        bev_manifest_sha256=bev_manifest.sha256 if bev_manifest else None,
+        scannetpp_sensor=args.scannetpp_sensor,
+    )
+    cache_signature = _canonical_sha256(cache_signature_payload)
+    for question in selected:
+        question["_evaluation_mode"] = mode
+        question["_blind"] = blind
+        question["_direct"] = direct
+        question["_cache_signature"] = cache_signature
+
     metadata.update(
         {
             "input_question_count": len(all_questions),
@@ -2653,6 +2788,11 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
             "api_provider": args.api_provider,
             "scannetpp_sensor": args.scannetpp_sensor,
             "vlm_workers": args.vlm_workers,
+            "mode": mode,
+            "blind": blind,
+            "direct": direct,
+            "cache_signature": cache_signature,
+            "cache_signature_payload": cache_signature_payload,
             "oracle": bool(getattr(args, "oracle", False)),
             "oracle_mode": oracle_mode,
             "oracle_scannet_root": scannet_root,
@@ -2703,22 +2843,17 @@ def evaluate(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, 
         uid = str(question["question_uid"])
         qtype = str(question.get("type") or "")
         cached = existing.get(uid) or existing_by_cache_key.get(_question_cache_key(question))
-        cached_condition = str(cached.get("evaluation_condition", "baseline")) if cached else None
-        cache_matches_condition = cached_condition == condition
-        if manifest is not None and cached is not None:
-            cache_matches_condition = cache_matches_condition and (
-                cached.get("rollout_manifest_sha256") == manifest.sha256
-            )
-        if bev_manifest is not None and cached is not None:
-            cache_matches_condition = cache_matches_condition and (
-                cached.get("bev_manifest_sha256") == bev_manifest.sha256
-            )
+        cache_matches_request = _cache_entry_matches_request(
+            cached,
+            mode=mode,
+            cache_signature=cache_signature,
+        )
         # Non-targeted types always use cache (ignore --force).
         # Targeted types (or all types when --only_type is absent) respect --force.
         is_targeted = only_types is None or qtype in only_types
         if (
             cached
-            and cache_matches_condition
+            and cache_matches_request
             and (not args.force or not is_targeted)
             and cached.get("raw_response") is not None
         ):
