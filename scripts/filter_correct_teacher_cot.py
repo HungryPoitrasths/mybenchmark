@@ -216,6 +216,19 @@ def _require_response_text(text: str, *, provider: str, model: str) -> str:
     return text
 
 
+def _responses_output_text(response: Any) -> str:
+    output_text = _get_field(response, "output_text")
+    if output_text:
+        return str(output_text).strip()
+    parts: list[str] = []
+    for item in _get_field(response, "output") or []:
+        for content in _get_field(item, "content") or []:
+            text = _get_field(content, "text")
+            if text:
+                parts.append(str(text))
+    return "\n".join(parts).strip()
+
+
 def call_model(
     client: Any,
     *,
@@ -225,6 +238,7 @@ def call_model(
     prompt: str,
     max_tokens: int,
     temperature: float,
+    on_stream_start: Callable[[str], None] | None = None,
 ) -> str:
     omit_temperature = _should_omit_temperature(model)
     if api_provider == "openai_responses":
@@ -246,20 +260,52 @@ def call_model(
                 {"role": "user", "content": user_content},
             ],
             "max_output_tokens": max_tokens,
+            "store": False,
+            "stream": True,
         }
         if not omit_temperature:
             kwargs["temperature"] = temperature
-        response = client.responses.create(**kwargs)
-        output_text = _get_field(response, "output_text")
-        if output_text:
-            return str(output_text).strip()
-        parts: list[str] = []
-        for item in _get_field(response, "output") or []:
-            for content in _get_field(item, "content") or []:
-                text = _get_field(content, "text")
-                if text:
-                    parts.append(str(text))
-        return _require_response_text("\n".join(parts), provider=api_provider, model=model)
+        response_stream = client.responses.create(**kwargs)
+        deltas: list[str] = []
+        done_text = ""
+        completed_response: Any = None
+        stream_error = ""
+        stream_started = False
+        try:
+            for event in response_stream:
+                event_type = str(_get_field(event, "type") or "")
+                if not stream_started:
+                    stream_started = True
+                    if on_stream_start is not None:
+                        on_stream_start(event_type or "unknown")
+                if event_type in {"response.output_text.delta", "response.refusal.delta"}:
+                    delta = _get_field(event, "delta")
+                    if delta:
+                        deltas.append(str(delta))
+                elif event_type in {"response.output_text.done", "response.refusal.done"}:
+                    text = _get_field(event, "text")
+                    if text:
+                        done_text = str(text)
+                elif event_type == "response.completed":
+                    completed_response = _get_field(event, "response")
+                    break
+                elif event_type in {"error", "response.failed", "response.incomplete"}:
+                    error = _get_field(event, "error")
+                    response = _get_field(event, "response")
+                    stream_error = str(error or _get_field(response, "error") or event_type)
+                    break
+        finally:
+            close = getattr(response_stream, "close", None)
+            if callable(close):
+                close()
+        if stream_error:
+            raise RuntimeError(f"Responses stream failed: {stream_error}")
+        text = "".join(deltas).strip()
+        if not text:
+            text = done_text.strip()
+        if not text and completed_response is not None:
+            text = _responses_output_text(completed_response)
+        return _require_response_text(text, provider=api_provider, model=model)
 
     if api_provider == "anthropic":
         user_content = [
@@ -428,6 +474,7 @@ class ThreadLocalClientFactory:
                     **credential,
                     base_url=self.base_url,
                     timeout=self.timeout,
+                    max_retries=0,
                 )
             else:
                 from openai import OpenAI
@@ -436,6 +483,7 @@ class ThreadLocalClientFactory:
                     api_key=self.api_key,
                     base_url=self.base_url,
                     timeout=self.timeout,
+                    max_retries=0,
                 )
             self.local.client = client
         return client
@@ -584,6 +632,25 @@ def process_question(
         transport_errors: list[str] = []
         for transport_attempt in range(1, args.transport_retries + 1):
             try:
+                request_started = time.monotonic()
+                encoded_mib = sum(len(encoded) for encoded, _ in encoded_images) / (1024 * 1024)
+                print(
+                    f"teacher API request: question_uid={uid} "
+                    f"semantic_attempt={semantic_attempt}/{args.max_attempts} "
+                    f"transport_attempt={transport_attempt}/{args.transport_retries} "
+                    f"provider={getattr(args, 'api_provider', 'openai_chat')} "
+                    f"images={len(encoded_images)} encoded_mib={encoded_mib:.2f}",
+                    flush=True,
+                )
+
+                def report_stream_start(event_type: str) -> None:
+                    elapsed = time.monotonic() - request_started
+                    print(
+                        f"teacher API stream started: question_uid={uid} "
+                        f"event={event_type} elapsed_seconds={elapsed:.1f}",
+                        flush=True,
+                    )
+
                 response_text = call_model(
                     client_factory(),
                     api_provider=getattr(args, "api_provider", "openai_chat"),
@@ -592,6 +659,7 @@ def process_question(
                     prompt=prompt,
                     max_tokens=args.max_output_tokens,
                     temperature=args.temperature,
+                    on_stream_start=report_stream_start,
                 )
                 break
             except Exception as exc:

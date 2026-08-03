@@ -258,7 +258,29 @@ def test_responses_and_anthropic_protocols_use_native_multimodal_payloads() -> N
     class Responses:
         def create(self, **kwargs: Any) -> Any:
             calls.append(("responses", kwargs))
-            return SimpleNamespace(output_text=_reasoning("A"))
+            response = _reasoning("A")
+
+            class Stream:
+                def __init__(self) -> None:
+                    self.closed = False
+
+                def __iter__(self):
+                    yield SimpleNamespace(type="response.created")
+                    yield SimpleNamespace(type="response.output_text.delta", delta=response[:40])
+                    yield SimpleNamespace(type="response.output_text.delta", delta=response[40:])
+                    yield SimpleNamespace(type="response.output_text.done", text=response)
+                    yield SimpleNamespace(
+                        type="response.completed",
+                        response=SimpleNamespace(output_text=response),
+                    )
+                    raise AssertionError("iteration must stop at response.completed")
+
+                def close(self) -> None:
+                    self.closed = True
+
+            stream = Stream()
+            calls.append(("responses_stream", {"stream": stream}))
+            return stream
 
     responses_client = SimpleNamespace(responses=Responses())
     responses_text = script.call_model(
@@ -293,8 +315,11 @@ def test_responses_and_anthropic_protocols_use_native_multimodal_payloads() -> N
     assert anthropic_text.endswith("Answer: A")
     responses_kwargs = calls[0][1]
     assert responses_kwargs["max_output_tokens"] == 384
+    assert responses_kwargs["stream"] is True
+    assert responses_kwargs["store"] is False
     assert responses_kwargs["input"][1]["content"][0]["type"] == "input_image"
-    anthropic_kwargs = calls[1][1]
+    assert calls[1][1]["stream"].closed is True
+    anthropic_kwargs = calls[2][1]
     assert anthropic_kwargs["messages"][0]["content"][0]["type"] == "image"
     assert "temperature" not in anthropic_kwargs
 
