@@ -492,18 +492,22 @@ def _edge_metrics(
     basis: _CorridorBasis,
     orientation_threshold_deg: float,
     local_perpendicular_hard_m: float = ROUTE_LOCAL_PERP_HARD_M,
+    enforce_camera_motion_hard_limits: bool = True,
 ) -> _EdgeMetrics | None:
     delta = np.asarray(right.position - left.position, dtype=np.float64)
     height_change = abs(float(delta[2]))
-    if height_change > ROUTE_HEIGHT_HARD_M:
+    if enforce_camera_motion_hard_limits and height_change > ROUTE_HEIGHT_HARD_M:
         return None
     angle = _forward_angle_deg(left, right)
-    if angle >= orientation_threshold_deg:
+    if enforce_camera_motion_hard_limits and angle >= orientation_threshold_deg:
         return None
 
     if basis.direction_xy is None:
         xy_distance = float(np.linalg.norm(delta[:2]))
-        if xy_distance > ROUTE_DEGENERATE_XY_HARD_M:
+        if (
+            enforce_camera_motion_hard_limits
+            and xy_distance > ROUTE_DEGENERATE_XY_HARD_M
+        ):
             return None
         local_perpendicular = xy_distance
         global_perpendicular = 0.0
@@ -524,7 +528,7 @@ def _edge_metrics(
             + next_frontier * basis.lateral_b
         )
         global_perpendicular = abs(right_lateral - expected_lateral)
-        if (
+        if enforce_camera_motion_hard_limits and (
             local_perpendicular > local_perpendicular_hard_m
             or global_perpendicular > ROUTE_GLOBAL_PERP_HARD_M
         ):
@@ -570,6 +574,7 @@ def find_depth_corridor_auxiliary_route(
     orientation_threshold_deg: float = ROUTE_ORIENTATION_THRESHOLD_DEG,
     min_overlap_frac: float = ROUTE_MIN_OVERLAP_FRAC,
     min_progress_frac: float = ROUTE_MIN_PROGRESS_FRAC,
+    enforce_camera_motion_hard_limits: bool = True,
 ) -> DepthCorridorAuxiliaryRoute | None:
     if frame_a_name == frame_b_name:
         return None
@@ -708,6 +713,7 @@ def find_depth_corridor_auxiliary_route(
             depth_visible_fraction=coverage_b.visible_fraction,
             basis=basis,
             orientation_threshold_deg=orientation_threshold_deg,
+            enforce_camera_motion_hard_limits=enforce_camera_motion_hard_limits,
         )
     if direct_edge is not None:
         return DepthCorridorAuxiliaryRoute(
@@ -807,6 +813,9 @@ def find_depth_corridor_auxiliary_route(
                     depth_visible_fraction=coverage_b.visible_fraction,
                     basis=basis,
                     orientation_threshold_deg=orientation_threshold_deg,
+                    enforce_camera_motion_hard_limits=(
+                        enforce_camera_motion_hard_limits
+                    ),
                 )
             if final_edge is not None:
                 complete = (
@@ -838,6 +847,9 @@ def find_depth_corridor_auxiliary_route(
                         depth_visible_fraction=coverage.visible_fraction,
                         basis=basis,
                         orientation_threshold_deg=orientation_threshold_deg,
+                        enforce_camera_motion_hard_limits=(
+                            enforce_camera_motion_hard_limits
+                        ),
                     )
                     if edge is None:
                         continue
@@ -1002,6 +1014,9 @@ def find_depth_corridor_auxiliary_route(
                             if (tail_name, image_name) in relaxed_edges
                             else ROUTE_LOCAL_PERP_HARD_M
                         ),
+                        enforce_camera_motion_hard_limits=(
+                            enforce_camera_motion_hard_limits
+                        ),
                     )
                     if edge is None:
                         continue
@@ -1043,6 +1058,9 @@ def find_depth_corridor_auxiliary_route(
                     VISUAL_PRUNE_LOCAL_PERP_HARD_M
                     if (tail_name, frame_b_name) in relaxed_edges
                     else ROUTE_LOCAL_PERP_HARD_M
+                ),
+                enforce_camera_motion_hard_limits=(
+                    enforce_camera_motion_hard_limits
                 ),
             )
             if edge is None:
@@ -1102,7 +1120,8 @@ def find_depth_corridor_auxiliary_route(
                 candidate_edges = path_edges(candidate_names)
                 new_edge = (previous_name, next_name)
                 candidate_relaxed_edges = frozenset(
-                    (relaxed_edges & candidate_edges) | {new_edge}
+                    (relaxed_edges & candidate_edges)
+                    | ({new_edge} if enforce_camera_motion_hard_limits else set())
                 )
                 candidate = evaluate_fixed_path(
                     candidate_names,
