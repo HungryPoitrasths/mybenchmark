@@ -105,6 +105,7 @@ def _mapping_keys(value: Any) -> set[str]:
 
 def test_transport_retry_does_not_consume_two_semantic_attempts_and_cache_resumes(
     tmp_path: Path,
+    capsys: Any,
 ) -> None:
     script = _load_script()
     image = tmp_path / "frame.jpg"
@@ -122,6 +123,12 @@ def test_transport_retry_does_not_consume_two_semantic_attempts_and_cache_resume
 
     assert report["accepted_count"] == 1
     assert len(calls) == 3
+    output_log = capsys.readouterr().out
+    assert "teacher API failed:" in output_log
+    assert "transport_attempt=1/2" in output_log
+    assert "teacher API success:" in output_log
+    assert "validation=rejected reason=wrong_answer" in output_log
+    assert "validation=accepted reason=accepted" in output_log
     output = json.loads(args.output.read_text(encoding="utf-8"))
     assert output["questions"][0]["teacher_cot"].endswith("Answer: A")
     cache = [json.loads(line) for line in args.cache_jsonl.read_text(encoding="utf-8").splitlines()]

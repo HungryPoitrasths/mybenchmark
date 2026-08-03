@@ -597,6 +597,13 @@ def process_question(
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 transport_errors.append(error)
+                print(
+                    f"teacher API failed: question_uid={uid} "
+                    f"semantic_attempt={semantic_attempt}/{args.max_attempts} "
+                    f"transport_attempt={transport_attempt}/{args.transport_retries} "
+                    f"error={' '.join(error.splitlines())}",
+                    flush=True,
+                )
                 new_records.append(
                     {
                         "question_uid": uid,
@@ -616,6 +623,15 @@ def process_question(
             }
 
         normalized, reason, validation = validate_teacher_response(question, response_text)
+        print(
+            f"teacher API success: question_uid={uid} "
+            f"semantic_attempt={semantic_attempt}/{args.max_attempts} "
+            f"transport_attempt={transport_attempt}/{args.transport_retries} "
+            f"response_chars={len(response_text)} "
+            f"validation={'accepted' if normalized is not None else 'rejected'} "
+            f"reason={reason}",
+            flush=True,
+        )
         attempt_record = {
             "question_uid": uid,
             "input_fingerprint": fingerprint,
