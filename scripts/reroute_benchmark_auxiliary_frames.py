@@ -344,11 +344,25 @@ def reroute_payload(
                 frame_1_ids, frame_2_ids = _question_groups(question)
                 group_a = _objects_for_ids(resources.objects_by_id, frame_1_ids)
                 group_b = _objects_for_ids(resources.objects_by_id, frame_2_ids)
+                raw_auxiliary = question.get("auxiliary_image_names")
+                if raw_auxiliary is None:
+                    preferred_candidate_names: tuple[str, ...] = ()
+                elif isinstance(raw_auxiliary, (list, tuple)):
+                    preferred_candidate_names = tuple(
+                        dict.fromkeys(
+                            str(name).strip()
+                            for name in raw_auxiliary
+                            if str(name).strip()
+                        )
+                    )
+                else:
+                    raise ValueError("auxiliary_image_names must be a list")
                 cache_key = (
                     frame_1_name,
                     frame_2_name,
                     frame_1_ids,
                     frame_2_ids,
+                    preferred_candidate_names,
                     config.max_auxiliary_frames,
                     config.max_candidate_poses,
                 )
@@ -372,6 +386,7 @@ def reroute_payload(
                             max_auxiliary_frames=config.max_auxiliary_frames,
                             max_candidate_poses=config.max_candidate_poses,
                             enforce_camera_motion_hard_limits=False,
+                            preferred_candidate_names=preferred_candidate_names,
                         )
                     except Exception as exc:
                         route = None
@@ -430,6 +445,7 @@ def reroute_payload(
             "camera_motion_hard_limits_enabled": False,
             "disabled_camera_motion_hard_limits": list(_DISABLED_HARD_LIMITS),
             "camera_motion_soft_costs_enabled": True,
+            "original_auxiliary_candidates_pinned": True,
             "max_auxiliary_frames": config.max_auxiliary_frames,
             "max_candidate_poses": config.max_candidate_poses,
             "failure_policy": "keep_original_selection",

@@ -169,6 +169,77 @@ def test_depth_route_threads_relaxed_policy_to_direct_edge(monkeypatch) -> None:
     assert route.max_forward_angle_deg == pytest.approx(90.0)
 
 
+def test_preferred_candidates_survive_pose_cap_and_restore_depth_route(
+    monkeypatch,
+) -> None:
+    poses = {
+        "main_a.jpg": make_pose("main_a.jpg", (0.0, 0.0, 0.0)),
+        "main_b.jpg": make_pose("main_b.jpg", (0.2, 0.0, 0.0)),
+        "ranked.jpg": make_pose("ranked.jpg", (0.1, 0.0, 0.0)),
+        "preferred.jpg": make_pose("preferred.jpg", (0.1, 0.0, 0.0)),
+    }
+
+    def interval_mask(length: int, start: float, end: float) -> np.ndarray:
+        samples = np.linspace(0.0, 1.0, length)
+        return (samples >= start) & (samples <= end)
+
+    def geometric_mask(points, pose, _intrinsics):
+        intervals = {
+            "main_a.jpg": (0.0, 0.45),
+            "main_b.jpg": (0.65, 1.0),
+            "ranked.jpg": (0.25, 1.0),
+            "preferred.jpg": (0.25, 0.9),
+        }
+        return interval_mask(len(points), *intervals[pose.image_name])
+
+    def depth_visibility(points, geometric, pose, _depth):
+        visible = geometric.copy()
+        if pose.image_name == "ranked.jpg":
+            samples = np.linspace(0.0, 1.0, len(points))
+            visible &= (samples <= 0.5) | (samples >= 0.65)
+        return geometric.copy(), visible
+
+    monkeypatch.setattr(
+        "src.depth_auxiliary_path.route_visibility_mask", geometric_mask
+    )
+    monkeypatch.setattr("src.depth_auxiliary_path._depth_visibility", depth_visibility)
+    monkeypatch.setattr(
+        "src.depth_auxiliary_path._semantic_conflict",
+        lambda *_args, **_kwargs: False,
+    )
+    intrinsics = CameraIntrinsics(640, 480, 320.0, 320.0, 320.0, 240.0)
+    depth_frame = DepthFrame(
+        np.ones((480, 640), dtype=np.float32), intrinsics, 1.0, "test"
+    )
+    kwargs = {
+        "center_a": np.array([0.0, 0.0, 2.0]),
+        "center_b": np.array([1.0, 0.0, 2.0]),
+        "frame_a_name": "main_a.jpg",
+        "frame_b_name": "main_b.jpg",
+        "poses": poses,
+        "intrinsics": intrinsics,
+        "depth_frame_for": lambda _name: depth_frame,
+        "group_a_objects": [
+            {"bbox_min": [-0.1, -0.1, 1.9], "bbox_max": [0.1, 0.1, 2.1]}
+        ],
+        "group_b_objects": [
+            {"bbox_min": [0.9, -0.1, 1.9], "bbox_max": [1.1, 0.1, 2.1]}
+        ],
+        "max_auxiliary_frames": 1,
+        "max_candidate_poses": 1,
+        "enforce_camera_motion_hard_limits": False,
+    }
+
+    assert find_depth_corridor_auxiliary_route(**kwargs) is None
+    route = find_depth_corridor_auxiliary_route(
+        **kwargs,
+        preferred_candidate_names=("preferred.jpg",),
+    )
+
+    assert route is not None
+    assert route.auxiliary_image_names == ("preferred.jpg",)
+
+
 def fake_route(*names: str) -> SimpleNamespace:
     return SimpleNamespace(
         auxiliary_image_names=names,
@@ -229,7 +300,7 @@ def test_reroute_payload_updates_only_auxiliary_fields_and_reuses_route(
                 "image_name": "first.jpg",
                 "reasoning_frame_2": "last.jpg",
                 "object_frame_groups": {"frame_1": [1], "frame_2": [2]},
-                "auxiliary_image_names": [],
+                "auxiliary_image_names": ["old.jpg"],
                 "answer": "B",
             },
         ],
@@ -277,6 +348,8 @@ def test_reroute_payload_updates_only_auxiliary_fields_and_reuses_route(
     )
     assert len(calls) == 1
     assert calls[0]["enforce_camera_motion_hard_limits"] is False
+    assert calls[0]["preferred_candidate_names"] == ("old.jpg",)
+    assert report["policy"]["original_auxiliary_candidates_pinned"] is True
     assert report["summary"] == {
         "total_question_count": 3,
         "cross_frame_question_count": 2,

@@ -575,6 +575,7 @@ def find_depth_corridor_auxiliary_route(
     min_overlap_frac: float = ROUTE_MIN_OVERLAP_FRAC,
     min_progress_frac: float = ROUTE_MIN_PROGRESS_FRAC,
     enforce_camera_motion_hard_limits: bool = True,
+    preferred_candidate_names: Iterable[str] = (),
 ) -> DepthCorridorAuxiliaryRoute | None:
     if frame_a_name == frame_b_name:
         return None
@@ -588,6 +589,11 @@ def find_depth_corridor_auxiliary_route(
     group_b = tuple(group_b_objects)
     if not group_a or not group_b:
         return None
+    preferred_candidates = tuple(
+        dict.fromkeys(
+            name.strip() for name in preferred_candidate_names if name.strip()
+        )
+    )
 
     center_a = np.asarray(center_a, dtype=np.float64)
     center_b = np.asarray(center_b, dtype=np.float64)
@@ -920,6 +926,13 @@ def find_depth_corridor_auxiliary_route(
     ):
         limit = int(max_candidate_poses)
         selected_names = set(geometric_bridge_path)
+        # A capped geometric prefilter can discard a previously valid depth
+        # route. Keep caller-supplied fallback frames in the depth-tested pool.
+        selected_names.update(
+            name
+            for name in preferred_candidates
+            if name in geometric_candidate_coverages
+        )
         progress_span = max(frame_b_start - frame_a_end, 1e-9)
         buckets: list[list[tuple[float, float, str]]] = [
             [] for _ in range(ROUTE_CANDIDATE_PROGRESS_BINS)
