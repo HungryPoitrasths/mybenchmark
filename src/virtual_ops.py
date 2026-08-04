@@ -402,6 +402,7 @@ def find_meaningful_movement(
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     relation_pair_ids: set[tuple[int, int]] | None = None,
+    candidate_deltas: list[np.ndarray] | tuple[np.ndarray, ...] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Search for a movement vector with a meaningful horizontal direction change.
 
@@ -419,7 +420,9 @@ def find_meaningful_movement(
     )
     first_45_degree_change: tuple[np.ndarray, list[dict]] | None = None
 
-    for delta in MOVEMENT_CANDIDATES:
+    search_deltas = MOVEMENT_CANDIDATES if candidate_deltas is None else candidate_deltas
+    for delta in search_deltas:
+        delta = np.asarray(delta, dtype=np.float64)
         new_objects = _apply_movement_for_direction_search(objects, moved_ids, delta)
         if not is_within_room(new_objects, room_min, room_max):
             continue

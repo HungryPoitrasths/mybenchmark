@@ -69,6 +69,7 @@ from src.qa_generator import (
     ReasoningFrameContext,
     SceneMotionCache,
     OcclusionDirectedSearchBudget,
+    L2_OBJECT_MOVE_SEMANTICS_VERSION,
     L2_OBJECT_MOVE_OCCLUSION_RELATION_NEITHER,
     L2_OBJECT_MOVE_OCCLUSION_RELATION_QUERY_BY_REF,
     L2_OBJECT_MOVE_OCCLUSION_RELATION_REF_BY_QUERY,
@@ -136,11 +137,11 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
 MANUAL_ATTACHMENT_CACHE_SCHEMA = "two_hop_attachment_salvage_v1"
 MANUAL_ATTACHMENT_QUESTION_TYPES = ["L3_attachment_chain"]
-PIPELINE_SCENE_STATUS_VERSION = 8
+PIPELINE_SCENE_STATUS_VERSION = 9
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
-CROSS_FRAME_CHECKPOINT_VERSION = 3
+CROSS_FRAME_CHECKPOINT_VERSION = 5
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
 L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 300, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
@@ -174,6 +175,14 @@ AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH = "visual_pose_graph"
 AUXILIARY_ROUTE_METHOD_LEGACY_GEOMETRIC = "legacy_geometric"
 AUXILIARY_ROUTE_METHOD_HYBRID_GEOMETRIC_VISUAL = "hybrid_geometric_visual"
 AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC = "depth_corridor_geometric"
+DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS = False
+DEPTH_ROUTE_DISABLED_CAMERA_MOTION_HARD_LIMITS = (
+    "forward_angle_deg",
+    "height_change_m",
+    "local_perpendicular_m",
+    "global_perpendicular_m",
+    "degenerate_xy_translation_m",
+)
 AUXILIARY_ROUTE_METHODS = (
     AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC,
     AUXILIARY_ROUTE_METHOD_VISUAL_POSE_GRAPH,
@@ -5459,6 +5468,7 @@ def _raw_scene_questions_cache_dir(output_dir: Path) -> Path:
 def _build_empty_pipeline_scene_status_doc() -> dict[str, object]:
     return {
         "version": PIPELINE_SCENE_STATUS_VERSION,
+        "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
         "completed_scenes": {},
     }
 
@@ -5479,17 +5489,43 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
             f"expected {PIPELINE_SCENE_STATUS_VERSION}."
         )
 
+    try:
+        movement_semantics_version = int(
+            loaded.get("object_move_semantics_version", 0) or 0
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid object-move semantics version at {path}"
+        ) from exc
+    if movement_semantics_version != L2_OBJECT_MOVE_SEMANTICS_VERSION:
+        raise RuntimeError(
+            "Unsupported object-move semantics version "
+            f"{movement_semantics_version or '<missing>'} at {path}; expected "
+            f"{L2_OBJECT_MOVE_SEMANTICS_VERSION}."
+        )
+
     completed_scenes = loaded.get("completed_scenes")
     if not isinstance(completed_scenes, dict):
         raise RuntimeError(f"Invalid scene status document at {path}: completed_scenes must be an object")
 
     result: dict[str, object] = {
         "version": PIPELINE_SCENE_STATUS_VERSION,
+        "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
         "completed_scenes": dict(completed_scenes),
     }
     route_method = loaded.get("auxiliary_route_method")
     if isinstance(route_method, str) and route_method in AUXILIARY_ROUTE_METHODS:
         result["auxiliary_route_method"] = route_method
+    depth_hard_limits = loaded.get(
+        "depth_route_camera_motion_hard_limits_enabled"
+    )
+    if depth_hard_limits is not None:
+        if not isinstance(depth_hard_limits, bool):
+            raise RuntimeError(
+                f"Invalid scene status document at {path}: "
+                "depth_route_camera_motion_hard_limits_enabled must be boolean"
+            )
+        result["depth_route_camera_motion_hard_limits_enabled"] = depth_hard_limits
     for field_name in (
         "l1_candidate_budget",
         "l2_l3_candidate_budget",
@@ -5680,6 +5716,7 @@ def _build_benchmark_payload(questions: list[dict[str, object]]) -> dict[str, ob
     return {
         "name": "PSR-Bench",
         "version": "1.0",
+        "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
         "statistics": compute_statistics(questions),
         "questions": questions,
     }
@@ -6726,6 +6763,11 @@ def run_pipeline(
     }
     if cross_frame_requested_types:
         logger.info("Cross-frame auxiliary route method: %s", auxiliary_route_method)
+        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+            logger.info(
+                "Depth-route camera-motion hard limits: disabled "
+                "(soft motion costs remain enabled)"
+            )
     attachment_only_l2_mode = False
 
     meta_dir = output_dir / "scene_metadata"
@@ -6857,7 +6899,35 @@ def run_pipeline(
                     f"scene(s) were generated with {recorded_route_method!r}. Use a new "
                     "--output_dir, or reset all completed scenes before switching methods."
                 )
+            if recorded_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+                recorded_hard_limits = scene_status_doc.get(
+                    "depth_route_camera_motion_hard_limits_enabled"
+                )
+                if recorded_hard_limits is None:
+                    # Depth-route status files written before this policy field
+                    # used the original hard camera-motion gates.
+                    recorded_hard_limits = True
+                if (
+                    recorded_hard_limits
+                    != DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+                ):
+                    raise RuntimeError(
+                        "Cannot resume with depth-route camera-motion hard limits "
+                        f"enabled={DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS}: "
+                        f"{len(completed_route_records)} completed scene(s) were "
+                        f"generated with enabled={recorded_hard_limits}. Use a new "
+                        "--output_dir, or reset all completed scenes before changing "
+                        "the depth-route camera-motion policy."
+                    )
         scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
+        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+            scene_status_doc["depth_route_camera_motion_hard_limits_enabled"] = (
+                DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+            )
+        else:
+            scene_status_doc.pop(
+                "depth_route_camera_motion_hard_limits_enabled", None
+            )
         completed_scene_ids, corrupted_scene_ids, scene_status_changed = _reconcile_pipeline_completed_scenes(
             scene_status_doc,
             raw_questions_dir=raw_questions_dir,
@@ -6885,6 +6955,10 @@ def run_pipeline(
         _clear_pipeline_resume_state(output_dir)
         scene_status_doc = _build_empty_pipeline_scene_status_doc()
         scene_status_doc["auxiliary_route_method"] = auxiliary_route_method
+        if auxiliary_route_method == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC:
+            scene_status_doc["depth_route_camera_motion_hard_limits_enabled"] = (
+                DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+            )
         scene_status_doc["l1_candidate_budget"] = scene_type_cap
         scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
         scene_status_doc["occlusion_max_references_per_query"] = (
@@ -7847,10 +7921,17 @@ def run_pipeline(
             cross_checkpoint_pre_path = cross_checkpoint_dir / "pre_cross.json"
             cross_checkpoint_signature = {
                 "version": CROSS_FRAME_CHECKPOINT_VERSION,
+                "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
                 "scene_id": scene_id,
                 "frame_names": [context.image_name for context in flash_contexts],
                 "question_types": list(cross_frame_requested_types),
                 "auxiliary_route_method": auxiliary_route_method,
+                "depth_route_camera_motion_hard_limits_enabled": (
+                    DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+                    if auxiliary_route_method
+                    == AUXILIARY_ROUTE_METHOD_DEPTH_CORRIDOR_GEOMETRIC
+                    else None
+                ),
                 "auxiliary_max_pose_candidates": auxiliary_max_pose_candidates,
                 "scannetpp_depth_cache_size": scannetpp_depth_cache_size,
                 "attachment_reference_cluster_radius_m": (
@@ -8160,6 +8241,12 @@ def run_pipeline(
                     funnel["auxiliary_graph"] = {
                         **depth_visual_router.diagnostics(),
                         "method": auxiliary_route_method,
+                        "camera_motion_hard_limits_enabled": (
+                            DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+                        ),
+                        "disabled_camera_motion_hard_limits": list(
+                            DEPTH_ROUTE_DISABLED_CAMERA_MOTION_HARD_LIMITS
+                        ),
                         "cache_hit": depth_visual_cache_hit,
                         "cache_path": str(depth_visual_cache_path),
                         "note": "visual evidence is used only for depth-route pruning",
@@ -8300,6 +8387,9 @@ def run_pipeline(
                         None
                         if auxiliary_max_pose_candidates == 0
                         else auxiliary_max_pose_candidates
+                    ),
+                    enforce_camera_motion_hard_limits=(
+                        DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
                     ),
                 )
 
@@ -8463,6 +8553,12 @@ def run_pipeline(
                             "max_height_change_m": question_route.max_height_change_m,
                             "max_parallel_change_m": question_route.max_parallel_change_m,
                             "max_forward_angle_deg": question_route.max_forward_angle_deg,
+                            "camera_motion_hard_limits_enabled": (
+                                DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+                            ),
+                            "disabled_camera_motion_hard_limits": list(
+                                DEPTH_ROUTE_DISABLED_CAMERA_MOTION_HARD_LIMITS
+                            ),
                             "depth_sources": list(question_route.depth_sources),
                             "pre_prune_auxiliary_count": (
                                 question_route.pre_prune_auxiliary_count
@@ -8955,6 +9051,12 @@ def run_pipeline(
                 funnel["auxiliary_graph"] = {
                     **depth_visual_router.diagnostics(),
                     "method": auxiliary_route_method,
+                    "camera_motion_hard_limits_enabled": (
+                        DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
+                    ),
+                    "disabled_camera_motion_hard_limits": list(
+                        DEPTH_ROUTE_DISABLED_CAMERA_MOTION_HARD_LIMITS
+                    ),
                     "cache_hit": depth_visual_cache_hit,
                     "cache_path": (
                         str(depth_visual_cache_path)
@@ -9377,6 +9479,7 @@ def run_pipeline(
     benchmark = {
         "name":       "PSR-Bench",
         "version":    "1.0",
+        "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
         "statistics": compute_statistics(final_questions),
         "questions":  final_questions,
     }
@@ -9461,7 +9564,8 @@ def main():
         help=(
             "Auxiliary-frame routing for cross-frame questions. "
             "depth_corridor_geometric uses sensor depth plus an A-to-B-aligned "
-            "camera corridor and is the default; "
+            "camera corridor, keeps camera-motion soft costs, disables hard "
+            "camera-motion gates, and is the default; "
             "visual_pose_graph uses the current per-scene ORB/RANSAC pose graph; "
             "legacy_geometric uses per-question global Dijkstra search over A-to-B "
             "route projection while excluding portions already covered by the two "

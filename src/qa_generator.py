@@ -19,7 +19,7 @@ import re
 import time
 import zlib
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
 
@@ -695,12 +695,26 @@ class _SelectedObjectMoveState:
     used_changed_delta: bool
 
 
+L2_OBJECT_MOVE_SEMANTICS_VERSION = 2
+_L2_MOVE_MAGNITUDES_M = (3.0, 2.5, 2.0, 1.5, 1.0, 0.5)
+
+
+def _candidate_delta_signature(
+    candidate_deltas: Sequence[np.ndarray] | None,
+) -> tuple[tuple[float, ...], ...]:
+    deltas = MOVEMENT_CANDIDATES if candidate_deltas is None else candidate_deltas
+    return tuple(
+        tuple(np.round(np.asarray(delta, dtype=np.float64), 6).tolist())
+        for delta in deltas
+    )
+
+
 class SceneMotionCache:
-    """Scene-local cache for camera-independent object transform searches."""
+    """Scene-local cache for object transforms under a specific action frame."""
 
     def __init__(self) -> None:
         self._move_states: dict[
-            tuple[int, bool],
+            tuple[int, bool, tuple[tuple[float, ...], ...]],
             list[tuple[np.ndarray, list[dict[str, Any]], set[int]]],
         ] = {}
         self._orbit_rotations: dict[tuple[int, int], list[dict[str, Any]]] = {}
@@ -720,8 +734,14 @@ class SceneMotionCache:
         target_id: int,
         *,
         lightweight: bool,
+        candidate_deltas: Sequence[np.ndarray] | None = None,
     ) -> list[tuple[np.ndarray, list[dict[str, Any]], set[int]]] | None:
-        cached = self._move_states.get((int(target_id), bool(lightweight)))
+        key = (
+            int(target_id),
+            bool(lightweight),
+            _candidate_delta_signature(candidate_deltas),
+        )
+        cached = self._move_states.get(key)
         if cached is None:
             self.move_misses += 1
             return None
@@ -734,8 +754,14 @@ class SceneMotionCache:
         states: list[tuple[np.ndarray, list[dict[str, Any]], set[int]]],
         *,
         lightweight: bool,
+        candidate_deltas: Sequence[np.ndarray] | None = None,
     ) -> None:
-        self._move_states[(int(target_id), bool(lightweight))] = states
+        key = (
+            int(target_id),
+            bool(lightweight),
+            _candidate_delta_signature(candidate_deltas),
+        )
+        self._move_states[key] = states
 
     def get_orbit_rotations(
         self,
@@ -1403,6 +1429,14 @@ def _direction_with_camera_hint(
         return "forward (away from the camera)"
     if direction == "backward":
         return "backward (toward the camera)"
+    if direction == "forward-right":
+        return "forward-right (away from the camera and to the right)"
+    if direction == "forward-left":
+        return "forward-left (away from the camera and to the left)"
+    if direction == "backward-right":
+        return "backward-right (toward the camera and to the right)"
+    if direction == "backward-left":
+        return "backward-left (toward the camera and to the left)"
     return direction
 
 
@@ -1596,8 +1630,8 @@ def _default_templates() -> dict:
             f"Imagine you are {{obj_query}} and facing toward {{obj_face}}. If {{obj_move_source}} were moved along a {{angle}}-degree {{rotation_direction}} (viewed from above) orbit around the center of {{obj_face}} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
         "L2_object_move_object_centric": [
-            f"Imagine you are {{obj_move_source}} and initially facing the camera in the first main view. If you were shifted {{direction}} by {{distance}}, from {{obj_query}}'s perspective (which initially faces that first camera too), in which horizontal direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
-            f"Imagine you are {{obj_move_source}} initially facing the camera in the first main view. If you were shifted {{direction}} by {{distance}}, from {{obj_query}}'s perspective (which also initially faces that first camera), in which horizontal direction is {{obj_ref}}? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"Use a fixed object-centric coordinate frame defined by the initial scene: from {{obj_query}} toward {{obj_ref}} is forward, and left/right are defined from that heading. Keep this frame fixed throughout the motion. If {{obj_move_source}} is moved {{direction}} by {{distance}} in this frame, in which horizontal direction is {{obj_ref}} from {{obj_query}} afterward, measured in the same fixed frame? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"Initially, let the direction from {{obj_query}} to {{obj_ref}} define forward in an object-centric frame, with left/right defined from that heading. Freeze those axes before anything moves. After moving {{obj_move_source}} {{direction}} by {{distance}} in that frozen frame, where is {{obj_ref}} relative to {{obj_query}} in the same frame? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
@@ -3209,31 +3243,23 @@ _CAMERA_GROUND_MOVE_LABELS = (
     "forward-left",
 )
 
+_ALLOCENTRIC_GROUND_MOVE_LABELS = (
+    "north",
+    "northeast",
+    "east",
+    "southeast",
+    "south",
+    "southwest",
+    "west",
+    "northwest",
+)
 
-def _camera_ground_move_directions(
-    camera_pose: CameraPose,
+
+def _eight_direction_ring(
+    forward: np.ndarray,
+    right: np.ndarray,
+    labels: Sequence[str],
 ) -> tuple[tuple[str, np.ndarray], ...]:
-    """Return the eight legal horizontal actions in the camera ground frame."""
-    rotation_t = np.asarray(camera_pose.rotation, dtype=np.float64).T
-    forward = rotation_t[:, 2].copy()
-    right_hint = rotation_t[:, 0].copy()
-    forward[2] = 0.0
-    right_hint[2] = 0.0
-    forward_norm = float(np.linalg.norm(forward))
-    if not np.isfinite(forward_norm) or forward_norm <= 1e-6:
-        return ()
-    forward /= forward_norm
-
-    # Ground-projecting pitched/rolled axes independently does not guarantee
-    # orthogonality. Gram-Schmidt keeps the diagonal actions exactly 45 degrees.
-    right = right_hint - float(np.dot(right_hint, forward)) * forward
-    right_norm = float(np.linalg.norm(right))
-    if not np.isfinite(right_norm) or right_norm <= 1e-6:
-        return ()
-    right /= right_norm
-    if float(np.dot(right, right_hint)) < 0.0:
-        right = -right
-
     vectors = (
         forward,
         forward + right,
@@ -3246,8 +3272,128 @@ def _camera_ground_move_directions(
     )
     return tuple(
         (label, np.asarray(vector / np.linalg.norm(vector), dtype=np.float64))
-        for label, vector in zip(_CAMERA_GROUND_MOVE_LABELS, vectors)
+        for label, vector in zip(labels, vectors)
     )
+
+
+def _camera_ground_move_directions(
+    camera_pose: CameraPose,
+) -> tuple[tuple[str, np.ndarray], ...]:
+    """Return the eight legal horizontal actions in the camera ground frame."""
+    rotation_t = np.asarray(camera_pose.rotation, dtype=np.float64).T
+    forward = rotation_t[:, 2].copy()
+    right_hint = rotation_t[:, 0].copy()
+    forward[2] = 0.0
+    right_hint[2] = 0.0
+    forward_norm = float(np.linalg.norm(forward))
+    if not np.isfinite(forward_norm) or forward_norm <= 1e-6:
+        # A top-down camera has no ground projection of its optical axis. Its
+        # image vertical axis still defines a stable camera-aligned ground
+        # frame, so use that instead of falling back to unrelated world axes.
+        forward = rotation_t[:, 1].copy()
+        forward[2] = 0.0
+        forward_norm = float(np.linalg.norm(forward))
+        if not np.isfinite(forward_norm) or forward_norm <= 1e-6:
+            return ()
+    forward /= forward_norm
+
+    # Keep the actual projected camera-right axis.  Orthogonalising it against
+    # projected forward silently rotates "right" for pitched/rolled cameras,
+    # so a nominal pure-right action no longer follows the image's right axis.
+    right = right_hint
+    right_norm = float(np.linalg.norm(right))
+    if not np.isfinite(right_norm) or right_norm <= 1e-6:
+        return ()
+    right /= right_norm
+
+    return _eight_direction_ring(
+        forward,
+        right,
+        _CAMERA_GROUND_MOVE_LABELS,
+    )
+
+
+def _allocentric_ground_move_directions() -> tuple[tuple[str, np.ndarray], ...]:
+    forward = np.asarray([0.0, 1.0, 0.0], dtype=np.float64)
+    right = np.asarray([1.0, 0.0, 0.0], dtype=np.float64)
+    return _eight_direction_ring(forward, right, _ALLOCENTRIC_GROUND_MOVE_LABELS)
+
+
+def _object_pair_ground_move_directions(
+    query_center: np.ndarray,
+    reference_center: np.ndarray,
+) -> tuple[tuple[str, np.ndarray], ...]:
+    """Use the initial query-to-reference heading as a frozen object frame."""
+    forward = np.asarray(reference_center, dtype=np.float64) - np.asarray(
+        query_center, dtype=np.float64
+    )
+    forward[2] = 0.0
+    norm = float(np.linalg.norm(forward))
+    if not np.isfinite(norm) or norm < MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE:
+        return ()
+    forward /= norm
+    right = np.asarray([forward[1], -forward[0], 0.0], dtype=np.float64)
+    return _eight_direction_ring(forward, right, _CAMERA_GROUND_MOVE_LABELS)
+
+
+def _scaled_move_candidates(
+    directions: Sequence[tuple[str, np.ndarray]],
+    magnitudes: Sequence[float] = _L2_MOVE_MAGNITUDES_M,
+) -> tuple[tuple[str, np.ndarray], ...]:
+    return tuple(
+        (label, np.asarray(unit, dtype=np.float64) * float(magnitude))
+        for magnitude in magnitudes
+        for label, unit in directions
+    )
+
+
+def _candidate_deltas(
+    candidates: Sequence[tuple[str, np.ndarray]],
+) -> tuple[np.ndarray, ...]:
+    return tuple(np.asarray(delta, dtype=np.float64) for _label, delta in candidates)
+
+
+def _movement_direction_for_delta(
+    delta: np.ndarray,
+    candidates: Sequence[tuple[str, np.ndarray]],
+) -> str:
+    key = _delta_key(delta)
+    for label, candidate_delta in candidates:
+        if _delta_key(candidate_delta) == key:
+            return str(label)
+    delta_array = np.asarray(delta, dtype=np.float64)
+    delta_norm = float(np.linalg.norm(delta_array))
+    if np.isfinite(delta_norm) and delta_norm > 1e-9:
+        unit_delta = delta_array / delta_norm
+        for label, candidate_delta in candidates:
+            candidate_array = np.asarray(candidate_delta, dtype=np.float64)
+            candidate_norm = float(np.linalg.norm(candidate_array))
+            if (
+                np.isfinite(candidate_norm)
+                and candidate_norm > 1e-9
+                and np.allclose(
+                    unit_delta,
+                    candidate_array / candidate_norm,
+                    atol=1e-6,
+                    rtol=0.0,
+                )
+            ):
+                return str(label)
+    raise ValueError(f"movement delta {key} is not part of the declared action frame")
+
+
+def _movement_metadata(
+    *,
+    direction: str,
+    delta: np.ndarray,
+    reference_frame: str,
+) -> dict[str, Any]:
+    return {
+        "movement_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
+        "movement_direction": str(direction),
+        "movement_distance_m": round(float(np.linalg.norm(delta)), 6),
+        "movement_reference_frame": str(reference_frame),
+    }
 
 
 def _aabb_extent_along_direction(obj: dict[str, Any], unit_direction: np.ndarray) -> float:
@@ -6505,12 +6651,14 @@ def _iter_valid_object_move_states(
     collision_objects: list[dict] | None = None,
     lightweight: bool = False,
     motion_cache: SceneMotionCache | None = None,
+    candidate_deltas: Sequence[np.ndarray] | None = None,
 ):
-    """Yield physically valid movement candidates in the canonical search order."""
+    """Yield physically valid candidates in the caller's declared action frame."""
     if motion_cache is not None:
         cached_states = motion_cache.get_move_states(
             target_id,
             lightweight=lightweight,
+            candidate_deltas=candidate_deltas,
         )
         if cached_states is not None:
             yield from cached_states
@@ -6520,7 +6668,9 @@ def _iter_valid_object_move_states(
     moved_ids = get_moved_object_ids(target_id, attachment_graph)
     computed_states: list[tuple[np.ndarray, list[dict[str, Any]], set[int]]] = []
 
-    for delta in MOVEMENT_CANDIDATES:
+    search_deltas = MOVEMENT_CANDIDATES if candidate_deltas is None else candidate_deltas
+    for delta in search_deltas:
+        delta = np.asarray(delta, dtype=np.float64)
         new_objects = (
             apply_movement_for_physics_check(objects, moved_ids, delta)
             if lightweight
@@ -6546,6 +6696,7 @@ def _iter_valid_object_move_states(
             target_id,
             computed_states,
             lightweight=lightweight,
+            candidate_deltas=candidate_deltas,
         )
         yield from computed_states
 
@@ -6625,6 +6776,7 @@ def _first_valid_object_move_state(
     room_bounds: dict | None = None,
     collision_objects: list[dict] | None = None,
     motion_cache: SceneMotionCache | None = None,
+    candidate_deltas: Sequence[np.ndarray] | None = None,
 ) -> _SelectedObjectMoveState | None:
     for delta, _physics_objects, moved_ids in _iter_valid_object_move_states(
         objects,
@@ -6634,6 +6786,7 @@ def _first_valid_object_move_state(
         collision_objects=collision_objects,
         lightweight=True,
         motion_cache=motion_cache,
+        candidate_deltas=candidate_deltas,
     ):
         return _make_selected_object_move_state(
             delta,
@@ -6673,6 +6826,7 @@ def _iter_additional_object_move_states(
     collision_objects: list[dict] | None = None,
     excluded_deltas: list[np.ndarray] | None = None,
     motion_cache: SceneMotionCache | None = None,
+    candidate_deltas: Sequence[np.ndarray] | None = None,
 ):
     excluded = {
         _delta_key(delta)
@@ -6687,6 +6841,7 @@ def _iter_additional_object_move_states(
         collision_objects=collision_objects,
         lightweight=True,
         motion_cache=motion_cache,
+        candidate_deltas=candidate_deltas,
     ):
         delta_key = _delta_key(delta)
         if delta_key in excluded:
@@ -6732,6 +6887,7 @@ def _select_object_move_state(
     ] | None = None,
     motion_cache: SceneMotionCache | None = None,
     relation_pair_ids: set[tuple[int, int]] | None = None,
+    candidate_deltas: Sequence[np.ndarray] | None = None,
 ) -> _SelectedObjectMoveState | None:
     delta, changed = _find_object_move_delta_and_changes(
         objects,
@@ -6746,6 +6902,7 @@ def _select_object_move_state(
         instance_mesh_data=instance_mesh_data,
         precomputed_original_visibility=precomputed_original_visibility,
         relation_pair_ids=relation_pair_ids,
+        candidate_deltas=candidate_deltas,
     )
     if delta is not None:
         return _make_selected_object_move_state(
@@ -6764,6 +6921,7 @@ def _select_object_move_state(
         room_bounds=room_bounds,
         collision_objects=collision_objects,
         motion_cache=motion_cache,
+        candidate_deltas=candidate_deltas,
     )
 
 
@@ -7645,6 +7803,7 @@ def _find_object_move_delta_and_changes(
         tuple[str | None, str, str, _L1OcclusionMetrics],
     ] | None = None,
     relation_pair_ids: set[tuple[int, int]] | None = None,
+    candidate_deltas: Sequence[np.ndarray] | None = None,
 ) -> tuple[np.ndarray | None, list[dict]]:
     """Return the first valid movement delta that yields relation or visibility changes."""
     delta, changed = find_meaningful_movement(
@@ -7655,6 +7814,9 @@ def _find_object_move_delta_and_changes(
         room_bounds=room_bounds,
         collision_objects=collision_objects,
         relation_pair_ids=relation_pair_ids,
+        candidate_deltas=(
+            list(candidate_deltas) if candidate_deltas is not None else None
+        ),
     )
     occlusion_enabled = (
         color_intrinsics is not None
@@ -7695,6 +7857,7 @@ def _find_object_move_delta_and_changes(
         target_id,
         room_bounds=room_bounds,
         collision_objects=collision_objects,
+        candidate_deltas=candidate_deltas,
     ):
         _occlusion_candidates_tried += 1
         if _occlusion_candidates_tried > _OCCLUSION_CANDIDATE_SEARCH_LIMIT:
@@ -7871,6 +8034,7 @@ def _find_stable_distance_move_for_relation(
     movement_objects: list[dict] | None = None,
     allow_unchanged_fallback: bool = False,
     valid_move_deltas: list[np.ndarray] | None = None,
+    candidate_deltas: Sequence[np.ndarray] | None = None,
     distance_state_cache: dict[tuple[float, ...], dict[int, dict[str, Any]]] | None = None,
     distance_details_cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> tuple[np.ndarray | None, str | None, str | None, bool]:
@@ -7922,14 +8086,21 @@ def _find_stable_distance_move_for_relation(
     # pair_moves_apart: search for a distance-bin change
     if pair_moves_apart:
         if valid_move_deltas is None:
-            candidate_deltas = _iter_distance_move_deltas()
+            search_deltas = (
+                _iter_distance_move_deltas()
+                if candidate_deltas is None
+                else (
+                    np.asarray(delta, dtype=np.float64)
+                    for delta in candidate_deltas
+                )
+            )
         else:
-            candidate_deltas = (
+            search_deltas = (
                 np.asarray(delta, dtype=np.float64)
                 for delta in valid_move_deltas
                 if np.allclose(np.asarray(delta, dtype=np.float64)[2], 0.0)
             )
-        for delta in candidate_deltas:
+        for delta in search_deltas:
             if valid_move_deltas is None:
                 moved_check_objects = apply_movement(
                     movement_check_objects,
@@ -8000,6 +8171,7 @@ def _find_stable_distance_move_for_relation(
                     target_id,
                     room_bounds=room_bounds,
                     collision_objects=collision_objects,
+                    candidate_deltas=candidate_deltas,
                 )
             )
         else:
@@ -8040,6 +8212,7 @@ def _find_stable_distance_move_for_relation(
                     target_id,
                     room_bounds=room_bounds,
                     collision_objects=collision_objects,
+                    candidate_deltas=candidate_deltas,
                 )
             )
         else:
@@ -8090,6 +8263,7 @@ def _generate_l2_distance_questions_for_object(
     allow_unchanged_fallback: bool = False,
     fixed_delta: np.ndarray | None = None,
     valid_move_deltas: list[np.ndarray] | None = None,
+    movement_candidates: Sequence[tuple[str, np.ndarray]] | None = None,
     distance_state_cache: dict[tuple[float, ...], dict[int, dict[str, Any]]] | None = None,
     distance_details_cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
@@ -8224,6 +8398,11 @@ def _generate_l2_distance_questions_for_object(
                 movement_objects=movement_scene_objects,
                 allow_unchanged_fallback=pair_moves_together or allow_unchanged_fallback,
                 valid_move_deltas=valid_move_deltas,
+                candidate_deltas=(
+                    _candidate_deltas(movement_candidates)
+                    if movement_candidates is not None
+                    else None
+                ),
                 distance_state_cache=distance_state_cache,
                 distance_details_cache=distance_details_cache,
             )
@@ -8258,7 +8437,11 @@ def _generate_l2_distance_questions_for_object(
             answer_value = str(new_distance.get("distance_bin", answer_value))
         obj_b_label = obj_map.get(relation_obj_b_id, {}).get("label", "object")
         obj_c_label = obj_map.get(relation_obj_c_id, {}).get("label", "object")
-        direction_desc = _delta_to_description(delta, camera_pose)
+        direction_desc = (
+            _movement_direction_for_delta(delta, movement_candidates)
+            if movement_candidates is not None
+            else _delta_to_description(delta, camera_pose)
+        )
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
         tpl = random.choice(tpl_list)
         question_text = tpl.format(
@@ -8305,6 +8488,13 @@ def _generate_l2_distance_questions_for_object(
             "relation_unchanged": relation_unchanged,
             "has_attachment_chain": has_attachment_chain,
         }
+        if movement_candidates is not None:
+            question_dict.update(_movement_metadata(
+                direction=direction_desc,
+                delta=delta,
+                reference_frame="agent",
+            ))
+            question_dict["movement_camera_binding"] = "frame_1"
         if attachment_remapped:
             direct_children = question_attachment_graph.get(move_source_id, [])
             if direct_children:
@@ -8403,6 +8593,10 @@ def generate_l2_object_move(
         else set(referable_object_ids)
     )
     visibility_camera_pose = occlusion_camera_pose or camera_pose
+    agent_move_candidates = _scaled_move_candidates(
+        _camera_ground_move_directions(camera_pose)
+    )
+    agent_candidate_deltas = _candidate_deltas(agent_move_candidates)
     question_attachment_graph = (
         {
             int(parent_id): [int(child_id) for child_id in child_ids]
@@ -8651,7 +8845,9 @@ def generate_l2_object_move(
                 # expensive collision-search state selection below entirely.
                 continue
         selected_state = None
-        if enable_agent or (enable_distance and reuse_move_state_for_distance):
+        if agent_candidate_deltas and (
+            enable_agent or (enable_distance and reuse_move_state_for_distance)
+        ):
             if reuse_move_state_for_distance and not enable_occlusion:
                 selected_state = _first_valid_object_move_state(
                     movement_scene_objects,
@@ -8660,6 +8856,7 @@ def generate_l2_object_move(
                     room_bounds=room_bounds,
                     collision_objects=collision_objects,
                     motion_cache=motion_cache,
+                    candidate_deltas=agent_candidate_deltas,
                 )
             else:
                 selected_state = _select_object_move_state(
@@ -8672,6 +8869,7 @@ def generate_l2_object_move(
                     allow_unchanged_attachment=has_attachment_chain,
                     motion_cache=motion_cache,
                     relation_pair_ids=source_relation_pair_ids,
+                    candidate_deltas=agent_candidate_deltas,
                 )
         if has_attachment_chain:
             _move_src_entry = {
@@ -8805,6 +9003,7 @@ def generate_l2_object_move(
                         collision_objects=collision_objects,
                         excluded_deltas=excluded_deltas,
                         motion_cache=motion_cache,
+                        candidate_deltas=agent_candidate_deltas,
                     )
                 )
             return alternative_states
@@ -8835,6 +9034,7 @@ def generate_l2_object_move(
                 collision_objects=collision_objects,
                 lightweight=True,
                 motion_cache=motion_cache,
+                candidate_deltas=agent_candidate_deltas,
             ):
                 valid_delta_by_key[_delta_key(candidate_delta)] = np.asarray(
                     candidate_delta,
@@ -8842,7 +9042,7 @@ def generate_l2_object_move(
                 )
             distance_valid_move_deltas = [
                 valid_delta_by_key[_delta_key(candidate_delta)]
-                for candidate_delta in MOVEMENT_CANDIDATES
+                for candidate_delta in agent_candidate_deltas
                 if _delta_key(candidate_delta) in valid_delta_by_key
             ]
 
@@ -8904,7 +9104,10 @@ def generate_l2_object_move(
                 # Phase 1: try selected_state - only accept direction changes
                 if selected_state is not None:
                     new_relation = _relation_map_for_state(selected_state).get(key)
-                    if new_relation is not None:
+                    if new_relation is not None and max(
+                        float(old_relation.get("ambiguity_score", 0.0)),
+                        float(new_relation.get("ambiguity_score", 0.0)),
+                    ) <= 0.7:
                         direction_values = _direction_values_for_query_object(
                             query_obj_id,
                             old_relation,
@@ -8925,6 +9128,11 @@ def generate_l2_object_move(
                     for candidate_state in _fallback_states():
                         new_relation = _relation_map_for_state(candidate_state).get(key)
                         if new_relation is None:
+                            continue
+                        if max(
+                            float(old_relation.get("ambiguity_score", 0.0)),
+                            float(new_relation.get("ambiguity_score", 0.0)),
+                        ) > 0.7:
                             continue
                         direction_values = _direction_values_for_query_object(
                             query_obj_id,
@@ -8959,7 +9167,10 @@ def generate_l2_object_move(
 
                 if agent_state is not None and old_value is not None and new_value is not None:
                     delta = agent_state.delta
-                    direction_desc = _delta_to_description(delta, camera_pose)
+                    direction_desc = _movement_direction_for_delta(
+                        delta,
+                        agent_move_candidates,
+                    )
                     distance_desc = f"{np.linalg.norm(delta):.1f}m"
                     tpl_list = templates.get(
                         "L2_object_move_agent",
@@ -9002,6 +9213,12 @@ def generate_l2_object_move(
                         "delta": delta.tolist(),
                         "relation_unchanged": relation_unchanged,
                         "has_attachment_chain": has_attachment_chain,
+                        **_movement_metadata(
+                            direction=direction_desc,
+                            delta=delta,
+                            reference_frame="agent",
+                        ),
+                        "movement_camera_binding": "frame_1",
                     }
                     if attachment_remapped:
                         direct_children = question_attachment_graph.get(move_source_id, [])
@@ -9195,7 +9412,12 @@ def generate_l2_object_move(
                         "relation_unchanged": False,
                         "new_query_blocking_ratio": selected_record["new_query_blocking_ratio"],
                         "new_ref_blocking_ratio": selected_record["new_ref_blocking_ratio"],
-                        "movement_direction": selected_record["direction_label"],
+                        **_movement_metadata(
+                            direction=str(selected_record["direction_label"]),
+                            delta=delta,
+                            reference_frame="agent",
+                        ),
+                        "movement_camera_binding": "frame_1",
                         "directed_search_target_relation": selected_record["desired_relation"],
                         "directed_search_score": {
                             "predicted_coverage": float(selected_record["search_score"][0]),
@@ -9250,6 +9472,7 @@ def generate_l2_object_move(
                             else None
                         ),
                         valid_move_deltas=distance_valid_move_deltas,
+                        movement_candidates=agent_move_candidates,
                         distance_state_cache=distance_state_cache,
                         distance_details_cache=distance_details_cache,
                     )
@@ -10091,11 +10314,7 @@ def generate_l2_object_move_object_centric(
     motion_cache: SceneMotionCache | None = None,
     answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
-    """L2 object-move questions answered in a query-centric object frame.
-
-    The frame uses the query object's initial camera-facing heading and keeps
-    that heading fixed after the moved attachment chain is translated.
-    """
+    """L2 object-move questions in a frozen query-to-reference frame."""
     questions_by_object: dict[int, list[dict]] = {}
     referable_object_ids = {int(o["id"]) for o in objects}
     attachment_referable_ids = (
@@ -10133,7 +10352,6 @@ def generate_l2_object_move_object_centric(
         _default_templates()["L2_object_move_object_centric"],
     )
     horizontal_answer_pool = list(HORIZONTAL_DIRECTIONS)
-    camera_center = np.asarray(camera_pose.position, dtype=float)
 
     source_count = 0
     for source_obj in movement_scene_objects:
@@ -10212,27 +10430,6 @@ def generate_l2_object_move_object_centric(
         if not query_objects:
             continue
 
-        valid_move_states: list[tuple[np.ndarray, dict[int, dict[str, Any]]]] = []
-        for delta, _physics_objects, _moved_ids in _iter_valid_object_move_states(
-            movement_scene_objects,
-            attachment_graph,
-            move_source_id,
-            room_bounds=room_bounds,
-            collision_objects=collision_objects,
-            lightweight=True,
-            motion_cache=motion_cache,
-        ):
-            moved_objects = apply_movement_selective(
-                movement_scene_objects,
-                attachment_graph,
-                move_source_id,
-                delta,
-            )
-            moved_map = {int(o["id"]): o for o in moved_objects}
-            valid_move_states.append((np.asarray(delta, dtype=np.float64), moved_map))
-        if not valid_move_states:
-            continue
-
         for query_obj in query_objects:
             query_obj_id = int(query_obj["id"])
             _emit_generator_candidate(
@@ -10252,9 +10449,6 @@ def generate_l2_object_move_object_centric(
                 },
             )
             query_center = np.array(query_obj["center"], dtype=float)
-            if not _has_stable_object_centric_facing(query_center, camera_center):
-                continue
-            facing_offset = camera_center - query_center
             query_questions: list[dict] = []
 
             for ref in reference_pool:
@@ -10271,9 +10465,18 @@ def generate_l2_object_move_object_centric(
                     continue
 
                 ref_c = np.array(ref["center"], dtype=float)
+                move_directions = _object_pair_ground_move_directions(
+                    query_center,
+                    ref_c,
+                )
+                if not move_directions:
+                    continue
+                movement_candidates = _scaled_move_candidates(move_directions)
+                candidate_deltas = _candidate_deltas(movement_candidates)
+                facing_offset = ref_c - query_center
                 old_dir, old_amb = primary_direction_object_centric(
                     query_center,
-                    query_center + facing_offset,
+                    ref_c,
                     ref_c,
                     horizontal_only=True,
                     anchor_hull_xy=_object_bottom_hull_xy(query_obj),
@@ -10293,7 +10496,23 @@ def generate_l2_object_move_object_centric(
                 selected_question: dict[str, Any] | None = None
                 fallback_question: dict[str, Any] | None = None
 
-                for delta, moved_map in valid_move_states:
+                for delta, _physics_objects, _moved_ids in _iter_valid_object_move_states(
+                    movement_scene_objects,
+                    attachment_graph,
+                    move_source_id,
+                    room_bounds=room_bounds,
+                    collision_objects=collision_objects,
+                    lightweight=True,
+                    motion_cache=motion_cache,
+                    candidate_deltas=candidate_deltas,
+                ):
+                    moved_objects = apply_movement_selective(
+                        movement_scene_objects,
+                        attachment_graph,
+                        move_source_id,
+                        delta,
+                    )
+                    moved_map = {int(o["id"]): o for o in moved_objects}
                     moved_query = moved_map.get(query_obj_id)
                     if moved_query is None:
                         continue
@@ -10322,14 +10541,9 @@ def generate_l2_object_move_object_centric(
                     if relation_unchanged and not attachment_relation_propagated:
                         continue
 
-                    # Object-centric phrasing puts the reader in the moved
-                    # object's frame ("you are X facing the camera"), so the
-                    # movement word must be expressed in that frame, not the
-                    # camera frame.  Since X faces the camera, this mirrors
-                    # both forward/backward and left/right vs. camera wording.
-                    source_center = np.array(move_source["center"], dtype=float)
-                    direction_desc = _delta_to_object_facing_description(
-                        delta, source_center, camera_center
+                    direction_desc = _movement_direction_for_delta(
+                        delta,
+                        movement_candidates,
                     )
                     tpl = random.choice(tpl_list)
                     question_text = tpl.format(
@@ -10367,6 +10581,14 @@ def generate_l2_object_move_object_centric(
                         "delta": delta.tolist(),
                         "relation_unchanged": relation_unchanged,
                         "has_attachment_chain": has_attachment_chain,
+                        **_movement_metadata(
+                            direction=direction_desc,
+                            delta=delta,
+                            reference_frame="object_centric",
+                        ),
+                        "movement_frame_query_obj_id": query_obj_id,
+                        "movement_frame_reference_obj_id": ref_id,
+                        "movement_frame_frozen": True,
                     }
                     if attachment_remapped:
                         direct_children = question_attachment_graph.get(move_source_id, [])
@@ -10452,6 +10674,12 @@ def generate_l2_object_move_allocentric(
     tpl_list = templates.get(
         "L2_object_move_allocentric",
         _default_templates()["L2_object_move_allocentric"],
+    )
+    allocentric_move_candidates = _scaled_move_candidates(
+        _allocentric_ground_move_directions()
+    )
+    allocentric_candidate_deltas = _candidate_deltas(
+        allocentric_move_candidates
     )
 
     source_count = 0
@@ -10543,12 +10771,16 @@ def generate_l2_object_move_allocentric(
             allow_unchanged_attachment=attachment_remapped,
             motion_cache=motion_cache,
             relation_pair_ids=source_relation_pair_ids,
+            candidate_deltas=allocentric_candidate_deltas,
         )
         if selected_state is None:
             continue
 
         delta = selected_state.delta
-        direction_desc = _delta_to_cardinal_description(delta)
+        direction_desc = _movement_direction_for_delta(
+            delta,
+            allocentric_move_candidates,
+        )
         distance_desc = f"{np.linalg.norm(delta):.1f}m"
         moved_map = {int(obj["id"]): obj for obj in selected_state.moved_objects}
 
@@ -10603,7 +10835,7 @@ def generate_l2_object_move_allocentric(
                 if new_dir not in CARDINAL_DIRECTIONS_8:
                     continue
 
-                old_dir, _ = primary_direction_allocentric(
+                old_dir, old_amb = primary_direction_allocentric(
                     query_center,
                     ref_center,
                     obj_a_hull_xy=_object_bottom_hull_xy(query_obj),
@@ -10613,6 +10845,8 @@ def generate_l2_object_move_allocentric(
                     obj_b_bbox_min=np.array(ref["bbox_min"], dtype=float),
                     obj_b_bbox_max=np.array(ref["bbox_max"], dtype=float),
                 )
+                if max(old_amb, amb) > 0.7:
+                    continue
                 attachment_relation_propagated = any(
                     participant_id in moved_ids and participant_id != move_source_id
                     for participant_id in (query_obj_id, int(ref["id"]))
@@ -10657,6 +10891,12 @@ def generate_l2_object_move_allocentric(
                     ],
                     "delta": delta.tolist(),
                     "relation_unchanged": relation_unchanged,
+                    **_movement_metadata(
+                        direction=direction_desc,
+                        delta=delta,
+                        reference_frame="allocentric",
+                    ),
+                    "movement_world_axes": "scannet_aligned_xy",
                 }
                 if attachment_remapped:
                     direct_children = question_attachment_graph.get(move_source_id, [])
