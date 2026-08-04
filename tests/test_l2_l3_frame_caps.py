@@ -202,10 +202,13 @@ def test_attachment_chain_uses_grandparent_as_its_primary_object() -> None:
 def test_split_candidate_budgets() -> None:
     assert run_pipeline._default_l1_candidate_budget("val") == 75
     assert run_pipeline._default_l1_candidate_budget("train") == 300
-    assert run_pipeline._default_l2_l3_candidate_budget("val") == 300
-    assert run_pipeline._default_l2_l3_candidate_budget("train") == 600
+    assert run_pipeline._default_l2_candidate_budget("val") == 400
+    assert run_pipeline._default_l2_candidate_budget("train") == 600
+    assert run_pipeline._default_l3_candidate_budget("val") == 300
+    assert run_pipeline._default_l3_candidate_budget("train") == 600
     assert run_pipeline._default_l1_candidate_budget("all") == 0
-    assert run_pipeline._default_l2_l3_candidate_budget(None) == 0
+    assert run_pipeline._default_l2_candidate_budget(None) == 0
+    assert run_pipeline._default_l3_candidate_budget(None) == 0
 
 
 def test_final_diversity_caps_do_not_apply_a_type_total_limit() -> None:
@@ -248,13 +251,14 @@ def test_candidate_budgets_are_independent_by_level() -> None:
     budgets = run_pipeline._remaining_candidate_type_budgets(
         Counter({"occlusion": 49, "object_move_agent": 100, "attachment_move": 99}),
         l1_candidate_budget=50,
-        l2_l3_candidate_budget=100,
+        l2_candidate_budget=120,
+        l3_candidate_budget=100,
         allowed_types={"occlusion", "object_move_agent", "attachment_move"},
     )
 
     assert budgets == {
         "attachment_move": 1,
-        "object_move_agent": 0,
+        "object_move_agent": 20,
         "occlusion": 1,
     }
 

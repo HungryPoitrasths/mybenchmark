@@ -143,7 +143,8 @@ RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
 CROSS_FRAME_CHECKPOINT_VERSION = 5
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
-L2_L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 300, "train": 600}
+L2_CANDIDATE_BUDGET_BY_SPLIT = {"val": 400, "train": 600}
+L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 300, "train": 600}
 QUESTION_REVIEW_MAX_RETRIES = 4
 QUESTION_REVIEW_RETRY_DELAY_SECONDS = 2.0
 QUESTION_REVIEW_MAX_TOKENS_PER_TARGET = 128
@@ -5528,6 +5529,8 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
         result["depth_route_camera_motion_hard_limits_enabled"] = depth_hard_limits
     for field_name in (
         "l1_candidate_budget",
+        "l2_candidate_budget",
+        "l3_candidate_budget",
         "l2_l3_candidate_budget",
         "occlusion_max_references_per_query",
         "occlusion_max_combinations_per_scene",
@@ -6323,12 +6326,24 @@ def _candidate_budget_for_type(
     canonical_type: str,
     *,
     l1_candidate_budget: int,
-    l2_l3_candidate_budget: int,
+    l2_candidate_budget: int | None = None,
+    l3_candidate_budget: int | None = None,
+    l2_l3_candidate_budget: int | None = None,
 ) -> int | None:
+    # Keep the shared argument as a compatibility alias for older internal callers.
+    shared_budget = int(l2_l3_candidate_budget or 0)
+    resolved_l2_budget = (
+        shared_budget if l2_candidate_budget is None else int(l2_candidate_budget)
+    )
+    resolved_l3_budget = (
+        shared_budget if l3_candidate_budget is None else int(l3_candidate_budget)
+    )
     if canonical_type in _SCENE_TYPE_CAP_ELIGIBLE_TYPES:
         budget = l1_candidate_budget
-    elif canonical_type in _L2_CANONICAL_QUESTION_TYPES | _L3_CANONICAL_QUESTION_TYPES:
-        budget = l2_l3_candidate_budget
+    elif canonical_type in _L2_CANONICAL_QUESTION_TYPES:
+        budget = resolved_l2_budget
+    elif canonical_type in _L3_CANONICAL_QUESTION_TYPES:
+        budget = resolved_l3_budget
     else:
         return None
     return int(budget) if int(budget) > 0 else None
@@ -6338,7 +6353,9 @@ def _remaining_candidate_type_budgets(
     type_counts: Counter[str],
     *,
     l1_candidate_budget: int,
-    l2_l3_candidate_budget: int,
+    l2_candidate_budget: int | None = None,
+    l3_candidate_budget: int | None = None,
+    l2_l3_candidate_budget: int | None = None,
     allowed_types: set[str] | None = None,
 ) -> dict[str, int] | None:
     target_types = set(allowed_types) if allowed_types else set(_ALL_CANONICAL_QUESTION_TYPES)
@@ -6347,6 +6364,8 @@ def _remaining_candidate_type_budgets(
         budget = _candidate_budget_for_type(
             question_type,
             l1_candidate_budget=l1_candidate_budget,
+            l2_candidate_budget=l2_candidate_budget,
+            l3_candidate_budget=l3_candidate_budget,
             l2_l3_candidate_budget=l2_l3_candidate_budget,
         )
         if budget is not None:
@@ -6359,7 +6378,9 @@ def _take_questions_within_candidate_budgets(
     type_counts: Counter[str],
     *,
     l1_candidate_budget: int,
-    l2_l3_candidate_budget: int,
+    l2_candidate_budget: int | None = None,
+    l3_candidate_budget: int | None = None,
+    l2_l3_candidate_budget: int | None = None,
 ) -> list[dict]:
     kept: list[dict] = []
     for question in questions:
@@ -6370,6 +6391,8 @@ def _take_questions_within_candidate_budgets(
         budget = _candidate_budget_for_type(
             canonical_type,
             l1_candidate_budget=l1_candidate_budget,
+            l2_candidate_budget=l2_candidate_budget,
+            l3_candidate_budget=l3_candidate_budget,
             l2_l3_candidate_budget=l2_l3_candidate_budget,
         )
         if budget is not None and type_counts[canonical_type] >= budget:
@@ -6385,11 +6408,15 @@ def _candidate_type_budget_remaining(
     canonical_type: str,
     *,
     l1_candidate_budget: int,
-    l2_l3_candidate_budget: int,
+    l2_candidate_budget: int | None = None,
+    l3_candidate_budget: int | None = None,
+    l2_l3_candidate_budget: int | None = None,
 ) -> int | None:
     budgets = _remaining_candidate_type_budgets(
         type_counts,
         l1_candidate_budget=l1_candidate_budget,
+        l2_candidate_budget=l2_candidate_budget,
+        l3_candidate_budget=l3_candidate_budget,
         l2_l3_candidate_budget=l2_l3_candidate_budget,
         allowed_types={canonical_type},
     )
@@ -6403,7 +6430,9 @@ def _all_candidate_type_budgets_exhausted(
     canonical_types: set[str],
     *,
     l1_candidate_budget: int,
-    l2_l3_candidate_budget: int,
+    l2_candidate_budget: int | None = None,
+    l3_candidate_budget: int | None = None,
+    l2_l3_candidate_budget: int | None = None,
 ) -> bool:
     limited_types = {
         canonical_type
@@ -6411,6 +6440,8 @@ def _all_candidate_type_budgets_exhausted(
         if _candidate_budget_for_type(
             canonical_type,
             l1_candidate_budget=l1_candidate_budget,
+            l2_candidate_budget=l2_candidate_budget,
+            l3_candidate_budget=l3_candidate_budget,
             l2_l3_candidate_budget=l2_l3_candidate_budget,
         ) is not None
     }
@@ -6419,6 +6450,8 @@ def _all_candidate_type_budgets_exhausted(
             type_counts,
             canonical_type,
             l1_candidate_budget=l1_candidate_budget,
+            l2_candidate_budget=l2_candidate_budget,
+            l3_candidate_budget=l3_candidate_budget,
             l2_l3_candidate_budget=l2_l3_candidate_budget,
         ) == 0
         for canonical_type in limited_types
@@ -6431,10 +6464,16 @@ def _default_l1_candidate_budget(split: str | None) -> int:
     return L1_CANDIDATE_BUDGET_BY_SPLIT.get(split_name, 0)
 
 
-def _default_l2_l3_candidate_budget(split: str | None) -> int:
-    """Return the default per-scene/type L2/L3 generation budget."""
+def _default_l2_candidate_budget(split: str | None) -> int:
+    """Return the default per-scene/type L2 generation budget."""
     split_name = str(split or "").strip().lower()
-    return L2_L3_CANDIDATE_BUDGET_BY_SPLIT.get(split_name, 0)
+    return L2_CANDIDATE_BUDGET_BY_SPLIT.get(split_name, 0)
+
+
+def _default_l3_candidate_budget(split: str | None) -> int:
+    """Return the default per-scene/type L3 generation budget."""
+    split_name = str(split or "").strip().lower()
+    return L3_CANDIDATE_BUDGET_BY_SPLIT.get(split_name, 0)
 
 
 def _make_dedup_key(q: dict) -> tuple:
@@ -6715,7 +6754,8 @@ def run_pipeline(
     elif scene_type_cap is None:
         scene_type_cap = _default_l1_candidate_budget(split)
     scene_type_cap = int(scene_type_cap)
-    l2_l3_candidate_budget = _default_l2_l3_candidate_budget(split)
+    l2_candidate_budget = _default_l2_candidate_budget(split)
+    l3_candidate_budget = _default_l3_candidate_budget(split)
     frame_type_cap = int(frame_type_cap)
     frame_type_object_cap = int(frame_type_object_cap)
     if scene_type_cap < 0:
@@ -6736,12 +6776,13 @@ def run_pipeline(
         raise ValueError("occlusion_max_combinations_per_scene must be >= 0")
     if dataset not in ("scannet", "scannetpp"):
         raise ValueError(f"Unknown dataset: {dataset!r}. Expected 'scannet' or 'scannetpp'.")
-    if scene_type_cap > 0 or l2_l3_candidate_budget > 0:
+    if scene_type_cap > 0 or l2_candidate_budget > 0 or l3_candidate_budget > 0:
         logger.info(
-            "Applying split=%s candidate budgets per (scene, type): L1=%s L2/L3=%s",
+            "Applying split=%s candidate budgets per (scene, type): L1=%s L2=%s L3=%s",
             split,
             scene_type_cap or "unlimited",
-            l2_l3_candidate_budget or "unlimited",
+            l2_candidate_budget or "unlimited",
+            l3_candidate_budget or "unlimited",
         )
     l3_attachment_chain_only = only_question_types == ["L3_attachment_chain"]
     l3_attachment_move_only = only_question_types == ["L3_attachment_move"]
@@ -6852,7 +6893,13 @@ def run_pipeline(
             )
         completed_route_records = _pipeline_completed_scene_records(scene_status_doc)
         recorded_l1_budget = scene_status_doc.get("l1_candidate_budget")
-        recorded_l2_l3_budget = scene_status_doc.get("l2_l3_candidate_budget")
+        legacy_l2_l3_budget = scene_status_doc.get("l2_l3_candidate_budget")
+        recorded_l2_budget = scene_status_doc.get(
+            "l2_candidate_budget", legacy_l2_l3_budget
+        )
+        recorded_l3_budget = scene_status_doc.get(
+            "l3_candidate_budget", legacy_l2_l3_budget
+        )
         recorded_occlusion_reference_budget = scene_status_doc.get(
             "occlusion_max_references_per_query"
         )
@@ -6861,7 +6908,8 @@ def run_pipeline(
         )
         if completed_route_records and (
             recorded_l1_budget != scene_type_cap
-            or recorded_l2_l3_budget != l2_l3_candidate_budget
+            or recorded_l2_budget != l2_candidate_budget
+            or recorded_l3_budget != l3_candidate_budget
             or recorded_occlusion_reference_budget
             != occlusion_max_references_per_query
             or recorded_occlusion_combination_budget
@@ -6869,18 +6917,22 @@ def run_pipeline(
         ):
             raise RuntimeError(
                 "Cannot resume with candidate/search budgets "
-                f"L1={scene_type_cap}, L2/L3={l2_l3_candidate_budget}, "
+                f"L1={scene_type_cap}, L2={l2_candidate_budget}, "
+                f"L3={l3_candidate_budget}, "
                 f"occlusion references={occlusion_max_references_per_query}, "
                 f"occlusion combinations={occlusion_max_combinations_per_scene}: "
                 f"{len(completed_route_records)} completed scene(s) were generated "
-                f"with L1={recorded_l1_budget!r}, L2/L3={recorded_l2_l3_budget!r}, "
+                f"with L1={recorded_l1_budget!r}, L2={recorded_l2_budget!r}, "
+                f"L3={recorded_l3_budget!r}, "
                 f"occlusion references={recorded_occlusion_reference_budget!r}, "
                 f"occlusion combinations={recorded_occlusion_combination_budget!r}. "
                 "Use a new --output_dir, or reset all completed scenes before "
                 "changing candidate budgets."
-            )
+        )
         scene_status_doc["l1_candidate_budget"] = scene_type_cap
-        scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
+        scene_status_doc["l2_candidate_budget"] = l2_candidate_budget
+        scene_status_doc["l3_candidate_budget"] = l3_candidate_budget
+        scene_status_doc.pop("l2_l3_candidate_budget", None)
         scene_status_doc["occlusion_max_references_per_query"] = (
             occlusion_max_references_per_query
         )
@@ -6960,7 +7012,8 @@ def run_pipeline(
                 DEPTH_ROUTE_ENFORCE_CAMERA_MOTION_HARD_LIMITS
             )
         scene_status_doc["l1_candidate_budget"] = scene_type_cap
-        scene_status_doc["l2_l3_candidate_budget"] = l2_l3_candidate_budget
+        scene_status_doc["l2_candidate_budget"] = l2_candidate_budget
+        scene_status_doc["l3_candidate_budget"] = l3_candidate_budget
         scene_status_doc["occlusion_max_references_per_query"] = (
             occlusion_max_references_per_query
         )
@@ -7484,13 +7537,18 @@ def run_pipeline(
             # generation budget. Final retained questions have no type-total cap.
             if (
                 not pending_manual_role_sets
-                and (scene_type_cap > 0 or l2_l3_candidate_budget > 0)
+                and (
+                    scene_type_cap > 0
+                    or l2_candidate_budget > 0
+                    or l3_candidate_budget > 0
+                )
             ):
                 if _all_candidate_type_budgets_exhausted(
                     scene_candidate_type_counts,
                     canonical_types=single_frame_scene_question_types,
                     l1_candidate_budget=scene_type_cap,
-                    l2_l3_candidate_budget=l2_l3_candidate_budget,
+                    l2_candidate_budget=l2_candidate_budget,
+                    l3_candidate_budget=l3_candidate_budget,
                 ):
                     logger.info(
                         "Scene %s exhausted all active single-frame candidate budgets after %d frame(s); stopping early",
@@ -7762,7 +7820,8 @@ def run_pipeline(
                             question_type_budgets = _remaining_candidate_type_budgets(
                                 scene_candidate_type_counts,
                                 l1_candidate_budget=scene_type_cap,
-                                l2_l3_candidate_budget=l2_l3_candidate_budget,
+                                l2_candidate_budget=l2_candidate_budget,
+                                l3_candidate_budget=l3_candidate_budget,
                                 allowed_types=single_frame_scene_question_types,
                             )
                             if pending_manual_role_sets and question_type_budgets is not None:
@@ -7839,7 +7898,8 @@ def run_pipeline(
                     questions,
                     scene_candidate_type_counts,
                     l1_candidate_budget=scene_type_cap,
-                    l2_l3_candidate_budget=l2_l3_candidate_budget,
+                    l2_candidate_budget=l2_candidate_budget,
+                    l3_candidate_budget=l3_candidate_budget,
                 )
                 frame_raw_generated_count = len(questions)
 
@@ -7938,7 +7998,8 @@ def run_pipeline(
                     attachment_reference_cluster_radius_m
                 ),
                 "l1_candidate_budget": scene_type_cap,
-                "l2_l3_candidate_budget": l2_l3_candidate_budget,
+                "l2_candidate_budget": l2_candidate_budget,
+                "l3_candidate_budget": l3_candidate_budget,
                 "max_move_sources": max_move_sources,
                 "occlusion_max_references_per_query": occlusion_max_references_per_query,
                 "occlusion_max_combinations_per_scene": occlusion_max_combinations_per_scene,
@@ -8269,7 +8330,8 @@ def run_pipeline(
                     cross_candidate_type_counts,
                     canonical_type,
                     l1_candidate_budget=scene_type_cap,
-                    l2_l3_candidate_budget=l2_l3_candidate_budget,
+                    l2_candidate_budget=l2_candidate_budget,
+                    l3_candidate_budget=l3_candidate_budget,
                 )
                 return remaining is None or remaining > 0
 
@@ -9530,8 +9592,8 @@ def main():
         help="Dataset split. ScanNet v2: filters discovered scene dirs by the matching "
         "SCANNET_METADATA_SPLIT_FILES entry. ScanNet++: selects the matching "
         "SCANNETPP_METADATA_SPLIT_FILES entry; overridden by --scannetpp_split_file. "
-            "Candidate budgets per scene/type are val L1=75 and L2/L3=300, or "
-        "train L1=300 and L2/L3=600; final type totals are not capped. "
+        "Candidate budgets per scene/type are val L1=75, L2=400, and L3=300, "
+        "or train L1=300, L2=600, and L3=600; final type totals are not capped. "
         "'all' or omitted scans every scene directory under --data_root.",
     )
     parser.add_argument(
