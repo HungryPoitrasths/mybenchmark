@@ -43,7 +43,7 @@ stop_occupier() {
   echo "[$(timestamp)] GRPO is ready for CUDA; stopping SFT occupier PID $pid."
   kill -TERM "$pid"
   for _ in $(seq 1 60); do
-    kill -0 "$pid" 2>/dev/null || return
+    kill -0 "$pid" 2>/dev/null || return 0
     sleep 1
   done
   echo "[$(timestamp)] Occupier did not stop after 60 seconds; sending SIGKILL."
@@ -175,8 +175,8 @@ PY
 
 mapfile -t occupier_pids < <(find_occupiers)
 for occupier_pid in "${occupier_pids[@]}"; do
-  stop_occupier "$occupier_pid"
   occupier_was_stopped=1
+  stop_occupier "$occupier_pid"
 done
 
 set_status nccl_smoke "testing normal NCCL P2P/NVLink on physical GPUs $devices"
