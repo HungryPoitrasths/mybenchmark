@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.cot.grpo_training import (
+    load_jsonl,
     prepare_balanced_benchmark_grpo_dataset,
     prepare_grpo_dataset,
 )
@@ -56,6 +58,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--preserve-dataset-order",
+        action="store_true",
+        help=(
+            "Keep benchmark row order through preparation and disable every MS-SWIFT "
+            "training shuffle. Required for an explicit curriculum schedule."
+        ),
+    )
+    parser.add_argument(
         "--train-dataset",
         type=Path,
         help="Existing MS-SWIFT JSONL. Requires --train-sidecar and bypasses --benchmark.",
@@ -75,23 +85,66 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--prepared-dataset", type=Path)
     parser.add_argument("--model", default="Qwen/Qwen3-VL-4B-Instruct")
+    parser.add_argument(
+        "--adapter",
+        type=Path,
+        help="Initialize policy LoRA weights from this checkpoint without optimizer state.",
+    )
+    parser.add_argument(
+        "--reference-adapter",
+        type=Path,
+        help="Initialize the GRPO reference model from this LoRA checkpoint.",
+    )
     parser.add_argument("--swift-bin", default="swift")
     parser.add_argument("--devices", default="0,1")
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument(
+        "--optim",
+        choices=("adamw_torch_fused", "adamw_torch"),
+        default="adamw_torch_fused",
+        help="AdamW implementation; use adamw_torch for cross-version optimizer resumes.",
+    )
+    parser.add_argument(
+        "--resume-optimizer-state-dtype",
+        choices=("none", "bfloat16", "float32"),
+        default="none",
+        help=(
+            "Restore Adam moment tensors to this dtype after loading a cross-version "
+            "checkpoint. Use with --optim adamw_torch."
+        ),
+    )
     parser.add_argument("--warmup-ratio", type=float, default=0.03)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--lora-rank", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=32)
     parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--lora-dtype",
+        choices=("bfloat16", "float16", "float32"),
+        default="bfloat16",
+        help=(
+            "LoRA parameter dtype. Keep this explicit so resumed optimizer states "
+            "use the same dtype across MS-SWIFT/PEFT versions."
+        ),
+    )
     parser.add_argument("--max-length", type=int, default=8192)
     parser.add_argument("--max-completion-length", type=int, default=1024)
     parser.add_argument("--max-pixels", type=int, default=786432)
     parser.add_argument("--vllm-max-model-len", type=int, default=10240)
     parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.45)
     parser.add_argument("--vllm-tensor-parallel-size", type=int, default=1)
+    parser.add_argument(
+        "--vllm-mm-processor-cache-gb",
+        type=float,
+        default=0.0,
+        help=(
+            "vLLM multimodal processor cache size. Zero disables the cache and avoids "
+            "receiver-cache inconsistencies in multi-rank colocate GRPO."
+        ),
+    )
     parser.add_argument(
         "--deepspeed",
         choices=("none", "zero2", "zero3"),
@@ -105,6 +158,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--answer-reward-weight", type=float, default=1.0)
     parser.add_argument("--format-reward-weight", type=float, default=0.1)
     parser.add_argument("--save-steps", type=int, default=250)
+    parser.add_argument(
+        "--save-strategy",
+        choices=("steps", "epoch"),
+        default="steps",
+    )
     parser.add_argument("--save-total-limit", type=int, default=2)
     parser.add_argument("--dataloader-workers", type=int, default=4)
     parser.add_argument("--dataset-workers", type=int, default=4)
@@ -117,6 +175,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Checkpoint directory or the literal value 'latest'.",
     )
     parser.add_argument("--skip-image-check", action="store_true")
+    parser.add_argument(
+        "--reuse-prepared-dataset",
+        action="store_true",
+        help="Use an existing verified --prepared-dataset without resolving images again.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
@@ -127,8 +190,11 @@ def _device_ids(value: str) -> list[str]:
         raise ValueError("--devices must select at least one CUDA device")
     if len(set(devices)) != len(devices):
         raise ValueError("--devices cannot contain duplicates")
-    if any(not device.isdigit() for device in devices):
-        raise ValueError("--devices must contain comma-separated non-negative integers")
+    valid_uuid = re.compile(r"GPU-[0-9a-fA-F-]+\Z")
+    if any(not (device.isdigit() or valid_uuid.fullmatch(device)) for device in devices):
+        raise ValueError(
+            "--devices must contain comma-separated non-negative integers or GPU UUIDs"
+        )
     return devices
 
 
@@ -155,12 +221,28 @@ def validate_args(args: argparse.Namespace) -> list[str]:
         raise ValueError("--epochs must be positive")
     if args.samples_per_type is not None and args.samples_per_type <= 0:
         raise ValueError("--samples-per-type must be positive")
+    if args.preserve_dataset_order and args.samples_per_type is not None:
+        raise ValueError(
+            "--preserve-dataset-order cannot be combined with --samples-per-type"
+        )
     if (args.train_dataset is None) != (args.train_sidecar is None):
         raise ValueError("provide both --train-dataset and --train-sidecar, or neither")
+    if (args.adapter is None) != (args.reference_adapter is None):
+        raise ValueError(
+            "provide both --adapter and --reference-adapter so policy and KL reference "
+            "start from the same curriculum checkpoint"
+        )
     if args.max_steps is not None and args.max_steps <= 0:
         raise ValueError("--max-steps must be positive")
+    if args.resume_optimizer_state_dtype != "none":
+        if args.resume_from_checkpoint is None:
+            raise ValueError("--resume-optimizer-state-dtype requires a resume checkpoint")
+        if args.optim != "adamw_torch":
+            raise ValueError("optimizer state dtype repair requires --optim adamw_torch")
     if not 0.0 < args.vllm_gpu_memory_utilization < 1.0:
         raise ValueError("--vllm-gpu-memory-utilization must be between 0 and 1")
+    if args.vllm_mm_processor_cache_gb < 0:
+        raise ValueError("--vllm-mm-processor-cache-gb must be non-negative")
     if args.vllm_tensor_parallel_size > len(devices):
         raise ValueError("vLLM tensor parallel size cannot exceed the visible GPU count")
     if args.vllm_max_model_len < args.max_length + args.max_completion_length:
@@ -182,7 +264,7 @@ def validate_args(args: argparse.Namespace) -> list[str]:
 
 def _latest_checkpoint(output_dir: Path) -> Path:
     candidates: list[tuple[int, Path]] = []
-    for path in output_dir.glob("checkpoint-*"):
+    for path in output_dir.rglob("checkpoint-*"):
         if not path.is_dir():
             continue
         try:
@@ -245,6 +327,8 @@ def build_swift_command(
         str(args.lora_alpha),
         "--lora_dropout",
         str(args.lora_dropout),
+        "--lora_dtype",
+        args.lora_dtype,
         "--torch_dtype",
         "bfloat16",
         "--enable_thinking",
@@ -259,6 +343,8 @@ def build_swift_command(
         str(args.vllm_tensor_parallel_size),
         "--vllm_max_model_len",
         str(args.vllm_max_model_len),
+        "--vllm_mm_processor_cache_gb",
+        str(args.vllm_mm_processor_cache_gb),
         "--vllm_enable_lora",
         "true",
         "--vllm_max_lora_rank",
@@ -277,6 +363,8 @@ def build_swift_command(
         str(args.gradient_accumulation_steps),
         "--learning_rate",
         str(args.learning_rate),
+        "--optim",
+        args.optim,
         "--lr_scheduler_type",
         "cosine",
         "--warmup_ratio",
@@ -308,7 +396,7 @@ def build_swift_command(
         "--top_p",
         str(args.top_p),
         "--save_strategy",
-        "steps",
+        args.save_strategy,
         "--save_steps",
         str(args.save_steps),
         "--save_total_limit",
@@ -336,6 +424,23 @@ def build_swift_command(
     ]
     if args.deepspeed != "none":
         command.extend(["--deepspeed", args.deepspeed])
+    if args.preserve_dataset_order:
+        command.extend(
+            [
+                "--dataset_shuffle",
+                "false",
+                "--train_dataloader_shuffle",
+                "false",
+                "--group_by_length",
+                "false",
+            ]
+        )
+    # On RLHF resume, Trainer restores the policy adapter from the checkpoint.
+    # MS-SWIFT expects only the original reference adapter to be preloaded.
+    if args.adapter is not None and resume_checkpoint is None:
+        command.extend(["--adapters", str(args.adapter.resolve())])
+    if args.reference_adapter is not None:
+        command.extend(["--ref_adapters", str(args.reference_adapter.resolve())])
     if args.max_steps is not None:
         command.extend(["--max_steps", str(args.max_steps)])
     if resume_checkpoint is not None:
@@ -349,6 +454,8 @@ def build_environment(args: argparse.Namespace, devices: list[str]) -> dict[str,
     env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
     env["NPROC_PER_NODE"] = str(len(devices))
     env["MAX_PIXELS"] = str(args.max_pixels)
+    if args.resume_optimizer_state_dtype != "none":
+        env["PSR_RESUME_ADAM_STATE_DTYPE"] = args.resume_optimizer_state_dtype
     return env
 
 
@@ -361,12 +468,52 @@ def _write_manifest(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def summarize_prepared_dataset(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise ValueError(f"prepared dataset does not exist: {path}")
+    rows = load_jsonl(path)
+    if not rows:
+        raise ValueError(f"prepared dataset is empty: {path}")
+    image_counts: list[int] = []
+    source_uids: set[str] = set()
+    question_types: dict[str, int] = {}
+    for index, row in enumerate(rows, start=1):
+        images = row.get("images")
+        if not isinstance(images, list) or not all(isinstance(item, str) for item in images):
+            raise ValueError(f"{path}:{index}: images must be a list of paths")
+        required = ("messages", "solution", "option_count", "question_uid")
+        missing = [key for key in required if row.get(key) in (None, "")]
+        if missing:
+            raise ValueError(f"{path}:{index}: missing required fields: {missing}")
+        image_counts.append(len(images))
+        source_uids.add(str(row.get("source_question_uid") or row["question_uid"]))
+        question_type = str(row.get("question_type") or "missing")
+        question_types[question_type] = question_types.get(question_type, 0) + 1
+    return {
+        "schema_version": "predictive-spatial-grpo-reused-prepared-v1",
+        "prepared_dataset": str(path),
+        "selected_count": len(rows),
+        "selected_by_type": dict(sorted(question_types.items())),
+        "unique_source_question_count": len(source_uids),
+        "repeated_instance_count": len(rows) - len(source_uids),
+        "min_images": min(image_counts),
+        "max_images": max(image_counts),
+        "checked_images": "verified_before_reuse",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     devices = validate_args(args)
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     resume_checkpoint = resolve_resume_checkpoint(args)
+    for label, path in (
+        ("adapter", args.adapter),
+        ("reference adapter", args.reference_adapter),
+    ):
+        if path is not None and not path.resolve().is_dir():
+            raise ValueError(f"{label} checkpoint is not a directory: {path.resolve()}")
     existing = [path for path in args.output_dir.glob("checkpoint-*") if path.is_dir()]
     if existing and resume_checkpoint is None and not args.dry_run:
         raise ValueError(
@@ -379,7 +526,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.prepared_dataset is not None
         else args.output_dir / "prepared" / "train.grpo.jsonl"
     )
-    if args.train_dataset is not None:
+    if args.reuse_prepared_dataset:
+        dataset_report = summarize_prepared_dataset(prepared_dataset)
+    elif args.train_dataset is not None:
         dataset_report = prepare_grpo_dataset(
             args.train_dataset,
             args.train_sidecar,
@@ -392,6 +541,7 @@ def main(argv: list[str] | None = None) -> int:
             prepared_dataset,
             samples_per_type=args.samples_per_type,
             seed=args.seed,
+            preserve_input_order=args.preserve_dataset_order,
             scannet_roots=[path.resolve() for path in args.scannet_image_root],
             scannetpp_roots=[path.resolve() for path in args.scannetpp_image_root],
             scannetpp_sensor=args.scannetpp_sensor,
@@ -412,7 +562,13 @@ def main(argv: list[str] | None = None) -> int:
         "schema_version": "predictive-spatial-grpo-run-v1",
         "model": args.model,
         "base_variant": "instruct",
-        "data_mode": "legacy_ms_swift" if args.train_dataset is not None else "balanced_benchmark",
+        "data_mode": (
+            "legacy_ms_swift"
+            if args.train_dataset is not None
+            else "ordered_benchmark"
+            if args.preserve_dataset_order
+            else "balanced_benchmark"
+        ),
         "tuner": "lora_llm_only",
         "rewards": [
             {"name": "psr_answer", "weight": args.answer_reward_weight},
@@ -423,12 +579,20 @@ def main(argv: list[str] | None = None) -> int:
         "global_completion_batch": global_completion_batch,
         "rollout_prompts_per_batch": global_completion_batch // args.num_generations,
         "num_generations": args.num_generations,
+        "dataset_order_preserved": args.preserve_dataset_order,
         "resume_from_checkpoint": str(resume_checkpoint) if resume_checkpoint else None,
+        "adapter": str(args.adapter.resolve()) if args.adapter else None,
+        "reference_adapter": (
+            str(args.reference_adapter.resolve()) if args.reference_adapter else None
+        ),
         "environment": {
             "CUDA_DEVICE_ORDER": environment["CUDA_DEVICE_ORDER"],
             "CUDA_VISIBLE_DEVICES": environment["CUDA_VISIBLE_DEVICES"],
             "NPROC_PER_NODE": environment["NPROC_PER_NODE"],
             "MAX_PIXELS": environment["MAX_PIXELS"],
+            "PSR_RESUME_ADAM_STATE_DTYPE": environment.get(
+                "PSR_RESUME_ADAM_STATE_DTYPE"
+            ),
         },
         "command": command,
         "shell_command": shlex.join(command),

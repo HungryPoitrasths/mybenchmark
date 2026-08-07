@@ -1,0 +1,18 @@
+# Reproduces the core zju18 vllm_fresh stack used by the GRPO launchers.
+# flash-attn and deepspeed are intentionally omitted: this run uses SDPA and no ZeRO.
+torch==2.10.0
+torchvision==0.25.0
+torchaudio==2.10.0
+vllm==0.17.1
+ms-swift==4.4.2
+transformers==4.57.6
+trl==0.29.1
+peft==0.19.1
+accelerate==1.14.0
+datasets==4.8.4
+modelscope==1.37.1
+qwen-vl-utils==0.0.14
+ray==2.54.0
+safetensors==0.8.0
+tokenizers==0.22.2
+torch-c-dlpack-ext==0.1.5

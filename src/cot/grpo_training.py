@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -19,6 +20,48 @@ from src.cot.facts import question_uid
 from src.cot.images import resolve_image_paths
 from src.cot.pipeline import format_user_prompt
 from src.cot.sampling import SUPPORTED_TYPE_ORDER, TYPES_BY_LEVEL
+
+
+def _cast_adam_moments(optimizer: Any, target_dtype: Any) -> int:
+    """Restore Adam moment dtype after a cross-version checkpoint load."""
+    import torch
+
+    converted = 0
+    for state in optimizer.state.values():
+        for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+            value = state.get(key)
+            if torch.is_tensor(value) and value.is_floating_point() and value.dtype != target_dtype:
+                state[key] = value.to(dtype=target_dtype)
+                converted += 1
+    return converted
+
+
+def _patch_adamw_resume_state_dtype() -> None:
+    dtype_name = os.environ.get("PSR_RESUME_ADAM_STATE_DTYPE")
+    if not dtype_name:
+        return
+
+    import torch
+
+    target_dtype = getattr(torch, dtype_name)
+    original = torch.optim.AdamW.load_state_dict
+    if getattr(original, "_psr_state_dtype_patch", False):
+        return
+
+    def load_state_dict(optimizer: Any, state_dict: dict[str, Any]) -> Any:
+        result = original(optimizer, state_dict)
+        converted = _cast_adam_moments(optimizer, target_dtype)
+        print(
+            f"[PSR] Restored {converted} Adam moment tensors to {dtype_name}",
+            flush=True,
+        )
+        return result
+
+    load_state_dict._psr_state_dtype_patch = True  # type: ignore[attr-defined]
+    torch.optim.AdamW.load_state_dict = load_state_dict
+
+
+_patch_adamw_resume_state_dtype()
 
 
 R1_COMPLETION_RE = re.compile(
@@ -293,6 +336,7 @@ def prepare_balanced_benchmark_grpo_dataset(
     *,
     samples_per_type: int | None,
     seed: int,
+    preserve_input_order: bool = False,
     scannet_roots: list[Path] | None = None,
     scannetpp_roots: list[Path] | None = None,
     scannetpp_sensor: str = "iphone",
@@ -303,6 +347,7 @@ def prepare_balanced_benchmark_grpo_dataset(
     output_path = output_path.resolve()
     questions = load_benchmark_questions(benchmark_path)
     candidates_by_type: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+    candidates_in_order: list[tuple[str, dict[str, Any]]] = []
     seen_uids: set[str] = set()
 
     for index, question in enumerate(questions, start=1):
@@ -319,7 +364,9 @@ def prepare_balanced_benchmark_grpo_dataset(
         if uid in seen_uids:
             raise ValueError(f"{benchmark_path}:{index}: duplicate question_uid {uid!r}")
         seen_uids.add(uid)
-        candidates_by_type[question_type].append((uid, question))
+        candidate = (uid, question)
+        candidates_by_type[question_type].append(candidate)
+        candidates_in_order.append(candidate)
 
     available_by_type = {
         question_type: len(candidates)
@@ -338,6 +385,10 @@ def prepare_balanced_benchmark_grpo_dataset(
     ]
     if samples_per_type is not None and samples_per_type <= 0:
         raise ValueError("samples_per_type must be positive")
+    if preserve_input_order and samples_per_type is not None:
+        raise ValueError(
+            "preserve_input_order cannot be combined with samples_per_type"
+        )
     if samples_per_type is not None:
         undersized = {
             question_type: count
@@ -349,18 +400,24 @@ def prepare_balanced_benchmark_grpo_dataset(
                 f"cannot sample {samples_per_type} records per type; "
                 f"insufficient capacities: {undersized}"
             )
-    for question_type in type_order:
-        candidates = candidates_by_type[question_type]
-        ordered = sorted(
-            candidates,
-            key=lambda item: _stable_question_rank(seed, question_type, item[0]),
-        )
-        selected.extend(ordered if samples_per_type is None else ordered[:samples_per_type])
-    selected.sort(key=lambda item: _stable_question_rank(seed, "global", item[0]))
+    if preserve_input_order:
+        selected = list(candidates_in_order)
+    else:
+        for question_type in type_order:
+            candidates = candidates_by_type[question_type]
+            ordered = sorted(
+                candidates,
+                key=lambda item: _stable_question_rank(seed, question_type, item[0]),
+            )
+            selected.extend(
+                ordered if samples_per_type is None else ordered[:samples_per_type]
+            )
+        selected.sort(key=lambda item: _stable_question_rank(seed, "global", item[0]))
 
     prepared: list[dict[str, Any]] = []
     image_counts: list[int] = []
     selected_by_type: Counter[str] = Counter()
+    source_uid_counts: Counter[str] = Counter()
     for uid, question in selected:
         question_type = str(question["type"])
         solution, option_count, multi_select = _raw_solution(
@@ -388,12 +445,19 @@ def prepare_balanced_benchmark_grpo_dataset(
                 "option_count": option_count,
                 "multi_select": multi_select,
                 "question_uid": uid,
+                "source_question_uid": str(
+                    question.get("source_question_uid") or uid
+                ),
+                "sampling_repeat_index": int(
+                    question.get("sampling_repeat_index") or 0
+                ),
                 "question_type": question_type,
                 "signature_id": str(question.get("signature_id") or question_type),
             }
         )
         image_counts.append(len(images))
         selected_by_type[question_type] += 1
+        source_uid_counts[str(question.get("source_question_uid") or uid)] += 1
 
     _write_jsonl(output_path, prepared)
     return {
@@ -403,10 +467,23 @@ def prepare_balanced_benchmark_grpo_dataset(
         "prepared_dataset": str(output_path),
         "input_question_count": len(questions),
         "selected_count": len(prepared),
-        "sampling_mode": "all_questions" if samples_per_type is None else "equal_per_type",
+        "sampling_mode": (
+            "all_questions_in_source_order"
+            if preserve_input_order
+            else "all_questions"
+            if samples_per_type is None
+            else "equal_per_type"
+        ),
         "samples_per_type": samples_per_type,
+        "input_order_preserved": preserve_input_order,
         "available_by_type": dict(sorted(available_by_type.items())),
         "selected_by_type": dict(sorted(selected_by_type.items())),
+        "unique_source_question_count": len(source_uid_counts),
+        "repeated_instance_count": len(prepared) - len(source_uid_counts),
+        "repeated_source_question_count": sum(
+            count > 1 for count in source_uid_counts.values()
+        ),
+        "max_source_instances": max(source_uid_counts.values()),
         "missing_supported_types": [
             question_type
             for question_type in SUPPORTED_TYPE_ORDER
