@@ -128,8 +128,6 @@ def _common_args(args: argparse.Namespace) -> list[str]:
         str(args.gradient_accumulation_steps),
         "--optim",
         args.optim,
-        "--resume-optimizer-state-dtype",
-        args.resume_optimizer_state_dtype,
         "--num-generations",
         str(args.num_generations),
         "--lora-rank",
@@ -243,7 +241,12 @@ def build_stage_command(
     ]
     if stage == 1 and args.stage1_resume_from_checkpoint is not None:
         command.extend(
-            ["--resume-from-checkpoint", str(args.stage1_resume_from_checkpoint)]
+            [
+                "--resume-from-checkpoint",
+                str(args.stage1_resume_from_checkpoint),
+                "--resume-optimizer-state-dtype",
+                args.resume_optimizer_state_dtype,
+            ]
         )
     if adapter is not None:
         command.extend(

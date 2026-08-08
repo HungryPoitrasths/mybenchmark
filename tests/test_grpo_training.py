@@ -746,17 +746,23 @@ def test_curriculum_launcher_resets_optimizer_and_loads_stage1_adapter(
     assert stage2_command[
         stage2_command.index("--vllm-mm-processor-cache-gb") + 1
     ] == "0.0"
+    assert "--resume-optimizer-state-dtype" not in stage1_command
     assert "--resume-from-checkpoint" not in stage2_command
+    assert "--resume-optimizer-state-dtype" not in stage2_command
 
     args.stage1_resume_from_checkpoint = Path("latest")
     resumed_stage1_command = launcher.build_stage_command(args, stage=1)
     assert resumed_stage1_command[
         resumed_stage1_command.index("--resume-from-checkpoint") + 1
     ] == "latest"
+    assert resumed_stage1_command[
+        resumed_stage1_command.index("--resume-optimizer-state-dtype") + 1
+    ] == args.resume_optimizer_state_dtype
     resumed_stage2_command = launcher.build_stage_command(
         args, stage=2, adapter=adapter
     )
     assert "--resume-from-checkpoint" not in resumed_stage2_command
+    assert "--resume-optimizer-state-dtype" not in resumed_stage2_command
 
 
 def test_launcher_dry_run_writes_manifest_without_swift(
