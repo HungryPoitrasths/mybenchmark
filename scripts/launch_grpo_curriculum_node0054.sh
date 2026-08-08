@@ -6,6 +6,7 @@ job_root=${JOB_ROOT:-/data/home/sujinyue/codex_jobs/grpo_curriculum_node0054_202
 output_root=${OUTPUT_ROOT:-$project_root/grpo/qwen3vl_4b_grpo_curriculum_node0054_gpu45}
 prepared_root=${PREPARED_ROOT:-$project_root/grpo/prepared}
 resume_checkpoint=${RESUME_CHECKPOINT:-$project_root/grpo/recovery/checkpoint-1024}
+start_stage=${START_STAGE:-1}
 image_root=${SCANNETPP_IMAGE_ROOT:-/data/home/sujinyue/datasets/scannetpp/train/iphone_frames}
 transfer_marker=${TRANSFER_MARKER:-$project_root/migration/modelscope_transfer.complete}
 python_bin=${PYTHON_BIN:-/data/home/sujinyue/venvs/grpo/bin/python}
@@ -88,7 +89,7 @@ on_exit() {
     kill -TERM -- "-$grpo_pid" 2>/dev/null || true
   fi
   if [[ $curriculum_finished -eq 1 && $status -eq 0 ]]; then
-    set_status complete "both GRPO curriculum stages finished"
+    set_status complete "GRPO curriculum run from stage $start_stage finished"
   elif [[ -n $interrupted_signal ]]; then
     set_status interrupted "launcher received $interrupted_signal"
   else
@@ -110,6 +111,11 @@ trap 'on_signal SIGTERM' TERM
 trap 'on_signal SIGINT' INT
 trap 'on_signal SIGHUP' HUP
 
+if [[ $start_stage != 1 && $start_stage != 2 ]]; then
+  set_status failed "START_STAGE must be 1 or 2, got: $start_stage"
+  exit 2
+fi
+
 if pgrep -u "$(id -u)" -f '[r]un_grpo_curriculum_qwen3vl_4b.py.*qwen3vl_4b_grpo_curriculum_node0054_gpu45' >/dev/null; then
   set_status blocked "another matching GRPO curriculum process is running"
   exit 3
@@ -120,15 +126,21 @@ while [[ ! -f $transfer_marker ]]; do
   sleep 30
 done
 
-for required in \
-  "$resume_checkpoint/adapter_model.safetensors" \
-  "$resume_checkpoint/optimizer.pt" \
-  "$resume_checkpoint/scheduler.pt" \
-  "$resume_checkpoint/trainer_state.json" \
-  "$prepared_root/stage1_l1_6144.grpo.jsonl" \
-  "$prepared_root/stage2_reasoning_18432.grpo.jsonl" \
-  "$base_model/config.json" \
-  "$base_model/model.safetensors.index.json"; do
+required_files=(
+  "$prepared_root/stage1_l1_6144.grpo.jsonl"
+  "$prepared_root/stage2_reasoning_18432.grpo.jsonl"
+  "$base_model/config.json"
+  "$base_model/model.safetensors.index.json"
+)
+if [[ $start_stage == 1 ]]; then
+  required_files+=(
+    "$resume_checkpoint/adapter_model.safetensors"
+    "$resume_checkpoint/optimizer.pt"
+    "$resume_checkpoint/scheduler.pt"
+    "$resume_checkpoint/trainer_state.json"
+  )
+fi
+for required in "${required_files[@]}"; do
   if [[ ! -f $required ]]; then
     set_status failed "required file is missing: $required"
     exit 4
@@ -191,7 +203,11 @@ if ! timeout -k 10s 90s "$python_bin" -m torch.distributed.run \
     --standalone --nproc_per_node=2 "$project_root/scripts/nccl_smoke.py"
 fi
 
-set_status running "stage 1 resumes from checkpoint-1024; stage 2 starts automatically"
+if [[ $start_stage == 1 ]]; then
+  set_status running "stage 1 resumes from checkpoint-1024; stage 2 starts automatically"
+else
+  set_status running "stage 2 starts from the latest completed stage-1 adapter"
+fi
 cd "$project_root"
 command=(
   "$python_bin" scripts/run_grpo_curriculum_qwen3vl_4b.py
@@ -199,7 +215,7 @@ command=(
   --stage2-benchmark output_train/grpo_curriculum_stage2_reasoning_18432.json
   --output-root "$output_root"
   --prepared-root "$prepared_root"
-  --stage1-resume-from-checkpoint "$resume_checkpoint"
+  --start-stage "$start_stage"
   --model "$base_model"
   --swift-bin "$swift_bin"
   --scannetpp-image-root "$image_root"
@@ -210,7 +226,6 @@ command=(
   --stage1-learning-rate 1e-5
   --stage2-learning-rate 5e-6
   --optim adamw_torch
-  --resume-optimizer-state-dtype bfloat16
   --per-device-batch-size 2
   --gradient-accumulation-steps 4
   --num-generations 8
@@ -241,6 +256,12 @@ command=(
   --seed 42
   --reuse-prepared-dataset
 )
+if [[ $start_stage == 1 ]]; then
+  command+=(
+    --stage1-resume-from-checkpoint "$resume_checkpoint"
+    --resume-optimizer-state-dtype bfloat16
+  )
+fi
 
 setsid "${command[@]}" &
 grpo_pid=$!
