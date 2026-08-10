@@ -21,17 +21,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.cot.evaluation import evaluate_predictions
+from src.cot.curriculum import (
+    LEGACY_PROFILE,
+    LEGACY_SCHEMA_VERSION,
+    profile_for_manifest,
+)
 
 
 CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
 STANDARD_TRAIN_COUNT = 2_000
 STANDARD_MONITOR_COUNT = 320
 CUDA_DEVICE_ORDER = "PCI_BUS_ID"
-CURRICULUM_SCHEMA_VERSION = "predictive-spatial-cot-curriculum-v1"
-CURRICULUM_TRAIN_COUNT = 20_480
-CURRICULUM_LEVEL_COUNTS = {"L1": 8_192, "L2": 6_144, "L3": 6_144}
-CURRICULUM_STAGE1_COUNT = 6_144
-CURRICULUM_GLOBAL_BATCH = 32
+CURRICULUM_SCHEMA_VERSION = LEGACY_SCHEMA_VERSION
+CURRICULUM_TRAIN_COUNT = LEGACY_PROFILE.total_exposures
+CURRICULUM_LEVEL_COUNTS = LEGACY_PROFILE.target_exposures_by_level
+CURRICULUM_STAGE1_COUNT = LEGACY_PROFILE.stage1_exposures
+CURRICULUM_GLOBAL_BATCH = LEGACY_PROFILE.global_batch
 CURRICULUM_MODEL = "Qwen/Qwen3-VL-4B-Instruct"
 
 
@@ -139,13 +144,14 @@ def validate_curriculum_manifest(
     train_sidecar: list[dict[str, Any]],
 ) -> dict[str, Any]:
     payload = load_json(path)
-    if not isinstance(payload, dict) or payload.get("schema_version") != CURRICULUM_SCHEMA_VERSION:
-        raise ValueError(
-            f"curriculum manifest must use schema_version {CURRICULUM_SCHEMA_VERSION!r}"
-        )
+    if not isinstance(payload, dict):
+        raise ValueError("curriculum manifest must be a JSON object")
+    profile = profile_for_manifest(payload)
     samples = payload.get("samples")
-    if not isinstance(samples, list) or len(samples) != CURRICULUM_TRAIN_COUNT:
-        raise ValueError("curriculum manifest must contain exactly 20,480 samples")
+    if not isinstance(samples, list) or len(samples) != profile.total_exposures:
+        raise ValueError(
+            f"curriculum manifest must contain exactly {profile.total_exposures:,} samples"
+        )
     if len(train_rows) != len(samples) or len(train_sidecar) != len(samples):
         raise ValueError("curriculum manifest, train dataset, and sidecar counts differ")
 
@@ -159,7 +165,7 @@ def validate_curriculum_manifest(
         sample_uid = str(sample.get("sample_uid") or "")
         question_uid_value = str(sample.get("question_uid") or "")
         level = str(sample.get("level") or "").upper()
-        if not sample_uid or not question_uid_value or level not in CURRICULUM_LEVEL_COUNTS:
+        if not sample_uid or not question_uid_value or level not in profile.target_exposures_by_level:
             raise ValueError(f"curriculum sample {index} has incomplete identity metadata")
         if int(sample.get("exposure_index") or 0) != index:
             raise ValueError(f"curriculum exposure order breaks at row {index}")
@@ -185,25 +191,18 @@ def validate_curriculum_manifest(
         levels.append(level)
         schedule_hasher.update(f"{index}|{sample_uid}|{level}\n".encode("utf-8"))
 
-    if any(level != "L1" for level in levels[:CURRICULUM_STAGE1_COUNT]):
-        raise ValueError("the first 6,144 curriculum samples must all be L1")
-    if dict(Counter(levels)) != CURRICULUM_LEVEL_COUNTS:
+    if any(level != "L1" for level in levels[: profile.stage1_exposures]):
+        raise ValueError(
+            f"the first {profile.stage1_exposures:,} curriculum samples must all be L1"
+        )
+    if dict(Counter(levels)) != profile.target_exposures_by_level:
         raise ValueError(f"invalid curriculum level counts: {dict(Counter(levels))}")
 
-    expected_pattern = (
-        ("A", {"L1": 4, "L2": 14, "L3": 14}),
-        ("B", {"L1": 5, "L2": 14, "L3": 13}),
-        ("A", {"L1": 4, "L2": 14, "L3": 14}),
-        ("C", {"L1": 5, "L2": 13, "L3": 14}),
-        ("A", {"L1": 4, "L2": 14, "L3": 14}),
-        ("B", {"L1": 5, "L2": 14, "L3": 13}),
-        ("C", {"L1": 5, "L2": 13, "L3": 14}),
-    )
-    stage2 = samples[CURRICULUM_STAGE1_COUNT:]
-    for batch_index in range(0, len(stage2), CURRICULUM_GLOBAL_BATCH):
-        batch = stage2[batch_index : batch_index + CURRICULUM_GLOBAL_BATCH]
-        expected_name, expected_counts = expected_pattern[
-            (batch_index // CURRICULUM_GLOBAL_BATCH) % len(expected_pattern)
+    stage2 = samples[profile.stage1_exposures :]
+    for batch_index in range(0, len(stage2), profile.global_batch):
+        batch = stage2[batch_index : batch_index + profile.global_batch]
+        expected_name, expected_counts = profile.stage2_pattern[
+            (batch_index // profile.global_batch) % len(profile.stage2_pattern)
         ]
         names = {str(sample.get("stage2_batch_pattern") or "") for sample in batch}
         counts = Counter(str(sample.get("level") or "").upper() for sample in batch)
@@ -220,10 +219,13 @@ def validate_curriculum_manifest(
     return {
         "path": str(path.resolve()),
         "file_sha256": file_sha256(path),
+        "profile_id": profile.profile_id,
+        "schema_version": profile.schema_version,
         "schedule_sha256": schedule_sha256,
-        "stage1_end_exposure": CURRICULUM_STAGE1_COUNT,
-        "level_counts": CURRICULUM_LEVEL_COUNTS,
-        "optimizer_steps": CURRICULUM_TRAIN_COUNT // CURRICULUM_GLOBAL_BATCH,
+        "stage1_end_exposure": profile.stage1_exposures,
+        "level_counts": profile.target_exposures_by_level,
+        "global_batch": profile.global_batch,
+        "optimizer_steps": profile.total_exposures // profile.global_batch,
         "dataset_shuffle": False,
         "train_dataloader_shuffle": False,
     }
@@ -712,7 +714,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--curriculum-manifest",
         type=Path,
-        help="Canonical 20,480-row curriculum JSON produced by build_mixed_cot_ablation.py.",
+        help="Canonical profile-aware curriculum JSON produced by build_mixed_cot_ablation.py.",
     )
     initialization = parser.add_mutually_exclusive_group(required=True)
     initialization.add_argument(
@@ -865,7 +867,7 @@ def main() -> int:
             "epochs": (args.epochs, 1),
             "per_device_batch_size": (args.per_device_batch_size, 2),
             "gradient_accumulation_steps": (args.gradient_accumulation_steps, 8),
-            "global_batch": (global_batch, CURRICULUM_GLOBAL_BATCH),
+            "global_batch": (global_batch, curriculum_report["global_batch"]),
             "learning_rate": (args.learning_rate, 1e-4),
             "aligner_learning_rate": (args.aligner_learning_rate, 1e-5),
             "optimizer": (args.optimizer, "adamw_torch"),

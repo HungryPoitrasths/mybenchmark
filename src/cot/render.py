@@ -87,8 +87,11 @@ def _move_direction_clauses(record: CotFactRecord) -> tuple[str, str, str]:
         frame = "the first camera's frame"
         relation_frame = "that same camera frame"
     elif qtype == "object_move_object_centric":
-        frame = f"{_article(f['moved_object'])}'s initial facing frame"
-        relation_frame = f"{_article(f['query_object'])}'s unchanged initial heading"
+        frame = f"{_article(f['moved_object'])}'s frozen initial frame facing the first camera"
+        relation_frame = (
+            f"{_article(f['query_object'])}'s separately frozen initial frame facing "
+            "that same camera"
+        )
     else:
         frame = "the room's cardinal frame"
         relation_frame = f"the floor plan anchored by the camera facing {f['camera_cardinal']}"
@@ -98,7 +101,7 @@ def _move_direction_clauses(record: CotFactRecord) -> tuple[str, str, str]:
     else:
         motion_effect = f"Recompute {_article(f['query_object'])} relative to {_article(f['reference_object'])} in {relation_frame}; the relation is {f['change_state']} from {f['old_result']} to {f['result']}"
     if qtype == "object_move_object_centric":
-        motion_effect += f", with {_article(f['query_object'])} keeping its original facing direction"
+        motion_effect += ", with the movement and answer frames frozen independently"
     transformation = motion_effect
     conclusion = f"{_article(f['query_object']).capitalize()} is {f['result']} of {_article(f['reference_object'])}"
     return observation, transformation, conclusion

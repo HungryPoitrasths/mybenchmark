@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.cot.facts import build_fact_record
+from src.cot.facts import build_fact_record, question_uid
 from src.cot.images import collect_image_names
 from src.cot.models import FactExtractionError
 from src.cot.pipeline import build_dataset
@@ -43,6 +43,23 @@ def _question(qtype: str, value: str, **fields: object) -> dict[str, object]:
     }
     question.update(fields)
     return question
+
+
+def test_question_uid_uses_the_complete_ordered_image_route() -> None:
+    base = _question(
+        "object_move_occlusion",
+        "neither",
+        auxiliary_image_names=["bridge.jpg"],
+        reasoning_frame_2="last-a.jpg",
+    )
+    changed_destination = {**base, "reasoning_frame_2": "last-b.jpg"}
+    duplicate_route = {
+        **base,
+        "auxiliary_image_names": ["bridge.jpg", "bridge.jpg", "last-a.jpg"],
+    }
+
+    assert question_uid(base) != question_uid(changed_destination)
+    assert question_uid(base) == question_uid(duplicate_route)
 
 
 def _supported_questions() -> list[dict[str, object]]:

@@ -6,6 +6,7 @@ import math
 import re
 from typing import Any
 
+from .images import collect_image_names
 from .models import CotFactRecord, FactExtractionError
 
 
@@ -82,7 +83,6 @@ def question_uid(question: dict[str, Any]) -> str:
         for key in (
             "_dataset",
             "scene_id",
-            "image_name",
             "level",
             "type",
             "question",
@@ -90,6 +90,7 @@ def question_uid(question: dict[str, Any]) -> str:
             "answer",
         )
     }
+    identity["image_route"] = collect_image_names(question)
     return hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
 
 
@@ -340,7 +341,11 @@ def _move_direction_facts(
     else:
         facts.update(reference_object=_label(question, "obj_ref_label"))
         if qtype == "object_move_object_centric":
-            facts["reference_frame"] = "query_original_camera_heading"
+            facts.update(
+                reference_frame="query_original_camera_heading",
+                movement_reference_frame="moved_object_facing_first_camera",
+                answer_reference_frame="query_object_facing_first_camera",
+            )
         else:
             facts.update(
                 reference_frame="floor_plan",

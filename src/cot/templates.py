@@ -18,7 +18,7 @@ _QUESTION_TYPE_CONTEXTS = {
     "object_move_distance": "This movement question recomputes closest-surface distance",
     "object_move_occlusion": "This movement question uses the first view for motion and the last view for occlusion",
     "object_rotate_object_centric": "This orbit question recomputes an observer-centered direction after the orbit",
-    "object_move_object_centric": "This movement question preserves the observer's initial horizontal heading",
+    "object_move_object_centric": "This movement question freezes separate moved-object and observer frames facing the first camera",
     "object_move_allocentric": "This movement question uses cardinal directions on the floor plan",
     "object_remove": "This question compares visibility before and after removing one object",
     "attachment_chain": "This question follows directed support paths from the moved object",

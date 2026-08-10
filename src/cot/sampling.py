@@ -208,11 +208,17 @@ def select_stratified(
     *,
     level_quotas: dict[str, int] | None = None,
     per_type_count: int | None = None,
+    type_quotas: dict[str, int] | None = None,
     seed: int = 42,
     strict_type_capacity: bool = False,
 ) -> SelectionResult:
-    if (level_quotas is None) == (per_type_count is None):
-        raise SamplingError("provide exactly one of level_quotas or per_type_count")
+    provided_modes = sum(
+        value is not None for value in (level_quotas, per_type_count, type_quotas)
+    )
+    if provided_modes != 1:
+        raise SamplingError(
+            "provide exactly one of level_quotas, per_type_count, or type_quotas"
+        )
 
     unique_indices, duplicate_count = _deduplicated_indices(rows)
     by_type: dict[str, list[int]] = {question_type: [] for question_type in SUPPORTED_TYPE_ORDER}
@@ -232,8 +238,23 @@ def select_stratified(
             )
         by_type[question_type].append(index)
 
-    type_quotas: dict[str, int] = {}
-    if per_type_count is not None:
+    requested_type_quotas = type_quotas
+    resolved_type_quotas: dict[str, int] = {}
+    if requested_type_quotas is not None:
+        unknown_types = set(requested_type_quotas) - set(SUPPORTED_TYPE_ORDER)
+        if unknown_types:
+            raise SamplingError(f"unknown types in quota: {sorted(unknown_types)}")
+        for question_type in SUPPORTED_TYPE_ORDER:
+            quota = int(requested_type_quotas.get(question_type, 0))
+            available = len(by_type[question_type])
+            if quota < 0:
+                raise SamplingError(f"{question_type} quota must be non-negative")
+            if quota > available:
+                raise SamplingError(
+                    f"{question_type} has {available} records, fewer than required {quota}"
+                )
+            resolved_type_quotas[question_type] = quota
+    elif per_type_count is not None:
         if per_type_count <= 0:
             raise SamplingError("per_type_count must be positive")
         for question_type in SUPPORTED_TYPE_ORDER:
@@ -242,7 +263,7 @@ def select_stratified(
                 raise SamplingError(
                     f"{question_type} has {available} records, fewer than required {per_type_count}"
                 )
-            type_quotas[question_type] = min(per_type_count, available)
+            resolved_type_quotas[question_type] = min(per_type_count, available)
     else:
         assert level_quotas is not None
         unknown_levels = set(level_quotas) - set(TYPES_BY_LEVEL)
@@ -254,11 +275,11 @@ def select_stratified(
                 question_type: len(by_type[question_type])
                 for question_type in TYPES_BY_LEVEL[level]
             }
-            type_quotas.update(_equal_allocation(quota, capacities))
+            resolved_type_quotas.update(_equal_allocation(quota, capacities))
 
     selected: list[int] = []
     for question_type in SUPPORTED_TYPE_ORDER:
-        quota = type_quotas[question_type]
+        quota = resolved_type_quotas[question_type]
         if quota:
             selected.extend(
                 _select_type_indices(
@@ -283,7 +304,7 @@ def select_stratified(
         "duplicate_uid_count": duplicate_count,
         "ignored_type_counts": dict(sorted(ignored_type_counts.items())),
         "available_by_type": available_by_type,
-        "target_by_type": type_quotas,
+        "target_by_type": resolved_type_quotas,
         "selected_by_level": dict(sorted(selected_by_level.items())),
         "selected_by_type": dict(sorted(selected_by_type.items())),
         "selected_by_signature": dict(sorted(selected_by_signature.items())),
