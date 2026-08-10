@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import redirect_stdout
 import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -297,12 +298,14 @@ def main() -> int:
     args = build_parser().parse_args()
     sources, shard_paths = _load_sources(args.shard_glob)
     metadata_roots = args.metadata_root or [path.parent for path in shard_paths]
-    resources, metadata_paths = _load_resources(
-        [record.question for record in sources],
-        metadata_roots=[path.resolve() for path in metadata_roots],
-        scannet_root=args.scannet_root.resolve(),
-        scannetpp_root=args.scannetpp_root.resolve(),
-    )
+    # The shared loader reports scene progress on stdout; keep dry-run stdout as pure JSON.
+    with redirect_stdout(sys.stderr):
+        resources, metadata_paths = _load_resources(
+            [record.question for record in sources],
+            metadata_roots=[path.resolve() for path in metadata_roots],
+            scannet_root=args.scannet_root.resolve(),
+            scannetpp_root=args.scannetpp_root.resolve(),
+        )
 
     def validate_images(record: SourceQuestion) -> None:
         resolve_image_paths(
