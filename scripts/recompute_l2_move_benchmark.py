@@ -1107,6 +1107,7 @@ def _repair_one(
     *,
     recover_object_centric_from_text: bool = False,
     object_centric_template: str = "configured",
+    forbidden_repaired_keys: set[tuple[Any, ...]] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     audit = _audit_base(index, question)
     objects_by_id = resources.objects_by_id
@@ -1169,6 +1170,18 @@ def _repair_one(
             "reason": baseline.reason,
             "details": baseline.details,
         }
+        if (
+            not baseline.valid
+            and baseline.reason == "baseline_ambiguous"
+            and trusted_evidence is not None
+        ):
+            audit["baseline"]["accepted_for_human_attachment_repair"] = True
+            baseline = CandidateEvaluation(
+                True,
+                new_value=baseline.new_value,
+                ambiguity=baseline.ambiguity,
+                details=baseline.details,
+            )
         if not baseline.valid:
             audit.update(status="dropped", reason=baseline.reason)
             return None, audit
@@ -1227,6 +1240,58 @@ def _repair_one(
             templates,
             object_centric_template=object_centric_template,
         )
+        duplicate_candidate_skips = 0
+        if (
+            forbidden_repaired_keys
+            and repaired_dedup_key(repaired) in forbidden_repaired_keys
+        ):
+            changed_alternative = None
+            unchanged_alternative = None
+            for alternative in schedule:
+                if alternative.rank == candidate.rank:
+                    continue
+                evaluation = evaluate_candidate(
+                    question, alternative, baseline, pose, resources
+                )
+                if not evaluation.valid:
+                    continue
+                alternative_repaired, alternative_options_preserved = (
+                    build_repaired_question(
+                        question,
+                        index,
+                        alternative,
+                        baseline,
+                        evaluation,
+                        resources,
+                        pose,
+                        templates,
+                        object_centric_template=object_centric_template,
+                    )
+                )
+                if repaired_dedup_key(alternative_repaired) in forbidden_repaired_keys:
+                    duplicate_candidate_skips += 1
+                    continue
+                record = (
+                    alternative,
+                    evaluation,
+                    alternative_repaired,
+                    alternative_options_preserved,
+                )
+                if evaluation.new_value != baseline.new_value:
+                    changed_alternative = record
+                    break
+                if unchanged_alternative is None:
+                    unchanged_alternative = record
+            replacement = changed_alternative or unchanged_alternative
+            if replacement is None:
+                audit.update(
+                    status="dropped",
+                    reason="no_unique_legal_candidate",
+                    duplicate_candidate_skips=duplicate_candidate_skips + 1,
+                )
+                return None, audit
+            candidate, selected, repaired, options_preserved = replacement
+            audit["duplicate_candidate_skips"] = duplicate_candidate_skips + 1
         audit.update({
             "status": "candidate_repaired",
             "reason": None,
@@ -1368,6 +1433,7 @@ def repair_benchmark(
 
     repaired_by_index: dict[int, dict[str, Any]] = {}
     audits_by_index: dict[int, dict[str, Any]] = {}
+    provisional_repaired_keys: set[tuple[Any, ...]] = set()
     for position, index in enumerate(in_scope_indices, start=1):
         question = questions[index]
         scene_id = str(question.get("scene_id", ""))
@@ -1380,6 +1446,10 @@ def repair_benchmark(
             question.get("type"),
         )
         resources = resources_by_scene[scene_id]
+        pair = (int(question.get("moved_obj_id", -1)), int(question.get("query_obj_id", -1)))
+        is_trusted_attachment = pair in getattr(
+            resources, "trusted_attachment_evidence", {}
+        )
         repaired, audit = _repair_one(
             index,
             question,
@@ -1387,10 +1457,14 @@ def repair_benchmark(
             templates,
             recover_object_centric_from_text=recover_object_centric_from_text,
             object_centric_template=object_centric_template,
+            forbidden_repaired_keys=(
+                provisional_repaired_keys if is_trusted_attachment else None
+            ),
         )
         audits_by_index[index] = audit
         if repaired is not None:
             repaired_by_index[index] = repaired
+            provisional_repaired_keys.add(repaired_dedup_key(repaired))
 
     in_scope_set = set(in_scope_indices)
     seen_keys: dict[tuple[Any, ...], int] = {}
