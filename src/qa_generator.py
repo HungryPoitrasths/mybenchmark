@@ -1630,8 +1630,8 @@ def _default_templates() -> dict:
             f"Imagine you are {{obj_query}} and facing toward {{obj_face}}. If {{obj_move_source}} were moved along a {{angle}}-degree {{rotation_direction}} (viewed from above) orbit around the center of {{obj_face}} in the horizontal plane, without changing its own facing direction, from your perspective, in which direction would {{obj_ref}} be? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
         "L2_object_move_object_centric": [
-            f"Use a fixed object-centric coordinate frame defined by the initial scene: from {{obj_query}} toward {{obj_ref}} is forward, and left/right are defined from that heading. Keep this frame fixed throughout the motion. If {{obj_move_source}} is moved {{direction}} by {{distance}} in this frame, in which horizontal direction is {{obj_ref}} from {{obj_query}} afterward, measured in the same fixed frame? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
-            f"Initially, let the direction from {{obj_query}} to {{obj_ref}} define forward in an object-centric frame, with left/right defined from that heading. Freeze those axes before anything moves. After moving {{obj_move_source}} {{direction}} by {{distance}} in that frozen frame, where is {{obj_ref}} relative to {{obj_query}} in the same frame? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"In the initial scene, imagine {{obj_move_source}} faces the camera in the first main view, and you are {{obj_query}}, also facing that same camera. Freeze both objects' initial horizontal forward/right axes before anything moves. If {{obj_move_source}} is moved {{direction}} by {{distance}} in its own frozen facing frame, from your separately frozen facing frame, in which horizontal direction is {{obj_ref}} from you afterward? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
+            f"Suppose {{obj_move_source}} and {{obj_query}} each initially face the camera in the first main view. Keep each object's initial horizontal facing axes fixed throughout the motion. After moving {{obj_move_source}} {{direction}} by {{distance}} in {{obj_move_source}}'s frozen frame, where is {{obj_ref}} relative to {{obj_query}} in {{obj_query}}'s separately frozen frame? ({OBJECT_RELATIVE_DIRECTION_NOTE})",
         ],
 
         # --- Allocentric ---
@@ -3333,6 +3333,35 @@ def _object_pair_ground_move_directions(
         return ()
     forward /= norm
     right = np.asarray([forward[1], -forward[0], 0.0], dtype=np.float64)
+    return _eight_direction_ring(forward, right, _CAMERA_GROUND_MOVE_LABELS)
+
+
+def _object_facing_ground_axes(
+    object_center: np.ndarray,
+    facing_center: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return frozen horizontal forward/right axes for an object facing a point."""
+    forward = np.asarray(facing_center, dtype=np.float64) - np.asarray(
+        object_center, dtype=np.float64
+    )
+    forward[2] = 0.0
+    norm = float(np.linalg.norm(forward))
+    if not np.isfinite(norm) or norm < MIN_OBJECT_CENTRIC_FACING_HORIZONTAL_DISTANCE:
+        return None
+    forward /= norm
+    right = np.asarray([forward[1], -forward[0], 0.0], dtype=np.float64)
+    return forward, right
+
+
+def _object_camera_ground_move_directions(
+    object_center: np.ndarray,
+    camera_position: np.ndarray,
+) -> tuple[tuple[str, np.ndarray], ...]:
+    """Return legal actions in the object's initial frame facing the camera."""
+    axes = _object_facing_ground_axes(object_center, camera_position)
+    if axes is None:
+        return ()
+    forward, right = axes
     return _eight_direction_ring(forward, right, _CAMERA_GROUND_MOVE_LABELS)
 
 
@@ -10314,7 +10343,7 @@ def generate_l2_object_move_object_centric(
     motion_cache: SceneMotionCache | None = None,
     answer_pair_distance_cache: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict]:
-    """L2 object-move questions in a frozen query-to-reference frame."""
+    """L2 movement in moved->camera axes, answered in frozen query->camera axes."""
     questions_by_object: dict[int, list[dict]] = {}
     referable_object_ids = {int(o["id"]) for o in objects}
     attachment_referable_ids = (
@@ -10381,6 +10410,20 @@ def generate_l2_object_move_object_centric(
         has_attachment_chain = attachment_remapped
         if not has_attachment_chain:
             continue
+        camera_position = np.asarray(camera_pose.position, dtype=np.float64)
+        movement_axes = _object_facing_ground_axes(
+            np.asarray(move_source["center"], dtype=np.float64),
+            camera_position,
+        )
+        if movement_axes is None:
+            continue
+        movement_forward, movement_right = movement_axes
+        move_directions = _object_camera_ground_move_directions(
+            np.asarray(move_source["center"], dtype=np.float64),
+            camera_position,
+        )
+        movement_candidates = _scaled_move_candidates(move_directions)
+        candidate_deltas = _candidate_deltas(movement_candidates)
         query_objects = [
             candidate_obj for candidate_obj in attachment_query_pool
             if int(candidate_obj["id"]) in candidate_moved_ids
@@ -10449,6 +10492,11 @@ def generate_l2_object_move_object_centric(
                 },
             )
             query_center = np.array(query_obj["center"], dtype=float)
+            answer_axes = _object_facing_ground_axes(query_center, camera_position)
+            if answer_axes is None:
+                continue
+            answer_forward, answer_right = answer_axes
+            answer_facing_offset = camera_position - query_center
             query_questions: list[dict] = []
 
             for ref in reference_pool:
@@ -10465,18 +10513,9 @@ def generate_l2_object_move_object_centric(
                     continue
 
                 ref_c = np.array(ref["center"], dtype=float)
-                move_directions = _object_pair_ground_move_directions(
-                    query_center,
-                    ref_c,
-                )
-                if not move_directions:
-                    continue
-                movement_candidates = _scaled_move_candidates(move_directions)
-                candidate_deltas = _candidate_deltas(movement_candidates)
-                facing_offset = ref_c - query_center
                 old_dir, old_amb = primary_direction_object_centric(
                     query_center,
-                    ref_c,
+                    query_center + answer_facing_offset,
                     ref_c,
                     horizontal_only=True,
                     anchor_hull_xy=_object_bottom_hull_xy(query_obj),
@@ -10518,7 +10557,7 @@ def generate_l2_object_move_object_centric(
                         continue
                     moved_ref = moved_map.get(ref_id, ref)
                     new_query_center = np.array(moved_query["center"], dtype=float)
-                    new_facing_center = new_query_center + facing_offset
+                    new_facing_center = new_query_center + answer_facing_offset
                     new_ref_c = np.array(moved_ref["center"], dtype=float)
                     new_dir, new_amb = primary_direction_object_centric(
                         new_query_center,
@@ -10584,11 +10623,19 @@ def generate_l2_object_move_object_centric(
                         **_movement_metadata(
                             direction=direction_desc,
                             delta=delta,
-                            reference_frame="object_centric",
+                            reference_frame="moved_object_facing_first_camera",
                         ),
-                        "movement_frame_query_obj_id": query_obj_id,
-                        "movement_frame_reference_obj_id": ref_id,
+                        "movement_frame_anchor_obj_id": move_source_id,
+                        "movement_camera_binding": "frame_1",
+                        "movement_frame_forward_world": movement_forward.tolist(),
+                        "movement_frame_right_world": movement_right.tolist(),
                         "movement_frame_frozen": True,
+                        "answer_reference_frame": "query_object_facing_first_camera",
+                        "answer_frame_anchor_obj_id": query_obj_id,
+                        "answer_camera_binding": "frame_1",
+                        "answer_frame_forward_world": answer_forward.tolist(),
+                        "answer_frame_right_world": answer_right.tolist(),
+                        "answer_frame_frozen": True,
                     }
                     if attachment_remapped:
                         direct_children = question_attachment_graph.get(move_source_id, [])

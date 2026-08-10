@@ -15,6 +15,7 @@ from src.qa_generator import (
     _generate_l2_distance_questions_for_object,
     _iter_valid_object_move_states,
     _movement_direction_for_delta,
+    _object_camera_ground_move_directions,
     _object_pair_ground_move_directions,
     _scaled_move_candidates,
     generate_l2_object_move,
@@ -133,6 +134,19 @@ def test_object_pair_frame_uses_query_to_reference_as_frozen_forward() -> None:
         [expected_forward[1], -expected_forward[0], 0.0],
     )
     assert _object_pair_ground_move_directions(query, query) == ()
+
+
+def test_strict_object_move_frame_uses_moved_object_to_camera() -> None:
+    moved = np.asarray([1.0, 2.0, 0.5])
+    camera = np.asarray([4.0, 6.0, 2.5])
+    directions = dict(_object_camera_ground_move_directions(moved, camera))
+    expected_forward = np.asarray([3.0, 4.0, 0.0]) / 5.0
+
+    np.testing.assert_allclose(directions["forward"], expected_forward)
+    np.testing.assert_allclose(
+        directions["right"],
+        [expected_forward[1], -expected_forward[0], 0.0],
+    )
 
 
 def test_direction_lookup_rejects_a_mislabeled_diagonal() -> None:
@@ -296,17 +310,20 @@ def test_distance_generator_uses_same_camera_action_table() -> None:
     assert questions[0]["movement_camera_binding"] == "frame_1"
 
 
-def test_object_centric_generator_freezes_initial_query_reference_frame() -> None:
-    objects, graph = _attachment_scene()
-    delta = np.asarray([0.5, 0.0, 0.0])
+def test_object_centric_generator_freezes_separate_camera_facing_frames() -> None:
+    objects = [
+        _object(1, "table", (1.0, 0.0, 0.5)),
+        _object(2, "book", (2.0, 1.0, 0.5)),
+        _object(3, "chair", (3.0, 0.0, 0.5)),
+    ]
+    graph = {1: [2]}
+    delta = np.asarray([-0.5, 0.0, 0.0])
     moved_objects = apply_movement_selective(objects, graph, 1, delta)
     facing_calls: list[tuple[np.ndarray, np.ndarray]] = []
 
-    from src.relation_engine import primary_direction_object_centric as real_direction
-
     def record_direction(anchor_center, facing_center, target_center, **kwargs):
         facing_calls.append((np.asarray(anchor_center), np.asarray(facing_center)))
-        return real_direction(anchor_center, facing_center, target_center, **kwargs)
+        return ("front", 0.0) if len(facing_calls) == 1 else ("right", 0.0)
 
     def valid_states(*_args, **kwargs):
         assert any(np.allclose(candidate, delta) for candidate in kwargs["candidate_deltas"])
@@ -326,14 +343,23 @@ def test_object_centric_generator_freezes_initial_query_reference_frame() -> Non
 
     question = next(question for question in questions if question["obj_ref_id"] == 3)
     assert question["movement_direction"] == "forward"
-    assert question["movement_reference_frame"] == "object_centric"
-    assert question["movement_frame_query_obj_id"] == 2
-    assert question["movement_frame_reference_obj_id"] == 3
+    assert question["movement_reference_frame"] == "moved_object_facing_first_camera"
+    assert question["movement_frame_anchor_obj_id"] == 1
+    assert question["movement_camera_binding"] == "frame_1"
     assert question["movement_frame_frozen"] is True
+    assert question["answer_reference_frame"] == "query_object_facing_first_camera"
+    assert question["answer_frame_anchor_obj_id"] == 2
+    assert question["answer_camera_binding"] == "frame_1"
+    assert question["answer_frame_frozen"] is True
+    np.testing.assert_allclose(question["movement_frame_forward_world"], [-1.0, 0.0, 0.0])
+    np.testing.assert_allclose(
+        question["answer_frame_forward_world"],
+        np.asarray([-2.0, -1.0, 0.0]) / np.sqrt(5.0),
+    )
     initial_anchor, initial_facing = facing_calls[0]
     moved_anchor, moved_facing = facing_calls[1]
-    np.testing.assert_allclose(initial_facing - initial_anchor, [1.0, 0.0, 0.0])
-    np.testing.assert_allclose(moved_facing - moved_anchor, [1.0, 0.0, 0.0])
+    np.testing.assert_allclose(initial_facing - initial_anchor, [-2.0, -1.0, -0.5])
+    np.testing.assert_allclose(moved_facing - moved_anchor, [-2.0, -1.0, -0.5])
 
 
 def test_allocentric_generator_uses_world_cardinal_action_metadata() -> None:

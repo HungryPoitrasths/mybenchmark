@@ -46,6 +46,8 @@ from src.qa_generator import (
     _load_templates,
     _movement_metadata,
     _object_bottom_hull_xy,
+    _object_camera_ground_move_directions,
+    _object_facing_ground_axes,
     _object_pair_ground_move_directions,
     build_multi_frame_split_note,
     enrich_objects_with_distance_geometry,
@@ -86,6 +88,13 @@ OVERALL_RETENTION_THRESHOLD = 0.80
 TYPE_RETENTION_THRESHOLD = 0.60
 SCANNET_SCENE_RE = re.compile(r"^scene\d{4}_\d{2}$")
 DISTANCE_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)m\b", re.IGNORECASE)
+LEGACY_OBJECT_CENTRIC_MOVE_RE = re.compile(
+    r"(?:shifted|moved)\s+"
+    r"(forward-right|forward-left|backward-right|backward-left|"
+    r"forward|backward|left|right)\s+by\s+"
+    r"(\d+(?:\.\d+)?)m\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -118,7 +127,7 @@ class MotionState:
 class SceneResources:
     scene_id: str
     dataset: str
-    scene_dir: Path
+    scene_dir: Path | None
     metadata_path: Path | None
     objects: list[dict[str, Any]]
     attachment_graph: dict[int, list[int]]
@@ -235,18 +244,30 @@ def _load_scene_resources(
     scannetpp_root: Path | None,
     distance_geometry: str,
     needs_distance: bool,
+    needs_camera_pose: bool = True,
 ) -> SceneResources:
     dataset = detect_dataset(scene_id)
-    scene_dir = _scene_dir_for(
-        scene_id,
-        dataset,
-        scannet_root=scannet_root,
-        scannetpp_root=scannetpp_root,
-    )
     metadata_path = _select_metadata_path(scene_id, metadata_index)
+    needs_raw_scene = (
+        needs_camera_pose
+        or metadata_path is None
+        or (needs_distance and distance_geometry == "mesh")
+    )
+    scene_dir = (
+        _scene_dir_for(
+            scene_id,
+            dataset,
+            scannet_root=scannet_root,
+            scannetpp_root=scannetpp_root,
+        )
+        if needs_raw_scene
+        else None
+    )
     if metadata_path is not None:
         scene = _json_load(metadata_path)
     else:
+        if scene_dir is None:
+            raise RuntimeError(f"scene directory is required to parse {scene_id}")
         parse_kwargs: dict[str, Any] = {}
         if dataset == "scannetpp":
             parse_kwargs["dataset"] = "scannetpp"
@@ -265,14 +286,22 @@ def _load_scene_resources(
             get_scene_attachment_graph(scene, scene_id=scene_id)
         )
 
-    data_source = make_data_source(dataset, scene_dir, sensor="iphone")
-    poses = data_source.load_poses()
-    if not poses:
-        raise RuntimeError(f"scene {scene_id} has no camera poses")
+    poses: dict[str, CameraPose] = {}
+    if needs_camera_pose:
+        if scene_dir is None:
+            raise RuntimeError(f"scene directory is required to load poses for {scene_id}")
+        data_source = make_data_source(dataset, scene_dir, sensor="iphone")
+        poses = data_source.load_poses()
+        if not poses:
+            raise RuntimeError(f"scene {scene_id} has no camera poses")
 
     geometry_used = "not_needed"
     if needs_distance:
         if distance_geometry == "mesh":
+            if scene_dir is None:
+                raise RuntimeError(
+                    f"scene directory is required to load distance geometry for {scene_id}"
+                )
             kwargs: dict[str, Any] = {
                 "instance_ids": [int(obj["id"]) for obj in objects],
                 "n_surface_samples": 512,
@@ -330,18 +359,24 @@ def recover_legacy_movement(
     elif qtype == "object_move_allocentric":
         direction = _delta_to_cardinal_description(delta)
     elif qtype == "object_move_object_centric":
-        moved_id = int(question["moved_obj_id"])
-        moved_obj = objects_by_id.get(moved_id)
-        if moved_obj is None:
-            raise KeyError(f"moved object {moved_id} is missing")
-        direction = _delta_to_object_facing_description(
-            delta,
-            np.asarray(moved_obj["center"], dtype=np.float64),
-            np.asarray(camera_pose.position, dtype=np.float64),
-        )
+        # Legacy object-centric deltas were sometimes stored in the wrong
+        # world direction. The visible action text is the source of intent.
+        return recover_legacy_object_centric_movement_from_text(question)
     else:
         raise ValueError(f"unsupported target type: {qtype}")
     return str(direction), distance_m
+
+
+def recover_legacy_object_centric_movement_from_text(
+    question: dict[str, Any],
+) -> tuple[str, float]:
+    """Recover a legacy object-centric action without requiring a camera pose."""
+    match = LEGACY_OBJECT_CENTRIC_MOVE_RE.search(str(question.get("question", "")))
+    if match is None:
+        raise ValueError("legacy object-centric movement text is not parseable")
+    direction = match.group(1).lower()
+    distance_m = float(match.group(2))
+    return direction, distance_m
 
 
 def cross_check_legacy_text(
@@ -361,13 +396,14 @@ def cross_check_legacy_text(
     elif qtype == "object_move_allocentric":
         direction_ok = f"to the {direction.lower()}" in text_lower
     else:
-        direction_ok = any(
-            phrase in text_lower
-            for phrase in (
-                f"shifted {direction.lower()} by",
-                f"moved {direction.lower()} by",
-            )
+        # Object-centric prompts may insert the moved-object label between the
+        # verb and action ("moving the sofa forward by 1.0m"). The action
+        # token immediately followed by "by" is the stable visible contract.
+        direction_ok = re.search(
+            rf"\b{re.escape(direction.lower())}\s+by\b",
+            text_lower,
         )
+        direction_ok = direction_ok is not None
     if not direction_ok:
         reasons.append("legacy_direction_text_mismatch")
 
@@ -408,6 +444,11 @@ def build_candidate_schedule(
         (value for value in MOVE_MAGNITUDES_M if value > original_distance)
     ):
         entries.append((legacy_direction, magnitude, "same_direction_farther"))
+    for magnitude in sorted(
+        (value for value in MOVE_MAGNITUDES_M if value < original_distance),
+        reverse=True,
+    ):
+        entries.append((legacy_direction, magnitude, "same_direction_nearer"))
     for label, _unit in directions:
         if label != legacy_direction:
             entries.append((str(label), original_distance, "other_direction_original_distance"))
@@ -429,20 +470,23 @@ def build_candidate_schedule(
 
 def strict_directions_for_question(
     question: dict[str, Any],
-    camera_pose: CameraPose,
+    camera_pose: CameraPose | None,
     objects_by_id: dict[int, dict[str, Any]],
 ) -> tuple[tuple[str, np.ndarray], ...]:
     qtype = str(question.get("type", ""))
     if qtype in {"object_move_agent", "object_move_distance"}:
+        if camera_pose is None:
+            raise ValueError(f"camera pose is required for {qtype}")
         return _camera_ground_move_directions(camera_pose)
     if qtype == "object_move_allocentric":
         return _allocentric_ground_move_directions()
     if qtype == "object_move_object_centric":
-        query = objects_by_id[int(question["query_obj_id"])]
-        reference = objects_by_id[int(question["obj_ref_id"])]
-        return _object_pair_ground_move_directions(
-            np.asarray(query["center"], dtype=np.float64),
-            np.asarray(reference["center"], dtype=np.float64),
+        if camera_pose is None:
+            raise ValueError("camera pose is required for object_move_object_centric")
+        moved = objects_by_id[int(question["moved_obj_id"])]
+        return _object_camera_ground_move_directions(
+            np.asarray(moved["center"], dtype=np.float64),
+            np.asarray(camera_pose.position, dtype=np.float64),
         )
     raise ValueError(f"unsupported target type: {qtype}")
 
@@ -534,12 +578,14 @@ def _allocentric_direction(
 
 def recompute_baseline(
     question: dict[str, Any],
-    camera_pose: CameraPose,
+    camera_pose: CameraPose | None,
     objects_by_id: dict[int, dict[str, Any]],
 ) -> CandidateEvaluation:
     qtype = str(question["type"])
     try:
         if qtype == "object_move_agent":
+            if camera_pose is None:
+                return CandidateEvaluation(False, "missing_camera_pose")
             obj_b = objects_by_id[int(question["obj_b_id"])]
             obj_c = objects_by_id[int(question["obj_c_id"])]
             value, ambiguity = compute_pairwise_direction(obj_c, obj_b, camera_pose)
@@ -562,10 +608,12 @@ def recompute_baseline(
             )
 
         if qtype == "object_move_object_centric":
+            if camera_pose is None:
+                return CandidateEvaluation(False, "missing_camera_pose")
             query = objects_by_id[int(question["query_obj_id"])]
             reference = objects_by_id[int(question["obj_ref_id"])]
             facing_offset = (
-                np.asarray(reference["center"], dtype=np.float64)
+                np.asarray(camera_pose.position, dtype=np.float64)
                 - np.asarray(query["center"], dtype=np.float64)
             )
             value, ambiguity = _object_centric_direction(query, reference, facing_offset)
@@ -593,7 +641,7 @@ def evaluate_candidate(
     question: dict[str, Any],
     candidate: CandidateSpec,
     baseline: CandidateEvaluation,
-    camera_pose: CameraPose,
+    camera_pose: CameraPose | None,
     resources: SceneResources,
 ) -> CandidateEvaluation:
     moved_obj_id = int(question["moved_obj_id"])
@@ -604,6 +652,8 @@ def evaluate_candidate(
     qtype = str(question["type"])
     try:
         if qtype == "object_move_agent":
+            if camera_pose is None:
+                return CandidateEvaluation(False, "missing_camera_pose")
             obj_b = moved_map[int(question["obj_b_id"])]
             obj_c = moved_map[int(question["obj_c_id"])]
             value, ambiguity = compute_pairwise_direction(obj_c, obj_b, camera_pose)
@@ -629,11 +679,12 @@ def evaluate_candidate(
             )
 
         if qtype == "object_move_object_centric":
+            if camera_pose is None:
+                return CandidateEvaluation(False, "missing_camera_pose")
             original_map = resources.objects_by_id
             original_query = original_map[int(question["query_obj_id"])]
-            original_ref = original_map[int(question["obj_ref_id"])]
             facing_offset = (
-                np.asarray(original_ref["center"], dtype=np.float64)
+                np.asarray(camera_pose.position, dtype=np.float64)
                 - np.asarray(original_query["center"], dtype=np.float64)
             )
             value, ambiguity = _object_centric_direction(
@@ -666,7 +717,7 @@ def choose_candidate(
     question: dict[str, Any],
     schedule: Sequence[CandidateSpec],
     baseline: CandidateEvaluation,
-    camera_pose: CameraPose,
+    camera_pose: CameraPose | None,
     resources: SceneResources,
 ) -> tuple[CandidateSpec | None, CandidateEvaluation | None, Counter[str]]:
     """Prefer the first changed answer; retain the first legal unchanged fallback."""
@@ -756,6 +807,8 @@ def _template_for(
     templates: dict[str, Any],
     question: dict[str, Any],
     source_index: int,
+    *,
+    object_centric_template: str = "configured",
 ) -> str:
     key = {
         "object_move_agent": "L2_object_move_agent",
@@ -766,6 +819,21 @@ def _template_for(
     candidates = templates.get(key) or _default_templates()[key]
     if not isinstance(candidates, list) or not candidates:
         raise ValueError(f"template list {key} is empty")
+    if qtype == "object_move_object_centric" and object_centric_template == "freeze":
+        freeze_templates = [
+            candidate
+            for candidate in candidates
+            if "Freeze both objects' initial horizontal forward/right axes" in str(candidate)
+        ]
+        if len(freeze_templates) != 1:
+            raise ValueError(
+                "expected exactly one canonical strict object-centric template"
+            )
+        return str(freeze_templates[0])
+    if object_centric_template not in {"configured", "freeze"}:
+        raise ValueError(
+            f"unsupported object-centric template mode: {object_centric_template}"
+        )
     return str(candidates[_stable_seed(question, source_index, "template") % len(candidates)])
 
 
@@ -775,9 +843,17 @@ def _render_question_text(
     resources: SceneResources,
     templates: dict[str, Any],
     source_index: int,
+    *,
+    object_centric_template: str = "configured",
 ) -> str:
     qtype = str(repaired["type"])
-    template = _template_for(qtype, templates, repaired, source_index)
+    template = _template_for(
+        qtype,
+        templates,
+        repaired,
+        source_index,
+        object_centric_template=object_centric_template,
+    )
     distance = f"{candidate.distance_m:.1f}m"
     if qtype in {"object_move_agent", "object_move_distance"}:
         base = template.format(
@@ -827,7 +903,10 @@ def build_repaired_question(
     baseline: CandidateEvaluation,
     selected: CandidateEvaluation,
     resources: SceneResources,
+    camera_pose: CameraPose | None,
     templates: dict[str, Any],
+    *,
+    object_centric_template: str = "configured",
 ) -> tuple[dict[str, Any], bool]:
     repaired = copy.deepcopy(question)
     qtype = str(repaired["type"])
@@ -848,16 +927,43 @@ def build_repaired_question(
         reference_frame={
             "object_move_agent": "agent",
             "object_move_distance": "agent",
-            "object_move_object_centric": "object_centric",
+            "object_move_object_centric": "moved_object_facing_first_camera",
             "object_move_allocentric": "allocentric",
         }[qtype],
     ))
     if qtype in {"object_move_agent", "object_move_distance"}:
         repaired["movement_camera_binding"] = "frame_1"
     elif qtype == "object_move_object_centric":
-        repaired["movement_frame_query_obj_id"] = int(repaired["query_obj_id"])
-        repaired["movement_frame_reference_obj_id"] = int(repaired["obj_ref_id"])
-        repaired["movement_frame_frozen"] = True
+        if camera_pose is None:
+            raise ValueError("camera pose is required for object-centric frame metadata")
+        camera_position = np.asarray(camera_pose.position, dtype=np.float64)
+        moved_obj = resources.objects_by_id[int(repaired["moved_obj_id"])]
+        query_obj = resources.objects_by_id[int(repaired["query_obj_id"])]
+        movement_axes = _object_facing_ground_axes(
+            np.asarray(moved_obj["center"], dtype=np.float64), camera_position
+        )
+        answer_axes = _object_facing_ground_axes(
+            np.asarray(query_obj["center"], dtype=np.float64), camera_position
+        )
+        if movement_axes is None or answer_axes is None:
+            raise ValueError("degenerate strict object-centric frame")
+        movement_forward, movement_right = movement_axes
+        answer_forward, answer_right = answer_axes
+        repaired.pop("movement_frame_query_obj_id", None)
+        repaired.pop("movement_frame_reference_obj_id", None)
+        repaired.update({
+            "movement_frame_anchor_obj_id": int(repaired["moved_obj_id"]),
+            "movement_camera_binding": "frame_1",
+            "movement_frame_forward_world": movement_forward.tolist(),
+            "movement_frame_right_world": movement_right.tolist(),
+            "movement_frame_frozen": True,
+            "answer_reference_frame": "query_object_facing_first_camera",
+            "answer_frame_anchor_obj_id": int(repaired["query_obj_id"]),
+            "answer_camera_binding": "frame_1",
+            "answer_frame_forward_world": answer_forward.tolist(),
+            "answer_frame_right_world": answer_right.tolist(),
+            "answer_frame_frozen": True,
+        })
     else:
         repaired["movement_world_axes"] = "scannet_aligned_xy"
 
@@ -881,10 +987,78 @@ def build_repaired_question(
         resources,
         templates,
         source_index,
+        object_centric_template=object_centric_template,
     )
     repaired.pop("trace_reason", None)
     _annotate_attachment_trace_reason(repaired)
     return repaired, options_preserved
+
+
+def normalize_v2_object_centric_template(
+    question: dict[str, Any],
+    source_index: int,
+    resources: SceneResources | None,
+    templates: dict[str, Any],
+) -> dict[str, Any]:
+    """Render an existing v2 object-centric question with canonical wording."""
+    if str(question.get("type", "")) != "object_move_object_centric":
+        return copy.deepcopy(question)
+    if (
+        question.get("movement_semantics_version")
+        != L2_OBJECT_MOVE_SEMANTICS_VERSION
+    ):
+        raise ValueError("cannot normalize a non-v2 object-centric question")
+    delta = np.asarray(question.get("delta", []), dtype=np.float64)
+    if delta.shape != (3,) or not np.all(np.isfinite(delta)):
+        raise ValueError("v2 object-centric question has an invalid delta")
+    direction = str(question.get("movement_direction", "")).strip()
+    if not direction:
+        raise ValueError("v2 object-centric question has no movement direction")
+    distance_m = float(
+        question.get("movement_distance_m", float(np.linalg.norm(delta)))
+    )
+    normalized = copy.deepcopy(question)
+    template = _template_for(
+        "object_move_object_centric",
+        templates,
+        normalized,
+        source_index,
+        object_centric_template="freeze",
+    )
+    base = template.format(
+        obj_a=f"the {normalized['moved_obj_label']}",
+        obj_move_source=f"the {normalized['moved_obj_label']}",
+        obj_query=f"the {normalized['query_obj_label']}",
+        obj_ref=f"the {normalized['obj_ref_label']}",
+        direction=direction,
+        direction_with_camera_hint=_direction_with_camera_hint(direction),
+        distance=f"{distance_m:.1f}m",
+    )
+    text = str(normalized.get("question", ""))
+    starts = [
+        position
+        for marker in (
+            "Use a fixed object-centric coordinate frame",
+            "Initially, let the direction from",
+            "In the initial scene, imagine",
+            "Suppose the ",
+        )
+        if (position := text.find(marker)) >= 0
+    ]
+    if starts:
+        normalized["question"] = f"{text[:min(starts)]}{base}"
+    elif resources is not None:
+        normalized["question"] = _render_question_text(
+            normalized,
+            CandidateSpec(direction, distance_m, delta, "template_normalization", 0),
+            resources,
+            templates,
+            source_index,
+            object_centric_template="freeze",
+        )
+    else:
+        raise ValueError("cannot locate the object-centric template text")
+    return normalized
 
 
 def _role_key(question: dict[str, Any]) -> tuple[int, ...]:
@@ -930,16 +1104,31 @@ def _repair_one(
     question: dict[str, Any],
     resources: SceneResources,
     templates: dict[str, Any],
+    *,
+    recover_object_centric_from_text: bool = False,
+    object_centric_template: str = "configured",
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     audit = _audit_base(index, question)
     objects_by_id = resources.objects_by_id
     try:
+        qtype = str(question.get("type", ""))
         pose = _pose_for_question(question, resources)
-        legacy_direction, legacy_distance = recover_legacy_movement(
-            question,
-            pose,
-            objects_by_id,
-        )
+        if qtype == "object_move_object_centric":
+            structured_direction = str(question.get("movement_direction") or "").strip()
+            structured_distance = question.get("movement_distance_m")
+            if structured_direction and structured_distance is not None:
+                legacy_direction = structured_direction
+                legacy_distance = float(structured_distance)
+            else:
+                legacy_direction, legacy_distance = (
+                    recover_legacy_object_centric_movement_from_text(question)
+                )
+        else:
+            legacy_direction, legacy_distance = recover_legacy_movement(
+                question,
+                pose,
+                objects_by_id,
+            )
         text_ok, text_reasons = cross_check_legacy_text(
             question,
             legacy_direction,
@@ -958,6 +1147,12 @@ def _repair_one(
         moved_id = int(question["moved_obj_id"])
         query_id = int(question["query_obj_id"])
         moved_ids = get_moved_object_ids(moved_id, resources.attachment_graph)
+        trusted_evidence = getattr(resources, "trusted_attachment_evidence", {}).get(
+            (moved_id, query_id)
+        )
+        if trusted_evidence is not None:
+            audit["attachment_source"] = "human_review_override"
+            audit["attachment_evidence"] = copy.deepcopy(trusted_evidence)
         if bool(question.get("attachment_remapped", False)) and query_id not in moved_ids:
             audit.update(
                 status="dropped",
@@ -1028,7 +1223,9 @@ def _repair_one(
             baseline,
             selected,
             resources,
+            pose,
             templates,
+            object_centric_template=object_centric_template,
         )
         audit.update({
             "status": "candidate_repaired",
@@ -1121,21 +1318,53 @@ def repair_benchmark(
     scene_errors: dict[str, str],
     templates: dict[str, Any],
     selected_scene_ids: set[str] | None = None,
+    target_types: set[str] | None = None,
+    legacy_only: bool = False,
+    rebalance: bool = True,
+    deduplicate_against_preserved: bool = False,
+    recover_object_centric_from_text: bool = False,
+    object_centric_template: str = "configured",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     questions = benchmark.get("questions")
     if not isinstance(questions, list):
         raise ValueError("benchmark must contain a questions list")
+    selected_types = set(TARGET_TYPES if target_types is None else target_types)
+    unsupported_types = selected_types - TARGET_TYPES
+    if not selected_types or unsupported_types:
+        raise ValueError(
+            f"invalid target types: {sorted(unsupported_types or selected_types)}"
+        )
     partial_run = selected_scene_ids is not None
     in_scope_indices = [
         index
         for index, question in enumerate(questions)
-        if str(question.get("type", "")) in TARGET_TYPES
+        if str(question.get("type", "")) in selected_types
+        and (
+            not legacy_only
+            or question.get("movement_semantics_version")
+            != L2_OBJECT_MOVE_SEMANTICS_VERSION
+        )
         and (
             selected_scene_ids is None
             or str(question.get("scene_id", "")) in selected_scene_ids
         )
     ]
     input_target_questions = [questions[index] for index in in_scope_indices]
+    required_scene_ids = {
+        str(question.get("scene_id", "")) for question in input_target_questions
+    }
+    unavailable_scene_ids = sorted(
+        scene_id for scene_id in required_scene_ids if scene_id not in resources_by_scene
+    )
+    if unavailable_scene_ids:
+        details = {
+            scene_id: scene_errors.get(scene_id, "missing_resources")
+            for scene_id in unavailable_scene_ids
+        }
+        raise RuntimeError(
+            "refusing to drop questions for systemic scene-resource failures: "
+            + json.dumps(details, ensure_ascii=False, sort_keys=True)
+        )
 
     repaired_by_index: dict[int, dict[str, Any]] = {}
     audits_by_index: dict[int, dict[str, Any]] = {}
@@ -1150,21 +1379,28 @@ def repair_benchmark(
             scene_id,
             question.get("type"),
         )
-        resources = resources_by_scene.get(scene_id)
-        if resources is None:
-            audit = _audit_base(index, question)
-            audit.update(
-                status="dropped",
-                reason=f"scene_load_error:{scene_errors.get(scene_id, 'missing_resources')}",
-            )
-            audits_by_index[index] = audit
-            continue
-        repaired, audit = _repair_one(index, question, resources, templates)
+        resources = resources_by_scene[scene_id]
+        repaired, audit = _repair_one(
+            index,
+            question,
+            resources,
+            templates,
+            recover_object_centric_from_text=recover_object_centric_from_text,
+            object_centric_template=object_centric_template,
+        )
         audits_by_index[index] = audit
         if repaired is not None:
             repaired_by_index[index] = repaired
 
+    in_scope_set = set(in_scope_indices)
     seen_keys: dict[tuple[Any, ...], int] = {}
+    if deduplicate_against_preserved:
+        for index, question in enumerate(questions):
+            if (
+                index not in in_scope_set
+                and str(question.get("type", "")) in selected_types
+            ):
+                seen_keys.setdefault(repaired_dedup_key(question), index)
     deduped_by_index: dict[int, dict[str, Any]] = {}
     for index in in_scope_indices:
         repaired = repaired_by_index.get(index)
@@ -1173,47 +1409,81 @@ def repair_benchmark(
         key = repaired_dedup_key(repaired)
         duplicate_of = seen_keys.get(key)
         if duplicate_of is not None:
+            duplicate_reason = (
+                "duplicate_repaired_question"
+                if duplicate_of in in_scope_set
+                else "duplicate_preserved_question"
+            )
             audits_by_index[index].update(
                 status="dropped",
-                reason="duplicate_repaired_question",
+                reason=duplicate_reason,
                 duplicate_of_source_index=duplicate_of,
             )
             continue
         seen_keys[key] = index
         deduped_by_index[index] = repaired
 
-    balance_input: list[dict[str, Any]] = []
-    for index in in_scope_indices:
-        repaired = deduped_by_index.get(index)
-        if repaired is None:
-            continue
-        tagged = copy.deepcopy(repaired)
-        tagged["_repair_source_index"] = index
-        balance_input.append(tagged)
-    balanced = balance_l2_attachment_per_scene(balance_input)
-    kept_indices = {int(question["_repair_source_index"]) for question in balanced}
     final_repaired_by_index: dict[int, dict[str, Any]] = {}
-    for tagged in balanced:
-        source_index = int(tagged.pop("_repair_source_index"))
-        final_repaired_by_index[source_index] = tagged
-        audits_by_index[source_index]["status"] = "kept"
-    for index in deduped_by_index:
-        if index not in kept_indices:
-            audits_by_index[index].update(status="dropped", reason="attachment_balance")
+    if rebalance:
+        balance_input: list[dict[str, Any]] = []
+        for index in in_scope_indices:
+            repaired = deduped_by_index.get(index)
+            if repaired is None:
+                continue
+            tagged = copy.deepcopy(repaired)
+            tagged["_repair_source_index"] = index
+            balance_input.append(tagged)
+        balanced = balance_l2_attachment_per_scene(balance_input)
+        kept_indices = {
+            int(question["_repair_source_index"]) for question in balanced
+        }
+        for tagged in balanced:
+            source_index = int(tagged.pop("_repair_source_index"))
+            final_repaired_by_index[source_index] = tagged
+            audits_by_index[source_index]["status"] = "kept"
+        for index in deduped_by_index:
+            if index not in kept_indices:
+                audits_by_index[index].update(
+                    status="dropped", reason="attachment_balance"
+                )
+    else:
+        final_repaired_by_index = dict(deduped_by_index)
+        for index in final_repaired_by_index:
+            audits_by_index[index]["status"] = "kept"
 
     output_questions: list[dict[str, Any]] = []
-    in_scope_set = set(in_scope_indices)
+    output_index_by_source: dict[int, int] = {}
     for index, question in enumerate(questions):
         if index not in in_scope_set:
             output_questions.append(question)
             continue
         repaired = final_repaired_by_index.get(index)
         if repaired is not None:
+            output_index_by_source[index] = len(output_questions)
             output_questions.append(repaired)
+
+    for source_index, output_index in output_index_by_source.items():
+        repaired_question = output_questions[output_index]
+        audits_by_index[source_index].update(
+            output_index=output_index,
+            repaired_question_sha256=hashlib.sha256(
+                json.dumps(
+                    repaired_question,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        )
 
     repaired_doc = copy.deepcopy(benchmark)
     repaired_doc["questions"] = output_questions
-    repaired_doc["version"] = f"{benchmark.get('version', 'unknown')}-l2-move-v2-repair"
+    suffix = (
+        "object-centric-v2-repair"
+        if selected_types == {"object_move_object_centric"} and legacy_only
+        else "l2-move-v2-repair"
+    )
+    repaired_doc["version"] = f"{benchmark.get('version', 'unknown')}-{suffix}"
     repaired_doc["statistics"] = compute_statistics(output_questions)
 
     kept_scope = [final_repaired_by_index[index] for index in in_scope_indices if index in final_repaired_by_index]
@@ -1243,7 +1513,11 @@ def repair_benchmark(
         "schema_version": 1,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "movement_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
-        "target_types": sorted(TARGET_TYPES),
+        "target_types": sorted(selected_types),
+        "legacy_only": legacy_only,
+        "attachment_rebalance_enabled": rebalance,
+        "deduplicate_against_preserved": deduplicate_against_preserved,
+        "object_centric_template": object_centric_template,
         "selected_scene_ids": sorted(selected_scene_ids) if selected_scene_ids else None,
         "partial_run": partial_run,
         "scene_errors": scene_errors,
@@ -1304,6 +1578,39 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Repair only these pilot scenes. Unselected questions are preserved and publication acceptance fails.",
     )
+    parser.add_argument(
+        "--target-type",
+        action="append",
+        choices=sorted(TARGET_TYPES),
+        default=None,
+        help="Repair only this movement type; repeatable. Defaults to all target types.",
+    )
+    parser.add_argument(
+        "--legacy-only",
+        action="store_true",
+        help="Repair only questions that are not already marked with movement semantics v2.",
+    )
+    parser.add_argument(
+        "--object-centric-template",
+        choices=("configured", "freeze"),
+        default="configured",
+        help="Use configured template selection or force the canonical Freeze wording.",
+    )
+    parser.add_argument(
+        "--skip-attachment-rebalance",
+        action="store_true",
+        help="Preserve repaired question order without balancing the selected subset.",
+    )
+    parser.add_argument(
+        "--deduplicate-against-preserved",
+        action="store_true",
+        help="Drop repaired questions that duplicate an out-of-scope preserved question.",
+    )
+    parser.add_argument(
+        "--allow-retention-failure",
+        action="store_true",
+        help="Return success after writing even when publication retention thresholds fail.",
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -1328,10 +1635,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("Input benchmark has no questions list")
 
     selected_scene_ids = set(args.scene_id) if args.scene_id else None
+    selected_types = set(args.target_type or TARGET_TYPES)
     target_questions = [
         question
         for question in questions
-        if str(question.get("type", "")) in TARGET_TYPES
+        if str(question.get("type", "")) in selected_types
+        and (
+            not args.legacy_only
+            or question.get("movement_semantics_version")
+            != L2_OBJECT_MOVE_SEMANTICS_VERSION
+        )
         and (
             selected_scene_ids is None
             or str(question.get("scene_id", "")) in selected_scene_ids
@@ -1360,6 +1673,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scannetpp_root=args.scannetpp_root.resolve() if args.scannetpp_root else None,
                 distance_geometry=args.distance_geometry,
                 needs_distance="object_move_distance" in target_types_by_scene[scene_id],
+                needs_camera_pose=True,
             )
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
@@ -1372,6 +1686,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         scene_errors=scene_errors,
         templates=_load_templates(),
         selected_scene_ids=selected_scene_ids,
+        target_types=selected_types,
+        legacy_only=args.legacy_only,
+        rebalance=not args.skip_attachment_rebalance,
+        deduplicate_against_preserved=args.deduplicate_against_preserved,
+        recover_object_centric_from_text=True,
+        object_centric_template=args.object_centric_template,
     )
     audit["input_path"] = str(input_path)
     audit["output_path"] = str(output_path)
@@ -1394,7 +1714,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         acceptance["overall"]["retention"],
         acceptance["accepted"],
     )
-    return 0 if acceptance["accepted"] or selected_scene_ids is not None else 2
+    return (
+        0
+        if acceptance["accepted"]
+        or selected_scene_ids is not None
+        or args.allow_retention_failure
+        else 2
+    )
 
 
 if __name__ == "__main__":

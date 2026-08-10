@@ -101,6 +101,10 @@ from src.legacy_auxiliary_path import (
     object_group_center,
 )
 from src.quality_control import full_quality_pipeline, compute_statistics
+from src.question_identity import (
+    QUESTION_OBJECT_ID_FIELDS as _QUESTION_CAP_OBJECT_ID_FIELDS,
+    question_pair_key as _shared_question_pair_key,
+)
 from src.utils.colmap_loader import (
     load_axis_alignment,
     load_scannet_depth_intrinsics,
@@ -6026,22 +6030,6 @@ _ATTACHMENT_ONLY_L2_PUBLIC_TYPES = {
     "L2_object_rotate_object_centric",
     "L2_object_move_allocentric",
 }
-_QUESTION_CAP_OBJECT_ID_FIELDS = [
-    "query_obj_id",
-    "obj_a_id",
-    "target_obj_id",
-    "obj_target_id",
-    "removed_obj_id",
-    "obj_ref_id",
-    "obj_face_id",
-    "moved_obj_id",
-    "parent_id",
-    "root_id",
-    "grandchild_id",
-    "grandparent_id",
-    "neighbor_id",
-    "obj_b_id",
-]
 _QUESTION_CAP_OBJECT_ID_FIELD_BY_TYPE = {
     "direction_agent": "obj_a_id",
     "occlusion": "obj_a_id",
@@ -6061,26 +6049,6 @@ _QUESTION_CAP_OBJECT_ID_FIELD_BY_TYPE = {
     "coordinate_rotation_object_centric": "obj_target_id",
     "coordinate_rotation_allocentric": "obj_a_id",
 }
-_PAIR_KEY_FIELDS_BY_TYPE: dict[str, tuple[str, str]] = {
-    "direction_agent": ("obj_a_id", "obj_b_id"),
-    "distance": ("obj_a_id", "obj_b_id"),
-    "direction_allocentric": ("obj_a_id", "obj_b_id"),
-    "coordinate_rotation_agent": ("obj_a_id", "obj_b_id"),
-    "coordinate_rotation_allocentric": ("obj_a_id", "obj_b_id"),
-    "direction_object_centric": ("obj_ref_id", "obj_target_id"),
-    "coordinate_rotation_object_centric": ("obj_ref_id", "obj_target_id"),
-    "object_move_agent": ("moved_obj_id", "query_obj_id"),
-    "object_move_distance": ("moved_obj_id", "query_obj_id"),
-    "object_move_occlusion": ("moved_obj_id", "query_obj_id"),
-    "object_move_object_centric": ("moved_obj_id", "query_obj_id"),
-    "object_rotate_object_centric": ("moved_obj_id", "query_obj_id"),
-    "object_move_allocentric": ("moved_obj_id", "query_obj_id"),
-    "object_remove": ("removed_obj_id", "obj_b_id"),
-    "attachment_chain": ("grandparent_id", "grandchild_id"),
-    "attachment_move": ("root_id", "query_obj_id"),
-}
-
-
 def _question_cap_object_id(question: dict) -> str:
     canonical_type = _canonical_scene_question_type(question)
     primary_field = _QUESTION_CAP_OBJECT_ID_FIELD_BY_TYPE.get(canonical_type)
@@ -6097,51 +6065,7 @@ def _question_cap_object_id(question: dict) -> str:
 
 
 def _question_pair_key(question: dict) -> tuple[str, str, str] | None:
-    # Scoped by canonical_type so pair-level dedup only ever collapses two
-    # questions of the SAME type about the same object pair (e.g. two
-    # direction_agent questions about (table, keyboard)). Without the type in
-    # the key, an L1 direction_agent question and an unrelated L2
-    # object_move_agent question about the same two object ids would share a
-    # key and the L2 one would be silently dropped. The six L2 move/rotate
-    # subtypes all key off the same ("moved_obj_id", "query_obj_id") fields,
-    # so without per-type scoping they would collide with each other too.
-    canonical_type = _canonical_scene_question_type(question)
-    if question.get("cross_frame_layout"):
-        groups = question.get("object_frame_groups")
-        if isinstance(groups, dict):
-            frame_1_ids = ",".join(str(value) for value in groups.get("frame_1", []))
-            frame_2_ids = ",".join(str(value) for value in groups.get("frame_2", []))
-            if frame_1_ids and frame_2_ids:
-                role_signature = f"{frame_1_ids}->{frame_2_ids}"
-                return (
-                    canonical_type,
-                    str(question.get("cross_frame_layout")),
-                    role_signature,
-                )
-    field_pair = _PAIR_KEY_FIELDS_BY_TYPE.get(canonical_type)
-    if field_pair is not None:
-        left = question.get(field_pair[0])
-        right = question.get(field_pair[1])
-        if left is not None and right is not None:
-            pair = tuple(sorted((str(left), str(right))))
-            if pair[0] != pair[1]:
-                return (canonical_type, pair[0], pair[1])
-
-    unique_ids: list[str] = []
-    for field in _QUESTION_CAP_OBJECT_ID_FIELDS:
-        value = question.get(field)
-        if value is None:
-            continue
-        text = str(value)
-        if text not in unique_ids:
-            unique_ids.append(text)
-        if len(unique_ids) > 2:
-            break
-    if len(unique_ids) == 2:
-        pair = tuple(sorted(unique_ids))
-        if pair[0] != pair[1]:
-            return (canonical_type, pair[0], pair[1])
-    return None
+    return _shared_question_pair_key(question)
 
 
 def _only_l2_attachment_types_requested(only_question_types: list[str] | None) -> bool:

@@ -11,6 +11,7 @@ import pytest
 from scripts.recompute_l2_move_benchmark import (
     CandidateEvaluation,
     CandidateSpec,
+    MOVE_MAGNITUDES_M,
     MotionState,
     SceneResources,
     _deterministic_options,
@@ -20,7 +21,9 @@ from scripts.recompute_l2_move_benchmark import (
     choose_candidate,
     cross_check_legacy_text,
     detect_dataset,
+    normalize_v2_object_centric_template,
     recompute_baseline,
+    recover_legacy_object_centric_movement_from_text,
     recover_legacy_movement,
     repair_benchmark,
     repaired_dedup_key,
@@ -52,7 +55,7 @@ def _pose() -> CameraPose:
     return CameraPose(
         image_name="frame.jpg",
         rotation=np.eye(3, dtype=float),
-        translation=np.zeros(3, dtype=float),
+        translation=np.asarray([0.0, -4.0, 0.0], dtype=float),
     )
 
 
@@ -139,6 +142,29 @@ def test_legacy_direction_recovery_and_text_cross_check() -> None:
     assert "legacy_direction_text_mismatch" in reasons
 
 
+def test_legacy_object_centric_text_recovery_needs_no_pose() -> None:
+    question = _base_question("object_move_object_centric")
+    question["question"] = (
+        "Imagine you are the table initially facing the camera. "
+        "If you were shifted backward-left by 2.5m, what happens?"
+    )
+
+    assert recover_legacy_object_centric_movement_from_text(question) == (
+        "backward-left",
+        2.5,
+    )
+
+
+def test_object_centric_text_cross_check_allows_an_inserted_object_label() -> None:
+    question = _base_question("object_move_object_centric")
+    question["question"] = (
+        "After moving the table forward-right by 2.5m in its frozen frame, "
+        "where is the chair?"
+    )
+
+    assert cross_check_legacy_text(question, "forward-right", 2.5) == (True, [])
+
+
 def test_known_legacy_diagonal_is_not_retained_as_strict_right() -> None:
     question = _base_question()
     question["delta"] = [1.767767, 1.767767, 0.0]
@@ -175,17 +201,17 @@ def test_strict_coordinate_systems_produce_expected_deltas() -> None:
 
     np.testing.assert_allclose(agent_dirs["right"], [1.0, 0.0, 0.0])
     np.testing.assert_allclose(alloc_dirs["east"], [1.0, 0.0, 0.0])
-    np.testing.assert_allclose(object_dirs["forward"], [1.0, 0.0, 0.0])
-    np.testing.assert_allclose(object_dirs["right"], [0.0, -1.0, 0.0])
+    np.testing.assert_allclose(object_dirs["forward"], [0.0, 1.0, 0.0])
+    np.testing.assert_allclose(object_dirs["right"], [1.0, 0.0, 0.0])
 
 
-def test_object_centric_baseline_uses_frozen_query_to_reference_frame() -> None:
+def test_object_centric_baseline_uses_frozen_query_to_camera_frame() -> None:
     question = _base_question("object_move_object_centric")
     result = recompute_baseline(question, _pose(), _resources().objects_by_id)
 
     assert result.valid
-    assert result.new_value == "front"
-    assert result.ambiguity == pytest.approx(0.0)
+    assert result.new_value == "right"
+    assert result.ambiguity is not None and result.ambiguity < 0.7
 
 
 def test_candidate_schedule_has_locked_fallback_order() -> None:
@@ -204,6 +230,7 @@ def test_candidate_schedule_has_locked_fallback_order() -> None:
     first_other = next(
         index for index, item in enumerate(schedule) if item.phase == "other_direction_original_distance"
     )
+    assert first_other == len(MOVE_MAGNITUDES_M)
     assert schedule[first_other].distance_m == 1.0
     assert len(schedule) == 48
 
@@ -324,6 +351,37 @@ def test_repaired_dedup_key_includes_delta_frames_and_roles() -> None:
     assert repaired_dedup_key(question) != repaired_dedup_key(changed_frame)
 
 
+def test_v2_template_normalization_preserves_existing_multiview_prefix() -> None:
+    question = _base_question("object_move_object_centric")
+    prefix = "A sequence of views follows a visually continuous camera path. "
+    question.update({
+        "movement_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
+        "movement_direction": "right",
+        "movement_distance_m": 1.0,
+        "movement_reference_frame": "moved_object_facing_first_camera",
+        "movement_frame_anchor_obj_id": 1,
+        "movement_frame_frozen": True,
+        "question": (
+            prefix
+            + "Use a fixed object-centric coordinate frame defined by the initial scene: "
+            "old wording"
+        ),
+    })
+    from scripts.recompute_l2_move_benchmark import _load_templates
+
+    normalized = normalize_v2_object_centric_template(
+        question,
+        0,
+        None,
+        _load_templates(),
+    )
+
+    assert normalized["question"].startswith(prefix)
+    assert "Freeze both objects' initial horizontal forward/right axes" in normalized["question"]
+    assert "Use a fixed object-centric" not in normalized["question"]
+    assert normalized["answer"] == question["answer"]
+
+
 def test_repair_merge_keeps_non_targets_deep_equal_and_in_order() -> None:
     non_target_a = {"level": "L1", "type": "distance", "marker": "a", "answer": "A"}
     target = _base_question()
@@ -365,6 +423,60 @@ def test_repair_merge_keeps_non_targets_deep_equal_and_in_order() -> None:
     assert output["questions"][2] is non_target_b
     assert output["questions"][1]["movement_semantics_version"] == 2
     assert audit["aggregate"]["kept_repaired_count"] == 1
+
+
+def test_repair_aborts_instead_of_mass_dropping_missing_scene_resources() -> None:
+    benchmark = {
+        "questions": [_base_question("object_move_object_centric")],
+        "statistics": {},
+    }
+
+    with pytest.raises(RuntimeError, match="systemic scene-resource failures"):
+        repair_benchmark(
+            benchmark,
+            resources_by_scene={},
+            scene_errors={"hashscene": "missing raw scene"},
+            templates={},
+            target_types={"object_move_object_centric"},
+        )
+
+
+def test_targeted_legacy_repair_deduplicates_against_preserved_v2() -> None:
+    legacy = _base_question("object_move_object_centric")
+    legacy["question"] = "If the table were shifted right by 1.0m, what happens?"
+    preserved = copy.deepcopy(legacy)
+    preserved["movement_semantics_version"] = L2_OBJECT_MOVE_SEMANTICS_VERSION
+    preserved["question"] = "current v2 wording"
+    other_type = _base_question("object_move_agent")
+    benchmark = {
+        "name": "test",
+        "version": "1",
+        "statistics": {},
+        "questions": [preserved, legacy, other_type],
+    }
+    repaired = copy.deepcopy(legacy)
+    repaired["movement_semantics_version"] = L2_OBJECT_MOVE_SEMANTICS_VERSION
+
+    def fake_repair(index, _question, *_args, **_kwargs):
+        return repaired, {"source_index": index, "status": "candidate_repaired"}
+
+    with patch(
+        "scripts.recompute_l2_move_benchmark._repair_one",
+        side_effect=fake_repair,
+    ):
+        output, audit = repair_benchmark(
+            benchmark,
+            resources_by_scene={"hashscene": _resources()},
+            scene_errors={},
+            templates={},
+            target_types={"object_move_object_centric"},
+            legacy_only=True,
+            rebalance=False,
+            deduplicate_against_preserved=True,
+        )
+
+    assert output["questions"] == [preserved, other_type]
+    assert audit["questions"][0]["reason"] == "duplicate_preserved_question"
 
 
 def test_attachment_balance_applies_exact_scene_and_batch_caps() -> None:
