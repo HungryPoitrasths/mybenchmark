@@ -351,6 +351,9 @@ def test_object_centric_generator_freezes_separate_camera_facing_frames() -> Non
     assert question["answer_frame_anchor_obj_id"] == 2
     assert question["answer_camera_binding"] == "frame_1"
     assert question["answer_frame_frozen"] is True
+    assert "movement_frame_query_obj_id" not in question
+    assert "movement_frame_reference_obj_id" not in question
+    assert "camera in the first main view" in question["question"]
     np.testing.assert_allclose(question["movement_frame_forward_world"], [-1.0, 0.0, 0.0])
     np.testing.assert_allclose(
         question["answer_frame_forward_world"],

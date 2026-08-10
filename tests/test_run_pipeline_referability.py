@@ -437,7 +437,7 @@ class RunPipelineReferabilityTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(RuntimeError, "expected 8"):
+            with self.assertRaisesRegex(RuntimeError, "expected 10"):
                 run_pipeline_module._load_pipeline_scene_status_doc(status_path)
 
     def test_scene_type_cap_does_not_limit_final_l1_types(self) -> None:

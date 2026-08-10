@@ -141,11 +141,12 @@ DEFAULT_VLM_URL = "http://183.129.178.195:60029/v1"
 EXPECTED_REFERABILITY_CACHE_VERSION = "20.0"
 MANUAL_ATTACHMENT_CACHE_SCHEMA = "two_hop_attachment_salvage_v1"
 MANUAL_ATTACHMENT_QUESTION_TYPES = ["L3_attachment_chain"]
-PIPELINE_SCENE_STATUS_VERSION = 9
+PIPELINE_SCENE_STATUS_VERSION = 10
+OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE = "strict-camera-facing-frozen-v1"
 PIPELINE_RANDOM_SEED = 20240506
 RAW_QUESTIONS_SCENE_CACHE_DIRNAME = "_raw_questions_scene_cache"
 CROSS_FRAME_SCENE_CACHE_DIRNAME = "_cross_frame_scene_cache"
-CROSS_FRAME_CHECKPOINT_VERSION = 5
+CROSS_FRAME_CHECKPOINT_VERSION = 6
 L1_CANDIDATE_BUDGET_BY_SPLIT = {"val": 75, "train": 300}
 L2_CANDIDATE_BUDGET_BY_SPLIT = {"val": 400, "train": 600}
 L3_CANDIDATE_BUDGET_BY_SPLIT = {"val": 300, "train": 600}
@@ -5470,10 +5471,109 @@ def _raw_scene_questions_cache_dir(output_dir: Path) -> Path:
     return output_dir / RAW_QUESTIONS_SCENE_CACHE_DIRNAME
 
 
+def _validate_strict_object_centric_questions(
+    questions: list[dict],
+    *,
+    source: str,
+) -> None:
+    direction_coefficients = {
+        "forward": (1.0, 0.0),
+        "forward-right": (1.0, 1.0),
+        "right": (0.0, 1.0),
+        "backward-right": (-1.0, 1.0),
+        "backward": (-1.0, 0.0),
+        "backward-left": (-1.0, -1.0),
+        "left": (0.0, -1.0),
+        "forward-left": (1.0, -1.0),
+    }
+
+    def fail(index: int, detail: str) -> None:
+        raise RuntimeError(
+            f"Invalid strict object_move_object_centric question at {source} "
+            f"index {index}: {detail}"
+        )
+
+    def axes(index: int, question: dict, prefix: str) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            forward = np.asarray(question[f"{prefix}_forward_world"], dtype=np.float64)
+            right = np.asarray(question[f"{prefix}_right_world"], dtype=np.float64)
+        except (KeyError, TypeError, ValueError) as exc:
+            fail(index, f"missing or invalid {prefix} axes: {exc}")
+        if (
+            forward.shape != (3,)
+            or right.shape != (3,)
+            or not np.all(np.isfinite(forward))
+            or not np.all(np.isfinite(right))
+            or not np.isclose(forward[2], 0.0, atol=1e-8)
+            or not np.isclose(right[2], 0.0, atol=1e-8)
+            or not np.isclose(np.linalg.norm(forward), 1.0, atol=1e-6)
+            or not np.isclose(np.linalg.norm(right), 1.0, atol=1e-6)
+            or not np.allclose(right, [forward[1], -forward[0], 0.0], atol=1e-6)
+        ):
+            fail(index, f"{prefix} axes are not a valid frozen horizontal frame")
+        return forward, right
+
+    for index, question in enumerate(questions):
+        if question.get("type") != "object_move_object_centric":
+            continue
+        if question.get("movement_semantics_version") != L2_OBJECT_MOVE_SEMANTICS_VERSION:
+            fail(index, "movement_semantics_version is not current")
+        legacy_fields = {
+            "movement_frame_query_obj_id",
+            "movement_frame_reference_obj_id",
+        } & question.keys()
+        if legacy_fields:
+            fail(index, f"legacy query-to-reference frame fields remain: {sorted(legacy_fields)}")
+
+        required = {
+            "movement_reference_frame": "moved_object_facing_first_camera",
+            "movement_camera_binding": "frame_1",
+            "movement_frame_frozen": True,
+            "answer_reference_frame": "query_object_facing_first_camera",
+            "answer_camera_binding": "frame_1",
+            "answer_frame_frozen": True,
+        }
+        for field, expected in required.items():
+            if question.get(field) != expected:
+                fail(index, f"{field}={question.get(field)!r}, expected {expected!r}")
+        try:
+            if int(question["movement_frame_anchor_obj_id"]) != int(question["moved_obj_id"]):
+                fail(index, "movement frame is not anchored at the moved object")
+            if int(question["answer_frame_anchor_obj_id"]) != int(question["query_obj_id"]):
+                fail(index, "answer frame is not anchored at the query object")
+        except (KeyError, TypeError, ValueError) as exc:
+            fail(index, f"missing or invalid frame anchor: {exc}")
+
+        movement_forward, movement_right = axes(index, question, "movement_frame")
+        axes(index, question, "answer_frame")
+        direction = str(question.get("movement_direction") or "")
+        coefficients = direction_coefficients.get(direction)
+        if coefficients is None:
+            fail(index, f"unsupported movement_direction={direction!r}")
+        try:
+            distance = float(question["movement_distance_m"])
+            delta = np.asarray(question["delta"], dtype=np.float64)
+        except (KeyError, TypeError, ValueError) as exc:
+            fail(index, f"missing or invalid movement delta: {exc}")
+        if not np.isfinite(distance) or distance <= 0.0:
+            fail(index, "movement_distance_m must be finite and positive")
+        if delta.shape != (3,) or not np.all(np.isfinite(delta)):
+            fail(index, "delta must be a finite 3-vector")
+        expected_delta = (
+            coefficients[0] * movement_forward + coefficients[1] * movement_right
+        )
+        expected_delta /= np.linalg.norm(expected_delta)
+        if not np.allclose(delta, expected_delta * distance, atol=2e-6):
+            fail(index, "delta does not match the frozen moved-object camera-facing frame")
+
+
 def _build_empty_pipeline_scene_status_doc() -> dict[str, object]:
     return {
         "version": PIPELINE_SCENE_STATUS_VERSION,
         "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
+        "object_move_object_centric_semantics": (
+            OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE
+        ),
         "completed_scenes": {},
     }
 
@@ -5508,6 +5608,17 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
             f"{movement_semantics_version or '<missing>'} at {path}; expected "
             f"{L2_OBJECT_MOVE_SEMANTICS_VERSION}."
         )
+    object_centric_semantics = str(
+        loaded.get("object_move_object_centric_semantics") or ""
+    )
+    if object_centric_semantics != OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE:
+        raise RuntimeError(
+            "Unsupported object_move_object_centric semantics profile "
+            f"{object_centric_semantics or '<missing>'!r} at {path}; expected "
+            f"{OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE!r}. Use a new "
+            "--output_dir or rerun without --resume so stale raw-question caches "
+            "cannot be reused."
+        )
 
     completed_scenes = loaded.get("completed_scenes")
     if not isinstance(completed_scenes, dict):
@@ -5516,6 +5627,9 @@ def _load_pipeline_scene_status_doc(path: Path) -> dict[str, object]:
     result: dict[str, object] = {
         "version": PIPELINE_SCENE_STATUS_VERSION,
         "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
+        "object_move_object_centric_semantics": (
+            OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE
+        ),
         "completed_scenes": dict(completed_scenes),
     }
     route_method = loaded.get("auxiliary_route_method")
@@ -5720,10 +5834,17 @@ def _reconcile_pipeline_completed_scenes(
 
 
 def _build_benchmark_payload(questions: list[dict[str, object]]) -> dict[str, object]:
+    _validate_strict_object_centric_questions(
+        questions,
+        source="benchmark output",
+    )
     return {
         "name": "PSR-Bench",
         "version": "1.0",
         "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
+        "object_move_object_centric_semantics": (
+            OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE
+        ),
         "statistics": compute_statistics(questions),
         "questions": questions,
     }
@@ -6461,6 +6582,10 @@ def _load_cached_scene_questions(
                 raw_question_path,
             )
             continue
+        _validate_strict_object_centric_questions(
+            scene_questions,
+            source=str(raw_question_path),
+        )
         raw_question_count += len(scene_questions)
         scene_questions = _deduplicate_scene_questions(scene_questions)
         scene_questions = _apply_scene_type_cap(
@@ -7103,6 +7228,10 @@ def run_pipeline(
             scene_type_cap=scene_type_cap,
             frame_type_cap=frame_type_cap,
             frame_type_object_cap=frame_type_object_cap,
+        )
+        _validate_strict_object_centric_questions(
+            scene_questions,
+            source=f"generated scene {scene_id}",
         )
         _write_json_file(raw_question_path, scene_questions)
         _mark_pipeline_scene_completed(
@@ -7906,6 +8035,9 @@ def run_pipeline(
             cross_checkpoint_signature = {
                 "version": CROSS_FRAME_CHECKPOINT_VERSION,
                 "object_move_semantics_version": L2_OBJECT_MOVE_SEMANTICS_VERSION,
+                "object_move_object_centric_semantics": (
+                    OBJECT_MOVE_OBJECT_CENTRIC_SEMANTICS_PROFILE
+                ),
                 "scene_id": scene_id,
                 "frame_names": [context.image_name for context in flash_contexts],
                 "question_types": list(cross_frame_requested_types),
