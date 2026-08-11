@@ -77,7 +77,7 @@ start_occupier() {
     sft_qwen3vl_4B.py \
     --gpus all \
     --memory-gb 45 \
-    --utilization-percent 80 >"$occupier_log" 2>&1 </dev/null &
+    --utilization-percent 80 >"$occupier_log" 2>&1 </dev/null 9>&- &
   printf '%s\n' "$!" >"$occupier_pid_file"
 }
 
