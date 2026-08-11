@@ -12,7 +12,8 @@ stage1_checkpoint=${STAGE1_CHECKPOINT:-$output_root/stage1_l1_perception/v0-2026
 stage2_checkpoint=${STAGE2_CHECKPOINT:-$output_root/stage2_reasoning_replay/v0-20260808-234735/checkpoint-8192}
 python_bin=${PYTHON_BIN:-/ces124/real/sujinyue/venvs/grpo/bin/python}
 swift_bin=${SWIFT_BIN:-/ces124/real/sujinyue/venvs/grpo/bin/swift}
-python_dev_include=${PYTHON_DEV_INCLUDE:-/ces124/real/sujinyue/python-dev/usr/include/python3.11}
+python_dev_root=${PYTHON_DEV_ROOT:-/ces124/real/sujinyue/python-dev/usr/include}
+python_dev_include=${PYTHON_DEV_INCLUDE:-$python_dev_root/python3.11}
 devices=${DEVICES:-2,3}
 occupier_pid_file=${OCCUPIER_PID_FILE:-$job_root/occupier.pid}
 
@@ -141,8 +142,10 @@ for required in "${required_files[@]}"; do
   fi
 done
 
-# Triton compiles a small CUDA driver extension during vLLM startup.
-export CPATH="$python_dev_include${CPATH:+:$CPATH}"
+# Triton compiles a small CUDA driver extension during vLLM startup. Python.h
+# also includes the architecture-specific header relative to python_dev_root.
+export CPATH="$python_dev_include:$python_dev_root${CPATH:+:$CPATH}"
+printf '#include <Python.h>\n' | gcc -x c -fsyntax-only -
 
 printf '%s  %s\n' \
   edac7703329133edfc53e46ac0081835144c99d7eebf28b71c732694d435224d "$model_root/config.json" \
