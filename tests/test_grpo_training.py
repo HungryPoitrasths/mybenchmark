@@ -764,6 +764,15 @@ def test_curriculum_launcher_resets_optimizer_and_loads_stage1_adapter(
     assert "--resume-from-checkpoint" not in resumed_stage2_command
     assert "--resume-optimizer-state-dtype" not in resumed_stage2_command
 
+    args.stage2_resume_from_checkpoint = Path("latest")
+    resumed_stage2_command = launcher.build_stage_command(
+        args, stage=2, adapter=adapter
+    )
+    assert resumed_stage2_command[
+        resumed_stage2_command.index("--resume-from-checkpoint") + 1
+    ] == "latest"
+    assert "--resume-optimizer-state-dtype" not in resumed_stage2_command
+
 
 def test_launcher_dry_run_writes_manifest_without_swift(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
