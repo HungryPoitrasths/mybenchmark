@@ -109,6 +109,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "'latest' selects the highest checkpoint below the stage-1 output."
         ),
     )
+    parser.add_argument(
+        "--stage2-resume-from-checkpoint",
+        type=Path,
+        help=(
+            "Resume stage 2 from this Trainer checkpoint. The literal value "
+            "'latest' selects the highest checkpoint below the stage-2 output."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -248,6 +256,13 @@ def build_stage_command(
                 args.resume_optimizer_state_dtype,
             ]
         )
+    if stage == 2 and args.stage2_resume_from_checkpoint is not None:
+        command.extend(
+            [
+                "--resume-from-checkpoint",
+                str(args.stage2_resume_from_checkpoint),
+            ]
+        )
     if adapter is not None:
         command.extend(
             [
@@ -282,7 +297,16 @@ def _write_plan(args: argparse.Namespace) -> None:
             "epochs": args.stage2_epochs,
             "learning_rate": args.stage2_learning_rate,
             "initialization": "stage1_final_lora_for_policy_and_reference",
-            "optimizer_state": "reset",
+            "resume_from_checkpoint": (
+                str(args.stage2_resume_from_checkpoint)
+                if args.stage2_resume_from_checkpoint is not None
+                else None
+            ),
+            "optimizer_state": (
+                "restored_from_trainer_checkpoint"
+                if args.stage2_resume_from_checkpoint is not None
+                else "reset"
+            ),
         },
         "devices": args.devices,
     }
