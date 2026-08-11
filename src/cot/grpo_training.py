@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -20,6 +21,42 @@ from src.cot.facts import question_uid
 from src.cot.images import resolve_image_paths
 from src.cot.pipeline import format_user_prompt
 from src.cot.sampling import SUPPORTED_TYPE_ORDER, TYPES_BY_LEVEL
+
+
+def _cache_triton_driver_source() -> None:
+    """Keep Triton's tiny C source off a transient network-filesystem read path."""
+    if os.environ.get("PSR_CACHE_TRITON_DRIVER_SOURCE") != "1":
+        return
+
+    from triton.backends.nvidia import driver as nvidia_driver
+
+    driver_source = Path(nvidia_driver.__file__).with_name("driver.c")
+    original_read_text = Path.read_text
+    if getattr(original_read_text, "_psr_triton_source_cache", False):
+        return
+
+    for attempt in range(20):
+        try:
+            cached_source = original_read_text(driver_source, encoding="utf-8")
+            break
+        except FileNotFoundError:
+            if attempt == 19:
+                raise
+            time.sleep(0.5)
+
+    driver_source_text = str(driver_source)
+
+    def read_text(path: Path, *args: Any, **kwargs: Any) -> str:
+        if str(path) == driver_source_text:
+            return cached_source
+        return original_read_text(path, *args, **kwargs)
+
+    read_text._psr_triton_source_cache = True  # type: ignore[attr-defined]
+    Path.read_text = read_text
+    print(f"[PSR] Cached Triton driver source: {driver_source}", flush=True)
+
+
+_cache_triton_driver_source()
 
 
 def _cast_adam_moments(optimizer: Any, target_dtype: Any) -> int:

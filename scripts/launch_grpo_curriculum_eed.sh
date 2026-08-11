@@ -14,6 +14,7 @@ python_bin=${PYTHON_BIN:-/ces124/real/sujinyue/venvs/grpo/bin/python}
 swift_bin=${SWIFT_BIN:-/ces124/real/sujinyue/venvs/grpo/bin/swift}
 python_dev_root=${PYTHON_DEV_ROOT:-/ces124/real/sujinyue/python-dev/usr/include}
 python_dev_include=${PYTHON_DEV_INCLUDE:-$python_dev_root/python3.11}
+triton_driver_source=${TRITON_DRIVER_SOURCE:-/ces124/real/sujinyue/venvs/grpo/lib/python3.11/site-packages/triton/backends/nvidia/driver.c}
 devices=${DEVICES:-2,3}
 occupier_pid_file=${OCCUPIER_PID_FILE:-$job_root/occupier.pid}
 
@@ -134,6 +135,7 @@ required_files=(
   "$stage2_checkpoint/rng_state_0.pth"
   "$stage2_checkpoint/rng_state_1.pth"
   "$python_dev_include/Python.h"
+  "$triton_driver_source"
 )
 for required in "${required_files[@]}"; do
   if [[ ! -f $required ]]; then
@@ -145,6 +147,7 @@ done
 # Triton compiles a small CUDA driver extension during vLLM startup. Python.h
 # also includes the architecture-specific header relative to python_dev_root.
 export CPATH="$python_dev_include:$python_dev_root${CPATH:+:$CPATH}"
+export PSR_CACHE_TRITON_DRIVER_SOURCE=1
 printf '#include <Python.h>\n' | gcc -x c -fsyntax-only -
 
 printf '%s  %s\n' \
