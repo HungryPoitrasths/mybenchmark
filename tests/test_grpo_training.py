@@ -11,6 +11,7 @@ import pytest
 from src.cot.evaluation import parse_relaxed_answer, parse_strict_answer
 from src.cot.grpo_training import (
     _cast_adam_moments,
+    _restore_adam_moment_dtypes,
     answer_rewards,
     format_rewards,
     load_jsonl,
@@ -31,6 +32,33 @@ def test_cast_adam_moments_restores_checkpoint_dtype() -> None:
     state = optimizer.state[parameter]
     assert state["exp_avg"].dtype == torch.bfloat16
     assert state["exp_avg_sq"].dtype == torch.bfloat16
+
+
+def test_restore_adam_moment_dtypes_preserves_checkpoint_values() -> None:
+    import copy
+
+    import torch
+
+    parameter = torch.nn.Parameter(torch.ones(2, dtype=torch.float32))
+    optimizer = torch.optim.AdamW([parameter])
+    optimizer.state[parameter] = {
+        "step": torch.tensor(1.0),
+        "exp_avg": torch.zeros_like(parameter),
+        "exp_avg_sq": torch.zeros_like(parameter),
+    }
+    checkpoint = copy.deepcopy(optimizer.state_dict())
+    checkpoint["state"][0]["exp_avg"] = checkpoint["state"][0]["exp_avg"].to(
+        torch.bfloat16
+    )
+    checkpoint["state"][0]["exp_avg_sq"] = checkpoint["state"][0][
+        "exp_avg_sq"
+    ].to(torch.bfloat16)
+
+    converted = _restore_adam_moment_dtypes(optimizer, checkpoint)
+
+    assert converted == 2
+    assert optimizer.state[parameter]["exp_avg"].dtype == torch.bfloat16
+    assert optimizer.state[parameter]["exp_avg_sq"].dtype == torch.bfloat16
 
 
 def _load_launcher():

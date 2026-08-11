@@ -148,6 +148,7 @@ done
 # also includes the architecture-specific header relative to python_dev_root.
 export CPATH="$python_dev_include:$python_dev_root${CPATH:+:$CPATH}"
 export PSR_CACHE_TRITON_DRIVER_SOURCE=1
+export PSR_PRESERVE_ADAM_STATE_DTYPE=1
 printf '#include <Python.h>\n' | gcc -x c -fsyntax-only -
 
 printf '%s  %s\n' \

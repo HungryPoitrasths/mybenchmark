@@ -73,25 +73,76 @@ def _cast_adam_moments(optimizer: Any, target_dtype: Any) -> int:
     return converted
 
 
+def _restore_adam_moment_dtypes(
+    optimizer: Any,
+    checkpoint_state_dict: dict[str, Any],
+) -> int:
+    """Undo optimizer-load casts while preserving each checkpoint moment dtype."""
+    import torch
+
+    converted = 0
+    checkpoint_groups = checkpoint_state_dict["param_groups"]
+    checkpoint_states = checkpoint_state_dict["state"]
+    for optimizer_group, checkpoint_group in zip(
+        optimizer.param_groups,
+        checkpoint_groups,
+        strict=True,
+    ):
+        for parameter, checkpoint_id in zip(
+            optimizer_group["params"],
+            checkpoint_group["params"],
+            strict=True,
+        ):
+            loaded_state = optimizer.state.get(parameter, {})
+            checkpoint_state = checkpoint_states.get(checkpoint_id, {})
+            for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                loaded = loaded_state.get(key)
+                checkpoint = checkpoint_state.get(key)
+                if (
+                    torch.is_tensor(loaded)
+                    and torch.is_tensor(checkpoint)
+                    and loaded.is_floating_point()
+                    and loaded.dtype != checkpoint.dtype
+                ):
+                    loaded_state[key] = loaded.to(dtype=checkpoint.dtype)
+                    converted += 1
+    return converted
+
+
 def _patch_adamw_resume_state_dtype() -> None:
     dtype_name = os.environ.get("PSR_RESUME_ADAM_STATE_DTYPE")
-    if not dtype_name:
+    preserve_checkpoint_dtype = (
+        os.environ.get("PSR_PRESERVE_ADAM_STATE_DTYPE") == "1"
+    )
+    if not dtype_name and not preserve_checkpoint_dtype:
         return
+    if dtype_name and preserve_checkpoint_dtype:
+        raise RuntimeError(
+            "PSR_RESUME_ADAM_STATE_DTYPE and PSR_PRESERVE_ADAM_STATE_DTYPE "
+            "are mutually exclusive"
+        )
 
     import torch
 
-    target_dtype = getattr(torch, dtype_name)
+    target_dtype = getattr(torch, dtype_name) if dtype_name else None
     original = torch.optim.AdamW.load_state_dict
     if getattr(original, "_psr_state_dtype_patch", False):
         return
 
     def load_state_dict(optimizer: Any, state_dict: dict[str, Any]) -> Any:
         result = original(optimizer, state_dict)
-        converted = _cast_adam_moments(optimizer, target_dtype)
-        print(
-            f"[PSR] Restored {converted} Adam moment tensors to {dtype_name}",
-            flush=True,
-        )
+        if preserve_checkpoint_dtype:
+            converted = _restore_adam_moment_dtypes(optimizer, state_dict)
+            print(
+                f"[PSR] Restored {converted} Adam moment tensors to checkpoint dtypes",
+                flush=True,
+            )
+        else:
+            converted = _cast_adam_moments(optimizer, target_dtype)
+            print(
+                f"[PSR] Restored {converted} Adam moment tensors to {dtype_name}",
+                flush=True,
+            )
         return result
 
     load_state_dict._psr_state_dtype_patch = True  # type: ignore[attr-defined]
