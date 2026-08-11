@@ -765,6 +765,7 @@ def test_curriculum_launcher_resets_optimizer_and_loads_stage1_adapter(
     assert "--resume-optimizer-state-dtype" not in resumed_stage2_command
 
     args.stage2_resume_from_checkpoint = Path("latest")
+    args.dry_run = True
     resumed_stage2_command = launcher.build_stage_command(
         args, stage=2, adapter=adapter
     )
@@ -772,6 +773,7 @@ def test_curriculum_launcher_resets_optimizer_and_loads_stage1_adapter(
         resumed_stage2_command.index("--resume-from-checkpoint") + 1
     ] == "latest"
     assert "--resume-optimizer-state-dtype" not in resumed_stage2_command
+    assert "--dry-run" in resumed_stage2_command
 
 
 def test_launcher_dry_run_writes_manifest_without_swift(

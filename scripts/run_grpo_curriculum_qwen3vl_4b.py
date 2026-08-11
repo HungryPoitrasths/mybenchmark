@@ -117,6 +117,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "'latest' selects the highest checkpoint below the stage-2 output."
         ),
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Prepare and print each selected stage command without launching MS-SWIFT.",
+    )
     return parser.parse_args(argv)
 
 
@@ -200,6 +205,8 @@ def _common_args(args: argparse.Namespace) -> list[str]:
         command.append("--skip-image-check")
     if args.reuse_prepared_dataset:
         command.append("--reuse-prepared-dataset")
+    if args.dry_run:
+        command.append("--dry-run")
     return command
 
 
