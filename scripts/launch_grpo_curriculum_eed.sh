@@ -14,6 +14,8 @@ python_bin=${PYTHON_BIN:-/ces124/real/sujinyue/venvs/grpo/bin/python}
 swift_bin=${SWIFT_BIN:-/ces124/real/sujinyue/venvs/grpo/bin/swift}
 python_dev_root=${PYTHON_DEV_ROOT:-/ces124/real/sujinyue/python-dev/usr/include}
 python_dev_include=${PYTHON_DEV_INCLUDE:-$python_dev_root/python3.11}
+python_runtime_root=${PYTHON_RUNTIME_ROOT:-/ces124/real/sujinyue/python-runtime-3.11/usr}
+gcc_toolchain_root=${GCC_TOOLCHAIN_ROOT:-/ces124/real/sujinyue/gcc-toolchain}
 triton_driver_source=${TRITON_DRIVER_SOURCE:-/ces124/real/sujinyue/venvs/grpo/lib/python3.11/site-packages/triton/backends/nvidia/driver.c}
 devices=${DEVICES:-2,3}
 occupier_pid_file=${OCCUPIER_PID_FILE:-$job_root/occupier.pid}
@@ -135,6 +137,10 @@ required_files=(
   "$stage2_checkpoint/rng_state_0.pth"
   "$stage2_checkpoint/rng_state_1.pth"
   "$python_dev_include/Python.h"
+  "$python_runtime_root/bin/python3.11"
+  "$gcc_toolchain_root/usr/bin/gcc-12"
+  "$gcc_toolchain_root/usr/bin/x86_64-linux-gnu-as"
+  "$gcc_toolchain_root/usr/bin/x86_64-linux-gnu-ld"
   "$triton_driver_source"
 )
 for required in "${required_files[@]}"; do
@@ -144,12 +150,15 @@ for required in "${required_files[@]}"; do
   fi
 done
 
-# Triton compiles a small CUDA driver extension during vLLM startup. Python.h
-# also includes the architecture-specific header relative to python_dev_root.
-export CPATH="$python_dev_include:$python_dev_root${CPATH:+:$CPATH}"
+# Keep the migrated Python 3.11 venv and Triton compiler independent of the
+# container image, which may not provide either runtime.
+export PATH="$gcc_toolchain_root/usr/bin:$PATH"
+export LD_LIBRARY_PATH="$python_runtime_root/lib/x86_64-linux-gnu:$gcc_toolchain_root/usr/lib/x86_64-linux-gnu:$gcc_toolchain_root/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export CPATH="$python_dev_include:$python_dev_root:$gcc_toolchain_root/usr/include:$gcc_toolchain_root/usr/include/x86_64-linux-gnu${CPATH:+:$CPATH}"
+export CC="$gcc_toolchain_root/usr/bin/gcc-12"
 export PSR_CACHE_TRITON_DRIVER_SOURCE=1
 export PSR_PRESERVE_ADAM_STATE_DTYPE=1
-printf '#include <Python.h>\n' | gcc -x c -fsyntax-only -
+printf '#include <Python.h>\n' | "$CC" -x c -fsyntax-only -
 
 printf '%s  %s\n' \
   edac7703329133edfc53e46ac0081835144c99d7eebf28b71c732694d435224d "$model_root/config.json" \
