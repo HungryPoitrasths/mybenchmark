@@ -875,3 +875,17 @@ def test_launcher_can_reuse_verified_prepared_dataset(
     assert manifest["dataset"]["selected_count"] == 1
     assert manifest["dataset"]["checked_images"] == "verified_before_reuse"
     assert "swift rlhf" in capsys.readouterr().out
+
+
+def test_eed_launcher_validates_python_packages_before_releasing_gpus() -> None:
+    launcher = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "launch_grpo_curriculum_eed.sh"
+    ).read_text(encoding="utf-8")
+
+    validation = launcher.index('"$python_bin" "$project_root/scripts/grpo_import_smoke.py"')
+    release = launcher.index("\nstop_occupier\n")
+    assert 'setuptools-84.0.0.dist-info/RECORD' in launcher
+    assert "Verified {checked} setuptools RECORD entries" in launcher
+    assert validation < release

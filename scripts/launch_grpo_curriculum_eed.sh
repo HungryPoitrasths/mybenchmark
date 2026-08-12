@@ -17,6 +17,8 @@ python_dev_include=${PYTHON_DEV_INCLUDE:-$python_dev_root/python3.11}
 python_runtime_root=${PYTHON_RUNTIME_ROOT:-/ces124/real/sujinyue/python-runtime-3.11/usr}
 gcc_toolchain_root=${GCC_TOOLCHAIN_ROOT:-/ces124/real/sujinyue/gcc-toolchain}
 triton_driver_source=${TRITON_DRIVER_SOURCE:-/ces124/real/sujinyue/venvs/grpo/lib/python3.11/site-packages/triton/backends/nvidia/driver.c}
+site_packages=${SITE_PACKAGES:-/ces124/real/sujinyue/venvs/grpo/lib/python3.11/site-packages}
+setuptools_record=${SETUPTOOLS_RECORD:-$site_packages/setuptools-84.0.0.dist-info/RECORD}
 devices=${DEVICES:-2,3}
 occupier_pid_file=${OCCUPIER_PID_FILE:-$job_root/occupier.pid}
 
@@ -142,6 +144,8 @@ required_files=(
   "$gcc_toolchain_root/usr/bin/x86_64-linux-gnu-as"
   "$gcc_toolchain_root/usr/bin/x86_64-linux-gnu-ld"
   "$triton_driver_source"
+  "$setuptools_record"
+  "$project_root/scripts/grpo_import_smoke.py"
 )
 for required in "${required_files[@]}"; do
   if [[ ! -f $required ]]; then
@@ -159,6 +163,51 @@ export CC="$gcc_toolchain_root/usr/bin/gcc-12"
 export PSR_CACHE_TRITON_DRIVER_SOURCE=1
 export PSR_PRESERVE_ADAM_STATE_DTYPE=1
 printf '#include <Python.h>\n' | "$CC" -x c -fsyntax-only -
+
+"$python_bin" - "$site_packages" "$setuptools_record" <<'PY'
+import base64
+import csv
+import hashlib
+import sys
+from pathlib import Path
+
+site_packages = Path(sys.argv[1]).resolve()
+record = Path(sys.argv[2]).resolve()
+missing = []
+mismatched = []
+checked = 0
+with record.open(encoding="utf-8", newline="") as handle:
+    for relative, digest, size in csv.reader(handle):
+        target = (site_packages / relative).resolve()
+        if not target.is_file():
+            missing.append(relative)
+            continue
+        if digest:
+            algorithm, expected = digest.split("=", 1)
+            if algorithm != "sha256":
+                raise ValueError(f"unsupported RECORD digest: {algorithm}")
+            actual = base64.urlsafe_b64encode(
+                hashlib.sha256(target.read_bytes()).digest()
+            ).rstrip(b"=").decode("ascii")
+            if actual != expected:
+                mismatched.append(relative)
+        if size and target.stat().st_size != int(size):
+            mismatched.append(f"{relative} (size)")
+        checked += 1
+if missing or mismatched:
+    raise RuntimeError(
+        f"incomplete setuptools installation: missing={missing}, "
+        f"mismatched={sorted(set(mismatched))}"
+    )
+print(f"Verified {checked} setuptools RECORD entries")
+PY
+
+# Imports can fail on missing package resources before CUDA is needed. Run both
+# single-process and torchrun checks while the SFT occupier still owns the GPUs.
+export CUDA_VISIBLE_DEVICES="$devices"
+"$python_bin" "$project_root/scripts/grpo_import_smoke.py"
+timeout -k 10s 90s "$python_bin" -m torch.distributed.run \
+  --standalone --nproc_per_node=2 "$project_root/scripts/grpo_import_smoke.py"
 
 printf '%s  %s\n' \
   edac7703329133edfc53e46ac0081835144c99d7eebf28b71c732694d435224d "$model_root/config.json" \
