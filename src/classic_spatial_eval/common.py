@@ -47,7 +47,7 @@ TARGET_COUNTS: dict[str, dict[str, int]] = {
         "Spatial_Relation": 143,
         "Visual_Correspondence": 172,
     },
-    "vsr": {"zero_shot_test": 731},
+    "vsr": {"zero_shot_test": 1222},
 }
 
 EXPECTED_TOTAL = sum(

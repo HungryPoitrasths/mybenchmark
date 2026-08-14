@@ -125,6 +125,11 @@ def _as_options(value: Any) -> list[str]:
         return [str(item[1]).strip() for item in pairs]
     if isinstance(value, (list, tuple)):
         return [str(item).strip() for item in value]
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        converted = tolist()
+        if isinstance(converted, list):
+            return [str(item).strip() for item in converted]
     if isinstance(value, str):
         try:
             decoded = json.loads(value)
@@ -489,17 +494,23 @@ def normalize_blink(
     for subset, rows in rows_by_subset.items():
         for index, row in enumerate(rows):
             question, options = _question_and_options(row)
+            answer = _first(row, "answer", "gt_answer", "ground_truth")
+            if _token(answer) == "hidden":
+                raise ValueError(
+                    f"BLINK {subset} has hidden test labels; use the labeled validation split"
+                )
+            source_id = _id(row, index)
             samples.append(
                 Sample(
                     "blink",
                     subset,
-                    "test",
-                    _id(row, index),
+                    "validation" if _token(source_id).startswith("val_") else "test",
+                    source_id,
                     question,
                     options,
-                    _first(row, "answer", "gt_answer", "ground_truth"),
+                    answer,
                     _media_from_row(row),
-                    group_id=_id(row, index),
+                    group_id=source_id,
                 )
             )
     return samples
@@ -844,14 +855,18 @@ def load_benchmark_samples(name: str, config: PrepareConfig) -> tuple[list[Sampl
                 search_root = root / subset if (root / subset).exists() else root
                 path = _find_annotation(
                     search_root,
-                    ("test-00000-of-00001.parquet", f"{subset}.jsonl"),
+                    (
+                        "val-00000-of-00001.parquet",
+                        "validation-00000-of-00001.parquet",
+                        f"{subset}.jsonl",
+                    ),
                 )
                 rows_by_subset[subset] = _rows_from_file(path)
             else:
                 rows_by_subset[subset] = _load_hf(
                     DATASET_IDS[name],
                     config=subset,
-                    split="test",
+                    split="validation",
                     revision=revision,
                     cache_dir=config.cache_dir,
                 )

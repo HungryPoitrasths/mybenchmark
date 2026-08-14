@@ -94,13 +94,14 @@ def result_row(
 
 
 def test_target_counts_are_decision_complete() -> None:
-    assert EXPECTED_TOTAL == 3469
+    assert EXPECTED_TOTAL == 3960
     assert sum(len(subsets) for subsets in TARGET_COUNTS.values()) == 22
     assert TARGET_COUNTS["mmsi"] == {
         "object_motion": 76,
         "multi_step_reasoning": 198,
     }
     assert sum(TARGET_COUNTS["blink"].values()) == 572
+    assert TARGET_COUNTS["vsr"] == {"zero_shot_test": 1222}
 
 
 @pytest.mark.parametrize(
@@ -289,14 +290,30 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
                 {
                     "idx": "b",
                     "question": "q",
-                    "choices": ["x", "y"],
+                    "choices": ArrayLike(["x", "y"]),
                     "answer": "(B)",
                     "image_1": b"image",
                 }
             ]
         }
     )
+    assert blink[0].options == ["x", "y"]
     assert blink[0].media_values == [b"image"]
+
+    with pytest.raises(ValueError, match="hidden test labels"):
+        normalize_blink(
+            {
+                "Relative_Depth": [
+                    {
+                        "idx": "test_hidden",
+                        "question": "q",
+                        "choices": ["x", "y"],
+                        "answer": "hidden",
+                        "image_1": b"image",
+                    }
+                ]
+            }
+        )
 
     vsr = normalize_vsr(
         [

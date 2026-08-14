@@ -7,7 +7,7 @@ This evaluation compares the same frozen sample and media manifest across:
 - GRPO `checkpoint-7680`
 - GRPO `checkpoint-9216`
 
-The full suite has 3,469 questions in 22 subsets. Scores remain separate by
+The full suite has 3,960 questions in 22 subsets. Scores remain separate by
 benchmark; the summarizer deliberately does not produce a cross-benchmark
 overall score.
 
@@ -19,12 +19,13 @@ overall score.
 | VSI-Bench | Relative Direction, Relative Distance, Route Planning (50 each) | 150 |
 | MVBench | Object Shuffle, Moving Direction, Egocentric Navigation (200 each) | 600 |
 | CLEVRER | Explanatory, Predictive, Counterfactual (200 each) | 600 |
-| BLINK | Multi-view Reasoning (133), Relative Depth (124), Spatial Relation (143), Visual Correspondence (172) | 572 |
-| VSR | Official zero-shot test split | 731 |
+| BLINK | Labeled validation: Multi-view Reasoning (133), Relative Depth (124), Spatial Relation (143), Visual Correspondence (172) | 572 |
+| VSR | Official zero-shot test split (1,222 questions over 731 unique images) | 1,222 |
 
-Each of the four models therefore runs 3,469 examples, for 13,876 total
+Each of the four models therefore runs 3,960 examples, for 15,840 total
 model-example inferences. VSI-Bench and CLEVRER are deterministically sampled
-with seed 42; the other included subsets use their complete pinned test split.
+with seed 42; the other included subsets use their complete pinned evaluation
+split. BLINK uses validation because its public test answers are hidden.
 
 ## 1. Install
 
