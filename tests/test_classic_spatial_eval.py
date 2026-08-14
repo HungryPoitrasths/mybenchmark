@@ -11,7 +11,9 @@ from src.classic_spatial_eval.common import (
     RESULT_SCHEMA_VERSION,
     TARGET_COUNTS,
     parse_answer,
+    parse_exact_answer,
     sha256_file,
+    validate_manifest,
     write_json,
     write_jsonl,
 )
@@ -117,6 +119,17 @@ def test_answer_parser(raw: str, multi: bool, expected: tuple[str, ...], status:
     assert parsed.status == status
 
 
+def test_exact_answer_parser_supports_tags_and_last_line() -> None:
+    tagged = parse_exact_answer(
+        "<think>x</think><answer>move_left:1, rotate_up:15</answer>"
+    )
+    assert tagged.text == "move_left:1, rotate_up:15"
+    assert tagged.status == "ok"
+    final = parse_exact_answer("Reasoning\nFinal answer: move_right:2,rotate_down:5")
+    assert final.text == "move_right:2,rotate_down:5"
+    assert final.status == "ok"
+
+
 def test_model_specs_use_base_alias() -> None:
     specs = parse_model_specs(["base=base", "grpo=/ckpt/9216"], "/models/qwen")
     assert specs == [
@@ -170,6 +183,7 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
         ]
     )
     assert spar[0].subset == "ViewChg"
+    assert spar[0].answer_type == "exact_text"
     assert spar[0].media_values == [{"bytes": b"one"}, {"bytes": b"two"}]
 
     mindcube = normalize_mindcube(
@@ -398,6 +412,33 @@ def test_vsr_missing_local_image_uses_fallback_url(
     )
     assert downloads == ["http://example.test/fallback.jpg"]
     assert (output_dir / row["media"][0]["path"]).is_file()
+
+
+def test_exact_text_sample_materializes_without_options(tmp_path: Path) -> None:
+    image_module = pytest.importorskip("PIL.Image")
+    buffer = io.BytesIO()
+    image_module.new("RGB", (4, 4), color=(1, 2, 3)).save(buffer, format="PNG")
+    sample = Sample(
+        "spar",
+        "ViewChg",
+        "test",
+        "fill",
+        "Describe the camera transform.",
+        [],
+        "move_left:1,rotate_up:15",
+        [buffer.getvalue()],
+        answer_type="exact_text",
+    )
+    row = materialize_sample(
+        sample,
+        source_root=None,
+        output_dir=tmp_path,
+        download_missing=False,
+    )
+    assert row["answer_type"] == "exact_text"
+    assert row["gold"] == []
+    assert row["gold_text"] == "move_left:1,rotate_up:15"
+    validate_manifest([row])
 
 
 def test_clevrer_loader_prefers_validation_annotations(tmp_path: Path) -> None:

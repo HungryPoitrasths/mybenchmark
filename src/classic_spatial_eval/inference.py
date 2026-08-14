@@ -19,9 +19,11 @@ from typing import Any, Mapping, Protocol, Sequence
 from .common import (
     RESULT_SCHEMA_VERSION,
     append_jsonl,
+    canonical_exact_text,
     iter_jsonl,
     manifest_sha256,
     parse_answer,
+    parse_exact_answer,
     resolve_media_path,
     sha256_file,
     validate_manifest,
@@ -72,6 +74,14 @@ def parse_model_specs(values: Sequence[str], base_model: str) -> list[ModelSpec]
 
 
 def build_prompt(row: Mapping[str, Any]) -> str:
+    if row.get("answer_type") == "exact_text":
+        return "\n".join(
+            [
+                str(row["question"]).strip(),
+                "",
+                "On the final line, output only the answer in the requested format.",
+            ]
+        )
     options = row["options"]
     option_lines = [f"{chr(ord('A') + index)}) {option}" for index, option in enumerate(options)]
     if row.get("multi_select"):
@@ -337,13 +347,35 @@ def _result_row(
     backend_name: str,
     elapsed_seconds: float,
 ) -> dict[str, Any]:
-    parsed = parse_answer(
-        raw,
-        [str(value) for value in row["options"]],
-        multi_select=bool(row.get("multi_select")),
-    )
-    predicted = list(parsed.letters)
-    gold = [str(value) for value in row["gold"]]
+    answer_type = str(row.get("answer_type", "choice"))
+    if answer_type == "exact_text":
+        parsed_exact = parse_exact_answer(raw)
+        predicted = []
+        prediction_text = parsed_exact.text
+        parse_status = parsed_exact.status
+        parse_source = parsed_exact.source
+        gold = []
+        gold_text = str(row["gold_text"])
+        correct = bool(
+            prediction_text
+            and parse_status == "ok"
+            and canonical_exact_text(prediction_text)
+            == canonical_exact_text(gold_text)
+            and error is None
+        )
+    else:
+        parsed = parse_answer(
+            raw,
+            [str(value) for value in row["options"]],
+            multi_select=bool(row.get("multi_select")),
+        )
+        predicted = list(parsed.letters)
+        prediction_text = parsed.text
+        parse_status = parsed.status
+        parse_source = parsed.source
+        gold = [str(value) for value in row["gold"]]
+        gold_text = None
+        correct = bool(predicted and predicted == gold and error is None)
     return {
         "schema_version": RESULT_SCHEMA_VERSION,
         "manifest_sha256": manifest_hash,
@@ -357,11 +389,13 @@ def _result_row(
         "group_id": row.get("group_id", row["source_id"]),
         "raw_response": raw,
         "prediction": predicted,
-        "prediction_text": parsed.text,
-        "parse_status": parsed.status,
-        "parse_source": parsed.source,
+        "prediction_text": prediction_text,
+        "parse_status": parse_status,
+        "parse_source": parse_source,
         "gold": gold,
-        "correct": bool(predicted and predicted == gold and error is None),
+        "gold_text": gold_text,
+        "answer_type": answer_type,
+        "correct": correct,
         "option_count": len(row["options"]),
         "multi_select": bool(row.get("multi_select")),
         "error": error,

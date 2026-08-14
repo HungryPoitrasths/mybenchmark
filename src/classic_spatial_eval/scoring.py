@@ -32,6 +32,9 @@ class ScoreRow:
     correct: bool
     prediction: tuple[str, ...]
     gold: tuple[str, ...]
+    prediction_text: str | None
+    gold_text: str | None
+    answer_type: str
     option_count: int
     parse_status: str
     error: str | None
@@ -76,6 +79,17 @@ def load_results(
                 correct=bool(raw.get("correct")),
                 prediction=tuple(str(value) for value in raw.get("prediction") or []),
                 gold=tuple(str(value) for value in raw.get("gold") or []),
+                prediction_text=(
+                    str(raw["prediction_text"])
+                    if raw.get("prediction_text") is not None
+                    else None
+                ),
+                gold_text=(
+                    str(raw["gold_text"])
+                    if raw.get("gold_text") is not None
+                    else None
+                ),
+                answer_type=str(raw.get("answer_type") or "choice"),
                 option_count=int(raw.get("option_count") or 0),
                 parse_status=str(raw.get("parse_status") or "invalid"),
                 error=str(raw["error"]) if raw.get("error") else None,
@@ -470,6 +484,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "sample_id": row.sample_id,
             "prediction": list(row.prediction),
             "gold": list(row.gold),
+            "prediction_text": row.prediction_text,
+            "gold_text": row.gold_text,
+            "answer_type": row.answer_type,
             "parse_status": row.parse_status,
             "error": row.error,
         }

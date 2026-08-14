@@ -82,6 +82,7 @@ class Sample:
     answer: Any
     media_values: list[Any]
     media_kind: str = "image"
+    answer_type: str = "choice"
     group_id: str | None = None
     multi_select: bool = False
     start_seconds: float | None = None
@@ -278,6 +279,7 @@ def normalize_spar(rows: Sequence[Mapping[str, Any]]) -> list[Sample]:
                 options,
                 _first(row, "answer", "gt_answer", "ground_truth"),
                 _media_from_row(row),
+                answer_type="exact_text" if subset == "ViewChg" else "choice",
                 group_id=str(_first(row, "scene_id", "image_group_id", default=_id(row, index))),
             )
         )
@@ -1058,13 +1060,22 @@ def materialize_sample(
     download_missing: bool,
     calculate_hashes: bool = True,
 ) -> dict[str, Any]:
-    if not sample.question or len(sample.options) < 2:
+    if not sample.question or (
+        sample.answer_type == "choice" and len(sample.options) < 2
+    ):
         raise ValueError(f"{sample.sample_id}: missing question or options")
-    gold = answer_to_letters(
-        sample.answer,
-        sample.options,
-        multi_select=sample.multi_select,
-    )
+    if sample.answer_type == "exact_text":
+        gold: tuple[str, ...] = ()
+        gold_text = str(sample.answer).strip()
+        if not gold_text:
+            raise ValueError(f"{sample.sample_id}: empty exact-text answer")
+    else:
+        gold = answer_to_letters(
+            sample.answer,
+            sample.options,
+            multi_select=sample.multi_select,
+        )
+        gold_text = None
     sample_dir = output_dir / "media" / sample.benchmark / stable_rank(sample.sample_id)[:16]
     media_paths: list[Path] = []
     frame_indices: list[int] = []
@@ -1109,6 +1120,8 @@ def materialize_sample(
         "question": sample.question,
         "options": sample.options,
         "gold": list(gold),
+        "gold_text": gold_text,
+        "answer_type": sample.answer_type,
         "multi_select": sample.multi_select,
         "frame_indices": frame_indices,
         "source_metadata": sample.metadata,

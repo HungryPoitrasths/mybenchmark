@@ -247,6 +247,47 @@ def parse_answer(
     return AnswerParseResult((), "invalid")
 
 
+@dataclass(frozen=True)
+class ExactAnswerParseResult:
+    text: str | None
+    status: str
+    source: str | None = None
+
+
+def canonical_exact_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+def parse_exact_answer(raw: str | None) -> ExactAnswerParseResult:
+    if not raw or not raw.strip():
+        return ExactAnswerParseResult(None, "empty")
+    text = raw.strip()
+    tagged = [
+        fragment.strip()
+        for fragment in re.findall(
+            r"<answer\b[^>]*>(.*?)</answer>", text, flags=re.I | re.S
+        )
+        if fragment.strip()
+    ]
+    if tagged:
+        canonical = {canonical_exact_text(value) for value in tagged}
+        if len(canonical) == 1:
+            return ExactAnswerParseResult(tagged[0], "ok", "answer_tag")
+        return ExactAnswerParseResult(None, "conflict", "answer_tag")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ExactAnswerParseResult(None, "empty")
+    answer = re.sub(
+        r"^(?:final\s+)?answer\s*[:：]?\s*",
+        "",
+        lines[-1],
+        flags=re.I,
+    ).strip(" `")
+    if not answer:
+        return ExactAnswerParseResult(None, "invalid", "last_line")
+    return ExactAnswerParseResult(answer, "ok", "last_line")
+
+
 def answer_to_letters(
     answer: Any,
     options: Sequence[str],
@@ -340,15 +381,34 @@ def validate_manifest_row(row: Mapping[str, Any], *, row_number: int) -> None:
         )
     options = row["options"]
     gold = row["gold"]
-    if not isinstance(options, list) or len(options) < 2:
-        raise ValueError(f"manifest row {row_number} must contain at least two options")
-    if not isinstance(gold, list) or not gold:
-        raise ValueError(f"manifest row {row_number} has no gold answer")
-    allowed = option_letters(len(options))
-    if any(letter not in allowed for letter in gold):
-        raise ValueError(f"manifest row {row_number} has invalid gold answer {gold}")
-    if not row["multi_select"] and len(gold) != 1:
-        raise ValueError(f"manifest row {row_number} has multiple single-select answers")
+    answer_type = str(row.get("answer_type", "choice"))
+    if answer_type == "exact_text":
+        if not isinstance(options, list):
+            raise ValueError(f"manifest row {row_number} options must be a list")
+        if gold not in ([], None):
+            raise ValueError(f"manifest row {row_number} exact-text gold must be empty")
+        if not isinstance(row.get("gold_text"), str) or not row["gold_text"].strip():
+            raise ValueError(f"manifest row {row_number} has no exact-text gold answer")
+        if row["multi_select"]:
+            raise ValueError(f"manifest row {row_number} exact text cannot be multi-select")
+    elif answer_type == "choice":
+        if not isinstance(options, list) or len(options) < 2:
+            raise ValueError(
+                f"manifest row {row_number} must contain at least two options"
+            )
+        if not isinstance(gold, list) or not gold:
+            raise ValueError(f"manifest row {row_number} has no gold answer")
+        allowed = option_letters(len(options))
+        if any(letter not in allowed for letter in gold):
+            raise ValueError(f"manifest row {row_number} has invalid gold answer {gold}")
+        if not row["multi_select"] and len(gold) != 1:
+            raise ValueError(
+                f"manifest row {row_number} has multiple single-select answers"
+            )
+    else:
+        raise ValueError(
+            f"manifest row {row_number} has unsupported answer_type {answer_type!r}"
+        )
     if not isinstance(row["media"], list) or not row["media"]:
         raise ValueError(f"manifest row {row_number} has no visual media")
 
