@@ -1,0 +1,17 @@
+# Data preparation and CPU-side scoring
+datasets>=4.0.0
+huggingface-hub>=0.28.0
+pandas>=2.0.0
+pyarrow>=16.0.0
+Pillow>=10.0.0
+opencv-python-headless>=4.10.0
+
+# Local Qwen3-VL / LoRA inference
+torch>=2.4.0
+transformers>=4.57.0
+accelerate>=1.0.0
+peft>=0.13.0
+qwen-vl-utils>=0.0.14
+
+# Optional --backend openai support for an existing vLLM server
+openai>=1.0.0
