@@ -128,6 +128,13 @@ def test_model_specs_use_base_alias() -> None:
 
 
 def test_normalizers_cover_all_eight_benchmarks() -> None:
+    class ArrayLike:
+        def __init__(self, values):
+            self.values = values
+
+        def tolist(self):
+            return self.values
+
     mmsi = normalize_mmsi(
         [
             {
@@ -136,7 +143,7 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
                 "question": "q",
                 "options": ["x", "y"],
                 "answer": "B",
-                "images": [b"image"],
+                "images": ArrayLike([b"image"]),
             },
             {
                 "id": 2,

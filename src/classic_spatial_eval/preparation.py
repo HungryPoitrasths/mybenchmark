@@ -145,11 +145,19 @@ def _question_and_options(row: Mapping[str, Any]) -> tuple[str, list[str]]:
 
 
 def _media_from_row(row: Mapping[str, Any]) -> list[Any]:
+    def expand(value: Any) -> list[Any]:
+        if isinstance(value, (list, tuple)):
+            return [item for item in value if item is not None]
+        tolist = getattr(value, "tolist", None)
+        if callable(tolist):
+            converted = tolist()
+            if isinstance(converted, list):
+                return [item for item in converted if item is not None]
+        return [value]
+
     values = _first(row, "images", "image_paths", "frames", "media")
     if values is not None:
-        if isinstance(values, (list, tuple)):
-            return [value for value in values if value is not None and value != ""]
-        return [values]
+        return [value for value in expand(values) if value != ""]
     image_keys = sorted(
         (
             key
@@ -163,10 +171,7 @@ def _media_from_row(row: Mapping[str, Any]) -> list[Any]:
         value = row[key]
         if value is None:
             continue
-        if isinstance(value, (list, tuple)):
-            media.extend(item for item in value if item is not None)
-        else:
-            media.append(value)
+        media.extend(expand(value))
     return media
 
 
