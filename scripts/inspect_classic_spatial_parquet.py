@@ -34,9 +34,10 @@ def inspect(path: Path, *, max_values: int) -> dict:
         or pa.types.is_string(field.type)
     ]
     table = pq.read_table(path, columns=scalar_columns)
+    frame = table.to_pandas()
     distributions = {}
     for name in scalar_columns:
-        counts = table[name].to_pandas().astype(str).value_counts(dropna=False)
+        counts = frame[name].astype(str).value_counts(dropna=False)
         if len(counts) <= max_values or any(
             token in name.lower()
             for token in ("type", "task", "category", "subset", "level", "split")
@@ -45,12 +46,38 @@ def inspect(path: Path, *, max_values: int) -> dict:
                 str(key): int(value)
                 for key, value in counts.head(max_values).items()
             }
+    example_fields = [
+        name
+        for name in scalar_columns
+        if any(
+            token in name.lower()
+            for token in ("type", "task", "format", "question", "answer")
+        )
+    ]
+    category_examples = {}
+    for category in scalar_columns:
+        if not any(
+            token in category.lower()
+            for token in ("type", "task", "category", "subset")
+        ):
+            continue
+        values = frame[category].astype(str)
+        if values.nunique() > max_values:
+            continue
+        examples = {}
+        for value in values.drop_duplicates():
+            row = frame.loc[values == value, example_fields].iloc[0]
+            examples[value] = {
+                name: str(item)[:500] for name, item in row.items()
+            }
+        category_examples[category] = examples
     return {
         "path": str(path.resolve()),
         "rows": parquet.metadata.num_rows,
         "row_groups": parquet.metadata.num_row_groups,
         "schema": {field.name: str(field.type) for field in schema},
         "scalar_distributions": distributions,
+        "category_examples": category_examples,
     }
 
 
