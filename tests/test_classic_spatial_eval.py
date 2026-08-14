@@ -539,6 +539,42 @@ def test_clevrer_loader_prefers_validation_annotations(tmp_path: Path) -> None:
     assert media_root == root.resolve()
 
 
+def test_clevrer_loader_filters_questions_without_local_videos(tmp_path: Path) -> None:
+    root = tmp_path / "clevrer"
+    videos = root / "validation_videos"
+    videos.mkdir(parents=True)
+    (videos / "video_10000.mp4").write_bytes(b"video")
+
+    rows = []
+    for video_id in ("10000", "10001"):
+        rows.append(
+            {
+                "video": f"validation_videos/video_{video_id}.mp4",
+                "question_id": "1",
+                "question_type": "predictive",
+                "question": "What happens next?",
+                "choices": [
+                    {"choice": "x", "answer": "correct"},
+                    {"choice": "y", "answer": "wrong"},
+                ],
+            }
+        )
+    write_json(root / "CLEVR_val_questions.json", rows)
+    config = PrepareConfig(
+        output_dir=tmp_path / "prepared",
+        cache_dir=tmp_path / "cache",
+        roots={"clevrer": root},
+        revisions={"clevrer_code": "pinned"},
+        benchmarks=("clevrer",),
+        download_missing=False,
+        dry_run=True,
+    )
+    samples, _ = load_benchmark_samples("clevrer", config)
+    assert [sample.source_id for sample in samples] == [
+        "validation_videos/video_10000.mp4:1"
+    ]
+
+
 class FakeBackend:
     def __init__(self) -> None:
         self.calls = 0

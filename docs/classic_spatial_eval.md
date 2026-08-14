@@ -20,7 +20,7 @@ overall score.
 | MVBench | Object Shuffle, Moving Direction, Egocentric Navigation (200 each) | 600 |
 | CLEVRER | Explanatory, Predictive, Counterfactual (200 each) | 600 |
 | BLINK | Labeled validation: Multi-view Reasoning (133), Relative Depth (124), Spatial Relation (143), Visual Correspondence (172) | 572 |
-| VSR | Official zero-shot test split (1,222 questions over 731 unique images) | 1,222 |
+| VSR | Official zero-shot test split (1,222 questions over 715 unique images) | 1,222 |
 
 Each of the four models therefore runs 3,960 examples, for 15,840 total
 model-example inferences. VSI-Bench and CLEVRER are deterministically sampled

@@ -881,7 +881,31 @@ def load_benchmark_samples(name: str, config: PrepareConfig) -> tuple[list[Sampl
             )
         annotation_files = _find_clevrer_annotations(root)
         items = [row for path in annotation_files for row in _rows_from_file(path)]
-        return normalize_clevrer(items), root.parent if root.is_file() else root
+        media_root = root.parent if root.is_file() else root
+        samples = normalize_clevrer(items)
+        has_local_videos = media_root.is_dir() and any(
+            path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+            for path in media_root.rglob("*")
+        )
+        if has_local_videos:
+            available: list[Sample] = []
+            for sample in samples:
+                try:
+                    _resolve_string_media(
+                        str(sample.media_values[0]), media_root, download_missing=False
+                    )
+                except FileNotFoundError:
+                    continue
+                available.append(sample)
+            if len(available) != len(samples):
+                LOGGER.warning(
+                    "CLEVRER media root covers %d/%d labeled questions; "
+                    "sampling only questions with verified local videos",
+                    len(available),
+                    len(samples),
+                )
+            samples = available
+        return samples, media_root
     if name == "blink":
         rows_by_subset = {}
         for subset in TARGET_COUNTS[name]:
