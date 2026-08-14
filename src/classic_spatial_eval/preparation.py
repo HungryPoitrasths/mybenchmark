@@ -489,6 +489,8 @@ def normalize_clevrer(items: Sequence[Mapping[str, Any]]) -> list[Sample]:
                             correct.append(chr(ord("A") + choice_index))
                     else:
                         options.append(str(choice).strip())
+            if not question or len(options) < 2:
+                continue
             if not correct:
                 answer = _first(row, "answer", "gt_answer", "ground_truth")
                 # Original CLEVRER choice-level labels may legitimately mark

@@ -345,6 +345,22 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
     )
     assert empty_clevrer == []
 
+    one_choice_clevrer = normalize_clevrer(
+        [
+            {
+                "video": "validation_videos/video_10000.mp4",
+                "question_id": "16",
+                "question_type": "counterfactual",
+                "question": "What happens?",
+                "choices": {
+                    "choice": ArrayLike(["x"]),
+                    "answer": ArrayLike(["correct"]),
+                },
+            }
+        ]
+    )
+    assert one_choice_clevrer == []
+
     blink = normalize_blink(
         {
             "Relative_Depth": [
