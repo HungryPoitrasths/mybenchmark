@@ -287,9 +287,28 @@ def normalize_spar(rows: Sequence[Mapping[str, Any]]) -> list[Sample]:
 
 
 def normalize_mindcube(rows: Sequence[Mapping[str, Any]]) -> list[Sample]:
-    category_candidates: list[tuple[int, Mapping[str, Any]]] = []
-    fallback_candidates: list[tuple[int, Mapping[str, Any]]] = []
+    selected: list[tuple[int, Mapping[str, Any]]] = []
     for index, row in enumerate(rows):
+        raw_category = row.get("category")
+        if isinstance(raw_category, (list, tuple)):
+            category_tokens = {_token(value) for value in raw_category}
+        else:
+            category_tokens = {_token(raw_category)} if raw_category is not None else set()
+
+        # The official tinybench dynamics slice is all 153 sequence questions
+        # plus rotation q2/q3 (79 + 60), for a fixed total of 292 examples.
+        question_family = re.search(r"(?:^|_)q([0-9]+)(?:_|$)", _id(row, index))
+        official_dynamic = "sequence" in category_tokens or (
+            "rotation" in category_tokens
+            and question_family is not None
+            and question_family.group(1) in {"2", "3"}
+        )
+        if official_dynamic:
+            selected.append((index, row))
+            continue
+
+        # Retain support for converted MindCube exports that expose a direct
+        # dynamics/what-if task label instead of the official category array.
         category_values = " ".join(
             _token(row.get(key))
             for key in ("category", "task", "task_type", "question_type", "capability")
@@ -298,13 +317,12 @@ def normalize_mindcube(rows: Sequence[Mapping[str, Any]]) -> list[Sample]:
         identifier = _token(_id(row, index))
         question = _token(row.get("question"))
         if "dynamic" in category_values or "what_if" in category_values:
-            category_candidates.append((index, row))
-        if any(
+            selected.append((index, row))
+        elif not ({"sequence", "rotation"} & category_tokens) and any(
             term in f"{category_values} {identifier} {question}"
             for term in ("what_if", "dynamics")
         ):
-            fallback_candidates.append((index, row))
-    selected = category_candidates or fallback_candidates
+            selected.append((index, row))
     samples: list[Sample] = []
     for index, row in selected:
         question, options = _question_and_options(row)

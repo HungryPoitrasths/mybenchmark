@@ -202,9 +202,35 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
                 "gt_answer": "A",
                 "images": ["b.jpg"],
             },
+            {
+                "id": "among_group001_q0_2_3",
+                "category": ["perpendicular", "P-O", "sequence", "self"],
+                "question": "Then I turn and move. A. yes B. no",
+                "gt_answer": "A",
+                "images": ["c.jpg"],
+            },
+            {
+                "id": "rotation_group001_q2_4",
+                "category": ["perpendicular", "PO", "rotation", "self"],
+                "question": "After I turn, what is left? A. chair B. desk",
+                "gt_answer": "B",
+                "images": ["d.jpg"],
+            },
+            {
+                "id": "rotation_group001_q1_4",
+                "category": ["perpendicular", "PO", "rotation", "self"],
+                "question": "What is left? A. chair B. desk",
+                "gt_answer": "B",
+                "images": ["e.jpg"],
+            },
         ]
     )
-    assert len(mindcube) == 1 and mindcube[0].options == ["left", "right"]
+    assert len(mindcube) == 3
+    assert mindcube[0].options == ["left", "right"]
+    assert [row.source_id for row in mindcube[1:]] == [
+        "among_group001_q0_2_3",
+        "rotation_group001_q2_4",
+    ]
 
     vsi = normalize_vsi(
         [
