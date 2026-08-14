@@ -491,6 +491,12 @@ def normalize_clevrer(items: Sequence[Mapping[str, Any]]) -> list[Sample]:
                         options.append(str(choice).strip())
             if not correct:
                 answer = _first(row, "answer", "gt_answer", "ground_truth")
+                # Original CLEVRER choice-level labels may legitimately mark
+                # every proposed choice wrong. Such rows cannot be represented
+                # as a non-empty multiple-selection answer, so sample another
+                # labeled question instead of failing during materialization.
+                if answer is None:
+                    continue
             else:
                 answer = correct
             raw_question_id = _first(row, "question_id", "id")
