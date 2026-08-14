@@ -262,6 +262,32 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
         }
     )
     assert mvbench[0].answer == "y" and mvbench[0].media_kind == "video"
+    assert mvbench[0].media_values == ["clevrer/video_validation/v.mp4"]
+
+    mvbench_media = normalize_mvbench(
+        {
+            "object_shuffle": [
+                {
+                    "video": "video_10344.mp4",
+                    "question": "q",
+                    "candidates": ["x", "y"],
+                    "answer": "x",
+                }
+            ],
+            "egocentric_navigation": [
+                {
+                    "video": "left/4504_frame52.mp4",
+                    "question": "q",
+                    "candidates": ["x", "y"],
+                    "answer": "x",
+                }
+            ],
+        }
+    )
+    assert [sample.media_values for sample in mvbench_media] == [
+        ["perception/videos/video_10344.mp4"],
+        ["vlnqa/left/4504_frame52.mp4"],
+    ]
 
     clevrer = normalize_clevrer(
         [

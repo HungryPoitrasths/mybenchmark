@@ -67,6 +67,11 @@ BENCHMARK_ORDER = (
 )
 
 VIDEO_FRAME_COUNTS = {"vsi": 32, "mvbench": 8, "clevrer": 32}
+MVBENCH_MEDIA_PREFIXES = {
+    "object_shuffle": "perception/videos",
+    "moving_direction": "clevrer/video_validation",
+    "egocentric_navigation": "vlnqa",
+}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".gif"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
@@ -394,6 +399,11 @@ def normalize_mvbench(
         for index, row in enumerate(rows):
             question, options = _question_and_options(row)
             video = _first(row, "video", "video_path", "path")
+            if video is not None:
+                value = str(video).replace("\\", "/").lstrip("/")
+                prefix = MVBENCH_MEDIA_PREFIXES.get(subset)
+                if prefix and value != prefix and not value.startswith(f"{prefix}/"):
+                    video = f"{prefix}/{value}"
             samples.append(
                 Sample(
                     "mvbench",
