@@ -132,7 +132,7 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
         [
             {
                 "id": 1,
-                "question_type": "Object Motion",
+                "question_type": "Motion (Obj.)",
                 "question": "q",
                 "options": ["x", "y"],
                 "answer": "B",
@@ -140,7 +140,7 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
             },
             {
                 "id": 2,
-                "question_type": "Multi-step Reasoning",
+                "question_type": "MSR",
                 "question": "q",
                 "options": ["x", "y"],
                 "answer": "A",
@@ -154,15 +154,16 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
         [
             {
                 "id": "s",
-                "question_type": "ViewChgI",
+                "task": "view_change_infer",
                 "question": "q",
                 "options": ["x", "y"],
                 "answer": "A",
-                "images": [b"image"],
+                "image": [{"bytes": b"one"}, {"bytes": b"two"}],
             }
         ]
     )
     assert spar[0].subset == "ViewChg"
+    assert spar[0].media_values == [{"bytes": b"one"}, {"bytes": b"two"}]
 
     mindcube = normalize_mindcube(
         [

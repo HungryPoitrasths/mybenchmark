@@ -158,7 +158,16 @@ def _media_from_row(row: Mapping[str, Any]) -> list[Any]:
         ),
         key=lambda key: (len(str(key)), str(key)),
     )
-    return [row[key] for key in image_keys if row[key] is not None]
+    media: list[Any] = []
+    for key in image_keys:
+        value = row[key]
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple)):
+            media.extend(item for item in value if item is not None)
+        else:
+            media.append(value)
+    return media
 
 
 def _id(row: Mapping[str, Any], fallback: int) -> str:
@@ -195,9 +204,11 @@ def normalize_mmsi(rows: Sequence[Mapping[str, Any]]) -> list[Sample]:
     aliases = {
         "object_motion": "object_motion",
         "object_movement": "object_motion",
+        "motion_obj": "object_motion",
         "multi_step_reasoning": "multi_step_reasoning",
         "multistep_reasoning": "multi_step_reasoning",
         "multi_step": "multi_step_reasoning",
+        "msr": "multi_step_reasoning",
     }
     samples: list[Sample] = []
     for index, row in enumerate(rows):
@@ -230,10 +241,15 @@ def normalize_spar(rows: Sequence[Mapping[str, Any]]) -> list[Sample]:
     aliases = {
         "viewchg": "ViewChg",
         "viewchgi": "ViewChg",
+        "view_change_infer": "ViewChg",
         "spimag_oc": "SpImag_OC",
+        "spatial_imagination_oc": "SpImag_OC",
         "spimag_oc_mv": "SpImag_OC_MV",
+        "spatial_imagination_oc_mv": "SpImag_OC_MV",
         "spimag_oo": "SpImag_OO",
+        "spatial_imagination_oo": "SpImag_OO",
         "spimag_oo_mv": "SpImag_OO_MV",
+        "spatial_imagination_oo_mv": "SpImag_OO_MV",
     }
     samples: list[Sample] = []
     for index, row in enumerate(rows):
