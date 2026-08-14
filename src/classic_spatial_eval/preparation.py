@@ -423,16 +423,24 @@ def _float_or_none(value: Any) -> float | None:
 def normalize_clevrer(items: Sequence[Mapping[str, Any]]) -> list[Sample]:
     samples: list[Sample] = []
     for item_index, item in enumerate(items):
-        scene_index = _first(item, "scene_index", "video_index", "id", default=item_index)
         video = _first(
             item,
             "video",
             "video_path",
             "path",
-            default=f"video_{int(scene_index):05d}.mp4",
         )
+        scene_index = _first(
+            item,
+            "scene_index",
+            "video_index",
+            "id",
+            default=video if video is not None else item_index,
+        )
+        if video is None:
+            video = f"video_{int(scene_index):05d}.mp4"
         questions = item.get("questions")
-        if not isinstance(questions, list):
+        flat_item = not isinstance(questions, list)
+        if flat_item:
             questions = [item]
         for question_index, row in enumerate(questions):
             if not isinstance(row, Mapping):
@@ -442,6 +450,21 @@ def normalize_clevrer(items: Sequence[Mapping[str, Any]]) -> list[Sample]:
                 continue
             question = str(_first(row, "question", "prompt", default="")).strip()
             raw_choices = _first(row, "choices", "options", default=[])
+            if isinstance(raw_choices, Mapping):
+                choice_values = _as_options(
+                    _first(raw_choices, "choice", "text", "option", default=[])
+                )
+                answer_values = _first(
+                    raw_choices, "answer", "label", "correct", default=[]
+                )
+                tolist = getattr(answer_values, "tolist", None)
+                answer_list = tolist() if callable(tolist) else answer_values
+                if not isinstance(answer_list, (list, tuple)):
+                    answer_list = [answer_list] * len(choice_values)
+                raw_choices = [
+                    {"choice": choice, "answer": answer}
+                    for choice, answer in zip(choice_values, answer_list)
+                ]
             options: list[str] = []
             correct: list[str] = []
             if isinstance(raw_choices, list):
@@ -460,19 +483,25 @@ def normalize_clevrer(items: Sequence[Mapping[str, Any]]) -> list[Sample]:
                 answer = _first(row, "answer", "gt_answer", "ground_truth")
             else:
                 answer = correct
-            source_id = str(
-                _first(
-                    row,
-                    "question_id",
-                    "id",
-                    default=f"{scene_index}:{question_index}",
-                )
+            raw_question_id = _first(row, "question_id", "id")
+            source_id = (
+                f"{video}:{raw_question_id}"
+                if raw_question_id is not None and flat_item
+                else str(raw_question_id or f"{scene_index}:{question_index}")
             )
             samples.append(
                 Sample(
                     "clevrer",
                     subset,
-                    str(_first(item, "split", default="test")),
+                    str(
+                        _first(
+                            item,
+                            "split",
+                            default="validation"
+                            if "validation" in str(video).lower()
+                            else "test",
+                        )
+                    ),
                     source_id,
                     question,
                     options,
@@ -602,8 +631,13 @@ def _find_clevrer_annotations(root: Path) -> list[Path]:
         return [root]
     candidates = sorted(
         path
-        for path in root.rglob("*.json")
-        if any(term in path.name.lower() for term in ("question", "annotation"))
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".json", ".parquet"}
+        and (
+            path.suffix.lower() == ".parquet"
+            or any(term in path.name.lower() for term in ("question", "annotation"))
+        )
     )
     validation = [
         path
@@ -615,7 +649,7 @@ def _find_clevrer_annotations(root: Path) -> list[Path]:
     if len(candidates) == 1:
         return candidates
     if not candidates:
-        return [_find_annotation(root, ("*.json",))]
+        return [_find_annotation(root, ("*.json", "*.parquet"))]
     raise ValueError(
         "multiple CLEVRER annotation files found but no validation split could be "
         "identified; point --clevrer-root at the validation annotation tree"

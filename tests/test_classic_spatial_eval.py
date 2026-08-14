@@ -284,6 +284,25 @@ def test_normalizers_cover_all_eight_benchmarks() -> None:
     assert clevrer[0].answer == ["B", "C"]
     assert clevrer[0].multi_select is True
 
+    flat_clevrer = normalize_clevrer(
+        [
+            {
+                "video": "validation_videos/video_10000.mp4",
+                "question_id": "14",
+                "question_type": "predictive",
+                "question": "q",
+                "choices": {
+                    "choice": ArrayLike(["x", "y"]),
+                    "answer": ArrayLike(["wrong", "correct"]),
+                },
+            }
+        ]
+    )
+    assert flat_clevrer[0].source_id == "validation_videos/video_10000.mp4:14"
+    assert flat_clevrer[0].split == "validation"
+    assert flat_clevrer[0].options == ["x", "y"]
+    assert flat_clevrer[0].answer == ["B"]
+
     blink = normalize_blink(
         {
             "Relative_Depth": [
